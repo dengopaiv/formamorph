@@ -3,19 +3,24 @@
 // rows, depth projection, drop commit, per-row presentation); everything else — sensors, drag state, the row
 // chrome (grip / chevron / duplicate / delete) — lives here once.
 //
+// Both axes answer to the keyboard too: space lifts the row under the focused grip, up/down walk it through
+// the list, left/right take it out of or into the row above, space drops it. See `coordinateGetter` below —
+// the sideways half is ours, because dnd-kit's own only knows how to find a droppable it can see.
+//
 // IMPORTANT: never clamp the drag's X. A full-axis bounding modifier (restrictToParentElement /
 // restrictToFirstScrollableAncestor / restrictToVerticalAxis) clamps the horizontal delta and breaks
 // depth-based nesting (see TraitTree history). Clamping only Y is fine and is exactly what
 // `restrictYToScrollAncestor` below does — it's why these trees can live in a ScrollArea without the
 // auto-scroll running away, while other lists (which don't need free X) use the stock both-axis modifiers.
-import { useState, type ReactNode } from 'react';
-import { EditorRow, EditorRowList } from '@/components/EditorRow';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { EditorRow, EditorRowList, TREE_INDENT } from '@/components/EditorRow';
 import { X, Copy } from 'lucide-react';
 import {
   DndContext, pointerWithin, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors,
-  type CollisionDetection, type Modifier,
+  type CollisionDetection, type Modifier, type KeyboardCoordinateGetter, type ScreenReaderInstructions,
   type DragStartEvent, type DragMoveEvent, type DragOverEvent, type DragEndEvent,
 } from '@dnd-kit/core';
+import { depthStepOffset } from '@/lib/treeDepthStep';
 
 // Pointer-precise collisions, but never empty: at the very bottom the pointer sits past the last row, so
 // `pointerWithin` alone returns nothing → dnd-kit drops the sort gap → the list shrinks → the pointer is
@@ -45,6 +50,16 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+// dnd-kit's stock wording only knows about the vertical axis, and a tree where half the gesture is sideways
+// has to say so — this is the only place the left/right keys are ever announced, since a grip's tooltip
+// never reaches someone who arrived by keyboard. Hung off the drag handle as `aria-describedby`.
+const SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
+  draggable: `
+    To pick up an item, press space or enter. While holding it, use the up and down arrow keys to move it
+    through the list, and the left and right arrow keys to move it out of or into the item above it. Press
+    space or enter again to drop it where it stands, or press escape to leave it where it began.
+  `,
+};
 
 /** Presentation + actions for one row, produced by the tree's adapter. */
 export interface TreeRowSpec {
@@ -101,7 +116,7 @@ function TreeRow({ id, depth, spec, selected, onSelect, isCollapsed, toggleColla
       style={style}
       depth={depth}
       gripProps={{ ...attributes, ...listeners }}
-      gripTitle="Drag to reorder or nest"
+      gripTitle="Drag to reorder or nest — or press space, then the arrow keys"
       selected={selected}
       onSelect={() => onSelect(id)}
       lead={spec.lead === 'none' ? undefined : spec.lead}
@@ -129,13 +144,54 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetLeft, setOffsetLeft] = useState(0);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   // Visible rows: the tree minus collapsed nodes' children and (while dragging) the dragged subtree.
   const visible = adapter.getVisible(activeId ? new Set([...collapsed, activeId]) : collapsed);
+
+  // A keyboard drag's sensor is built once, at lift, and keeps the props it was handed — so the key handler
+  // below has to read the drag through refs rather than through the render that created it.
+  const live = useRef({ visible, overId, offsetLeft, adapter });
+  live.current = { visible, overId, offsetLeft, adapter };
+
+  /**
+   * Up and down are dnd-kit's; left and right are the tree's.
+   *
+   * The stock `sortableKeyboardCoordinates` resolves an arrow by hunting for a droppable lying that way, and
+   * in a full-width list nothing ever lies left or right — every row shares one left edge, since depth is
+   * drawn as padding *inside* the box. So the sideways half of the gesture had no keyboard at all: a row
+   * could be reordered without a mouse but never nested. Here each press moves the drag's x by one indent,
+   * which is the same signal a pointer sends, and the projection reads it the same way.
+   *
+   * Vertical moves keep whatever depth the author has already dialled in: dnd-kit answers with the target
+   * row's own left edge, so the current offset is added back on to leave `delta.x` — the thing depth is read
+   * from — untouched. Without that, walking down a row would silently undo the nesting.
+   */
+  const coordinateGetter: KeyboardCoordinateGetter = useCallback((event, args) => {
+    const step = event.code === 'ArrowLeft' ? -1 : event.code === 'ArrowRight' ? 1 : 0;
+    const { visible: rows, overId: over, offsetLeft: offset, adapter: current } = live.current;
+
+    if (!step) {
+      const moved = sortableKeyboardCoordinates(event, args);
+      return moved && { ...moved, x: moved.x + offset };
+    }
+
+    const activeId = String(args.active);
+    const activeDepth = rows.find((n) => n.id === activeId)?.depth;
+    if (activeDepth === undefined) return undefined;
+
+    const next = depthStepOffset(
+      (at) => current.projectDepth(rows, activeId, over ?? activeId, at),
+      activeDepth, offset, step, TREE_INDENT,
+    );
+    // Returned even when the step was refused, so the arrow is swallowed rather than scrolling the list out
+    // from under a drag the author is still holding.
+    return { ...args.currentCoordinates, x: args.currentCoordinates.x + (next - offset) };
+  }, []);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter }),
+  );
+
   const projectedDepth = activeId && overId
     ? adapter.projectDepth(visible, activeId, overId, offsetLeft)
     : null;
@@ -145,6 +201,9 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   const handleDragStart = ({ active }: DragStartEvent) => {
     setActiveId(String(active.id));
     setOverId(String(active.id));
+    // A lift always starts square: the keyboard reads depth off `delta.x`, which dnd-kit measures from where
+    // the row sat on the first keypress, so a stale offset here would show up as a phantom indent.
+    setOffsetLeft(0);
   };
   const handleDragMove = ({ delta }: DragMoveEvent) => setOffsetLeft(delta.x);
   const handleDragOver = ({ over }: DragOverEvent) => setOverId(over ? String(over.id) : null);
@@ -162,6 +221,7 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   return (
     <DndContext
       sensors={sensors}
+      accessibility={{ screenReaderInstructions: SCREEN_READER_INSTRUCTIONS }}
       collisionDetection={collisionWithFallback}
       modifiers={[restrictYToScrollAncestor]}
       onDragStart={handleDragStart}
