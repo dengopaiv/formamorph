@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { bridgeDescription, bridgePrompt } from './bridgeDescription';
+import {
+  bridgeDescription, bridgePrompt, composeBridgePrompt,
+  DEFAULT_PLAYER_DESC_PROMPT, DEFAULT_AI_DESC_PROMPT,
+} from './bridgeDescription';
 
 const opts = { endpointUrl: 'http://x/v1/chat/completions', apiToken: 't', modelName: 'm' };
 
@@ -59,5 +62,61 @@ describe('bridgeDescription', () => {
   it('throws on an empty content response', async () => {
     mockFetch(() => new Response(JSON.stringify({ choices: [{ message: { content: '   ' } }] })));
     await expect(bridgeDescription('x', 'playerDesc', 'character', opts)).rejects.toThrow('Empty description response');
+  });
+});
+
+describe('composeBridgePrompt', () => {
+  it('expands both tokens for the subject kind', () => {
+    const out = composeBridgePrompt('About <SUBJECT>, covering <FACETS>.', 'location');
+    expect(out).toBe('About this place, covering layout, atmosphere, and what stands out on arrival.');
+  });
+
+  it('expands every occurrence, not just the first', () => {
+    // The player-facing default names the subject twice; a replace() would have filled only one.
+    expect(composeBridgePrompt('<SUBJECT> and <SUBJECT>', 'character')).toBe('this character and this character');
+  });
+
+  it('leaves a template carrying no tokens alone', () => {
+    expect(composeBridgePrompt('Just write something.', 'character')).toBe('Just write something.');
+  });
+
+  it('shipped defaults resolve to the wording each direction is meant to carry', () => {
+    expect(composeBridgePrompt(DEFAULT_PLAYER_DESC_PROMPT, 'character')).toBe(bridgePrompt('playerDesc', 'character'));
+    expect(composeBridgePrompt(DEFAULT_AI_DESC_PROMPT, 'location')).toBe(bridgePrompt('aiDesc', 'location'));
+    // No token survives expansion — a leaked <SUBJECT> would reach the model as literal text.
+    expect(bridgePrompt('aiDesc', 'location')).not.toMatch(/<SUBJECT>|<FACETS>/);
+  });
+});
+
+describe('bridgeDescription — author overrides', () => {
+  const sendAndRead = async (fn: () => Promise<unknown>) => {
+    const fetchSpy = vi.fn((_url: string, _init: RequestInit) =>
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    await fn();
+    return JSON.parse(fetchSpy.mock.calls[0][1].body as string);
+  };
+
+  it("sends the author's template, expanded for the kind", async () => {
+    const body = await sendAndRead(() =>
+      bridgeDescription('note', 'playerDesc', 'location', { ...opts, template: 'Describe <SUBJECT>: <FACETS>.' }),
+    );
+    expect(body.messages[0].content).toBe('Describe this place: layout, atmosphere, and what stands out on arrival.');
+  });
+
+  it("honors the author's output cap", async () => {
+    const body = await sendAndRead(() =>
+      bridgeDescription('note', 'aiDesc', 'character', { ...opts, maxTokens: 1500 }),
+    );
+    expect(body.max_tokens).toBe(1500);
+  });
+
+  it('falls back to the shipped default when the template is blank', async () => {
+    // A cleared field must not send an empty system prompt — the generation would be unguided.
+    const body = await sendAndRead(() =>
+      bridgeDescription('note', 'aiDesc', 'character', { ...opts, template: '   ' }),
+    );
+    expect(body.messages[0].content).toBe(bridgePrompt('aiDesc', 'character'));
   });
 });

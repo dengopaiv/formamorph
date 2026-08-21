@@ -152,6 +152,8 @@ Three description fields, with distinct jobs:
 
 The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing Description.
 
+> 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds all three drafting prompts — Player-Facing, AI-Facing and Summary — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
+
 ### Aliases
 
 Other names the entity goes by — a title, a nickname, an epithet. They do two jobs: the AI is told them as *"also known as"*, and the story parser counts the entity as **present** when the narration uses one, not just when it uses the real name.
@@ -275,6 +277,8 @@ The default prompt gives the **narrator** the current location in full, and its 
 > 💡 **The two descriptions are disjoint.** The player only ever sees the Player-Facing one; the AI only ever sees the AI-Facing one — so the AI-Facing Description is where a secret lives.
 
 The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing Description. Blank is fine — it falls back to the full description.
+
+> 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds all three drafting prompts — Player-Facing, AI-Facing and Summary — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
 
 ### Entities
 

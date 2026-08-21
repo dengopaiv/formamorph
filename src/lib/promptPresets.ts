@@ -12,6 +12,15 @@ export type ReasoningMap = Record<string, PromptReasoning>;
  *  its shipped default. Narration/choices only are user-editable. */
 export type ReasoningBudgetMap = Partial<Record<AIRequestType, number>>;
 
+/** The authoring prompts, which run outside the turn pipeline and so are keyed by their own ids rather
+ *  than by `AIRequestType`. */
+export type DescPromptKind = 'playerdesc' | 'aidesc' | 'aisummary';
+
+/** Per-authoring-prompt output caps carried on a preset; a missing kind uses its shipped default. Paired
+ *  with the prompt text because the two only make sense together — a template asking for more than the cap
+ *  allows truncates mid-sentence, so the author who edits one needs the other. */
+export type DescTokensMap = Partial<Record<DescPromptKind, number>>;
+
 /** The editable prompt-text values a preset captures: the system-prompt bodies + user-message
  *  templates + the memory-recap, scene-recall, and OOC-direction lines. Enable flags, verbatim-turns,
  *  and thinking mode are global and deliberately NOT included. */
@@ -42,6 +51,11 @@ export const PROMPT_TEXT_KEYS = [
   'openingTimeUserPrompt',
   'sceneTagsPrompt',
   'sceneTagsUserPrompt',
+  // Authoring prompts — the world editor's ✨ buttons. Preset-scoped like the rest, so a preset stays a
+  // self-contained pack: switching to a prose-heavy preset also switches how its descriptions get written.
+  'playerDescPrompt',
+  'aiDescPrompt',
+  'aiSummaryPrompt',
 ] as const;
 
 export type PromptTextKey = (typeof PROMPT_TEXT_KEYS)[number];
@@ -63,6 +77,9 @@ export interface PromptPreset {
   reasoning?: ReasoningMap;
   reasoningBudget?: ReasoningBudgetMap;
   verbatim?: VerbatimMap;
+  /** Output caps for the authoring prompts. Shared like the text above (unlike `promptEndpoints`): a token
+   *  count means the same thing on any machine. */
+  descTokens?: DescTokensMap;
   /** Per-prompt endpoint routing. Preset-scoped like the tuning above, but deliberately excluded from
    *  sharing: it names endpoint presets, whose ids mean nothing on another machine. */
   promptEndpoints?: PromptEndpointMap;
@@ -211,6 +228,12 @@ export function activeReasoningBudget(store: PromptPresetStore): ReasoningBudget
   return store.presets.find((p) => p.id === store.activeId)?.reasoningBudget ?? {};
 }
 
+/** The active preset's authoring-prompt caps (empty for a built-in → every kind resolves to its default). */
+export function activeDescTokens(store: PromptPresetStore): DescTokensMap {
+  if (isBuiltInActive(store)) return {};
+  return store.presets.find((p) => p.id === store.activeId)?.descTokens ?? {};
+}
+
 /** Apply a patch to the active user preset; no-op under a built-in. */
 function patchActivePreset(store: PromptPresetStore, patch: (p: PromptPreset) => PromptPreset): PromptPresetStore {
   if (isBuiltInActive(store)) return store;
@@ -240,6 +263,11 @@ export function updatePromptEndpoints(store: PromptPresetStore, fn: (m: PromptEn
 /** Set one kind's reasoning-budget percent on the active preset. No-op under a built-in. */
 export function updateReasoningBudget(store: PromptPresetStore, kind: AIRequestType, value: number): PromptPresetStore {
   return patchActivePreset(store, (p) => ({ ...p, reasoningBudget: { ...(p.reasoningBudget ?? {}), [kind]: value } }));
+}
+
+/** Set one authoring prompt's output cap on the active preset. No-op under a built-in. */
+export function updateDescTokens(store: PromptPresetStore, kind: DescPromptKind, value: number): PromptPresetStore {
+  return patchActivePreset(store, (p) => ({ ...p, descTokens: { ...(p.descTokens ?? {}), [kind]: value } }));
 }
 
 /** One-time migration: fold the (previously global) tuning onto every user preset that lacks it, so switching

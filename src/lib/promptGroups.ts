@@ -12,11 +12,28 @@ export interface PromptGroup {
   tabs: string[];
 }
 
+/**
+ * The authoring prompts: the world editor's ✨ buttons, not a pass in the turn pipeline. Single-sourced
+ * because that difference shows up in three places — the group below, the surfaces the panel offers, and
+ * the tuning it doesn't. They have no user-message template, no conditional message riders, and no
+ * per-request tuning (no `AIRequestType` to key samplers or endpoint routing by), so the panel shows the
+ * system prompt alone.
+ */
+export const AUTHORING_TABS = ['playerdesc', 'aidesc', 'aisummary'] as const;
+
+/** Whether a `promptTab` id is one of the authoring prompts. */
+export function isAuthoringTab(tab: string): boolean {
+  return (AUTHORING_TABS as readonly string[]).includes(tab);
+}
+
 export const PROMPT_GROUPS: PromptGroup[] = [
   { label: 'Story', tabs: ['narration', 'thinking', 'director', 'character', 'storyboard', 'choices'] },
   { label: 'Trackers', tabs: ['statupdates', 'location', 'timepassed', 'timeopening'] },
   { label: 'Memory', tabs: ['summary', 'diary'] },
   { label: 'Images', tabs: ['scenetags'] },
+  // Last, and outside the pipeline order the groups above follow: these run in the world editor while the
+  // author is building, not during a turn. Grouped rather than scattered so the rail still reads as a map.
+  { label: 'Authoring', tabs: [...AUTHORING_TABS] },
 ];
 
 /**
@@ -40,6 +57,9 @@ export const PROMPT_DESCRIPTIONS: Record<string, string> = {
   director: 'Sets the stage for the turn: who is here, and what each of them is doing.',
   character: 'One character states, in the first person, what they want this turn.',
   storyboard: "Reconciles every character's intentions into a single plan for the turn.",
+  playerdesc: 'Turns an AI-facing note into the description a player reads.',
+  aidesc: 'Expands a player-facing blurb into the reference the narrator reads.',
+  aisummary: 'Condenses an AI-facing description into the one-line version used in lists.',
 };
 
 /** Which part of the selected prompt is on show. */

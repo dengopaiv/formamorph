@@ -10,6 +10,7 @@ const base: PromptTabFlags = {
   characterDiaries: false,
   aiClock: false,
   sceneImages: false,
+  advanced: false,
 };
 
 describe('computePromptTabAvailability — Diary gating', () => {
@@ -58,5 +59,27 @@ describe('computePromptTabAvailability — other tabs', () => {
     expect(computePromptTabAvailability({ ...base, memoryDigests: true }).summary).toBe(true);
     expect(computePromptTabAvailability({ ...base, sceneImages: true }).scenetags).toBe(true);
     expect(computePromptTabAvailability(base).scenetags).toBe(false);
+  });
+});
+
+describe('computePromptTabAvailability — authoring prompts', () => {
+  it('gates the authoring prompts on advanced mode alone', () => {
+    const simple = computePromptTabAvailability(base);
+    expect(simple.playerdesc).toBe(false);
+    expect(simple.aidesc).toBe(false);
+    expect(simple.aisummary).toBe(false);
+
+    const adv = computePromptTabAvailability({ ...base, advanced: true });
+    expect(adv.playerdesc).toBe(true);
+    expect(adv.aidesc).toBe(true);
+    expect(adv.aisummary).toBe(true);
+  });
+
+  it('does not tie them to any turn-pipeline feature', () => {
+    // They drive the world editor's buttons, which are always present. Switching every gameplay feature
+    // off must not take the prompt editors away with it.
+    const adv = computePromptTabAvailability({ ...base, advanced: true, thinkingMode: 'off' });
+    expect(adv.playerdesc).toBe(true);
+    expect(adv.aisummary).toBe(true);
   });
 });

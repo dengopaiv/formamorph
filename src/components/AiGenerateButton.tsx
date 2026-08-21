@@ -35,7 +35,10 @@ const AiGenerateButton = ({ mode, source, onChange, kind }: {
   onChange: (v: string) => void;
   kind?: ImageSubjectKind; // tags/playerDesc/aiDesc: subject kind
 }) => {
-  const { activeEndpointUrl, activeApiToken, activeModelName, imageTagPrompt } = useSettings();
+  const {
+    activeEndpointUrl, activeApiToken, activeModelName, imageTagPrompt,
+    playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens,
+  } = useSettings();
   const [loading, setLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -58,8 +61,12 @@ const AiGenerateButton = ({ mode, source, onChange, kind }: {
         // knows a person's name. An author who wants one in the tags can type it.
         ? await buildImagePrompt({ description: text, kind: kind ?? 'character' }, { ...opts, tagPrompt: imageTagPrompt })
         : mode === 'summary'
-          ? await summarizeDescription(text, opts)
-          : await bridgeDescription(text, mode, bridgeKind, opts);
+          ? await summarizeDescription(text, { ...opts, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
+          : await bridgeDescription(text, mode, bridgeKind, {
+            ...opts,
+            template: mode === 'playerDesc' ? playerDescPrompt : aiDescPrompt,
+            maxTokens: mode === 'playerDesc' ? descMaxTokens.playerdesc : descMaxTokens.aidesc,
+          });
       onChange(result);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
