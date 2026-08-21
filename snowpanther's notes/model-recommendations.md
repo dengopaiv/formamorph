@@ -2,7 +2,7 @@
 
 > **Scope:** the shortlist. *Which* model to point Formamorph at — per local VRAM tier (§1), per rented
 > GPU (§2), per flat-rate host (§3), per cloud budget (§4) — and what to change in Settings once you have. The **why** — the
-> selection axes, the gate-probe history, the per-model behavior findings — lives in [`model-research.md`](model-research.md), which stays the
+> selection axes, the gate-probe history, the per-model behavior findings — lives in [`model-research.md`](../docs-internal/model-research.md), which stays the
 > authoritative research log. This doc is downstream of it: refresh that one first, then re-rank here.
 
 **Data pulled:** 2026-08-21 (HF API live; UGI leaderboard CSV; OpenRouter model/pricing API; RunPod pricing).
@@ -64,7 +64,7 @@ tighter than the incumbent (7.95 vs 7.38 GB) — check it still loads with a wor
 but every one of them is `Mistral-Nemo-Instruct-2407`, and **Nemo has never cleared B on our board**
 (Rocinante-X 12B C/37, Silver-Siren B/53). Screen one only after StyleTune, and treat a C as the base
 speaking rather than the tuning. Sicarius' real value to this project is at 4B — see the author notes in
-[`model-research.md`](model-research.md).
+[`model-research.md`](../docs-internal/model-research.md).
 
 **Ornith-1.5-9B is a trap.** It is the most-downloaded new small model on the Hub right now (115k in three
 days) and it is *wrong for us*: a reasoning-first coding/agentic model — SWE-bench tuned, `reasoning_content`
@@ -256,7 +256,7 @@ model. Treat that as a steerability property rather than a feature: the narrator
 through the director and character passes, so a model with no stopping condition lets a long session drift
 somewhere nobody steered it. It does not disqualify anything, because at 123B it was never a catalog
 candidate — but it does mean the W-10 8.2 in the table above should not be read as "better than 7.2." See
-*Reading W/10 at the top of its range* in [`model-research.md`](model-research.md). Put the floor in the
+*Reading W/10 at the top of its range* in [`model-research.md`](../docs-internal/model-research.md). Put the floor in the
 prompt and the preset, where you can see it and edit it.
 
 **Anubis-70B-v1.1 is the value pick, and note the version number.** It beats the *newer* v1.2 on all three
@@ -541,6 +541,6 @@ then re-rank this doc.
   [Anubis-70B-v1.1](https://huggingface.co/TheDrummer/Anubis-70B-v1.1),
   [GLM-4.5-Iceblink-v3-106B-A12B](https://huggingface.co/zerofata/GLM-4.5-Iceblink-v3-106B-A12B).
 - Author notes and the Sicarius-vs-leaderboard reconciliation: *Authors worth tracking* in
-  [`model-research.md`](model-research.md).
-- Internal: [`model-research.md`](model-research.md), [`leaderboard.md`](../testing/baseline/leaderboard.md),
+  [`model-research.md`](../docs-internal/model-research.md).
+- Internal: [`model-research.md`](../docs-internal/model-research.md), [`leaderboard.md`](../testing/baseline/leaderboard.md),
   [`GATE-PROBE.md`](../testing/baseline/GATE-PROBE.md), [`src/lib/localModels.ts`](../src/lib/localModels.ts).

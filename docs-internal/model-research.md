@@ -13,7 +13,7 @@
 > subscription** (MeroMero 2 concurrency units + Pepe-8B 1 unit, of 4). Caveat: the Chat plan's terms exclude
 > benchmarking, so run `npm run screen` on the metered Developer plan. Details in `model-recommendations.md` §3.
 
-> **Shortlist lives next door.** [`model-recommendations.md`](model-recommendations.md) carries the current
+> **Shortlist lives in `snowpanther's notes/`.** [`model-recommendations.md`](<../snowpanther's notes/model-recommendations.md>) carries the current
 > per-tier picks, a **rented-GPU tier for everything above 32 B** with RunPod $/hr and rent-vs-API
 > break-even, the cloud/API options with per-turn cost, and the screen queue — refreshed 2026-08-21 against
 > live HF + UGI + OpenRouter + RunPod data. This doc stays the research log (axes, probes, findings); that
