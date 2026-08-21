@@ -147,7 +147,7 @@ Locations exist to keep the story somewhere. Without a fixed place the narrator 
 
 What nesting decides is where *the story* can take them. When the AI reads an action as movement, it only considers places connected to where they are: down into a sub-location, or up and sideways from one. It then offers the move — *Move to the Eelhouse?* — and the player takes it or dismisses it. Nest your places and the story starts proposing journeys through them. Leave them flat and travel stays something the player reaches for.
 
-**Making one.** A new location always arrives at the top level, so nesting is a second move. In the list, drag a row by its grip: up and down reorder, sideways sets depth. From the keyboard, focus a grip and press space to lift the row, then the arrows — up and down to move it, left and right to take it out of or into the row above — and space again to drop it. On the canvas, drag a box into a box that already holds something. Deleting a parent never takes the branch with it; its children move up one level instead.
+**Making one.** A new location always arrives at the top level, so nesting is a second move. In the list, drag a row by its grip: up and down reorder, sideways sets depth. From the keyboard, focus a grip and press space to lift the row, then the arrows — up and down to move it, left and right to take it out of or into the row above — and space again to drop it. On the canvas, drag a box into one that already holds something, or hold still over a childless box until it lights up and then release. Deleting a parent never takes the branch with it; its children move up one level instead.
 
 **What the AI sees**
 
