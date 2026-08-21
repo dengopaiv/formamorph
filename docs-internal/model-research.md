@@ -4,7 +4,27 @@
 > baseline instead of re-deriving (and getting different answers each time). When asked for model info,
 > **read this first, refresh only what's stale, then update this doc** with the new numbers + date.
 
-**Last updated:** 2026-08-07 (harness debt: the engine is an endpoint preset now, so the seeded `useCustomEndpoint` flag is dead — see *Harness debt*)
+**Last updated:** 2026-08-21 (added *Authors worth tracking*; shortlist re-ranked next door) — prior: 2026-08-07 (harness debt: the engine is an endpoint preset now, so the seeded `useCustomEndpoint` flag is dead — see *Harness debt*)
+
+> **Hosting matters as much as the model.** Every model in the catalog and the screen queue is served on
+> **Featherless** (flat $25/mo, unlimited tokens, OpenAI-compatible) — including `G4-MeroMero-31B`,
+> `Gemma-4-26B-A4B-StyleTune-V2`, `Cydonia-24B-v4.3` and both `Assistant_Pepe` sizes. A candidate can now be
+> screened without downloading it, and the narration/structured **endpoint split is reachable on one
+> subscription** (MeroMero 2 concurrency units + Pepe-8B 1 unit, of 4). Caveat: the Chat plan's terms exclude
+> benchmarking, so run `npm run screen` on the metered Developer plan. Details in `model-recommendations.md` §3.
+
+> **Shortlist lives next door.** [`model-recommendations.md`](model-recommendations.md) carries the current
+> per-tier picks, a **rented-GPU tier for everything above 32 B** with RunPod $/hr and rent-vs-API
+> break-even, the cloud/API options with per-turn cost, and the screen queue — refreshed 2026-08-21 against
+> live HF + UGI + OpenRouter + RunPod data. This doc stays the research log (axes, probes, findings); that
+> one ranks. Refresh this first, then re-rank there. **Unscreened candidates as of 2026-08-21:**
+> G4-MeroMero-v2-31B, Gemma-4-12B-StyleTune, Artemis-31B-v1.1, Qwen3.8-27B-Dominatrix; and on rented
+> hardware Behemoth-X-123B-v2, Behemoth-128B-v3, Anubis-70B-v1.1, GLM-4.5-Air `/nothink`. **Best-provenance
+> unscreened candidate: `Gryphe/Gemma-4-31B-StyleTune`** — MeroMero's base, StyleTune's tuner.
+>
+> **Scope note:** `localModels.ts` describes only what the built-in engine downloads locally, so nothing in
+> the >32 B tier ever enters it — those are endpoint presets, and the catalog's VRAM tiers stop where they
+> stop for that reason.
 
 ---
 
@@ -53,8 +73,10 @@ an author), sort by `downloads`.
 
 **Selection axes, in priority order:**
 
-1. **Refusal rate → hard gate.** Below a willingness threshold (UGI `W/10`), disqualified. Adult RP; no prose
-   skill buys back a model that hedges or moralizes. (Why the defaults are abliterated/heretic.)
+1. **Refusal rate → hard gate, but it is a band and not a maximum.** Below a willingness threshold
+   (UGI `W/10`), disqualified — adult RP, and no prose skill buys back a model that hedges or moralizes.
+   (Why the defaults are abliterated/heretic.) **Above roughly W/10 9 it stops measuring an asset**: see
+   *Reading W/10 at the top of its range* below before treating a higher number as a better one.
 2. **2nd-person prose quality, scored thinking-OFF.** Narration is the product; weight EQ-Bench / UGI Writing
    without reasoning, since reasoning over-schematizes prose.
 3. **Format discipline & restraint on plain-text contracts.** Holds voice/tense/name-discipline and — the real
@@ -76,6 +98,91 @@ an author), sort by `downloads`.
 **cloud default is a *general* decensored writer (gemma-4 heretic)** — excluded by a policy it contradicted.
 The A/B settled it: the RP-tune premium did **not** survive. Eligibility is now per-model on measured quality,
 general decensored included. See the gate-probe results below.
+
+---
+
+## Reading W/10 at the top of its range (2026-08-21)
+
+Willingness is axis 1 and the catalog is deliberately built from abliterated/heretic models, so this is not
+a squeamishness note. It is a calibration note, because the axis stops behaving monotonically near the top.
+
+**What W/10 measures** is the absence of refusal. Low is disqualifying here: a narrator that hedges,
+moralizes or asks permission breaks the game, and the dialogue-collapse investigation below is largely a
+record of that failure mode. But the metric has no upper bound at "will write adult content" — it keeps
+going, and what it measures past that point is the **absence of any floor at all**.
+
+**Why a floor is an engineering property, not a moral one.** Formamorph's narrator is not a passive
+transcriber. The director, character and storyboard passes let it choose beats the player did not ask for,
+and stat/time passes let it move the world on its own. A model with a floor declines to take a scene
+somewhere the player never steered it; a model without one has no such stopping condition, and drift
+compounds across a long session. That is a **steerability** property, and it belongs in the same column as
+"does it obey the line contract" rather than in a content-policy discussion.
+
+**Probed finding (maintainer, undated).** `Behemoth`-class 123B models were pushed deliberately to find the
+ceiling. There is not one — the output limit is set by the prompt, not by the model. The ceiling was looked
+for; keeping the evidence would have got the researcher into trouble; the evidence was disposed of. That is
+the joke and also the correct outcome — **no examples are kept in this repo**, and none are needed, because
+the finding is the ceiling's absence and that is the whole of the useful information. Recorded here so the
+question is not re-opened from zero on the next refresh.
+
+**Consequences, which are the actionable part:**
+
+- **This is not a catalog disqualifier, because it was never a catalog candidate.** Nothing at 123B fits a
+  VRAM tier or is hosted (see `model-recommendations.md` §2–3). The question of shipping it does not arise;
+  it is a rented-pod curiosity. `localModels.ts` is a surface the app hands to users, and the research log
+  is not — those are different bars and this doc should not blur them.
+- **Prefer the floor when scores are close.** `DeepSeek V4 Flash` (Writing 54.58 / W-10 7.2) beats
+  Behemoth-X-123B-v2 (50.27 / 8.2) on the axis that is actually the product, at ~$0.45 per 100 turns. The
+  choice is not a trade here — the affordable option is also the better-behaved one.
+- **Read `Assistant_Pepe_70B`'s 9.5 the same way.** It is proposed for the *structured* passes — router,
+  stats, choices, clock — where output is a bare name or `NONE` and unbounded willingness has nothing to
+  act on. That is a reason it suits that role specifically, not a reason to promote it to narration.
+- **Where the floor should live.** In the prompt and the preset, which are inspectable and editable, not in
+  a model's refusal behavior, which is neither. This is consistent with how everything else in the app is
+  steered.
+
+---
+
+## Authors worth tracking (2026-08-21)
+
+Maintainer's trusted list, plus what the data says each is actually good *for*. Author is a genuine prior —
+it predicts template hygiene, quant availability and whether a model was ever tested for roleplay at all —
+but it is a prior, not a score. Every one of these still goes through the gate.
+
+| Author | Shape | Where they win | Watch out for |
+|---|---|---|---|
+| **TheDrummer** | RP finetunes, 8B→128B, every tier | The only author covering >32 B for RP at all. Cydonia (our ≤16 GB pick), Behemoth, Anubis, Artemis, Skyfall | The `R1`/`T1` reasoning variants score far *worse* on writing than the plain ones — see below |
+| **BeaverAI** | TheDrummer's testing org | Release candidates land here **weeks before** the main repo. Watch it to see what is coming | Lettered builds (`v1a`…`v1e`) are work-in-progress, sometimes broken (`-BROKEN` suffix is used honestly) |
+| **SicariusSicariiStuff** | RP + abliteration, 1B→70B | Small-model *discipline*. `Impish_LLAMA_4B` is our ≤4 GB pick and the **only** model that ever cleared the tier-4 routing gate | RP line tops out at 24B and most of it is Mistral-Nemo, which has never cleared B here. 2026 output has moved to assistant models |
+| **zerofata** | Gemma-4 / GLM RP finetunes | `G4-MeroMero-31B` is our board leader at A/84 | The `GLM-4.5-Iceblink` line *lowers* writing against its own base — the winning streak is Gemma-4, not GLM |
+| **tacodevs** | **Quantizer, not a finetuner** | vLLM serving formats — FP8, AWQ, W4A16-GPTQ — which is what you want on a rented pod, not GGUF | Publishes no models of their own; 123B coverage is of the weak `R1`/`T1` Behemoths |
+| **allura-org** | Experimental bases + RP | Early on new bases (Qwen3.8-27B-Dominatrix within 3 days of the base) | Ships candidly untested — *"no beta read we die like llama 4"* |
+| **mradermacher / bartowski** | Quantizers | Near-universal GGUF coverage, exact file sizes, imatrix builds | Auto-quant everything, so presence in their repos implies **nothing** about quality |
+
+### The Sicarius reconciliation — why the leaderboard disagrees with the catalog
+
+Worth writing down because it looks like a contradiction and isn't. On UGI Writing, **every** Sicarius model
+scores lower than TheDrummer's equivalent: their best is `Sweet_Dreams_12B` at 34.25 and
+`Assistant_Pepe_70B` at 34.32, against Cydonia-24B-v4.3 at 41.35 and Skyfall-31B-v4 at 39.99.
+`Impish_LLAMA_4B` scores 20.37.
+
+And yet `Impish_LLAMA_4B` is in the shipping catalog and nothing else has ever held the ≤4 GB slot. That is
+not an inconsistency — it is **selection axis 3 doing its job**. UGI Writing measures prose ceiling. The
+thing that kills small models here is *restraint and format discipline*: emitting `NONE`, emitting nothing,
+staying on the line contract across ~10 structured calls a turn. Impish 4B cleared routing at 93% where
+Qwen3.5-2B-abliterated (80%) and Qwen3-4B-RPG (60%) failed. No leaderboard measures that axis, which is
+exactly why the doc says it is only measurable by probe.
+
+**Practical reading:** trust Sicarius for the small and structured end, trust TheDrummer/zerofata for the
+prose ceiling. They are strong at different axes and the catalog should reflect that rather than pick one.
+
+### An unexploited idea: `Assistant_Pepe_70B` for the structured passes
+
+`Assistant_Pepe_70B` scores **UGI 59.52 / W-10 9.5** — the highest willingness of any 70 B in the CSV —
+against Writing 34.32. Read against our workload that is not a mediocre model, it is a *mis-tiered* one:
+low prose ceiling, extremely high obedience. Nine of the ~10 calls in a turn want obedience and no prose at
+all. With per-prompt endpoint routing (2.10.0) that is now expressible — narration on an RP model, router /
+stats / choices / clock / digests on an assistant model. Untested; worth a probe.
 
 ---
 
