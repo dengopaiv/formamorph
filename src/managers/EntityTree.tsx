@@ -18,8 +18,8 @@ const EntityTree = ({ selectedId, onSelect }: { selectedId: string | null; onSel
 
   const adapter: SortableTreeAdapter<FlatEntityNode> = {
     getVisible: (collapsed) => removeChildrenOf(flattenEntityTree(buildEntityTree(entityGroups, entities)), collapsed),
-    projectDepth: (visible, activeId, overId, offsetLeft) =>
-      getEntityDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT)?.depth ?? null,
+    project: (visible, activeId, overId, offsetLeft) =>
+      getEntityDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT),
     onDrop: (activeId, overId, offsetLeft, collapsed) => {
       const next = applyEntityDrop(entityGroups, entities, collapsed, activeId, overId, offsetLeft, TREE_INDENT);
       if (next.groups !== entityGroups) setEntityGroups(next.groups);
@@ -33,6 +33,7 @@ const EntityTree = ({ selectedId, onSelect }: { selectedId: string | null; onSel
         collapseLabels: ['Expand group', 'Collapse group'],
         icon: isGroup ? <Folder className="h-4 w-4 shrink-0" /> : undefined,
         label: <PlaceholderText text={isGroup ? node.group?.name ?? '' : node.leaf?.name ?? ''} placeholders={placeholders} />,
+        name: (isGroup ? node.group?.name : node.leaf?.name) || 'Untitled',
         labelClass: isGroup ? 'font-medium' : undefined,
         remove: () => { if (isGroup) removeEntityGroup(node.id); else removeEntity(node.id); },
         duplicate: () => {

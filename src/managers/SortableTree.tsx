@@ -12,15 +12,19 @@
 // depth-based nesting (see TraitTree history). Clamping only Y is fine and is exactly what
 // `restrictYToScrollAncestor` below does — it's why these trees can live in a ScrollArea without the
 // auto-scroll running away, while other lists (which don't need free X) use the stock both-axis modifiers.
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { EditorRow, EditorRowList, TREE_INDENT } from '@/components/EditorRow';
 import { X, Copy } from 'lucide-react';
 import {
   DndContext, pointerWithin, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors,
   type CollisionDetection, type Modifier, type KeyboardCoordinateGetter, type ScreenReaderInstructions,
-  type DragStartEvent, type DragMoveEvent, type DragOverEvent, type DragEndEvent,
+  type Announcements, type DragStartEvent, type DragMoveEvent, type DragOverEvent, type DragEndEvent,
 } from '@dnd-kit/core';
 import { depthStepOffset } from '@/lib/treeDepthStep';
+import {
+  announceLift, announceMove, announceDrop, announceCancel, describeDrop,
+  type TreeDropDescription,
+} from '@/lib/treeAnnouncements';
 
 // Pointer-precise collisions, but never empty: at the very bottom the pointer sits past the last row, so
 // `pointerWithin` alone returns nothing → dnd-kit drops the sort gap → the list shrinks → the pointer is
@@ -70,6 +74,8 @@ export interface TreeRowSpec {
   /** Optional icon between the grip and the label (e.g. a folder for groups). */
   icon?: ReactNode;
   label: ReactNode;
+  /** The row's name as plain text. `label` may be markup, and a screen reader needs words. */
+  name: string;
   /** Extra classes on the label span (e.g. 'font-medium' for group headers). */
   labelClass?: string;
   remove: () => void;
@@ -80,8 +86,11 @@ export interface TreeRowSpec {
 export interface SortableTreeAdapter<N extends { id: string; depth: number }> {
   /** Visible rows given the effective collapsed set (the dragged subtree's root is added while dragging). */
   getVisible: (collapsed: Set<string>) => N[];
-  /** The dragged row's projected depth for the current pointer position, or null for no projection. */
-  projectDepth: (visible: N[], activeId: string, overId: string, offsetLeft: number) => number | null;
+  /** Where the dragged row would land for the current pointer position, or null for no projection. The
+   *  depth drives the row's indent and the keyboard's sideways step; the parent is what a screen reader is
+   *  told it would nest into. */
+  project: (visible: N[], activeId: string, overId: string, offsetLeft: number)
+    => { depth: number; parentId: string | null } | null;
   /** Commit a drop. */
   onDrop: (activeId: string, overId: string, offsetLeft: number, collapsed: Set<string>) => void;
   rowSpec: (node: N) => TreeRowSpec;
@@ -179,7 +188,7 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
     if (activeDepth === undefined) return undefined;
 
     const next = depthStepOffset(
-      (at) => current.projectDepth(rows, activeId, over ?? activeId, at),
+      (at) => current.project(rows, activeId, over ?? activeId, at)?.depth ?? null,
       activeDepth, offset, step, TREE_INDENT,
     );
     // Returned even when the step was refused, so the arrow is swallowed rather than scrolling the list out
@@ -193,8 +202,48 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   );
 
   const projectedDepth = activeId && overId
-    ? adapter.projectDepth(visible, activeId, overId, offsetLeft)
+    ? adapter.project(visible, activeId, overId, offsetLeft)?.depth ?? null
     : null;
+
+  /**
+   * The drag's current landing spot, in words. Read through `live` for the same reason `coordinateGetter`
+   * is: dnd-kit builds its announcer once per drag, so a closure over this render would go stale after the
+   * first keypress.
+   *
+   * A lift describes the row where it already sits, which is `project` against its own slot at zero offset —
+   * exactly what `handleDragStart` seeds the drag state with.
+   */
+  const describeAt = useCallback((
+    activeId: string, overId: string | null, offset: number,
+  ): TreeDropDescription | null => {
+    const { visible: rows, adapter: current } = live.current;
+    return describeDrop(
+      rows, activeId, overId,
+      overId ? current.project(rows, activeId, overId, offset) : null,
+      (id) => {
+        const node = rows.find((n) => n.id === id);
+        return node ? current.rowSpec(node).name : null;
+      },
+    );
+  }, []);
+
+  const announcements = useMemo<Announcements>(() => {
+    const nameOf = (id: string) => {
+      const node = live.current.visible.find((n) => n.id === id);
+      return node ? live.current.adapter.rowSpec(node).name : id;
+    };
+    const here = (activeId: string, overId: string | null) =>
+      describeAt(activeId, overId, live.current.offsetLeft);
+    return {
+      onDragStart: ({ active }) =>
+        announceLift(nameOf(String(active.id)), describeAt(String(active.id), String(active.id), 0)),
+      onDragMove: ({ active, over }) => announceMove(here(String(active.id), over && String(over.id))),
+      onDragOver: ({ active, over }) => announceMove(here(String(active.id), over && String(over.id))),
+      onDragEnd: ({ active, over }) =>
+        announceDrop(nameOf(String(active.id)), here(String(active.id), over && String(over.id))),
+      onDragCancel: ({ active }) => announceCancel(nameOf(String(active.id))),
+    };
+  }, [describeAt]);
 
   const reset = () => { setActiveId(null); setOverId(null); setOffsetLeft(0); };
 
@@ -221,7 +270,7 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   return (
     <DndContext
       sensors={sensors}
-      accessibility={{ screenReaderInstructions: SCREEN_READER_INSTRUCTIONS }}
+      accessibility={{ screenReaderInstructions: SCREEN_READER_INSTRUCTIONS, announcements }}
       collisionDetection={collisionWithFallback}
       modifiers={[restrictYToScrollAncestor]}
       onDragStart={handleDragStart}

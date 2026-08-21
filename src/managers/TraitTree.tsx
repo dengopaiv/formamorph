@@ -17,8 +17,8 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
 
   const adapter: SortableTreeAdapter<FlatTraitNode> = {
     getVisible: (collapsed) => removeChildrenOf(flattenTraitTree(buildTraitTree(traitGroups, traits)), collapsed),
-    projectDepth: (visible, activeId, overId, offsetLeft) =>
-      getTraitDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT)?.depth ?? null,
+    project: (visible, activeId, overId, offsetLeft) =>
+      getTraitDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT),
     onDrop: (activeId, overId, offsetLeft, collapsed) => {
       const next = applyTraitDrop(traitGroups, traits, collapsed, activeId, overId, offsetLeft, TREE_INDENT);
       if (next.groups !== traitGroups) setTraitGroups(next.groups);
@@ -32,6 +32,7 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
         collapseLabels: ['Expand group', 'Collapse group'],
         icon: isGroup ? <Folder className="h-4 w-4 shrink-0" /> : undefined,
         label: <PlaceholderText text={isGroup ? node.group?.name ?? '' : node.leaf?.name ?? ''} placeholders={placeholders} />,
+        name: (isGroup ? node.group?.name : node.leaf?.name) || 'Untitled',
         labelClass: isGroup ? 'font-medium' : undefined,
         remove: () => { if (isGroup) removeTraitGroup(node.id); else removeTrait(node.id); },
         duplicate: () => {

@@ -23,8 +23,8 @@ const LocationTree = ({ selectedId, onSelect }: { selectedId: string | null; onS
 
   const adapter: SortableTreeAdapter<FlatLocationNode> = {
     getVisible: (collapsed) => removeCollapsedChildren(locationRows(locations), collapsed),
-    projectDepth: (visible, activeId, overId, offsetLeft) =>
-      getLocationDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT)?.depth ?? null,
+    project: (visible, activeId, overId, offsetLeft) =>
+      getLocationDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT),
     onDrop: (activeId, overId, offsetLeft, collapsed) => {
       const next = applyLocationDrop(locations, collapsed, activeId, overId, offsetLeft, TREE_INDENT);
       if (next !== locations) setLocations(next);
@@ -34,6 +34,7 @@ const LocationTree = ({ selectedId, onSelect }: { selectedId: string | null; onS
       lead: parentIds.has(node.id) ? 'chevron' : 'spacer',
       collapseLabels: ['Expand sub-locations', 'Collapse sub-locations'],
       label: <PlaceholderText text={node.location.name} placeholders={placeholders} />,
+      name: node.location.name,
       remove: () => setLocations(removeLocationPromotingChildren(locations, node.id)),
       duplicate: () => {
         const index = locations.findIndex((l) => l.id === node.id);
