@@ -45,9 +45,9 @@ export interface PromptVariable {
 }
 
 /** Every prompt editor maps to one of these kinds (mirrors the Settings → Output → Turn Extras toggles).
- *  The last three are authoring-time, not turn-time: they drive the world editor's ✨ buttons rather than
+ *  The last four are authoring-time, not turn-time: they drive the world editor's ✨ buttons rather than
  *  anything in the turn pipeline, so they carry none of the runtime context chips. */
-export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'summary' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'playerdesc' | 'aidesc' | 'aisummary';
+export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'summary' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'playerdesc' | 'aidesc' | 'aisummary' | 'desccheck';
 
 const SUMMARY_VARIANT: PromptVariant = {
   id: 'summary',
@@ -209,6 +209,9 @@ export const PROMPT_KIND_VARIABLES: Record<PromptKind, PromptVariable[]> = {
   playerdesc: [SUBJECT, FACETS],
   aidesc: [SUBJECT, FACETS],
   aisummary: [],
+  // The check pass reads both descriptions of one subject, so it takes the same per-kind noun the bridge
+  // prompts do — but no <FACETS>: it is told what to look for, not what to cover.
+  desccheck: [SUBJECT],
 };
 
 /** Variables offered by the editable user-message templates (the per-turn runtime values the code

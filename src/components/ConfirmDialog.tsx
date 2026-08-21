@@ -25,6 +25,7 @@ export function ConfirmDialog({
   children,
   open,
   onOpenChange,
+  confirmLabel = "Confirm",
 }: {
   title?: ReactNode
   description?: ReactNode
@@ -35,6 +36,9 @@ export function ConfirmDialog({
   children?: ReactNode
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Wording on the action button. A verb naming what happens reads better than "Confirm" on a dialog
+   *  that is not asking about deletion — and is what a screen reader announces on focus. */
+  confirmLabel?: string
 }) {
   const handleConfirm = () => {
     onConfirm?.()
@@ -46,7 +50,7 @@ export function ConfirmDialog({
 
   // Hold the title/description shown while open so a controlled dialog keeps them through its fade-out, even
   // as the parent clears the state that drove them (e.g. `pendingDelete?.name` going undefined on close).
-  const shown = useClosingSnapshot(open, { title, description, icon })
+  const shown = useClosingSnapshot(open, { title, description, icon, confirmLabel })
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -62,7 +66,7 @@ export function ConfirmDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel onClick={handleCancel}>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={handleConfirm}>Confirm</AlertDialogAction>
+          <AlertDialogAction onClick={handleConfirm}>{shown.confirmLabel}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

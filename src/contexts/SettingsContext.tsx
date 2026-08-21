@@ -6,6 +6,7 @@ import { isDesktop } from '../lib/imageGen/desktop';
 import { useLocalLlmStatus } from '../lib/useLocalLlmStatus';
 import { DEFAULT_TAG_PROMPT } from '../lib/imagePrompt';
 import { DEFAULT_PLAYER_DESC_PROMPT, DEFAULT_AI_DESC_PROMPT, DEFAULT_BRIDGE_MAX_TOKENS } from '../lib/bridgeDescription';
+import { DEFAULT_DESC_CHECK_PROMPT, DEFAULT_CHECK_MAX_TOKENS } from '../lib/descriptionCheck';
 import { DEFAULT_AI_SUMMARY_PROMPT, DEFAULT_SUMMARY_MAX_TOKENS } from '../lib/summarize';
 import {
   imageEndpointPresetCodec, makeDefaultStore as makeImageStore, presetStoreFromEnv, DEFAULT_IMAGE_ENDPOINT_VALUES,
@@ -205,6 +206,7 @@ const PROMPT_TEXT_DEFAULTS: PromptValues = {
   playerDescPrompt: DEFAULT_PLAYER_DESC_PROMPT,
   aiDescPrompt: DEFAULT_AI_DESC_PROMPT,
   aiSummaryPrompt: DEFAULT_AI_SUMMARY_PROMPT,
+  descCheckPrompt: DEFAULT_DESC_CHECK_PROMPT,
 };
 
 /** Each read-only built-in preset's values, its section style applied to the canonical text (markdown =
@@ -633,7 +635,7 @@ function useProvideSettings() {
     diaryPrompt, directorPrompt, directorUserPrompt, characterPrompt, storyboardPrompt,
     choicesUserPrompt, statUpdatesUserPrompt, locationChangeUserPrompt, summaryUserPrompt, nowLinePrompt, timePassedPrompt, timePassedUserPrompt,
     openingTimePrompt, openingTimeUserPrompt, sceneTagsPrompt, sceneTagsUserPrompt,
-    playerDescPrompt, aiDescPrompt, aiSummaryPrompt,
+    playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descCheckPrompt,
   } = promptValues;
   const setSystemPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'systemPrompt', v));
   const setNarrationUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'narrationUserPrompt', v));
@@ -664,6 +666,7 @@ function useProvideSettings() {
   const setPlayerDescPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'playerDescPrompt', v));
   const setAiDescPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'aiDescPrompt', v));
   const setAiSummaryPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'aiSummaryPrompt', v));
+  const setDescCheckPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'descCheckPrompt', v));
 
   // Preset-scoped tuning derives from the active preset (built-ins → empty → defaults); setters patch the
   // active preset and no-op under a built-in, mirroring the text setters above.
@@ -679,6 +682,7 @@ function useProvideSettings() {
     playerdesc: descTokenOverrides.playerdesc ?? DEFAULT_BRIDGE_MAX_TOKENS,
     aidesc: descTokenOverrides.aidesc ?? DEFAULT_BRIDGE_MAX_TOKENS,
     aisummary: descTokenOverrides.aisummary ?? DEFAULT_SUMMARY_MAX_TOKENS,
+    desccheck: descTokenOverrides.desccheck ?? DEFAULT_CHECK_MAX_TOKENS,
   }), [descTokenOverrides]);
   const setDescMaxTokens = useCallback(
     (kind: DescPromptKind, value: number) => setPresetStore((s) => updateDescTokens(s, kind, value)),
@@ -1399,6 +1403,8 @@ function useProvideSettings() {
     setAiDescPrompt,
     aiSummaryPrompt,
     setAiSummaryPrompt,
+    descCheckPrompt,
+    setDescCheckPrompt,
     descMaxTokens,
     setDescMaxTokens,
     setSummaryUserPrompt,

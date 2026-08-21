@@ -70,6 +70,9 @@ import {
 import {
   DEFAULT_AI_SUMMARY_PROMPT, DEFAULT_SUMMARY_MAX_TOKENS, SUMMARY_MAX_TOKENS_MIN, SUMMARY_MAX_TOKENS_MAX,
 } from '@/lib/summarize';
+import {
+  DEFAULT_DESC_CHECK_PROMPT, DEFAULT_CHECK_MAX_TOKENS, CHECK_MAX_TOKENS_MIN, CHECK_MAX_TOKENS_MAX,
+} from '@/lib/descriptionCheck';
 import { resetTutorials, useSeenTutorialCount, useTutorial } from '@/lib/tutorials';
 
 // The segmented rows' options. Copy lives in `settingsCopy`; these bindings only narrow `value` to the
@@ -662,6 +665,8 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     setAiDescPrompt,
     aiSummaryPrompt,
     setAiSummaryPrompt,
+    descCheckPrompt,
+    setDescCheckPrompt,
     descMaxTokens,
     setDescMaxTokens,
     sceneImageAuto,
@@ -978,6 +983,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     aisummary: {
       label: 'AI Summary',
       reset: () => { setAiSummaryPrompt(DEFAULT_AI_SUMMARY_PROMPT); setDescMaxTokens('aisummary', DEFAULT_SUMMARY_MAX_TOKENS); },
+    },
+    desccheck: {
+      label: 'Description Check',
+      reset: () => { setDescCheckPrompt(DEFAULT_DESC_CHECK_PROMPT); setDescMaxTokens('desccheck', DEFAULT_CHECK_MAX_TOKENS); },
     },
   };
   // Each prompt tab only exists while its prompt is enabled (toggled in Generation → System Prompts, or
@@ -2751,6 +2760,32 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   min={SUMMARY_MAX_TOKENS_MIN}
                   max={SUMMARY_MAX_TOKENS_MAX}
                   onChange={(n) => setDescMaxTokens('aisummary', n)}
+                  disabled={activePresetIsBuiltIn}
+                />
+              </TabsContent>
+
+              <TabsContent value="desccheck" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-2">
+                <p className="text-helper text-muted-foreground flex-shrink-0">
+                  Reads a subject&apos;s two descriptions against each other and reports where they disagree. It
+                  writes nothing, so a finding is yours to act on or ignore. The
+                  <span className="mx-1 font-medium">Subject</span>chip expands per kind, as above.
+                </p>
+                <PromptField
+                  value={descCheckPrompt}
+                  onChange={setDescCheckPrompt}
+                  variables={PROMPT_KIND_VARIABLES.desccheck}
+                  readOnlyReason={readOnlyReason}
+                  onRequestEdit={duplicateForEditing}
+                  fullscreen={promptsFullscreen}
+                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  readOnly={activePresetIsBuiltIn}
+                />
+                <DescTokenCapField
+                  id="descCheckMaxTokens"
+                  value={descMaxTokens.desccheck}
+                  min={CHECK_MAX_TOKENS_MIN}
+                  max={CHECK_MAX_TOKENS_MAX}
+                  onChange={(n) => setDescMaxTokens('desccheck', n)}
                   disabled={activePresetIsBuiltIn}
                 />
               </TabsContent>

@@ -4,6 +4,7 @@ import { MultiSelect } from "@/components/ui/multi-select";
 import { KeywordChips } from "@/components/KeywordChips";
 import { HelpButton } from "@/components/HelpButton";
 import AiGenerateButton from "@/components/AiGenerateButton";
+import DescriptionCheckButton from "@/components/DescriptionCheckButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { ModelUpload } from '../lib/UtilityComponents';
 import { IMAGE_CAPS } from '../lib/imageOptim';
@@ -61,6 +62,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
             mode="playerDesc"
             source={value.aiDescription}
             onChange={(s) => onChange('playerDescription', s)}
+            target={value.playerDescription}
             kind="character"
           />
         )}
@@ -72,12 +74,21 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
       <PlaceholderField
         label="AI-Facing Description"
         labelAside={(
-          <AiGenerateButton
-            mode="aiDesc"
-            source={value.playerDescription}
-            onChange={(s) => onChange('aiDescription', s)}
-            kind="character"
-          />
+          <>
+            <AiGenerateButton
+              mode="aiDesc"
+              source={value.playerDescription}
+              onChange={(s) => onChange('aiDescription', s)}
+              target={value.aiDescription}
+              kind="character"
+            />
+            <DescriptionCheckButton
+              playerText={value.playerDescription}
+              aiText={value.aiDescription}
+              kind="character"
+              subjectName={value.name}
+            />
+          </>
         )}
         value={value.aiDescription || ''}
         onChange={(v) => onChange('aiDescription', v)}
@@ -93,6 +104,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
               mode="summary"
               source={value.aiDescription}
               onChange={(s) => onChange('aiSummary', s)}
+              target={value.aiSummary}
             />
           )}
           value={value.aiSummary || ''}

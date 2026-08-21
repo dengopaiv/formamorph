@@ -43,5 +43,6 @@ export function computePromptTabAvailability(flags: PromptTabFlags): Record<stri
     playerdesc: advanced,
     aidesc: advanced,
     aisummary: advanced,
+    desccheck: advanced,
   };
 }

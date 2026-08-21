@@ -152,7 +152,11 @@ Three description fields, with distinct jobs:
 
 The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing Description.
 
-> 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds all three drafting prompts — Player-Facing, AI-Facing and Summary — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
+> 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds the drafting prompts — Player-Facing, AI-Facing, Summary and Description Check — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
+
+> ⚠️ **The two descriptions write into each other, so neither is a base.** Drafting the Player-Facing one from the AI-Facing one and then the AI-Facing one back from it does not return you to where you started: the player-facing prompt is meant to leave private material out, and the AI-facing prompt is meant to fill in what a blurb implies, so a round trip strips your secrets and replaces them with what the model inferred. A ✨ button now asks before replacing text that is already there, naming how much goes — and generating into an empty field is still one click, because nothing can be lost there.
+
+> 🔍 **The 🔍 button beside AI-Facing Description reads the two against each other** and reports where they disagree — a fact one states and the other contradicts, something the blurb asserts that the note does not account for, or an AI-facing description that has stopped saying any more than the player-facing one. It writes nothing: every finding is yours to act on or ignore. Its prompt and cap live in Settings → **Prompts** → **Authoring** → **Description Check**.
 
 ### Aliases
 
@@ -266,7 +270,11 @@ The default prompt gives the **narrator** the current location in full, and its 
 
 The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing Description. Blank is fine — it falls back to the full description.
 
-> 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds all three drafting prompts — Player-Facing, AI-Facing and Summary — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
+> 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds the drafting prompts — Player-Facing, AI-Facing, Summary and Description Check — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
+
+> ⚠️ **The two descriptions write into each other, so neither is a base.** Drafting the Player-Facing one from the AI-Facing one and then the AI-Facing one back from it does not return you to where you started: the player-facing prompt is meant to leave private material out, and the AI-facing prompt is meant to fill in what a blurb implies, so a round trip strips your secrets and replaces them with what the model inferred. A ✨ button now asks before replacing text that is already there, naming how much goes — and generating into an empty field is still one click, because nothing can be lost there.
+
+> 🔍 **The 🔍 button beside AI-Facing Description reads the two against each other** and reports where they disagree — a fact one states and the other contradicts, something the blurb asserts that the note does not account for, or an AI-facing description that has stopped saying any more than the player-facing one. It writes nothing: every finding is yours to act on or ignore. Its prompt and cap live in Settings → **Prompts** → **Authoring** → **Description Check**.
 
 ### Entities
 

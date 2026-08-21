@@ -6,7 +6,7 @@ import {
   PROMPT_KIND_VARIABLES,
   type PromptVariable,
 } from './promptVariables';
-import { isAuthoringTab } from './promptGroups';
+import { isAuthoringTab, AUTHORING_TABS } from './promptGroups';
 
 describe('variant token helpers', () => {
   it('extracts the variant id (or null for the default form)', () => {
@@ -143,7 +143,9 @@ describe('the authoring prompt kinds offer none of them', () => {
   // The complement of the rule above, and the reason those kinds are exempt from it: they run while the
   // author is building a world, where <LOCATION> and friends have no turn to resolve against. Offering one
   // would put a chip on the toolbar that can only ever render a placeholder.
-  for (const kind of ['playerdesc', 'aidesc', 'aisummary'] as const) {
+  // Driven off AUTHORING_TABS rather than a written-out list, so a kind added to the group is held to
+  // this rule by arriving rather than by someone remembering to add it here.
+  for (const kind of AUTHORING_TABS) {
     it(kind, () => {
       const tokens = PROMPT_KIND_VARIABLES[kind].map((v) => v.token);
       for (const t of CONTEXT) expect(tokens).not.toContain(t);
@@ -155,6 +157,8 @@ describe('the authoring prompt kinds offer none of them', () => {
     expect(PROMPT_KIND_VARIABLES.aidesc.map((v) => v.token)).toEqual(['<SUBJECT>', '<FACETS>']);
     // The summary condenses whatever text it is handed, so it has no subject to vary by.
     expect(PROMPT_KIND_VARIABLES.aisummary).toEqual([]);
+    // The check pass is told what to look for, not what to cover, so it takes the subject and no facets.
+    expect(PROMPT_KIND_VARIABLES.desccheck.map((v) => v.token)).toEqual(['<SUBJECT>']);
   });
 });
 

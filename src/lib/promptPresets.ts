@@ -14,7 +14,7 @@ export type ReasoningBudgetMap = Partial<Record<AIRequestType, number>>;
 
 /** The authoring prompts, which run outside the turn pipeline and so are keyed by their own ids rather
  *  than by `AIRequestType`. */
-export type DescPromptKind = 'playerdesc' | 'aidesc' | 'aisummary';
+export type DescPromptKind = 'playerdesc' | 'aidesc' | 'aisummary' | 'desccheck';
 
 /** Per-authoring-prompt output caps carried on a preset; a missing kind uses its shipped default. Paired
  *  with the prompt text because the two only make sense together — a template asking for more than the cap
@@ -56,6 +56,7 @@ export const PROMPT_TEXT_KEYS = [
   'playerDescPrompt',
   'aiDescPrompt',
   'aiSummaryPrompt',
+  'descCheckPrompt',
 ] as const;
 
 export type PromptTextKey = (typeof PROMPT_TEXT_KEYS)[number];

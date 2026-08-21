@@ -19,7 +19,7 @@ export interface PromptGroup {
  * per-request tuning (no `AIRequestType` to key samplers or endpoint routing by), so the panel shows the
  * system prompt alone.
  */
-export const AUTHORING_TABS = ['playerdesc', 'aidesc', 'aisummary'] as const;
+export const AUTHORING_TABS = ['playerdesc', 'aidesc', 'aisummary', 'desccheck'] as const;
 
 /** Whether a `promptTab` id is one of the authoring prompts. */
 export function isAuthoringTab(tab: string): boolean {
@@ -60,6 +60,7 @@ export const PROMPT_DESCRIPTIONS: Record<string, string> = {
   playerdesc: 'Turns an AI-facing note into the description a player reads.',
   aidesc: 'Expands a player-facing blurb into the reference the narrator reads.',
   aisummary: 'Condenses an AI-facing description into the one-line version used in lists.',
+  desccheck: 'Reads a subject’s two descriptions against each other and reports where they disagree.',
 };
 
 /** Which part of the selected prompt is on show. */

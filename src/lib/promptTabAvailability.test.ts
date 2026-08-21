@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computePromptTabAvailability, type PromptTabFlags } from './promptTabAvailability';
+import { AUTHORING_TABS } from './promptGroups';
 
 const base: PromptTabFlags = {
   thinkingMode: 'off',
@@ -63,23 +64,21 @@ describe('computePromptTabAvailability — other tabs', () => {
 });
 
 describe('computePromptTabAvailability — authoring prompts', () => {
-  it('gates the authoring prompts on advanced mode alone', () => {
+  it('gates every authoring prompt on advanced mode alone', () => {
+    // Enumerated from the group itself: a new authoring prompt that forgot its availability entry would
+    // read as undefined here, not as a passing test nobody updated.
     const simple = computePromptTabAvailability(base);
-    expect(simple.playerdesc).toBe(false);
-    expect(simple.aidesc).toBe(false);
-    expect(simple.aisummary).toBe(false);
-
     const adv = computePromptTabAvailability({ ...base, advanced: true });
-    expect(adv.playerdesc).toBe(true);
-    expect(adv.aidesc).toBe(true);
-    expect(adv.aisummary).toBe(true);
+    for (const tab of AUTHORING_TABS) {
+      expect(simple[tab]).toBe(false);
+      expect(adv[tab]).toBe(true);
+    }
   });
 
   it('does not tie them to any turn-pipeline feature', () => {
     // They drive the world editor's buttons, which are always present. Switching every gameplay feature
     // off must not take the prompt editors away with it.
     const adv = computePromptTabAvailability({ ...base, advanced: true, thinkingMode: 'off' });
-    expect(adv.playerdesc).toBe(true);
-    expect(adv.aisummary).toBe(true);
+    for (const tab of AUTHORING_TABS) expect(adv[tab]).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MultiSelect } from "@/components/ui/multi-select";
 import AiGenerateButton from "@/components/AiGenerateButton";
+import DescriptionCheckButton from "@/components/DescriptionCheckButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { describePlaceholders } from '@/lib/placeholders';
 import { SoundUpload } from '../lib/UtilityComponents';
@@ -61,6 +62,7 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
             mode="playerDesc"
             source={editingLocation.aiDescription}
             onChange={(s) => handleChange('playerDescription', s)}
+            target={editingLocation.playerDescription}
             kind="location"
           />
         )}
@@ -72,12 +74,21 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
       <PlaceholderField
         label="AI-Facing Description"
         labelAside={(
-          <AiGenerateButton
-            mode="aiDesc"
-            source={editingLocation.playerDescription}
-            onChange={(s) => handleChange('aiDescription', s)}
-            kind="location"
-          />
+          <>
+            <AiGenerateButton
+              mode="aiDesc"
+              source={editingLocation.playerDescription}
+              onChange={(s) => handleChange('aiDescription', s)}
+              target={editingLocation.aiDescription}
+              kind="location"
+            />
+            <DescriptionCheckButton
+              playerText={editingLocation.playerDescription}
+              aiText={editingLocation.aiDescription}
+              kind="location"
+              subjectName={editingLocation.name}
+            />
+          </>
         )}
         value={editingLocation.aiDescription || ''}
         onChange={(v) => handleChange('aiDescription', v)}
@@ -93,6 +104,7 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
               mode="summary"
               source={editingLocation.aiDescription}
               onChange={(s) => handleChange('aiSummary', s)}
+              target={editingLocation.aiSummary}
             />
           )}
           value={editingLocation.aiSummary || ''}
