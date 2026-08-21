@@ -5,6 +5,8 @@ import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TO
 import { isDesktop } from '../lib/imageGen/desktop';
 import { useLocalLlmStatus } from '../lib/useLocalLlmStatus';
 import { DEFAULT_TAG_PROMPT } from '../lib/imagePrompt';
+import { DEFAULT_PLAYER_DESC_PROMPT, DEFAULT_AI_DESC_PROMPT, DEFAULT_BRIDGE_MAX_TOKENS } from '../lib/bridgeDescription';
+import { DEFAULT_AI_SUMMARY_PROMPT, DEFAULT_SUMMARY_MAX_TOKENS } from '../lib/summarize';
 import {
   imageEndpointPresetCodec, makeDefaultStore as makeImageStore, presetStoreFromEnv, DEFAULT_IMAGE_ENDPOINT_VALUES,
   activeValues as imageEndpointActiveValues, setActive as imageSetActive, addPreset as imageAddPreset,
@@ -40,10 +42,10 @@ import {
 import {
   emptyStore, presetStoreCodec, activeValues, isBuiltInActive, activeStyle, BUILTIN_PRESETS,
   setActive as setActivePreset, addPreset as addPresetOp, renamePreset as renamePresetOp, deletePreset as deletePresetOp, resetPreset as resetPresetOp, updateValue,
-  activeSamplers, activeReasoning, activeReasoningBudget, activeVerbatim, activePromptEndpoints,
-  updateSamplers, updateReasoning, updateReasoningBudget, updateVerbatim, updatePromptEndpoints, foldTuningIntoUserPresets,
+  activeSamplers, activeReasoning, activeReasoningBudget, activeVerbatim, activePromptEndpoints, activeDescTokens,
+  updateSamplers, updateReasoning, updateReasoningBudget, updateVerbatim, updatePromptEndpoints, updateDescTokens, foldTuningIntoUserPresets,
   addFullPreset, replacePreset,
-  type PromptPresetStore, type PromptValues, type VerbatimMap, type PromptPreset,
+  type PromptPresetStore, type PromptValues, type VerbatimMap, type PromptPreset, type DescPromptKind,
 } from '../lib/promptPresets';
 import { buildSharedPreset, type SharedPreset, type ImportedPreset } from '../lib/promptPresetShare';
 import { resolvePinnedPreset } from '../lib/worldPromptPreset';
@@ -198,6 +200,11 @@ const PROMPT_TEXT_DEFAULTS: PromptValues = {
   openingTimeUserPrompt: defaultOpeningTimeUserPrompt,
   sceneTagsPrompt: defaultSceneTagsPrompt,
   sceneTagsUserPrompt: defaultSceneTagsUserPrompt,
+  // Authoring prompts. Their defaults live beside the code that sends them (like DEFAULT_TAG_PROMPT does)
+  // rather than in GamePrompts, which is the turn pipeline's own file.
+  playerDescPrompt: DEFAULT_PLAYER_DESC_PROMPT,
+  aiDescPrompt: DEFAULT_AI_DESC_PROMPT,
+  aiSummaryPrompt: DEFAULT_AI_SUMMARY_PROMPT,
 };
 
 /** Each read-only built-in preset's values, its section style applied to the canonical text (markdown =
@@ -626,6 +633,7 @@ function useProvideSettings() {
     diaryPrompt, directorPrompt, directorUserPrompt, characterPrompt, storyboardPrompt,
     choicesUserPrompt, statUpdatesUserPrompt, locationChangeUserPrompt, summaryUserPrompt, nowLinePrompt, timePassedPrompt, timePassedUserPrompt,
     openingTimePrompt, openingTimeUserPrompt, sceneTagsPrompt, sceneTagsUserPrompt,
+    playerDescPrompt, aiDescPrompt, aiSummaryPrompt,
   } = promptValues;
   const setSystemPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'systemPrompt', v));
   const setNarrationUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'narrationUserPrompt', v));
@@ -653,6 +661,9 @@ function useProvideSettings() {
   const setOpeningTimeUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'openingTimeUserPrompt', v));
   const setSceneTagsPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'sceneTagsPrompt', v));
   const setSceneTagsUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'sceneTagsUserPrompt', v));
+  const setPlayerDescPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'playerDescPrompt', v));
+  const setAiDescPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'aiDescPrompt', v));
+  const setAiSummaryPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'aiSummaryPrompt', v));
 
   // Preset-scoped tuning derives from the active preset (built-ins → empty → defaults); setters patch the
   // active preset and no-op under a built-in, mirroring the text setters above.
@@ -660,6 +671,19 @@ function useProvideSettings() {
   const promptReasoning = useMemo(() => activeReasoning(effectiveStore), [effectiveStore]);
   const promptReasoningBudget = useMemo(() => activeReasoningBudget(effectiveStore), [effectiveStore]);
   const promptEndpoints = useMemo(() => activePromptEndpoints(effectiveStore), [effectiveStore]);
+
+  // Authoring-prompt output caps. Resolved here rather than at the call site so the ✨ buttons read one
+  // ready number, and so a preset carrying no override still lands on the shipped default.
+  const descTokenOverrides = useMemo(() => activeDescTokens(effectiveStore), [effectiveStore]);
+  const descMaxTokens = useMemo(() => ({
+    playerdesc: descTokenOverrides.playerdesc ?? DEFAULT_BRIDGE_MAX_TOKENS,
+    aidesc: descTokenOverrides.aidesc ?? DEFAULT_BRIDGE_MAX_TOKENS,
+    aisummary: descTokenOverrides.aisummary ?? DEFAULT_SUMMARY_MAX_TOKENS,
+  }), [descTokenOverrides]);
+  const setDescMaxTokens = useCallback(
+    (kind: DescPromptKind, value: number) => setPresetStore((s) => updateDescTokens(s, kind, value)),
+    [setPresetStore],
+  );
   const setPromptEndpoint = useCallback(
     (kind: AIRequestType, id: string | null) =>
       setPresetStore((s) => updatePromptEndpoints(s, (m) => setRoutedEndpoint(m, kind, id))),
@@ -1369,6 +1393,14 @@ function useProvideSettings() {
     setSceneTagsPrompt,
     sceneTagsUserPrompt,
     setSceneTagsUserPrompt,
+    playerDescPrompt,
+    setPlayerDescPrompt,
+    aiDescPrompt,
+    setAiDescPrompt,
+    aiSummaryPrompt,
+    setAiSummaryPrompt,
+    descMaxTokens,
+    setDescMaxTokens,
     setSummaryUserPrompt,
     promptPresets,
     builtinPresets,

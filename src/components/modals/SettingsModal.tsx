@@ -20,7 +20,7 @@ import { type SharedPreset } from '@/lib/promptPresetShare';
 import { APP_VERSION } from '@/lib/version';
 import { normalizeEndpointUrl, endpointUrlWasCompleted } from '@/lib/endpointUrl';
 import { computePromptTabAvailability } from '@/lib/promptTabAvailability';
-import { visibleGroups, SURFACE_LABELS, PROMPT_DESCRIPTIONS, type PromptSurface } from '@/lib/promptGroups';
+import { visibleGroups, SURFACE_LABELS, PROMPT_DESCRIPTIONS, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
 import { Settings } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, dialogFullHeightMobile } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -63,6 +63,13 @@ import { COMMON_LANGUAGES } from '@/lib/languages';
 import ImageSetupGuide from './ImageSetupGuide';
 import ComfyWorkflowGuide from './ComfyWorkflowGuide';
 import { DEFAULT_TAG_PROMPT, SUBJECT_GUIDANCE } from '@/lib/imagePrompt';
+import {
+  DEFAULT_PLAYER_DESC_PROMPT, DEFAULT_AI_DESC_PROMPT, DEFAULT_BRIDGE_MAX_TOKENS,
+  BRIDGE_MAX_TOKENS_MIN, BRIDGE_MAX_TOKENS_MAX, BRIDGE_SUBJECT, BRIDGE_FACETS,
+} from '@/lib/bridgeDescription';
+import {
+  DEFAULT_AI_SUMMARY_PROMPT, DEFAULT_SUMMARY_MAX_TOKENS, SUMMARY_MAX_TOKENS_MIN, SUMMARY_MAX_TOKENS_MAX,
+} from '@/lib/summarize';
 import { resetTutorials, useSeenTutorialCount, useTutorial } from '@/lib/tutorials';
 
 // The segmented rows' options. Copy lives in `settingsCopy`; these bindings only narrow `value` to the
@@ -139,7 +146,34 @@ function VerbatimTurnsField({ id, value, onChange, disabled }: { id: string; val
   );
 }
 
-// The prompt sub-tab keys map to their `AIRequestType` for per-prompt temperature lookup.
+/** Per-prompt control: the output cap for one authoring prompt. It rides the System view rather than
+ *  Options because it is not tuning — a template edited to ask for more than the cap allows stops
+ *  mid-sentence, with nothing on screen to say why, so the two are only meaningful side by side. */
+function DescTokenCapField({ id, value, min, max, onChange, disabled }: {
+  id: string; value: number; min: number; max: number; onChange: (n: number) => void; disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2 flex-shrink-0">
+      <label htmlFor={id} className="text-label">Max Output Tokens</label>
+      <Input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Math.min(max, numInput(e.target.value, min)))}
+        className="w-24"
+      />
+      <span className="hidden sm:inline text-helper text-muted-foreground">
+        Caps how long this generation may run. Raise it if you ask the prompt for longer text.
+      </span>
+    </div>
+  );
+}
+
+// The prompt sub-tab keys map to their `AIRequestType` for per-prompt temperature lookup. The authoring
+// prompts are deliberately absent: they run outside the turn pipeline and have no request type.
 const TAB_TO_REQUEST: Record<string, AIRequestType> = {
   narration: 'narration', thinking: 'thinking', choices: 'choices', statupdates: 'statUpdates',
   location: 'locationChange', summary: 'summary', diary: 'diary', director: 'director',
@@ -622,6 +656,14 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     setSceneTagsPrompt,
     sceneTagsUserPrompt,
     setSceneTagsUserPrompt,
+    playerDescPrompt,
+    setPlayerDescPrompt,
+    aiDescPrompt,
+    setAiDescPrompt,
+    aiSummaryPrompt,
+    setAiSummaryPrompt,
+    descMaxTokens,
+    setDescMaxTokens,
     sceneImageAuto,
     setSceneImageAuto,
     setSummaryUserPrompt,
@@ -923,6 +965,20 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     director: { label: 'Director', reset: () => setDirectorPrompt(defaultDirectorPrompt) },
     character: { label: 'Character', reset: () => setCharacterPrompt(defaultCharacterPrompt) },
     storyboard: { label: 'Storyboard', reset: () => setStoryboardPrompt(defaultStoryboardPrompt) },
+    // Reset restores the prompt AND its cap: the two were edited as a pair, so restoring only the text
+    // would leave a default template running under a cap the author raised for a longer one.
+    playerdesc: {
+      label: 'Player Description',
+      reset: () => { setPlayerDescPrompt(DEFAULT_PLAYER_DESC_PROMPT); setDescMaxTokens('playerdesc', DEFAULT_BRIDGE_MAX_TOKENS); },
+    },
+    aidesc: {
+      label: 'AI Description',
+      reset: () => { setAiDescPrompt(DEFAULT_AI_DESC_PROMPT); setDescMaxTokens('aidesc', DEFAULT_BRIDGE_MAX_TOKENS); },
+    },
+    aisummary: {
+      label: 'AI Summary',
+      reset: () => { setAiSummaryPrompt(DEFAULT_AI_SUMMARY_PROMPT); setDescMaxTokens('aisummary', DEFAULT_SUMMARY_MAX_TOKENS); },
+    },
   };
   // Each prompt tab only exists while its prompt is enabled (toggled in Generation → System Prompts, or
   // its governing setting for Thinking/Summary). If the open tab is no longer available (disabled since,
@@ -930,6 +986,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   const promptAvailable = computePromptTabAvailability({
     thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, aiClock,
     sceneImages: !imageGenDisabled,
+    advanced,
   });
   const activePromptTab = promptAvailable[promptTab] ? promptTab : 'narration';
   // Tag Prompt only exists while image generation is on; fall back to Image so the panel is never blank.
@@ -998,14 +1055,18 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
       variables: undefined,
     }] : []),
   ];
+  // The authoring prompts have only their system template: no user message, no riders, and no per-request
+  // tuning to put under Options (they run outside the turn pipeline, so there is no AIRequestType to key
+  // samplers or endpoint routing by). Their output cap rides the System view instead.
+  const authoringPrompt = isAuthoringTab(activePromptTab);
   // Which parts the open prompt actually has — the rail lists exactly these under it.
-  const activeSurfaces: PromptSurface[] = [
+  const activeSurfaces: PromptSurface[] = authoringPrompt ? ['system'] : [
     'system',
     ...(activeUserPrompt ? ['user' as const] : []),
     ...(messagesAvailable ? ['messages' as const] : []),
     'options',
   ];
-  const showingOptions = promptView === 'options';
+  const showingOptions = promptView === 'options' && !authoringPrompt;
   // The Reset button targets whichever template is on screen. `label` is the full noun ("Narration Prompt"
   // or just "Message" for the user-message template), so the button reads "Reset <label>". The Messages
   // view carries its own per-field resets, so the footer button hides there (like Options).
@@ -2612,6 +2673,88 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
               )}
               </>
               )}
+
+              {/* Authoring prompts — the world editor's ✨ buttons. System template only, each with the
+                  output cap that has to move with it. Advanced mode gates them into the rail. */}
+              {advanced && (<>
+              <TabsContent value="playerdesc" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-2">
+                <p className="text-helper text-muted-foreground flex-shrink-0">
+                  Rewrites an AI-facing description into the player-facing one. The
+                  <span className="mx-1 font-medium">Subject</span>and
+                  <span className="mx-1 font-medium">Facets</span>chips expand per kind — character:
+                  “{BRIDGE_SUBJECT.character}” / “{BRIDGE_FACETS.character}”; location: “{BRIDGE_SUBJECT.location}” / “{BRIDGE_FACETS.location}”.
+                </p>
+                <PromptField
+                  value={playerDescPrompt}
+                  onChange={setPlayerDescPrompt}
+                  variables={PROMPT_KIND_VARIABLES.playerdesc}
+                  readOnlyReason={readOnlyReason}
+                  onRequestEdit={duplicateForEditing}
+                  fullscreen={promptsFullscreen}
+                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  readOnly={activePresetIsBuiltIn}
+                />
+                <DescTokenCapField
+                  id="playerDescMaxTokens"
+                  value={descMaxTokens.playerdesc}
+                  min={BRIDGE_MAX_TOKENS_MIN}
+                  max={BRIDGE_MAX_TOKENS_MAX}
+                  onChange={(n) => setDescMaxTokens('playerdesc', n)}
+                  disabled={activePresetIsBuiltIn}
+                />
+              </TabsContent>
+
+              <TabsContent value="aidesc" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-2">
+                <p className="text-helper text-muted-foreground flex-shrink-0">
+                  Expands a player-facing description into the AI-facing one. The
+                  <span className="mx-1 font-medium">Subject</span>and
+                  <span className="mx-1 font-medium">Facets</span>chips expand per kind, as above.
+                </p>
+                <PromptField
+                  value={aiDescPrompt}
+                  onChange={setAiDescPrompt}
+                  variables={PROMPT_KIND_VARIABLES.aidesc}
+                  readOnlyReason={readOnlyReason}
+                  onRequestEdit={duplicateForEditing}
+                  fullscreen={promptsFullscreen}
+                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  readOnly={activePresetIsBuiltIn}
+                />
+                <DescTokenCapField
+                  id="aiDescMaxTokens"
+                  value={descMaxTokens.aidesc}
+                  min={BRIDGE_MAX_TOKENS_MIN}
+                  max={BRIDGE_MAX_TOKENS_MAX}
+                  onChange={(n) => setDescMaxTokens('aidesc', n)}
+                  disabled={activePresetIsBuiltIn}
+                />
+              </TabsContent>
+
+              <TabsContent value="aisummary" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-2">
+                <p className="text-helper text-muted-foreground flex-shrink-0">
+                  Condenses an AI-facing description into the one-line AI-facing summary. It condenses
+                  whatever text it is handed, so it takes no per-kind chips.
+                </p>
+                <PromptField
+                  value={aiSummaryPrompt}
+                  onChange={setAiSummaryPrompt}
+                  variables={PROMPT_KIND_VARIABLES.aisummary}
+                  readOnlyReason={readOnlyReason}
+                  onRequestEdit={duplicateForEditing}
+                  fullscreen={promptsFullscreen}
+                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  readOnly={activePresetIsBuiltIn}
+                />
+                <DescTokenCapField
+                  id="aiSummaryMaxTokens"
+                  value={descMaxTokens.aisummary}
+                  min={SUMMARY_MAX_TOKENS_MIN}
+                  max={SUMMARY_MAX_TOKENS_MAX}
+                  onChange={(n) => setDescMaxTokens('aisummary', n)}
+                  disabled={activePresetIsBuiltIn}
+                />
+              </TabsContent>
+              </>)}
               </div>
             </Tabs>
 

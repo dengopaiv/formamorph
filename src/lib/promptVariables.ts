@@ -44,8 +44,10 @@ export interface PromptVariable {
   affixable?: boolean;
 }
 
-/** Every prompt editor maps to one of these kinds (mirrors the Settings → Output → Turn Extras toggles). */
-export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'summary' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags';
+/** Every prompt editor maps to one of these kinds (mirrors the Settings → Output → Turn Extras toggles).
+ *  The last three are authoring-time, not turn-time: they drive the world editor's ✨ buttons rather than
+ *  anything in the turn pipeline, so they carry none of the runtime context chips. */
+export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'summary' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'playerdesc' | 'aidesc' | 'aisummary';
 
 const SUMMARY_VARIANT: PromptVariant = {
   id: 'summary',
@@ -152,6 +154,11 @@ const NARRATION: PromptVariable = { token: '<NARRATION>', label: 'Narration', co
 // here so the shared prompt parser/chip recognize it; it is never offered in a game prompt's toolbar.
 export const SUBJECT: PromptVariable = { token: '<SUBJECT>', label: 'Subject', color: HIGHLIGHT_PALETTE[12] };
 
+// The description-bridge prompts only (Settings → Prompts → Authoring): the facets a description of this
+// kind should cover. Its companion <SUBJECT> is the token above, expanded there to a noun ("this place")
+// rather than the tag prompt's image guidance — the same chip doing a different job in a different prompt.
+export const FACETS: PromptVariable = { token: '<FACETS>', label: 'Facets', color: HIGHLIGHT_PALETTE[15] };
+
 // The story's own clock — "Day 3, evening" — as a plain inline value. Renders the uniform placeholder while
 // Time in Memory is off, so an affixed placement simply disappears rather than needing its own switch.
 const TIME: PromptVariable = { token: '<TIME>', label: 'Time', color: HIGHLIGHT_PALETTE[10], affixable: true };
@@ -173,7 +180,7 @@ export const NOW_LINE_VARIABLES: PromptVariable[] = [LOCATION, ENTITIES, TIME, N
 /** All known variables — used by the parser to recognize any token regardless of which prompt it's in. */
 export const ALL_PROMPT_VARIABLES: PromptVariable[] = [
   WORLD, STATS, TRAITS, LOCATION, ENTITIES, NOTES, DICTIONARY, LENGTH, MARKDOWN, ACTIVE_CHARACTER, PLAYER_ACTION, NARRATION, CHARACTER, SUBJECT,
-  TIME, IN_FRAME, LANGUAGE,
+  TIME, IN_FRAME, LANGUAGE, FACETS,
 ];
 
 /** The context chips every system prompt can reference; GameViewer substitutes them uniformly. */
@@ -196,6 +203,12 @@ export const PROMPT_KIND_VARIABLES: Record<PromptKind, PromptVariable[]> = {
   timepassed: [...CONTEXT_VARS],
   timeopening: [...CONTEXT_VARS],
   scenetags: [...CONTEXT_VARS],
+  // Authoring prompts run in the world editor, where no turn is in flight and the runtime context chips
+  // would have nothing to resolve against — so they offer only their own per-kind tokens. The summary pass
+  // is kind-agnostic (it condenses whatever text it is handed), so it offers none at all.
+  playerdesc: [SUBJECT, FACETS],
+  aidesc: [SUBJECT, FACETS],
+  aisummary: [],
 };
 
 /** Variables offered by the editable user-message templates (the per-turn runtime values the code

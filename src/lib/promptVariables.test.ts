@@ -6,6 +6,7 @@ import {
   PROMPT_KIND_VARIABLES,
   type PromptVariable,
 } from './promptVariables';
+import { isAuthoringTab } from './promptGroups';
 
 describe('variant token helpers', () => {
   it('extracts the variant id (or null for the default form)', () => {
@@ -125,14 +126,36 @@ describe('multi-axis variants (Stats: content × format)', () => {
   });
 });
 
-describe('every prompt kind offers the six shared context chips', () => {
-  const CONTEXT = ['<WORLD DESCRIPTION>', '<STATS DESCRIPTION>', '<TRAITS DESCRIPTION>', '<LOCATION>', '<ENTITIES>', '<NOTES>'];
+const CONTEXT = ['<WORLD DESCRIPTION>', '<STATS DESCRIPTION>', '<TRAITS DESCRIPTION>', '<LOCATION>', '<ENTITIES>', '<NOTES>'];
+
+describe('every turn-pipeline prompt kind offers the six shared context chips', () => {
   for (const [kind, vars] of Object.entries(PROMPT_KIND_VARIABLES)) {
+    // The authoring prompts run in the world editor, with no turn in flight — see below.
+    if (isAuthoringTab(kind)) continue;
     it(kind, () => {
       const tokens = vars.map((v) => v.token);
       for (const t of CONTEXT) expect(tokens).toContain(t);
     });
   }
+});
+
+describe('the authoring prompt kinds offer none of them', () => {
+  // The complement of the rule above, and the reason those kinds are exempt from it: they run while the
+  // author is building a world, where <LOCATION> and friends have no turn to resolve against. Offering one
+  // would put a chip on the toolbar that can only ever render a placeholder.
+  for (const kind of ['playerdesc', 'aidesc', 'aisummary'] as const) {
+    it(kind, () => {
+      const tokens = PROMPT_KIND_VARIABLES[kind].map((v) => v.token);
+      for (const t of CONTEXT) expect(tokens).not.toContain(t);
+    });
+  }
+
+  it('offers the bridge prompts their own per-kind chips, and the summary none at all', () => {
+    expect(PROMPT_KIND_VARIABLES.playerdesc.map((v) => v.token)).toEqual(['<SUBJECT>', '<FACETS>']);
+    expect(PROMPT_KIND_VARIABLES.aidesc.map((v) => v.token)).toEqual(['<SUBJECT>', '<FACETS>']);
+    // The summary condenses whatever text it is handed, so it has no subject to vary by.
+    expect(PROMPT_KIND_VARIABLES.aisummary).toEqual([]);
+  });
 });
 
 describe('the Dictionary chip is narration-scoped', () => {

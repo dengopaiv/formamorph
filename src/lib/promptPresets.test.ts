@@ -13,6 +13,8 @@ import {
   deletePreset,
   resetPreset,
   updateValue,
+  activeDescTokens,
+  updateDescTokens,
   type PromptValues,
   type PromptPresetStore,
 } from './promptPresets';
@@ -163,5 +165,34 @@ describe('forward compatibility of the key list', () => {
     expect(resolved.systemPrompt).toBe('default:systemPrompt'); // the user's own values still win
     // Every key the app knows about resolves to something — no undefined reaches a prompt template.
     for (const k of PROMPT_TEXT_KEYS) expect(resolved[k]).toBeTypeOf('string');
+  });
+});
+
+describe('authoring-prompt caps', () => {
+  it('reads nothing from a built-in, so every kind falls to its shipped default', () => {
+    expect(activeDescTokens(emptyStore)).toEqual({});
+  });
+
+  it('stores one kind at a time without disturbing the others', () => {
+    const store = updateDescTokens(storeWith({ id: 'p1', name: 'Mine' }), 'aidesc', 1200);
+    expect(activeDescTokens(store)).toEqual({ aidesc: 1200 });
+    const both = updateDescTokens(store, 'aisummary', 200);
+    expect(activeDescTokens(both)).toEqual({ aidesc: 1200, aisummary: 200 });
+  });
+
+  it('no-ops under a built-in, like the text setters', () => {
+    // Built-ins are read-only: a cap edit there must not silently persist against a preset the user
+    // cannot otherwise change.
+    expect(updateDescTokens(emptyStore, 'playerdesc', 999)).toEqual(emptyStore);
+  });
+
+  it('leaves the prompt text alone', () => {
+    const store = updateDescTokens(storeWith({ id: 'p1', name: 'Mine' }), 'playerdesc', 512);
+    expect(activeValues(store, builtinValues).playerDescPrompt).toBe('default:playerDescPrompt');
+  });
+
+  it('survives a preset saved before caps existed', () => {
+    const store = storeWith({ id: 'p1', name: 'Mine' }); // no descTokens key at all
+    expect(activeDescTokens(store)).toEqual({});
   });
 });

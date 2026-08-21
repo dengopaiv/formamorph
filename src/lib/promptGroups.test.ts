@@ -4,7 +4,7 @@ import { computePromptTabAvailability } from './promptTabAvailability';
 
 const everyFeature = {
   choicesEnabled: true, statUpdatesEnabled: true, locationChangeEnabled: true,
-  memoryDigests: true, characterDiaries: true, aiClock: true, sceneImages: true,
+  memoryDigests: true, characterDiaries: true, aiClock: true, sceneImages: true, advanced: true,
 };
 
 /**
@@ -55,7 +55,13 @@ describe('visibleGroups', () => {
   });
 
   it('keeps every group when everything is on', () => {
-    expect(visibleGroups(staged).map((g) => g.label)).toEqual(['Story', 'Trackers', 'Memory', 'Images']);
+    expect(visibleGroups(staged).map((g) => g.label)).toEqual(['Story', 'Trackers', 'Memory', 'Images', 'Authoring']);
+  });
+
+  it('drops the Authoring group in simple mode', () => {
+    // The authoring prompts are the only group gated by editor mode rather than a gameplay feature.
+    const simple = computePromptTabAvailability({ ...everyFeature, thinkingMode: 'staged', advanced: false });
+    expect(visibleGroups(simple).map((g) => g.label)).not.toContain('Authoring');
   });
 
   it('survives an availability map that knows nothing', () => {

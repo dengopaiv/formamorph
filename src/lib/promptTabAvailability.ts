@@ -11,6 +11,9 @@ export interface PromptTabFlags {
   aiClock: boolean;
   /** Scene images are available at all — i.e. image generation isn't switched off wholesale. */
   sceneImages: boolean;
+  /** Advanced editor mode. Gates the Authoring group only: the world editor's ✨ buttons work on their
+   *  shipped prompts in Simple mode, where a prompt editor is noise rather than a missing feature. */
+  advanced: boolean;
 }
 
 /**
@@ -20,7 +23,7 @@ export interface PromptTabFlags {
  * persisted Character Diaries flag is on.
  */
 export function computePromptTabAvailability(flags: PromptTabFlags): Record<string, boolean> {
-  const { thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, aiClock, sceneImages } = flags;
+  const { thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, aiClock, sceneImages, advanced } = flags;
   return {
     narration: true,
     thinking: thinkingMode === 'precall',
@@ -35,5 +38,10 @@ export function computePromptTabAvailability(flags: PromptTabFlags): Record<stri
     timepassed: aiClock,
     timeopening: aiClock,
     scenetags: sceneImages,
+    // Authoring prompts are gated by editor mode alone — they drive the world editor's buttons, which are
+    // always present, rather than any turn-pipeline feature that can be switched off.
+    playerdesc: advanced,
+    aidesc: advanced,
+    aisummary: advanced,
   };
 }
