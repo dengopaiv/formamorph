@@ -9,6 +9,6 @@ Nothing here is upstream's, and nothing here ships. Anything meant for upstream 
 
 | | |
 |---|---|
-| `description-consistency-design.md` | Making the ✨ drafting buttons check a draft against the world's dictionary and locations. Filed, not started. |
+| `description-consistency-design.md` | The ✨ drafting buttons: the round-trip that launders authored facts out of a description, and checking a draft against the world's names, lore and locations. Filed, not started. |
 | `keyboard-nesting-test-script.md` | Manual pass for the `keyboard-tree-nesting` branch, with NVDA — setup, ordered cases, and which claims only ears can settle. |
 | `model-recommendations.md` | The shortlist: which model to point Formamorph at, per VRAM tier / rented GPU / flat-rate host / cloud budget. Downstream of `docs-internal/model-research.md`, which stays the research log. |

@@ -1,100 +1,229 @@
 # Description consistency — design memo
 
-> **Status: not built.** Filed 2026-08-21 from a design conversation, so the analysis survives the branch
-> it was thought up on. Nothing here is started; the working tree at filing time carries the *editable
-> authoring prompts* work, which is this memo's prerequisite, not its beginning.
+> **Status: not built.** Filed 2026-08-21 from a design conversation; rewritten the same day after two
+> rounds of ideation that changed the shape substantially. Nothing here is started. Read §1 and §7 first
+> if you are picking this up cold — the problem is smaller than the original framing, and the first thing
+> to build is smaller still.
 
-**Problem.** The World Editor's ✨ drafting buttons write a description from one field and nothing else.
-They cannot see the world's dictionary entries or its locations, so a drafted description can contradict
-the lore the narrator will later be handed. The author only finds out mid-play, and the contradiction is
-usually a detail neither text flagged — a place described as ruined that an entry says was rebuilt.
+**Problem.** The World Editor's ✨ drafting buttons write a description from one other field and nothing
+else. Two consequences, and the second is worse than the first:
 
-**Fix, in one line.** Select the *few* lore entries a draft actually touches, using the activation
-machinery that already exists, and let the author's own prompt decide what to do with them. Nothing gets
-run through the shredder: the selector is the same one a turn uses, pointed at the draft text instead of
-at a player action.
+1. A drafted description can contradict the dictionary entries, locations and characters the narrator will
+   later be handed. The author finds out mid-play.
+2. **The two description fields generate into each other, so there is no base.** Round-tripping them
+   deletes authored facts and substitutes invented ones. This is shipped behaviour today.
 
 ---
 
-## 1. Where the gap is
+## 1. The cycle
 
-`bridgeDescription` sends exactly two strings — the expanded template as system, the field's text as user
-([bridgeDescription.ts:96](src/lib/bridgeDescription.ts:96)). Nothing else reaches the model.
+At the call sites ([EntityFields.tsx:58](src/managers/EntityFields.tsx:58), same shape in
+[LocationManager.tsx](src/managers/LocationManager.tsx)):
 
-That is deliberate and written down: `PROMPT_KIND_VARIABLES`
-([promptVariables.ts:205](src/lib/promptVariables.ts:205)) gives `playerdesc`/`aidesc` only `SUBJECT` and
-`FACETS`, because the runtime chips "would have nothing to resolve against" in the editor.
+```
+aiDescription  <->  playerDescription  ->  aiSummary
+```
 
-**Half of that reasoning is now stale.** There is no *turn* in the editor, so `<ENTITIES scope=here>`,
-`<STATS>`, `<NOTES>` and `<TIME>` genuinely have nothing to bind to. But the world's dictionary books, its
-locations and its world description are all in `GameDataContext` — `LocationManager.tsx:19` already pulls
-from it three lines above the ✨ button. Those are resolvable at authoring time. The blanket exclusion is
-what costs us, not the rule behind it.
+Two nodes, both edges one click, target overwritten in place through `onChange`. `aiSummary` is the only
+honest edge in the graph — strictly derived, nothing generates back into its source. It is a leaf, which is
+proof the right shape is achievable; the other two simply do not have it.
 
-## 2. The selector already exists, twice
+**The cycle is not a loop, it is a shredder.** The two directions are instructed to do opposite things:
 
-Neither of these needs a turn. Both are pure over `entries × text`.
+- `playerDesc` — *"Keep only what a player would learn by looking. Details the note holds back — secrets,
+  plans, private history, author bookkeeping — stay out."*
+  ([bridgeDescription.ts:38](src/lib/bridgeDescription.ts:38)). Deliberately, correctly lossy.
+- `aiDesc` — *"plus behavior and relationships the blurb implies… keep additions to what it already
+  suggests."* Deliberately generative.
 
-| | Module | What it gives |
+So a round trip **deletes the secrets, then invents replacements consistent with what is left**. Not drift
+— substitution. The invented material is plausible, specific, and indistinguishable from authored text,
+sitting in the field the narrator reads.
+
+Then it propagates: `aiSummary` draws from `aiDescription`, and the `summary` content variant is what many
+runtime prompts actually send. Launder the AI-facing description once and the corruption is downstream in
+what the model sees every turn.
+
+**There is no base because the graph has no root — but the information has one.** `aiDesc` is a superset of
+`playerDesc` by construction. The base exists; the UI does not know it.
+
+### The fix is a rule about emptiness, not a schema
+
+Every destructive case is an **overwrite**. Generating into an empty field cannot lose anything, and
+knowing that needs no provenance, no tracking, no new world data.
+
+- `playerDesc -> aiDesc` is legitimate as a **seed** for an empty AI-facing field, and never as a
+  **regeneration** of a populated one. Same in reverse.
+- The button does not need disabling. It needs to stop being silent: *"This will replace 4 sentences of
+  AI-facing description."* Undo already exists underneath it.
+
+That alone breaks the cycle, because closing it requires overwriting a populated field every single time.
+
+Provenance is the nicer version and also needs no schema: **session-only** marking of "this field was
+drafted, not typed" catches the round trip in the sitting where people actually do it — filling a world in
+for the first time. Persisting it across sessions is a separate, larger argument.
+
+**This is upstream's bug, not ours.** The buttons shipped this way; `0d528de` only made their prompts
+editable. Worth raising with Jake independently of everything below — an overwrite warning is a far easier
+sell than a detection window.
+
+## 2. Three detectors, all of which already exist
+
+None needs a turn. All are pure over `(text, world data)`.
+
+| | Module | What it finds |
 |---|---|---|
-| Keyword | `explainActivation` ([dictionaryUtils.ts:226](src/lib/dictionaryUtils.ts:226)) | Takes arbitrary named `ScanSource` regions. Hand it the draft as the scene corpus and it reports which entries fire, with hits attributed. |
-| Semantic | `selectSemanticLore` ([semanticDictionary.ts](src/lib/semanticDictionary.ts)) | Meaning-based, threshold 0.39, capped at 3 — already tuned by `semantic-lore-probe.mjs` against Vane Hollow. |
+| **Names** | [entityMatch.ts](src/lib/entityMatch.ts) | Locations, characters and their **aliases** named in the draft. Not a substring search: proper-noun guard, singular/plural folding through `matchKey`, whole-name and distinctive-word matching, aliases under a stricter case rule. Reports `MatchVia` (name / partial / alias) with `TextSpan` evidence per hit. Built for the turn parser's presence detection — point it at a draft instead of at narration. |
+| **Keyword lore** | `explainActivation` ([dictionaryUtils.ts:226](src/lib/dictionaryUtils.ts:226)) | Takes arbitrary named `ScanSource` regions, so it reads a draft as happily as a turn. Reports which entries fire and why. |
+| **Semantic lore** | `selectSemanticLore` ([semanticDictionary.ts](src/lib/semanticDictionary.ts)) | Meaning-based, threshold 0.39, capped at 3. Tuned by `semantic-lore-probe.mjs` against Vane Hollow. Needs an embedding endpoint, so it is the last one to add, not the first. |
 
-Keyword-only is the no-dependency first cut (no embedding endpoint needed in the editor). Semantic is a
-pure add-on afterwards, since `entryVectorKey`/`selectSemanticLore` hold no state.
+**Names is the most valuable of the three**, and it was missing from the first draft of this memo. What a
+description most often contradicts is not a dictionary entry — it is another location or character that has
+a name.
 
 Scan the **world's enabled books only** (`flattenEnabledBookEntries`). Library books are a play-time
-selection ([dictionarySelection.ts](src/lib/dictionarySelection.ts)) and have no meaning while authoring.
+selection ([dictionarySelection.ts](src/lib/dictionarySelection.ts)) and mean nothing while authoring.
 
-Region label: something like `authoring:source`. The scan rule in
-[dictionaryScan.ts](src/lib/dictionaryScan.ts) — *if the AI is given the text, the text can fire a
-trigger* — holds cleanly here, because the source text is exactly what is given.
+Region label for the lore scan: `authoring:source`. The rule in
+[dictionaryScan.ts](src/lib/dictionaryScan.ts) — *if the AI is given the text, the text can fire a trigger*
+— holds cleanly, because the source text is exactly what is given.
 
-## 3. Two features, kept apart
+## 3. Detector, not marker
 
-**A. Grounding.** Inject the selected lore (and, for a location, its parent) into the generation, so the
-draft is consistent by construction. Smallest version:
+An author-placed marker (a string in the world JSON saying "this references entry X") was considered and
+rejected. It is bookkeeping that rots: rename an entry and it dangles; write a new sentence and nothing
+marks it; and it demands attention at exactly the moment the author is least thinking about
+cross-references.
 
-1. A `<DICTIONARY|relevant>` chip whose scope is "entries the source text activates", plus
-   `<LOCATION|parent>` for the location editor.
-2. Add both to `playerdesc`/`aidesc` in `PROMPT_KIND_VARIABLES`.
-3. Plumb an author-context object through `AiGenerateButton` → `bridgeDescription`.
+The detector reads what is actually written, every time — and, decisively, **it is the same rule the
+narrator will fire on at play time**. What the window shows is what the model will see in the scene. A
+marker cannot promise that.
 
-The author's template decides whether the check happens and how strict it is — which is how every other
-prompt here works, and it means the shipped defaults stay byte-identical for anyone who does not want it.
+**The marker's kernel survives as pin and mute.** The detector will miss something the author knows
+matters, and surface something they know does not. Pin forces an undetected entry in; mute keeps one out
+without unticking it every time.
 
-**B. Checking.** A read-only pass that *reports* contradictions without touching the text — "the
-description says the beacon is ruined; the Old Beacon entry says it was rebuilt". New prompt kind, new
-mode on the button, and somewhere to put the output.
+Where those live is the one real schema question:
 
-**Order: A first**, because once the relevant context is selected and plumbed, B is largely a different
-prompt over the same payload. But B is the more valuable half for this author: it produces something
-readable and actionable rather than a silent rewrite that has to be diffed by ear.
+- **Ephemeral** (this invocation only) — no world-data change at all.
+- **Stored per item** — a new field that must travel through export, import and the share format.
 
-## 4. Three things that will bite
+**Ship ephemeral.** Let the friction prove whether pinning is worth schema.
 
-1. **`playerDesc` is not symmetric with `aiDesc`.** The player-facing template's whole job is keeping
-   private material out — "secrets, plans, private history"
-   ([bridgeDescription.ts:38](src/lib/bridgeDescription.ts:38)). Grounding *that* direction hands the model
-   more secret material and asks it to be disciplined. Ground `aiDesc` first; playerDesc grounding is
-   opt-in and should say out loud what it is doing.
-2. **Small models will copy injected lore into the description.** `lore-noise-probe.mjs` measured 11%
-   uptake on Cydonia 24B for a *wrong* entry and 75% for correct on-topic lore. At runtime that is the
-   feature working; here it is a failure — a three-sentence blurb that has swallowed a lore entry verbatim
-   is worse than one that never saw it. Argues for **B over A** on local hardware.
+## 4. The window is the feature, not the ✨ button
+
+Today the button is one click and opaque: text out, text back, diff it by ear. A **draft -> detect ->
+review -> act** dialog fixes three problems at once:
+
+1. The author sees what is about to be injected, so a small model eating a lore entry verbatim stops being
+   a surprise (see §8.2).
+2. Grounding and checking stop being two features. Same window, same detected set, two buttons: *write it
+   using these*, and *check it against these*.
+3. It is navigable. A one-click button that silently consults hidden context is the worst possible shape
+   for a screen reader; a dialog with a labelled checkbox group and a findings region is close to the best.
+
+### Chips and checkboxes are different jobs
+
+- **The prompt template decides what *kinds* of context this prompt may use** — `<LOCATION|ancestors.name>`
+  says "this prompt wants the containing chain, by name". Preset-level policy, set once.
+- **The window decides which *instances* are used this time** — the checkbox beside *Second Floor* says
+  "not this one, this classroom is a weird annex". Invocation-level exception.
+
+This also means the chip carries the token-budget decision and the checkbox never has to.
+
+## 5. Location scope — existing machinery, one gap
+
+The runtime already has the scopes this needs, with a Full / Summary / Name content axis and
+`contextDelivery` ([locationContext.ts:23](src/lib/locationContext.ts:23)) behind them: Current, Sub,
+Parent, Reachable, Destinations. Connections are already modelled in `navigableDestinations`
+([locationContext.ts:281](src/lib/locationContext.ts:281)).
+
+**The gap is the ancestor chain.** `parent` is single-level only
+([buildParentLocationContext](src/lib/locationContext.ts:327)); there is no walk to the root anywhere in
+`src/lib/`. A classroom wants *Hallway -> Second Floor -> Northgate School*, and that chain is the piece
+that has to be written.
+
+## 6. The chain wants names, not descriptions
+
+The single most important defaults decision in this design.
+
+Take the classroom literally: three ancestors, five connected rooms, three lore hits. As full descriptions
+that is roughly 350 tokens of ancestors, 600 of connections and 240 of lore — about **1,200 tokens of
+context wrapped around a request for three sentences**, on a model where instruction-following is the
+scarce resource.
+
+As names: *"inside Hallway, inside Second Floor, inside Northgate School"* — about **fifteen tokens**, and
+it buys nearly all of the coherence. The model does not need the Second Floor's prose to avoid writing a
+sea view into a room three floors up; it needs to know the room is indoors, upstairs, in a school.
+
+So the defaults are **asymmetric, not uniform**:
+
+| Context | Default delivery |
+|---|---|
+| The subject itself | Full |
+| Ancestors | **Name only** |
+| Connections / siblings | Name + summary |
+| Lore entries | Full — they are short, and they are the point |
+
+The Full/Summary/Name axis already exists per chip, so this is a defaults decision, not new code.
+
+## 7. Staging — build them in this order
+
+**Version zero — check the two descriptions against each other.** No dictionary, no location scope, no
+ancestor walk, no detector, no schema. Two fields, one model call, a report: does the player-facing text
+assert anything the AI-facing text contradicts, and does the AI-facing text still hold the secrets it is
+supposed to be holding, or did a round trip launder them out? This targets the failure in §1, which is the
+one actively destroying authored work today. Pair it with the overwrite warning, which is smaller still.
+
+**Version one — the window, check only.** Draft, detect across names + keyword lore, list what was found
+with its evidence, report contradictions, **change nothing**. Cannot damage a description, needs no schema,
+and is worth using on a 12B.
+
+**Later, in rough order of appetite:** grounding (inject the checked set into the generation), the semantic
+pass, pin/mute, persisted provenance, stored per-item context preferences.
+
+Note the direction of travel: every round of design has made version one *smaller*. Resist the urge to
+start at grounding — it is the part that can damage text, and the part a small model handles worst.
+
+## 8. Things that will bite
+
+1. **`playerDesc` is not symmetric with `aiDesc`.** The player-facing template's whole job is withholding.
+   Grounding *that* direction hands the model more secret material and asks it to be disciplined. Ground
+   `aiDesc` first; playerDesc grounding is opt-in and should say out loud what it is doing.
+2. **Small models copy injected lore into the prose.** `lore-noise-probe.mjs` measured 11% uptake on
+   Cydonia 24B for a *wrong* entry and 75% for correct on-topic lore. At runtime that is the feature
+   working; here it is a defect — a three-sentence blurb that has swallowed a lore entry verbatim is worse
+   than one that never saw it. Another argument for checking before grounding.
 3. **`EntityFields` is shared with the library editor**, which has no world at all — that is why
-   `placeholders` and `locationOptions` are optional props ([EntityFields.tsx:20](src/managers/EntityFields.tsx:20)).
-   Any world context must degrade to "no context, behave exactly as today".
+   `placeholders` and `locationOptions` are optional props
+   ([EntityFields.tsx:20](src/managers/EntityFields.tsx:20)). Any world context must degrade to "no
+   context, behave exactly as today".
+4. **Telephone between items.** Generate the classroom from the hallway, later regenerate the hallway from
+   the classroom, and a drift has been laundered through two models. The window should show which sources
+   are themselves drafts, so a weaker source looks weaker.
+5. **Half-built worlds, which is every world during authoring.** Most connected locations will have no
+   description yet. Show them as present-but-empty **with the reason**, rather than silently omitting them
+   — and put the reason in the accessible name, not in a grey.
 
-## 5. Accessibility bar (for B)
+## 9. Accessibility bar
 
-A check pass that reports findings needs a surface. A toast is the wrong one: it cannot be re-read, and
-it steals nothing to focus. Findings want a region that can be reached and re-read after the fact, named
-counts rather than colour, and each finding naming the entry it came from so the author can open it.
+The lens this whole feature is designed through, not a later pass.
 
-## 6. Done bar
+- A toast is the wrong surface for findings: it cannot be re-read and it takes no focus. Findings want a
+  region that can be reached and re-read after the fact.
+- Named counts, never colour alone — "3 contradictions, 2 unresolved names".
+- Every finding names the entry or location it came from, so the author can open it.
+- When the draft is edited and re-detected, **what changed must be announced** — the checkbox list is a
+  live thing, and a silently different list is the same failure the silent arrows were.
+- The checkbox group needs grouping and per-group select-all: a location with eight connections, four
+  ancestors and six lore hits is eighteen tab stops otherwise.
 
-- Keyword selection over the draft returns the same entries a turn would, asserted against a fixture world.
-- Default templates unchanged byte-for-byte; grounding only happens when the author places the chip.
+## 10. Done bar
+
+- Version zero reports a contradiction planted between the two descriptions of a fixture entity, and stays
+  silent on a consistent pair.
+- Generating into a populated field states what it will replace; generating into an empty one does not.
+- Keyword selection over a draft returns the same entries a turn would, asserted against a fixture world.
+- Default templates unchanged byte-for-byte; grounding happens only when the author places the chip.
 - The library editor (no world) generates exactly as it does today.
 - Nothing in the turn pipeline changes — `PROMPT_KIND_VARIABLES`'s turn-kind invariant test still holds.
