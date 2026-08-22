@@ -86,6 +86,11 @@ export interface TraitPlaceholderPin {
 export interface TraitGroup {
   id: string;
   name: string;
+  /** The author's own source notes, in whatever shape suits them — bullets are expected. Both
+   *  descriptions are drafted from it when it holds anything. **Nothing generates into it**; see
+   *  `lib/authorBrief` for why that invariant is the feature. Absent on worlds written before it
+   *  existed, which reads as "no brief" and leaves the drafting buttons behaving as they always did. */
+  authorBrief?: string;
   /** Shown to the player in the trait-selection screen. */
   playerDescription?: string;
   /** Sent to the AI as a header above this group's selected traits. */
@@ -102,6 +107,11 @@ export interface TraitGroup {
 export interface Trait {
   id: string;
   name: string;
+  /** The author's own source notes, in whatever shape suits them — bullets are expected. Both
+   *  descriptions are drafted from it when it holds anything. **Nothing generates into it**; see
+   *  `lib/authorBrief` for why that invariant is the feature. Absent on worlds written before it
+   *  existed, which reads as "no brief" and leaves the drafting buttons behaving as they always did. */
+  authorBrief?: string;
   /** Shown to the player in the trait-selection screen. */
   playerDescription?: string;
   /** Sent to the AI when this trait is selected. */
@@ -129,6 +139,11 @@ export interface Entity {
    *  (case-sensitive, word-bounded, plural-tolerant) and surfaced to the AI as "also known as". */
   aliases?: string[];
   type?: string;
+  /** The author's own source notes, in whatever shape suits them — bullets are expected. Both
+   *  descriptions are drafted from it when it holds anything. **Nothing generates into it**; see
+   *  `lib/authorBrief` for why that invariant is the feature. Absent on worlds written before it
+   *  existed, which reads as "no brief" and leaves the drafting buttons behaving as they always did. */
+  authorBrief?: string;
   /** Shown to the player in-game. */
   playerDescription?: string;
   /** Full description sent to the AI. */
@@ -179,6 +194,11 @@ export interface EntityGroup {
 export interface GameLocation {
   id: string;
   name: string;
+  /** The author's own source notes, in whatever shape suits them — bullets are expected. Both
+   *  descriptions are drafted from it when it holds anything. **Nothing generates into it**; see
+   *  `lib/authorBrief` for why that invariant is the feature. Absent on worlds written before it
+   *  existed, which reads as "no brief" and leaves the drafting buttons behaving as they always did. */
+  authorBrief?: string;
   /** Shown to the player in-game. */
   playerDescription?: string;
   /** Full description sent to the AI. */

@@ -27,6 +27,10 @@ const model = argVal("--model", "default");
 const runs = Number(argVal("--runs", "12"));
 const only = argVal("--only");
 const onlyDir = argVal("--dir");
+// --source brief drafts both directions from the authored bullet list instead of from the other
+// description, which is the topology a non-generated base field creates. Same fact and secret sets score it:
+// playerDesc must still keep the visible facts and drop the secrets, aiDesc must still carry both across.
+const sourceMode = argVal("--source", "description");
 const baseSeed = Number(argVal("--seed", "7"));
 const token = argVal("--token", process.env.PROBE_TOKEN || "");
 const dumpPath = argVal("--dump");
@@ -60,6 +64,18 @@ for (const [name, want] of [["BRIDGE_TEMPERATURE", TEMPERATURE], ["BRIDGE_MAX_TO
 const CASES = [
   {
     name: "harbormaster",
+    // The authored brief in the shape an author actually writes one: bullets, not prose, and the
+    // superset — visible facts and secrets together. Both descriptions are drafted from this.
+    brief:
+      "- runs the harbor office at the river mouth\n"
+      + "- gray-bearded, heavy through the shoulders\n"
+      + "- pronounced limp, winch accident on the dock years ago\n"
+      + "- same tarred oilskin coat in every weather\n"
+      + "- never without his tally ledger\n"
+      + "- curt with strangers, slow to warm\n"
+      + "- SECRET: takes bribes from the night barges to keep their cargo out of the ledger\n"
+      + "- SECRET: his younger brother drowned at this landing; he has never forgiven himself\n"
+      + "- SECRET: means to sell the office and flee downriver before the ice closes",
     kind: "character",
     aiNote:
       "Ordec runs the harbor office at the river mouth. Gray-bearded, heavy through the shoulders, and he walks "
@@ -93,6 +109,17 @@ const CASES = [
   },
   {
     name: "healer",
+    // The authored brief in the shape an author actually writes one: bullets, not prose, and the
+    // superset — visible facts and secrets together. Both descriptions are drafted from this.
+    brief:
+      "- small, spare woman\n"
+      + "- fingers permanently stained brown from the herbs\n"
+      + "- speaks slowly, long gaps between sentences\n"
+      + "- walled bitterroot garden behind her cottage\n"
+      + "- endless patience with frightened children\n"
+      + "- SECRET: poisoned the old magistrate two winters ago and watched him die\n"
+      + "- SECRET: never learned to read; hides it by having others read aloud\n"
+      + "- SECRET: dying of the same wasting sickness she treats",
     kind: "character",
     aiNote:
       "Mother Ain is a small, spare woman whose fingers are permanently stained brown from the herbs she works. "
@@ -128,6 +155,17 @@ const CASES = [
   },
   {
     name: "chapel",
+    // The authored brief in the shape an author actually writes one: bullets, not prose, and the
+    // superset — visible facts and secrets together. Both descriptions are drafted from this.
+    brief:
+      "- stone chapel, half-sunk in the marsh a mile east of the village\n"
+      + "- walls tilting where the ground gave way\n"
+      + "- standing water to the knee inside, never drains\n"
+      + "- cold air, smells of silt\n"
+      + "- herons nest in the exposed roof beams, scatter when anyone enters\n"
+      + "- SECRET: sealed crypt below holding the village's plague dead\n"
+      + "- SECRET: the bronze bell was stolen and sold downriver a generation ago\n"
+      + "- SECRET: smugglers use the nave to meet after dark",
     kind: "location",
     aiNote:
       "The drowned chapel stands half-sunk in the marsh a mile east of the village, its stone walls tilting where "
@@ -163,6 +201,17 @@ const CASES = [
   },
   {
     name: "nightmarket",
+    // The authored brief in the shape an author actually writes one: bullets, not prose, and the
+    // superset — visible facts and secrets together. Both descriptions are drafted from this.
+    brief:
+      "- six lantern-strung alleys behind the customs house\n"
+      + "- runs dusk until first gray light, then the stalls fold away\n"
+      + "- loud, packed shoulder to shoulder\n"
+      + "- dried fish, hammered copperware, cheap sweet wine\n"
+      + "- the whole quarter smells of frying oil\n"
+      + "- SECRET: the guard captain takes a cut from every stallholder\n"
+      + "- SECRET: a slaver keeps a covered cage behind the furthest stall\n"
+      + "- SECRET: the quarter burns next spring",
     kind: "location",
     aiNote:
       "The night market fills six lantern-strung alleys behind the customs house and runs from dusk until the first "
@@ -210,7 +259,17 @@ const sentences = (s) => (s.match(/[.!?]+(\s|$)/g) || []).length;
 async function call(sys, user, seed) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(endpoint, {
+  // Shared endpoints rate-limit. Without a backoff, one arm lost 37 of 48 calls to 429s and its numbers
+  // were unreadable beside an arm that lost none.
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetchOnce();
+    if (res.status !== 429 || attempt >= 4) break;
+    await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+  }
+  return await finish(res);
+
+  async function fetchOnce() { return fetch(endpoint, {
     method: "POST", headers,
     body: JSON.stringify({
       model,
@@ -218,15 +277,18 @@ async function call(sys, user, seed) {
       temperature: TEMPERATURE, max_tokens: MAX_TOKENS, seed,
       reasoning_effort: "none", stream: false,
     }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const j = await res.json();
-  return (j.choices?.[0]?.message?.content ?? "").trim();
+  }); }
+
+  async function finish(r) {
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content ?? "").trim();
+  }
 }
 
 const DIRS = ["playerDesc", "aiDesc"].filter((d) => !onlyDir || d === onlyDir);
 const pick = CASES.filter((c) => !only || c.name.includes(only));
-console.log(`Bridge probe · ${endpoint} · "${model}" · ${pick.length} case(s) · ${runs} run(s)/case · temp ${TEMPERATURE}`);
+console.log(`Bridge probe · ${endpoint} · "${model}" · source ${sourceMode} · ${pick.length} case(s) · ${runs} run(s)/case · temp ${TEMPERATURE}`);
 console.log(`playerDesc: secret leakage (want 0) + visible recall (guard, want high) · aiDesc: blurb fidelity + expansion\n`);
 await call(bridgePrompt("playerDesc", "character"), "warm up", baseSeed).catch(() => {});
 
@@ -238,8 +300,10 @@ for (const dir of DIRS) {
   console.log(`\n================ ${dir} (want ${range[0]}-${range[1]} sentences)`);
   for (const c of pick) {
     const sys = bridgePrompt(dir, c.kind);
-    const src = dir === "playerDesc" ? c.aiNote : c.blurb;
-    const facts = dir === "playerDesc" ? c.visible : c.blurbFacts;
+    const src = sourceMode === "brief" ? c.brief : (dir === "playerDesc" ? c.aiNote : c.blurb);
+    // From a brief, aiDesc is judged on the whole authored set rather than on a blurb it never saw.
+    const facts = sourceMode === "brief" && dir === "aiDesc" ? [...c.visible, ...c.secret]
+      : (dir === "playerDesc" ? c.visible : c.blurbFacts);
     console.log(`\n######## ${c.name} (${c.kind})`);
     for (let r = 0; r < runs; r++) {
       const T = totals[dir];

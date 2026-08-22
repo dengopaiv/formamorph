@@ -5,6 +5,7 @@ import { KeywordChips } from "@/components/KeywordChips";
 import { HelpButton } from "@/components/HelpButton";
 import AiGenerateButton from "@/components/AiGenerateButton";
 import DescriptionCheckButton from "@/components/DescriptionCheckButton";
+import { draftSource } from "@/lib/authorBrief";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { ModelUpload } from '../lib/UtilityComponents';
 import { IMAGE_CAPS } from '../lib/imageOptim';
@@ -56,11 +57,20 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
       </div>
       )}
       <PlaceholderField
+        label="Author's Brief"
+        labelAside={<HelpButton topicId="worldEditor.authorBrief" className="h-6 w-6" />}
+        value={value.authorBrief || ''}
+        onChange={(v) => onChange('authorBrief', v)}
+        placeholders={placeholders}
+        placeholder="Notes, in any shape — a list is fine. Both descriptions are written from this."
+        resizable
+      />
+      <PlaceholderField
         label="Player-Facing Description"
         labelAside={(
           <AiGenerateButton
             mode="playerDesc"
-            source={value.aiDescription}
+            source={draftSource(value.authorBrief, value.aiDescription)}
             onChange={(s) => onChange('playerDescription', s)}
             target={value.playerDescription}
             kind="character"
@@ -77,7 +87,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
           <>
             <AiGenerateButton
               mode="aiDesc"
-              source={value.playerDescription}
+              source={draftSource(value.authorBrief, value.playerDescription)}
               onChange={(s) => onChange('aiDescription', s)}
               target={value.aiDescription}
               kind="character"

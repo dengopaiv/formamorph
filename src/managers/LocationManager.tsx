@@ -5,7 +5,9 @@ import { entityIdsAt, setLocationRoster } from '@/lib/entityPresence';
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { HelpButton } from "@/components/HelpButton";
 import AiGenerateButton from "@/components/AiGenerateButton";
+import { draftSource } from "@/lib/authorBrief";
 import DescriptionCheckButton from "@/components/DescriptionCheckButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { describePlaceholders } from '@/lib/placeholders';
@@ -56,11 +58,20 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
         </Label>
       </div>
       <PlaceholderField
+        label="Author's Brief"
+        labelAside={<HelpButton topicId="worldEditor.authorBrief" className="h-6 w-6" />}
+        value={editingLocation.authorBrief || ''}
+        onChange={(v) => handleChange('authorBrief', v)}
+        placeholders={placeholders}
+        placeholder="Notes, in any shape — a list is fine. Both descriptions are written from this."
+        resizable
+      />
+      <PlaceholderField
         label="Player-Facing Description"
         labelAside={(
           <AiGenerateButton
             mode="playerDesc"
-            source={editingLocation.aiDescription}
+            source={draftSource(editingLocation.authorBrief, editingLocation.aiDescription)}
             onChange={(s) => handleChange('playerDescription', s)}
             target={editingLocation.playerDescription}
             kind="location"
@@ -77,7 +88,7 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
           <>
             <AiGenerateButton
               mode="aiDesc"
-              source={editingLocation.playerDescription}
+              source={draftSource(editingLocation.authorBrief, editingLocation.playerDescription)}
               onChange={(s) => handleChange('aiDescription', s)}
               target={editingLocation.aiDescription}
               kind="location"

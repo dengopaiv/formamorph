@@ -20,6 +20,9 @@ export interface EntityCardData {
   name: string;
   aliases?: string[];
   type?: string;
+  /** The author's own source notes. Carried so a shared card keeps what the descriptions were
+   *  written from, not only what was written. */
+  authorBrief?: string;
   playerDescription?: string;
   aiDescription?: string;
   aiSummary?: string;
@@ -39,7 +42,8 @@ export interface EntityCardData {
  *  for a world entity, or the entity's own carried `placeholders` for a library one. */
 export function buildEntityCardData(entity: Entity, available: Placeholder[] = entity.placeholders ?? []): EntityCardData {
   const used = collectUsedPlaceholders(
-    [entity.name, ...(entity.aliases ?? []), entity.playerDescription, entity.aiDescription, entity.aiSummary]
+    [entity.name, ...(entity.aliases ?? []), entity.authorBrief, entity.playerDescription, entity.aiDescription,
+      entity.aiSummary]
       .filter((t): t is string => !!t),
     available,
   );
@@ -50,6 +54,7 @@ export function buildEntityCardData(entity: Entity, available: Placeholder[] = e
     name: entity.name,
     ...(entity.aliases?.length ? { aliases: entity.aliases } : {}),
     ...(entity.type ? { type: entity.type } : {}),
+    ...(entity.authorBrief ? { authorBrief: entity.authorBrief } : {}),
     ...(entity.playerDescription ? { playerDescription: entity.playerDescription } : {}),
     ...(entity.aiDescription ? { aiDescription: entity.aiDescription } : {}),
     ...(entity.aiSummary ? { aiSummary: entity.aiSummary } : {}),

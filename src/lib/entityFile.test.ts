@@ -7,6 +7,7 @@ const entity: Entity = {
   id: 'orig-id',
   name: 'Wren',
   type: 'guide',
+  authorBrief: '- marsh guide\n- knows every channel of the fen',
   playerDescription: 'A quiet marsh guide.',
   aiDescription: 'Wren knows every channel of the fen.',
   aiSummary: 'marsh guide',
@@ -165,5 +166,24 @@ describe('a character card’s tags', () => {
     });
 
     expect(parsed.tags).toEqual(['npc']);
+  });
+});
+
+describe("the author's brief on a card", () => {
+  it('travels with the card, so a shared character keeps what its descriptions were written from', () => {
+    // Without it the recipient inherits the prose and loses the source, and their first regenerate quietly
+    // drops back to drafting one description from the other.
+    expect(buildEntityCardData(entity).authorBrief).toBe('- marsh guide\n- knows every channel of the fen');
+  });
+
+  it('is omitted when empty rather than written as a blank key', () => {
+    expect(buildEntityCardData({ ...entity, authorBrief: '' })).not.toHaveProperty('authorBrief');
+    expect(buildEntityCardData({ ...entity, authorBrief: undefined })).not.toHaveProperty('authorBrief');
+  });
+
+  it('has its placeholder chips resolved like every other text field', () => {
+    const town = { id: 'town', name: 'Town', values: ['Sedge Landing'] };
+    const brief: Entity = { id: 'z', name: 'Wren', authorBrief: 'born in {{ph:town:world:p1}}' };
+    expect(buildEntityCardData(brief, [town]).placeholders).toEqual([town]);
   });
 });

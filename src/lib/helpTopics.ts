@@ -194,6 +194,18 @@ Image, Image Tags and the 3D model are for the player's screen and for image gen
 
 Give a location the two or three entities the scene genuinely turns on. Everything at the player's location is sent every turn, so a crowded location is a permanent context bill.`,
   },
+  'worldEditor.authorBrief': {
+    title: "Author's Brief",
+    body: `Your notes for this thing, in whatever shape suits you. A list is fine — in fact a list is expected. "classroom, second floor", "windows face east", "smells of chalk and radiator dust". The ✨ buttons below write both descriptions from it.
+
+**Nothing ever writes into this field.** It is the only one here that no generator touches, and that is the point of it. The Player-Facing and AI-Facing descriptions can each be drafted from the other, so running both in turn quietly replaces what you wrote with what a model inferred — the player-facing prompt is *meant* to hold secrets back, and the AI-facing one is *meant* to fill in what a blurb implies. Put your facts here and they stay yours, however many times you regenerate either description.
+
+**You do not have to write prose.** That is the work the drafting buttons are for. Jot what is true about the place or person and let them turn it into sentences; a description that comes back wrong is fixed by correcting the brief and pressing ✨ again, rather than by rewriting the prose every time.
+
+**Mark what is private.** A line the player should never learn — a motive, a plan, a past crime — is worth saying so on: *"SECRET: he takes bribes from the night barges"*. The Player-Facing draft leaves marked lines out and the AI-Facing draft keeps them, which is the difference between the two descriptions in the first place.
+
+**Leave it empty and nothing changes.** A subject with no brief drafts exactly as it did before this field existed: Player-Facing from AI-Facing, and AI-Facing from Player-Facing.`,
+  },
   'worldEditor.aliases': {
     title: 'Aliases',
     body: `Other names an entity goes by — a nickname, a title, an epithet. "Rosalind" answers to "Roz", and to her title, "Warden". List as many as you like.
