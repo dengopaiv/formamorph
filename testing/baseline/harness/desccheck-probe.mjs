@@ -57,6 +57,7 @@ const baseSeed = Number(argVal("--seed", "7"));
 const token = argVal("--token", process.env.PROBE_TOKEN || "");
 const reasoning = argVal("--reasoning", "none");
 const dumpPath = argVal("--dump");
+const rescorePath = argVal("--rescore");
 const dump = [];
 
 // The prompt, the message shape and the parser all come from the shipped module, so an edit to
@@ -93,7 +94,7 @@ const SAID_NONE = /^none[.!]?$/i;
 // Broad on purpose — the class is scored on whether the *theme* was reached, and every matched finding is
 // printed with its evidence below, so a suspicious rate can be read rather than trusted.
 const ROUNDTRIP_WANT =
-  /\b(no|not|noth\w*|little|fails?|lacks?|lacking|absent|missing|omits?|without)\b[\s\S]{0,70}\b(more|beyond|extra|additional|further|private|secret|hidden|unseen|motive|interior|depth|deeper|new)\b|\b(same|identical|mirror\w*|echo\w*|duplicat\w*|paraphras\w*|restat\w*|repeats?|adds? nothing|no new|near-?identical|little more than)\b/i;
+  /(?:holds?|contains?|adds?|offers?|reveals?|includes?|carries)[^.]{0,40}(?:no|nothing|none)[^.]{0,30}(?:secret|private|hidden|more|beyond|additional)|no (?:secret|private|hidden)[^.]{0,30}(?:at all|whatsoever|material|detail)|(?:should|ought to) (?:hold|contain|carry)[^.]{0,20}more|lacks? (?:any )?(?:secret|private|hidden|interior)|says no more than|nothing (?:the|that) (?:player|blurb)|(?:identical|the same) (?:to|as) the (?:player|blurb)/i
 
 // The cast is the bridge probe's, deliberately: the same four subjects run through both probes, so a result
 // here can be read next to how the drafting prompts behaved on the same text. `player` and `ai` are the
@@ -240,7 +241,7 @@ const activeClasses = CLASSES.filter((k) => arms.some((a) => a.cls === k));
 // the parser being fooled, which is a different bug with a different fix, so it is kept apart.
 const PREAMBLE = /^\s*(here (is|are)|here'?s|sure[,!.]|certainly|okay[,!.]|below (is|are)|i(?:'ve| have) (found|reviewed|compared)|after (reviewing|comparing)|upon review)/i;
 const REWRITE = /^\s*(?:\*\*)?(?:revis\w*|rewritten|rewrite|corrected|proposed|updated|suggested)\s*(?:version|text|description|wording)?\s*(?:\*\*)?\s*:/im;
-const AGREEMENT = /\b(agree\w*|consistent|no (?:disagreement|contradiction|discrepanc\w*|conflict|issue|inconsistenc\w*)\w*|nothing to (?:report|flag)|none (?:found|identified)|no findings|align\w*)\b/i;
+const AGREEMENT = /\b(?:agree\w*|consistent|match(?:es)?|align\w*)\b|\bno (?:disagreement|contradiction|conflict|discrepanc\w*|issue|inconsistenc\w*)|\b(?:does |do |is |are )?not (?:a )?(?:contradict\w*|disagree\w*|conflict\w*|discrepanc\w*|inconsistent)|nothing to (?:report|flag)|none (?:found|identified)|no findings|just more detail|allowed to hold more/i;
 const words = (s) => (s.trim().match(/\S+/g) || []).length;
 
 async function call(model, sys, user, seed) {
@@ -268,83 +269,118 @@ const blank = () => ({
   byClass: Object.fromEntries(CLASSES.map((k) => [k, { runs: 0, hits: 0, findSum: 0, agreeWorded: 0, saidNone: 0 }])),
 });
 
-console.log(`Description-check probe · ${endpoint} · ${models.length} model(s) · ${arms.length} arm(s) · `
-  + `${runs} run(s)/arm · temp ${TEMPERATURE} · cap ${DEFAULT_CHECK_MAX_TOKENS} · reasoning ${reasoning}`);
-console.log(`clean: want NONE (findings are false positives) · the other three: want the planted finding\n`);
+// One run's scoring, shared by the live sweep and --rescore, so a metric that turns out to be wrong can be
+// corrected against completions already paid for instead of by calling the models again. The first sweep
+// needed exactly that: ROUNDTRIP_WANT was matching "not a contradiction — the AI-facing is allowed to hold
+// more", which is the opposite of the finding it was meant to count.
+function scoreRow(T, arm, out, label) {
+  const C = T.byClass[arm.cls];
+
+  // Nothing came back and the budget is gone: the model reasoned through the entire cap. `checkDescriptions`
+  // would read that empty completion as agreement, so the run is voided rather than scored — a null result
+  // must not be able to pass as a clean one, which is the single class where saying nothing is correct.
+  if (out.finish === "length" && !out.raw) {
+    T.truncated++;
+    T.emptyTrunc++;
+    console.log(`  ${label} VOID · empty after truncation (${out.tokens ?? "?"} tok)`
+      + " — the app would read this as agreement");
+    return { hit: null, findings: [] };
+  }
+  C.runs++;
+
+  const findings = parseFindings(out.raw);
+  C.findSum += findings.length;
+  // A clean pair is a hit only when nothing was reported; the planted classes need a finding that names the
+  // plant, so a model that reports two unrelated things does not score.
+  const hit = arm.want ? findings.some((f) => arm.want.test(f)) : findings.length === 0;
+  if (hit) C.hits++;
+
+  const flags = [];
+  if (SAID_NONE.test(out.raw)) C.saidNone++;
+  if (PREAMBLE.test(out.raw)) { T.preamble++; flags.push("preamble"); }
+  if (REWRITE.test(out.raw)) { T.rewrote++; flags.push("REWRITE"); }
+  if (findings.length === 1 && words(findings[0]) > 60) { T.blob++; flags.push("blob"); }
+  if (out.finish === "length") { T.truncated++; flags.push("truncated"); }
+  if (out.tokens != null) { T.tokSum += out.tokens; T.tokRuns++; T.tokMax = Math.max(T.tokMax, out.tokens); }
+  // Counted on every class, not just clean: a model narrating what agrees is the same parser gap wherever it
+  // happens, and on a planted arm it is what pads the finding count without adding a finding.
+  if (findings.some((f) => AGREEMENT.test(f))) { C.agreeWorded++; flags.push("agreement-worded"); }
+
+  const tok = out.tokens != null ? ` · ${out.tokens} tok` : "";
+  console.log(`  ${label} ${findings.length} finding(s) · ${hit ? "HIT" : "miss"}${tok}`
+    + `${flags.length ? " · " + flags.join(",") : ""}`);
+  for (const f of findings) console.log(`      • ${f.replace(/\s+/g, " ").slice(0, 200)}`);
+  // A regex hit can be an artifact of a broad alternation, so show what matched — the rates are only
+  // trustworthy once a few of these have been read.
+  if (arm.want) {
+    for (const f of findings.filter((x) => arm.want.test(x))) {
+      const flat = f.replace(/\s+/g, " ");
+      const m = flat.match(arm.want);
+      const at = Math.max(0, m.index - 40);
+      console.log(`      ↳ matched: …${flat.slice(at, m.index + m[0].length + 40)}…`);
+    }
+  }
+  return { hit, findings };
+}
 
 const totals = {};
-for (const model of models) {
-  const T = totals[model] = blank();
-  console.log(`\n${"=".repeat(96)}\n== ${model}`);
-  await call(model, composeCheckPrompt(DEFAULT_DESC_CHECK_PROMPT, "character"), "warm up", baseSeed).catch(() => {});
 
-  for (const arm of arms) {
-    const sys = composeCheckPrompt(DEFAULT_DESC_CHECK_PROMPT, arm.kind);
-    const user = buildCheckMessage(arm.player, arm.ai);
-    console.log(`\n######## ${arm.case} · ${arm.cls} (${arm.kind})`);
-    for (let r = 0; r < runs; r++) {
-      let out, err = null;
-      try { out = await call(model, sys, user, baseSeed + r); } catch (e) { err = String(e.message || e); }
-      T.runs++;
-      const C = T.byClass[arm.cls];
-      if (err) { T.errors++; console.log(`  #${r + 1} ERROR: ${err}`); continue; }
+if (rescorePath) {
+  const rows = (await readFile(rescorePath, "utf8")).trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const byArm = new Map(ARMS.map((a) => [`${a.case}/${a.cls}`, a]));
+  console.log(`Re-scoring ${rows.length} stored completion(s) from ${rescorePath} — no model is called.`);
+  console.log(`temp ${TEMPERATURE} · cap ${DEFAULT_CHECK_MAX_TOKENS} · fixtures and metrics as they stand now
+`);
+  let last = "";
+  for (const row of rows) {
+    if (only && !row.case.includes(only)) continue;
+    if (onlyClass && row.cls !== onlyClass) continue;
+    const arm = byArm.get(`${row.case}/${row.cls}`);
+    if (!arm) continue;
+    const T = totals[row.model] ??= blank();
+    const head = `${row.model} · ${row.case} · ${row.cls}`;
+    if (head !== last) { console.log(`
+######## ${head}`); last = head; }
+    T.runs++;
+    scoreRow(T, arm, { raw: row.raw ?? "", finish: row.finish, tokens: row.tokens }, `#${row.run}`);
+  }
+} else {
+  console.log(`Description-check probe · ${endpoint} · ${models.length} model(s) · ${arms.length} arm(s) · `
+    + `${runs} run(s)/arm · temp ${TEMPERATURE} · cap ${DEFAULT_CHECK_MAX_TOKENS} · reasoning ${reasoning}`);
+  console.log(`clean: want NONE (findings are false positives) · the other three: want the planted finding
+`);
 
-      // Nothing came back and the budget is gone: the model reasoned through the entire cap. `checkDescriptions`
-      // would read that empty completion as agreement, so the run is voided rather than scored — a null result
-      // must not be able to pass as a clean one, which is the single class where saying nothing is correct.
-      if (out.finish === "length" && !out.raw) {
-        T.truncated++;
-        T.emptyTrunc++;
-        console.log(`  #${r + 1} VOID · empty after truncation (${out.tokens ?? "?"} tok)`
-          + " — the app would read this as agreement");
-        dump.push({ model, case: arm.case, cls: arm.cls, kind: arm.kind, run: r + 1, seed: baseSeed + r,
-          findings: [], hit: null, finish: out.finish, tokens: out.tokens, raw: "" });
-        continue;
+  for (const model of models) {
+    const T = totals[model] = blank();
+    console.log(`
+${"=".repeat(96)}
+== ${model}`);
+    await call(model, composeCheckPrompt(DEFAULT_DESC_CHECK_PROMPT, "character"), "warm up", baseSeed).catch(() => {});
+
+    for (const arm of arms) {
+      const sys = composeCheckPrompt(DEFAULT_DESC_CHECK_PROMPT, arm.kind);
+      const user = buildCheckMessage(arm.player, arm.ai);
+      console.log(`
+######## ${arm.case} · ${arm.cls} (${arm.kind})`);
+      for (let r = 0; r < runs; r++) {
+        let out, err = null;
+        try { out = await call(model, sys, user, baseSeed + r); } catch (e) { err = String(e.message || e); }
+        T.runs++;
+        if (err) { T.errors++; console.log(`  #${r + 1} ERROR: ${err}`); continue; }
+        const { hit, findings } = scoreRow(T, arm, out, `#${r + 1}`);
+        dump.push({
+          model, case: arm.case, cls: arm.cls, kind: arm.kind, run: r + 1, seed: baseSeed + r,
+          findings, hit, finish: out.finish, tokens: out.tokens, raw: out.raw,
+        });
       }
-      C.runs++;
-
-      const findings = parseFindings(out.raw);
-      C.findSum += findings.length;
-      // A clean pair is a hit only when nothing was reported; the planted classes need a finding that names
-      // the plant, so a model that reports two unrelated things does not score.
-      const hit = arm.want ? findings.some((f) => arm.want.test(f)) : findings.length === 0;
-      if (hit) C.hits++;
-
-      const flags = [];
-      if (SAID_NONE.test(out.raw)) C.saidNone++;
-      if (PREAMBLE.test(out.raw)) { T.preamble++; flags.push("preamble"); }
-      if (REWRITE.test(out.raw)) { T.rewrote++; flags.push("REWRITE"); }
-      if (findings.length === 1 && words(findings[0]) > 60) { T.blob++; flags.push("blob"); }
-      if (out.finish === "length") { T.truncated++; flags.push("truncated"); }
-      if (out.tokens != null) { T.tokSum += out.tokens; T.tokRuns++; T.tokMax = Math.max(T.tokMax, out.tokens); }
-      const agreeWorded = findings.filter((f) => AGREEMENT.test(f));
-      if (arm.cls === "clean" && agreeWorded.length) { C.agreeWorded++; flags.push("agreement-worded"); }
-
-      const tok = out.tokens != null ? ` · ${out.tokens} tok` : "";
-      console.log(`  #${r + 1} ${findings.length} finding(s) · ${hit ? "HIT" : "miss"}${tok}`
-        + `${flags.length ? " · " + flags.join(",") : ""}`);
-      for (const f of findings) console.log(`      • ${f.replace(/\s+/g, " ").slice(0, 200)}`);
-      // A regex hit can be an artifact of a broad alternation, so show what matched — the rates are only
-      // trustworthy once a few of these have been read.
-      if (arm.want) {
-        for (const f of findings.filter((x) => arm.want.test(x))) {
-          const flat = f.replace(/\s+/g, " ");
-          const m = flat.match(arm.want);
-          const at = Math.max(0, m.index - 40);
-          console.log(`      ↳ matched: …${flat.slice(at, m.index + m[0].length + 40)}…`);
-        }
-      }
-      dump.push({
-        model, case: arm.case, cls: arm.cls, kind: arm.kind, run: r + 1, seed: baseSeed + r,
-        findings, hit, finish: out.finish, tokens: out.tokens, raw: out.raw,
-      });
     }
   }
 }
 
+const modelList = Object.keys(totals);
 const pct = (n, d) => `${(100 * n / (d || 1)).toFixed(0)}%`;
 console.log(`\n${"=".repeat(96)}`);
-for (const model of models) {
+for (const model of modelList) {
   const T = totals[model];
   const clean = T.byClass.clean;
   console.log(`\n${model} · ${T.runs} runs (${T.errors} err)`);
@@ -373,11 +409,11 @@ for (const model of models) {
   }
 }
 
-if (models.length > 1) {
+if (modelList.length > 1) {
   console.log(`\n${"=".repeat(96)}\nArms, same fixtures and seeds:\n`);
   const head = ["model".padEnd(34), ...activeClasses.map((k) => k.slice(0, 7).padStart(8)), "rewrite".padStart(8), "trunc".padStart(6)];
   console.log(head.join(" "));
-  for (const model of models) {
+  for (const model of modelList) {
     const T = totals[model];
     const cells = activeClasses.map((k) => {
       const C = T.byClass[k];
