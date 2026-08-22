@@ -346,9 +346,22 @@ staging in §7: version one is no longer the detection window.
 
 What remains open, in order:
 
-1. **The clean arm is still the blocker for the check itself.** Best false-positive rate measured on any
-   model under any prompt is 63%; on a 24B roleplay finetune it is 88–100%. Cutting the third bullet may
-   move it — the sweeps above were all run with the bullet in — so re-measure before assuming.
+1. **The clean arm is still the blocker, and cutting the third bullet did not move it.** Re-measured the
+   same day on the same fixtures and seeds: deepseek-v4-flash went 92% → **100%** false positives and its
+   `NONE` answers went 2/24 → 0/24; cydonia stayed pinned at 100%. Best rate on any model under any prompt
+   remains 63%.
+
+   The cut also **cost omission detection**, on both models and in the same direction: flash 100% → 75%,
+   cydonia 74% → 58% (n=24 per arm, so flash's drop is six misses). The likely reason is that the removed
+   bullet — *"detail the AI-facing description ought to hold and does not"* — was a second framing of the
+   omission question and was priming it. It was doing two jobs: one it never accomplished, and one it did
+   by accident.
+
+   It bought a real but narrow gain: truncations at the 300-token cap fell 11 → 4.
+
+   **Do not restore it.** Shipping a request for a finding that arrives once in ninety-six, to keep a side
+   effect, is the wrong repair. Strengthen the omission bullet directly and re-measure; if omission returns
+   with the clean arm unmoved, the cut was right and the wording was merely thin.
 2. **Few-shot is the one untried lever.** Every attempt so far changed what the model was *told*. A worked
    example of a clean pair answered NONE changes what it *sees*.
 3. **Unlabelled briefs are unmeasured.** The 0-leak figure for brief → player-facing is on briefs that mark
