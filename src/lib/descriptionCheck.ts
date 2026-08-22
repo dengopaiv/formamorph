@@ -15,9 +15,16 @@ import { SUBJECT_TOKEN, BRIDGE_SUBJECT, type BridgeKind } from './bridgeDescript
  * description will otherwise volunteer a rewrite, which is exactly the silent overwrite this pass exists
  * to avoid.
  *
- * The third bullet is the round trip's own signature. An AI-facing description that says no more than the
- * player-facing one is the shape a laundered reference note has — the secrets were stripped on the way out
- * and never came back — and it is the one finding an author cannot spot by reading either text alone.
+ * It asked after the round trip too, once — an AI-facing description that says no more than the
+ * player-facing one is the shape a laundered reference note has. That bullet is gone, and it was removed on
+ * evidence rather than taste. Across five models from 24B to frontier, four wordings of it and roughly 1,400
+ * probe calls, the finding was named in one run out of ninety-six, while every rewrite moved a single dial —
+ * how much the model says — with true and false positives rising and falling together. Asking a model to
+ * notice that something private is *absent* does not work, and asking cost output tokens on every call for a
+ * finding that never arrived. `lib/authorBrief` answers it instead, by making the round trip unrepresentable
+ * rather than detectable. The measurement is in `snowpanther's notes/description-consistency-design.md` §11.
+ *
+ * What remains is the half that does work: contradictions were found in 100% of runs on every model tested.
  *
  * Persisted per prompt preset and overridable in Settings → Prompts → Authoring.
  */
@@ -28,9 +35,7 @@ export const DEFAULT_DESC_CHECK_PROMPT =
   + 'cannot see.\n\n'
   + 'Report only real disagreements:\n'
   + '- A fact one states and the other contradicts.\n'
-  + '- Something the player-facing description asserts that the AI-facing one does not account for.\n'
-  + '- Detail the AI-facing description ought to hold and does not. If it says no more than the player-facing '
-  + 'one, say so: that is what a reference note looks like after it has been overwritten from the blurb.\n\n'
+  + '- Something the player-facing description asserts that the AI-facing one does not account for.\n\n'
   + 'Write one finding per line, each naming both sides. Do not rewrite either description, do not suggest '
   + 'wording, and do not remark on style. If the two agree, reply with the single word NONE.';
 

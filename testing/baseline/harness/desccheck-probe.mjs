@@ -11,9 +11,11 @@
 //                    and an author shown three imaginary problems stops opening the dialog at all.
 //     contradiction  one fact stated on both sides, differently. Want a finding naming it.
 //     omission       the player-facing text asserts something the note never accounts for.
-//     roundtrip      the note has been overwritten from the blurb and holds nothing private any more. This
-//                    is the finding the whole feature exists for — the one an author cannot get by
-//                    re-reading either text — so it is scored on its own rather than folded into the rest.
+//     roundtrip      the note has been overwritten from the blurb and holds nothing private any more.
+//                    **Off by default**, and a canary rather than a test: the shipped prompt stopped
+//                    asking for this finding after it scored 1 in 96 across five models and four
+//                    wordings, and `lib/authorBrief` answers it structurally instead. `--class
+//                    roundtrip` still runs it, and a non-zero result would be worth knowing about.
 //
 //   format — `parseFindings` is lenient by design, which hides the difference between "NONE" and "The two
 //     descriptions are consistent." The second is a bogus finding sitting in the dialog under a heading that
@@ -234,7 +236,12 @@ for (const c of CASES) {
   ARMS.push({ ...base, cls: "omission", player: c.omission.player, ai: c.ai, want: c.omission.want });
   ARMS.push({ ...base, cls: "roundtrip", player: c.player, ai: c.roundtrip, want: ROUNDTRIP_WANT });
 }
-const arms = ARMS.filter((a) => !onlyClass || a.cls === onlyClass);
+// The roundtrip arm is off by default. The shipped prompt no longer asks for that finding — it was cut
+// after scoring 1 in 96 across five models and four wordings, and `lib/authorBrief` answers it by making
+// the round trip unrepresentable instead. The fixtures stay because the case is still real for a world
+// with no brief, and because a future model that *can* name an absence would be news: run it with
+// `--class roundtrip`, where anything above zero is the story.
+const arms = ARMS.filter((a) => (onlyClass ? a.cls === onlyClass : a.cls !== "roundtrip"));
 const activeClasses = CLASSES.filter((k) => arms.some((a) => a.cls === k));
 
 // Format violations. A preamble and a rewrite are both the prompt being disobeyed; the agreement wording is
@@ -368,7 +375,7 @@ if (rescorePath) {
 } else {
   console.log(`Description-check probe · ${endpoint} · ${models.length} model(s) · ${arms.length} arm(s) · `
     + `${runs} run(s)/arm · temp ${TEMPERATURE} · cap ${DEFAULT_CHECK_MAX_TOKENS} · reasoning ${reasoning}`);
-  console.log(`clean: want NONE (findings are false positives) · the other three: want the planted finding
+  console.log(`clean: want NONE (findings are false positives) · the planted arms: want the planted finding
 `);
 
   for (const model of models) {

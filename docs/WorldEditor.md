@@ -158,7 +158,7 @@ The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing De
 >
 > Without a brief the two descriptions write into each other and neither is a base: drafting Player-Facing from AI-Facing and then AI-Facing back from it does not return you to where you started, because the player-facing prompt is meant to leave private material out and the AI-facing prompt is meant to fill in what a blurb implies — so a round trip strips your secrets and replaces them with what the model inferred. Filling in the brief removes that path entirely. Leave it empty and the buttons behave exactly as they always did, with a ✨ that replaces existing text asking first and naming how much goes.
 
-> 🔍 **The 🔍 button beside AI-Facing Description reads the two against each other** and reports where they disagree — a fact one states and the other contradicts, something the blurb asserts that the note does not account for, or an AI-facing description that has stopped saying any more than the player-facing one. It writes nothing: every finding is yours to act on or ignore. Its prompt and cap live in Settings → **Prompts** → **Authoring** → **Description Check**.
+> 🔍 **The 🔍 button beside AI-Facing Description reads the two against each other** and reports where they disagree — a fact one states and the other contradicts, something the blurb asserts that the note does not account for, whichever way round. It writes nothing: every finding is yours to act on or ignore. Its prompt and cap live in Settings → **Prompts** → **Authoring** → **Description Check**.
 
 ### Aliases
 
@@ -278,7 +278,7 @@ The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing De
 >
 > Without a brief the two descriptions write into each other and neither is a base: drafting Player-Facing from AI-Facing and then AI-Facing back from it does not return you to where you started, because the player-facing prompt is meant to leave private material out and the AI-facing prompt is meant to fill in what a blurb implies — so a round trip strips your secrets and replaces them with what the model inferred. Filling in the brief removes that path entirely. Leave it empty and the buttons behave exactly as they always did, with a ✨ that replaces existing text asking first and naming how much goes.
 
-> 🔍 **The 🔍 button beside AI-Facing Description reads the two against each other** and reports where they disagree — a fact one states and the other contradicts, something the blurb asserts that the note does not account for, or an AI-facing description that has stopped saying any more than the player-facing one. It writes nothing: every finding is yours to act on or ignore. Its prompt and cap live in Settings → **Prompts** → **Authoring** → **Description Check**.
+> 🔍 **The 🔍 button beside AI-Facing Description reads the two against each other** and reports where they disagree — a fact one states and the other contradicts, something the blurb asserts that the note does not account for, whichever way round. It writes nothing: every finding is yours to act on or ignore. Its prompt and cap live in Settings → **Prompts** → **Authoring** → **Description Check**.
 
 ### Entities
 

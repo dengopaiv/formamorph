@@ -331,3 +331,26 @@ So the check splits by what each half is good at:
 
 The clean arm remains the blocker: the best false-positive rate measured on any model under any prompt is
 63%, and on the model an author is likeliest to run it is 88–100%.
+
+### Acted on, 2026-08-22
+
+The round-trip bullet is out of the shipped prompt (`descriptionCheck.ts`), and the test that asserted its
+presence now asserts its absence with the measurement in the comment, so it does not come back without new
+evidence. The probe keeps the fixtures but runs that arm only under `--class roundtrip`, as a canary: the
+case is still real for a world with no brief, and a future model that can name an absence would be news.
+
+`authorBrief` shipped in `a59f429` — an optional field on all four description-bearing types that no
+generator writes to, with `lib/authorBrief.draftSource` returning it when present and the other description
+otherwise. That is §1's "the graph has no root" answered directly rather than detected, and it retires the
+staging in §7: version one is no longer the detection window.
+
+What remains open, in order:
+
+1. **The clean arm is still the blocker for the check itself.** Best false-positive rate measured on any
+   model under any prompt is 63%; on a 24B roleplay finetune it is 88–100%. Cutting the third bullet may
+   move it — the sweeps above were all run with the bullet in — so re-measure before assuming.
+2. **Few-shot is the one untried lever.** Every attempt so far changed what the model was *told*. A worked
+   example of a clean pair answered NONE changes what it *sees*.
+3. **Unlabelled briefs are unmeasured.** The 0-leak figure for brief → player-facing is on briefs that mark
+   private lines `SECRET:`. An author who does not mark them is the untested case, and the help text
+   recommends the convention precisely because the evidence only covers it.

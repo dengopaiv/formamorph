@@ -20,8 +20,19 @@ describe('DEFAULT_DESC_CHECK_PROMPT', () => {
     expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/do not rewrite/i);
   });
 
-  it('asks after the round trip signature — an AI-facing note that says no more than the blurb', () => {
-    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/no more than the player-facing/i);
+  it('does not ask after the round trip, which was measured and does not work', () => {
+    // Named in 1 run out of 96 across five models and four wordings; see the module's own note and
+    // `snowpanther's notes/description-consistency-design.md` §11. `lib/authorBrief` makes the round trip
+    // unrepresentable instead of asking a model to spot an absence. Re-adding this bullet costs output
+    // tokens on every call for a finding that does not arrive, so it should not come back without new
+    // evidence — which is what this test is here to insist on.
+    expect(DEFAULT_DESC_CHECK_PROMPT).not.toMatch(/no more than the player-facing/i);
+    expect(DEFAULT_DESC_CHECK_PROMPT).not.toMatch(/overwritten from the blurb/i);
+  });
+
+  it('still asks the two questions that do work', () => {
+    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/a fact one states and the other contradicts/i);
+    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/does not account for/i);
   });
 
   it('names the escape hatch the parser understands', () => {
