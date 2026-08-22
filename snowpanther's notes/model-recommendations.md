@@ -252,7 +252,8 @@ is mature rather than bleeding-edge: quants, templates and community settings ar
 `bartowski/TheDrummer_Behemoth-X-123B-v2-GGUF` → Q4_K_M 73.22 GB, IQ4_XS 65.43 GB, Q6_K 100.59 GB.
 
 **Behemoth has no content floor** — probed directly, and the limit is set by the prompt rather than by the
-model. Treat that as a steerability property rather than a feature: the narrator here chooses its own beats
+model. **Scope that to Behemoth-X-123B-v2 and earlier**: it is a claim about the `Mistral-Large` line, and
+Behemoth-128B-v3 does not inherit it (see below). Treat that as a steerability property rather than a feature: the narrator here chooses its own beats
 through the director and character passes, so a model with no stopping condition lets a long session drift
 somewhere nobody steered it. It does not disqualify anything, because at 123B it was never a catalog
 candidate — but it does mean the W-10 8.2 in the table above should not be read as "better than 7.2." See
@@ -271,6 +272,29 @@ reasoning on Mistral v7 Tekken"* — which at least tells you the template and t
 base scores Writing 45.47 / W/10 6.0 at `reasoning=none`, below Behemoth-X-v2's finetuned 50.27. **Screen it
 against Behemoth-X-v2 before assuming the newer number wins** — the Anubis v1.1-vs-v1.2 result above is the
 cautionary case.
+
+**Tested here 2026-08-22, subjectively:** writing and instruction-following both good — one session, by ear,
+no score, and no substitute for a screen.
+
+**It refuses, which no earlier Behemoth has done here**, and that outweighs the writing. The *no content
+floor* finding above was probed on Behemoth-X-123B-v2, which is `Mistral-Large`; v3 is built on
+`Mistral-Medium-3.5`, a newer and more aligned base, and the finetune plainly does not strip what the base
+brought with it. For a narrator that picks its own beats through the director and character passes, a
+refusal mid-session is a harder failure than a prose deficit — it stops the story rather than weakening it.
+The leaderboard's Refusals column is a ⚠ review flag for exactly this, and v3 has not been screened.
+
+**No screen result exists for the base either.** `Mistral-Medium-3.5` has never been run here, and the
+leaderboard's `mistral-heretic` (Obj 41, Format 30, tier C) is a different and older Mistral — not a proxy.
+So the newer-is-not-better pattern this family already showed once, with Anubis v1.1 over v1.2, now has a
+second instance and no measurement on either side of it.
+
+**There is an exl3 build, and it is the better way to serve it.** `MikeRoz/Behemoth-128B-v3-5.00bpw-h6-exl3` — 75.06 GiB of weights at 5.00 bpw with a 6-bit head, which is
+**smaller than the Q4_K_M GGUF's 78.41 GB and more precise than it**, the usual exl3-over-GGUF trade when
+every layer is on GPU anyway. Same hardware row regardless: 2×A40 (96 GB) leaves ~20 GB for KV cache —
+comfortable at the default 10,750 window with room to raise it — and it will not fit one 80 GB card with
+usable context. Note the server changes with the format: exl3 is ExLlamaV3 behind TabbyAPI, not vLLM, so
+none of the `tacodevs` FP8/AWQ/W4A16 discussion above applies to this path, and neither does its caveat
+about every 123B build being a reasoning variant. This is the plain finetune, quantized.
 
 **Skip the Iceblink finetunes; rent the base Air.** zerofata authors our A/84 board leader, so
 `GLM-4.5-Iceblink-v3-106B-A12B` looked like the obvious MoE pick. The measurements say otherwise: base
