@@ -283,3 +283,51 @@ judged by eye:
 
 Until the second and third hold on a model an author would plausibly run, the 🔍 button shows invented or
 narrated findings on most subjects and never catches the thing it was built for.
+
+### The prompt was rewritten three times and it is a volume knob
+
+`v2a` named the asymmetry as never-a-finding and forbade agreement lines. `v2b` asked the round trip as
+its own step about one description alone. `v3` named the missing thing as *secrets, motives, plans,
+private history* instead of "what a player could not observe" — because `v2b` proved the models execute
+the step and answer a different question, reading "could not observe" as "not stated in the blurb".
+
+Each was obeyed. None discriminated. Cydonia-24b across all four, on the clean arm:
+
+| prompt | findings/run | clean false positives | omission found |
+|---|---|---|---|
+| current | 5.5 | 100% | 74% |
+| v2a | 5.1 | 100% | 71% |
+| v2b | 3.1 | 100% | 63% |
+| v3 | 1.1 | 88% | 14% |
+
+Monotonic. The instructions changed how much the model says, and true findings fell with the false ones.
+`v3` cut the noise by 80% and took omission detection down with it, 71% → 14%.
+
+**A third failure mode, found only because the probe scores through the shipped parser:** models paste the
+input descriptions back as findings. Cydonia did it on 9 of 20 clean runs under `v2a`. Not invention, not
+agreement narration — echo, which `parseFindings` keeps because the line is not NONE. It has its own
+counter now.
+
+### The round trip is not a model task
+
+Zero detections across four prompts and five models, on the order of 1,400 calls. The one thing every
+variant shares is asking a model to notice an *absence* — that nothing private is present — while it is
+also being asked to compare two texts. Two more phrasings will not fix that.
+
+**It does not need a model at all.** §1 already has the answer and staged it as the nicer-to-have:
+the app knows when it generated into a field. A session-only mark of "this was drafted, not typed" makes
+the round trip *exact* — `aiDescription` drafted from `playerDescription` which was itself drafted from
+`aiDescription` is a fact the app observes rather than infers. No schema, no call, no latency, no false
+positives, and it catches the case in the sitting where it actually happens: filling a world in for the
+first time.
+
+So the check splits by what each half is good at:
+
+- **Contradictions — keep the model.** 100% on every model tested, every prompt. This half works.
+- **The round trip — drop it from the prompt entirely** and implement provenance. It currently costs
+  tokens on every call and returns nothing.
+- **Omissions — undecided.** Real when the model is talkative, and talkativeness is what makes the clean
+  arm unusable.
+
+The clean arm remains the blocker: the best false-positive rate measured on any model under any prompt is
+63%, and on the model an author is likeliest to run it is 88–100%.

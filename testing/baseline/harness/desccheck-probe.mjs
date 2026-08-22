@@ -244,6 +244,19 @@ const REWRITE = /^\s*(?:\*\*)?(?:revis\w*|rewritten|rewrite|corrected|proposed|u
 const AGREEMENT = /\b(?:agree\w*|consistent|match(?:es)?|align\w*)\b|\bno (?:disagreement|contradiction|conflict|discrepanc\w*|issue|inconsistenc\w*)|\b(?:does |do |is |are )?not (?:a )?(?:contradict\w*|disagree\w*|conflict\w*|discrepanc\w*|inconsistent)|nothing to (?:report|flag)|none (?:found|identified)|no findings|just more detail|allowed to hold more/i;
 const words = (s) => (s.trim().match(/\S+/g) || []).length;
 
+// A "finding" that is one of the input descriptions pasted back. Cydonia-24b produced these on every clean
+// pair — not an invented disagreement and not agreement narration, but the model restating what it was
+// given, which `parseFindings` keeps because the line is not NONE. Any run of source text long enough to be
+// a quotation rather than a shared phrase counts.
+const norm = (s) => s.replace(/\s+/g, " ").toLowerCase().trim();
+function isEcho(finding, arm) {
+  const f = norm(finding).replace(/^[^:]{0,40}:\s*/, "");
+  if (f.length < 60) return false;
+  const hay = norm(arm.player) + " || " + norm(arm.ai);
+  for (let i = 0; i + 60 <= f.length; i += 10) if (hay.includes(f.slice(i, i + 60))) return true;
+  return false;
+}
+
 async function call(model, sys, user, seed) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -253,7 +266,14 @@ async function call(model, sys, user, seed) {
     temperature: TEMPERATURE, max_tokens: DEFAULT_CHECK_MAX_TOKENS, seed, stream: false,
   };
   if (reasoning !== "off") body.reasoning_effort = reasoning;
-  const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  // Shared endpoints rate-limit, and a 429 is not a result — losing 87 of 128 calls to them once was enough
+  // to make the arm unreadable. Back off and retry rather than scoring a model on whatever survived.
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+    if (res.status !== 429 || attempt >= 4) break;
+    await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`);
   const j = await res.json();
   return {
@@ -266,7 +286,7 @@ async function call(model, sys, user, seed) {
 const blank = () => ({
   runs: 0, errors: 0, preamble: 0, rewrote: 0, blob: 0, truncated: 0, emptyTrunc: 0,
   tokSum: 0, tokMax: 0, tokRuns: 0,
-  byClass: Object.fromEntries(CLASSES.map((k) => [k, { runs: 0, hits: 0, findSum: 0, agreeWorded: 0, saidNone: 0 }])),
+  byClass: Object.fromEntries(CLASSES.map((k) => [k, { runs: 0, hits: 0, findSum: 0, agreeWorded: 0, saidNone: 0, echoed: 0 }])),
 });
 
 // One run's scoring, shared by the live sweep and --rescore, so a metric that turns out to be wrong can be
@@ -305,6 +325,7 @@ function scoreRow(T, arm, out, label) {
   // Counted on every class, not just clean: a model narrating what agrees is the same parser gap wherever it
   // happens, and on a planted arm it is what pads the finding count without adding a finding.
   if (findings.some((f) => AGREEMENT.test(f))) { C.agreeWorded++; flags.push("agreement-worded"); }
+  if (findings.some((f) => isEcho(f, arm))) { C.echoed++; flags.push("ECHO"); }
 
   const tok = out.tokens != null ? ` · ${out.tokens} tok` : "";
   console.log(`  ${label} ${findings.length} finding(s) · ${hit ? "HIT" : "miss"}${tok}`
@@ -390,9 +411,11 @@ for (const model of modelList) {
     if (k === "clean") {
       const fp = C.runs - C.hits;
       console.log(`  ${"clean".padEnd(15)}false positives ${fp}/${C.runs} (${pct(fp, C.runs)})`
-        + ` · agreement-worded ${C.agreeWorded} · said NONE ${C.saidNone}/${C.runs} · ${avg} findings avg`);
+        + ` · agreement-worded ${C.agreeWorded} · echoed ${C.echoed} · said NONE ${C.saidNone}/${C.runs}`
+        + ` · ${avg} findings avg`);
     } else {
-      console.log(`  ${k.padEnd(15)}found ${C.hits}/${C.runs} (${pct(C.hits, C.runs)}) · ${avg} findings avg`);
+      console.log(`  ${k.padEnd(15)}found ${C.hits}/${C.runs} (${pct(C.hits, C.runs)}) · ${avg} findings avg`
+        + `${C.echoed ? ` · echoed ${C.echoed}` : ""}`);
     }
   }
   const tokAvg = T.tokRuns ? (T.tokSum / T.tokRuns).toFixed(0) : "n/a";
