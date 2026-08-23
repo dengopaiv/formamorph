@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeEndpointUrl, endpointUrlWasCompleted } from './endpointUrl';
+import { normalizeEndpointUrl, endpointUrlWasCompleted, endpointSendsInTheClear } from './endpointUrl';
 
 describe('normalizeEndpointUrl', () => {
   it('completes a bare origin — the LM Studio "Reachable at" paste', () => {
@@ -62,5 +62,64 @@ describe('endpointUrlWasCompleted', () => {
     expect(endpointUrlWasCompleted('https://gateway.example.com/openai')).toBe(false);
     expect(endpointUrlWasCompleted('')).toBe(false);
     expect(endpointUrlWasCompleted('  http://127.0.0.1:1234/v1/chat/completions  ')).toBe(false);
+  });
+});
+
+describe('endpointSendsInTheClear', () => {
+  it('flags plain HTTP to a host out on the internet', () => {
+    for (const url of [
+      'http://203.0.113.9:5001',
+      'http://pod-5001.proxy.runpod.net/v1',
+      'http://api.example.com/v1/chat/completions',
+      'http://8.8.8.8:8000',
+    ]) {
+      expect(endpointSendsInTheClear(url)).toBe(true);
+    }
+  });
+
+  it('stays quiet for HTTPS anywhere', () => {
+    expect(endpointSendsInTheClear('https://api.lyonade.net/v1')).toBe(false);
+    expect(endpointSendsInTheClear('https://203.0.113.9:5001')).toBe(false);
+  });
+
+  it('stays quiet for a link the player controls', () => {
+    for (const url of [
+      'http://localhost:1234',
+      'http://127.0.0.1:5001/v1',
+      'http://[::1]:8080',
+      'http://192.168.1.40:5001',
+      'http://10.0.0.7:8000',
+      'http://172.16.4.2:8000',
+      'http://172.31.255.1:8000',
+      'http://169.254.10.3:8000',
+      'http://[fe80::1]:8000',
+      'http://[fd00::1]:8000',
+      'http://workstation.local:1234',
+    ]) {
+      expect(endpointSendsInTheClear(url)).toBe(false);
+    }
+  });
+
+  it('stays quiet inside the Tailscale range, which is encrypted under the http://', () => {
+    expect(endpointSendsInTheClear('http://100.64.0.1:5001')).toBe(false);
+    expect(endpointSendsInTheClear('http://100.101.102.103:5001')).toBe(false);
+    expect(endpointSendsInTheClear('http://100.127.255.254:5001')).toBe(false);
+  });
+
+  it('does not mistake a neighbouring range for a private one', () => {
+    // 172.15/172.32 sit outside RFC1918, and 100.63/100.128 outside the CGNAT block.
+    expect(endpointSendsInTheClear('http://172.15.0.1:8000')).toBe(true);
+    expect(endpointSendsInTheClear('http://172.32.0.1:8000')).toBe(true);
+    expect(endpointSendsInTheClear('http://100.63.0.1:8000')).toBe(true);
+    expect(endpointSendsInTheClear('http://100.128.0.1:8000')).toBe(true);
+    // A public host that merely ends in something private-looking.
+    expect(endpointSendsInTheClear('http://notlocalhost.com/v1')).toBe(true);
+  });
+
+  it('says nothing about a URL still being typed', () => {
+    expect(endpointSendsInTheClear('')).toBe(false);
+    expect(endpointSendsInTheClear('   ')).toBe(false);
+    expect(endpointSendsInTheClear('http:/')).toBe(false);
+    expect(endpointSendsInTheClear('api.example.com')).toBe(false);
   });
 });

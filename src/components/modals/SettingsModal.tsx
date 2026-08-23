@@ -11,14 +11,14 @@ import { settingsUseAdvancedValues } from '@/lib/settingsAdvancedData';
 import { TutorialPopover } from '@/components/TutorialPopover';
 import { useDevRoute } from '@/lib/devRouter';
 import { Row, CheckRow, Section, SubGroup, HintInfo, RecommendedMark } from '@/components/SettingsRows';
-import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, type SettingOptionCopy } from '@/components/modals/settingsCopy';
+import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, ENDPOINT_CLEARTEXT_WARNING, type SettingOptionCopy } from '@/components/modals/settingsCopy';
 import { rowCopy, optionRowCopy } from '@/components/modals/settingsRowCopy';
 import TagField from '@/components/prompt/TagField';
 import { reasoningTabs, reasoningPromptTabs, defaultPromptReasoning, defaultReasoningBudgetPct, REASONING_CONTROL_KINDS, type PromptReasoning } from '@/lib/reasoningEffort';
 import { ExportPresetDialog, ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
 import { type SharedPreset } from '@/lib/promptPresetShare';
 import { APP_VERSION } from '@/lib/version';
-import { normalizeEndpointUrl, endpointUrlWasCompleted } from '@/lib/endpointUrl';
+import { normalizeEndpointUrl, endpointUrlWasCompleted, endpointSendsInTheClear } from '@/lib/endpointUrl';
 import { computePromptTabAvailability } from '@/lib/promptTabAvailability';
 import { visibleGroups, SURFACE_LABELS, PROMPT_DESCRIPTIONS, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
 import { Settings } from "lucide-react";
@@ -1855,9 +1855,20 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     onChange={(e) => setEndpointUrl(e.target.value)}
                     readOnly={activeTextEndpointPresetIsBuiltIn}
                     className={activeTextEndpointPresetIsBuiltIn ? 'opacity-60 cursor-not-allowed' : undefined}
+                    /* Both hints are named here so focusing the field reads them, in the order they render.
+                       Without this a screen-reader user meets the warning only by chance, if at all. */
+                    aria-describedby={[
+                      endpointSendsInTheClear(endpointUrl) && 'endpointUrl-cleartext',
+                      endpointUrlWasCompleted(endpointUrl) && 'endpointUrl-completed',
+                    ].filter(Boolean).join(' ') || undefined}
                   />
+                  {endpointSendsInTheClear(endpointUrl) && (
+                    <p id="endpointUrl-cleartext" className="text-helper text-destructive">
+                      {ENDPOINT_CLEARTEXT_WARNING}
+                    </p>
+                  )}
                   {endpointUrlWasCompleted(endpointUrl) && (
-                    <p className="text-helper text-muted-foreground">
+                    <p id="endpointUrl-completed" className="text-helper text-muted-foreground">
                       Requests go to <span className="font-mono break-all">{normalizeEndpointUrl(endpointUrl)}</span>
                     </p>
                   )}
@@ -2017,13 +2028,26 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   <Button variant="outline" size="sm" onClick={() => setShowImageSetup(true)}>{SETTINGS_BUTTONS.howToSetUp}</Button>
                 </div>
               </Row>
-              <Row htmlFor="imageEndpoint" {...rowCopy('imageEndpointUrl')}>
-                <Input
-                  id="imageEndpoint"
-                  value={imageEndpoint}
-                  onChange={(e) => setImageEndpoint(e.target.value)}
-                  placeholder={DEFAULT_ENDPOINT_BY_PROVIDER[imageProvider] || 'https://api.openai.com'}
-                />
+              {/* `top` + `data-row-stacked` for the same reason the text endpoint row carries them: the
+                  warning below is conditional, so the row grows only sometimes and must be aligned for
+                  both states — which the DOM at any one moment can't decide. */}
+              <Row top htmlFor="imageEndpoint" {...rowCopy('imageEndpointUrl')}>
+                {/* The image endpoint gets the same warning as the text one: what it receives is the scene
+                    rendered into a prompt, which is no less revealing than the prose it came from. */}
+                <div className="grid gap-1" data-row-stacked>
+                  <Input
+                    id="imageEndpoint"
+                    value={imageEndpoint}
+                    onChange={(e) => setImageEndpoint(e.target.value)}
+                    placeholder={DEFAULT_ENDPOINT_BY_PROVIDER[imageProvider] || 'https://api.openai.com'}
+                    aria-describedby={endpointSendsInTheClear(imageEndpoint) ? 'imageEndpoint-cleartext' : undefined}
+                  />
+                  {endpointSendsInTheClear(imageEndpoint) && (
+                    <p id="imageEndpoint-cleartext" className="text-helper text-destructive">
+                      {ENDPOINT_CLEARTEXT_WARNING}
+                    </p>
+                  )}
+                </div>
               </Row>
               <Row htmlFor="imageApiToken" {...rowCopy('imageApiToken')}>
                 <Input id="imageApiToken" type="password" value={imageApiToken} onChange={(e) => setImageApiToken(e.target.value)} />

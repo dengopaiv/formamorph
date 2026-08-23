@@ -509,6 +509,15 @@ Lower it first when a model won't fit.`,
   },
 } as const satisfies Record<string, SettingCopy>;
 
+/**
+ * Shown under an endpoint URL that would carry play text over the open internet unencrypted. Longer than
+ * a row description on purpose: it has to say what leaks and what to do instead, and it only ever appears
+ * when the player has actually typed such a URL — so it is exempt from the one-line rule the rows follow.
+ */
+export const ENDPOINT_CLEARTEXT_WARNING =
+  'This sends every prompt and reply unencrypted — readable by anyone between you and that server. ' +
+  'Use an https:// address, or reach the machine over a VPN or SSH tunnel.';
+
 /** Buttons inside the modal, kept here so their casing is guarded alongside the row labels. */
 export const SETTINGS_BUTTONS = {
   resetSizeSpacing: 'Reset Size & Spacing',
