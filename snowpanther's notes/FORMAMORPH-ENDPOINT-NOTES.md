@@ -1560,11 +1560,34 @@ it; by how much is still unmeasured.
 
 ### 15.9. The peer-to-peer trap — check this before you trust two cards
 
-> **Reproduced on a second pod, 2026-08-23.** `qp2jd6prtg6w6c`, 2× A40 in `CA-MTL-1`, a different
-> machine from the one below: `can_device_access_peer` → `True`, direct `cuda:0→cuda:1` copy → all
-> zeros, host-staged copy → correct. **Two A40 pods out of two.** Treat this as the expected state of a
-> rented multi-GPU pod rather than bad luck, and plan for `tensor_parallel` + `nccl` +
-> `NCCL_P2P_DISABLE=1` from the start — the check below is then a confirmation, not a gamble.
+> **Three A40 pods out of three, 2026-08-23.** `zzbockeqp0d3by`, then `qp2jd6prtg6w6c` and
+> `wj1g4hdryli3ko` in `CA-MTL-1` — different machines, same signature: `can_device_access_peer` →
+> `True`, direct `cuda:0→cuda:1` copy → zeros, host-staged copy → correct. Treat it as the expected
+> state of a rented multi-GPU pod rather than bad luck, and plan for `tensor_parallel` + `nccl` +
+> `NCCL_P2P_DISABLE=1` from the start — the check below is a confirmation, not a gamble. **Verified on
+> the third pod:** with that configuration, a model on cards in exactly this state serves correct,
+> coherent prose.
+
+#### Size the test properly, or it will lie to you
+
+Measured on `wj1g4hdryli3ko`, three processes × three repetitions each:
+
+| Elements | Bytes | Result |
+|---|---|---|
+| 1,000 | 4 KB | **passes in some processes, fails in others** — on a pod that is definitively broken |
+| 100,000 | 400 KB | broken, but **partially**: 83–98% zeros, the rest correct data |
+| 1,000,000 | 4 MB | 100% zeros, every process, every repetition |
+| 10,000,000 | 40 MB | 100% zeros, every process, every repetition |
+
+Two things follow. **A small buffer is not a quick version of this test, it is a different test with a
+different answer** — a 4 KB copy is the size most likely to report a healthy pod that is not one, and it
+is not even stable between processes on the same pod. Use a million elements; that is what the script
+above does and why.
+
+And the intermediate case is the one worth fearing. At 100 KB the copy returns *partially* corrupt data
+rather than obviously empty data. Nothing downstream has any reason to notice a tensor that is 90% zeros
+and 10% right — there is no error, no NaN, no crash, just weights that are quietly wrong in a way that
+reads as a model with a strange personality.
 
 **The failure.** A two-GPU pod can advertise working peer-to-peer transfers and not have them. On
 RunPod pod `zzbockeqp0d3by` (2× A40, 2026-08-23) a direct `cuda:0 → cuda:1` tensor copy returned
@@ -1764,6 +1787,34 @@ upload. `/pre_start.sh` is a hook for an image **you build**, not for a stock on
 the setup script once over `rp.sh` is the practical shape, and it has the better failure behaviour
 anyway.
 
+#### Install into a venv, not over the image's Python
+
+Measured 2026-08-23 on `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`. TabbyAPI's `[cu12]` extra pulls
+**torch 2.9.0** onto an image pinned at **2.8.0**, which leaves the preinstalled `torchao 0.15.0`
+mismatched. `import exllamav3` then aborts:
+
+```
+Skipping import of cpp extensions due to incompatible torch version 2.9.0+cu128 for torchao 0.15.0
+terminate called after throwing an instance of 'std::bad_alloc'
+```
+
+Reproducible, and with **433 GB of RAM free** — the allocation error is thrown during extension init and
+says nothing about memory. `python3 -m venv /root/tabbyenv` and installing there fixes it outright, which
+is exactly why the official TabbyAPI image builds itself into `/opt/venv`. The 2026-08-20 pod, on an
+older Ubuntu 22.04 tag, did not have this conflict — it arrived with the newer base image.
+
+**TabbyAPI also generates its own API key** on first start when `api_tokens.yml` has none, and prints it
+nowhere obvious. The preset needs it: `grep api_key /root/tabbyAPI/api_tokens.yml`.
+
+#### Two things that will waste an hour if you don't know them
+
+- **A pod's PTY truncates an input line at about 4 KB.** Pushing a script in as one base64 line silently
+  loses the tail, and what arrives is a valid-looking file that is simply short. Fetch scripts with
+  `curl` instead of pasting them.
+- **`raw.githubusercontent.com` serves a cached copy** for a few minutes after a push. A re-run that
+  "ignores your fix" is usually this. Pin the URL to a commit SHA rather than a branch name and it is
+  immutable: `.../<owner>/<repo>/<sha>/<path>`.
+
 #### One thing the template hands every process on the pod
 
 `env` on a running pod includes **`RUNPOD_API_KEY`**, injected by RunPod. Anyone with a shell there — or
@@ -1855,7 +1906,14 @@ kilobytes per turn against a multi-second generation, not a timing.
 last compatible commit on `exl2-checkpoint`; the official image's registry, tags, and its Dockerfile's
 base (`nvidia/cuda:12.8.1-runtime-ubuntu24.04`), `EXPOSE 5000`, `ENTRYPOINT ["python3"]` and
 `CMD ["main.py", "--host", "0.0.0.0"]`; and the old third-party family's CUDA 12.1–12.4 / port 7000 /
-`/app/models` shape. All of that is read off the repositories, not run. **Since settled on a live pod** (above): the current `runpod/pytorch` tag, and that leaving the start
+`/app/models` shape. All of that is read off the repositories, not run. **Settled by running the setup script, 2026-08-23** (pod `wj1g4hdryli3ko`): the whole path end to end —
+venv install, branch-aware download, config, launch, `/health`, and a coherent 474-character completion
+with `finish_reason: stop` over the tunnel, on cards whose direct copies return zeros. Also the
+peer-to-peer size dependence in §15.9, and the torch/torchao conflict above. **Still unverified:** the
+same path against a 100 GB-class model rather than a 1B one — nothing in the script is size-dependent,
+but the download and load times are not measured.
+
+**Since settled on a live pod** (above): the current `runpod/pytorch` tag, and that leaving the start
 command empty *is* required for sshd. **Still unverified:** whether RunPod's Container Start Command
 field replaces CMD or the entrypoint — moot for the recommended shape, which leaves it empty, but it
 still decides whether the official TabbyAPI image can be driven at all. And what a 70 GB model costs to

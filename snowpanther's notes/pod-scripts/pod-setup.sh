@@ -15,10 +15,11 @@
 #   RP_HOST=... ./rp.sh 'curl -sL <raw-url-of-this-file> -o /root/pod-setup.sh && bash /root/pod-setup.sh MikeRoz/Behemoth-128B-v3-4.25bpw-h6-exl3'
 # or paste it in with a heredoc if you would rather not fetch it.
 #
-# STATUS: run against a real pod 2026-08-23. That run failed at the exllamav3 import, and its
-# peer-to-peer check returned a false OK; both are fixed here, and the comments above each say what
-# was measured. Proven so far: the background re-exec, the logging, the status file, the branch-aware
-# download and the failure path. A clean end-to-end run of *this* version is still owed.
+# STATUS: verified end to end on 2026-08-23, pod wj1g4hdryli3ko (2x A40, broken peer-to-peer), against
+# turboderp/Llama-3.2-1B-Instruct-exl3 branch 4.0bpw. Reached READY, served through an SSH tunnel, and
+# generated coherent prose (finish_reason "stop") on cards whose direct GPU-to-GPU copies return zeros.
+# Two faults were found by running it and are fixed above: the peer-to-peer check was too small to be
+# reliable, and the install fought the image's torch. Not yet run against a 100GB-class model.
 
 set -uo pipefail
 
@@ -73,7 +74,8 @@ PY
 )
 echo "peer-to-peer: $P2P"
 case "$P2P" in
-  BROKEN*) echo "  -> expected on a rented pod (3 of 3 so far). Using tensor parallel + NCCL_P2P_DISABLE=1." ;;
+  BROKEN*) echo "  -> expected on a rented pod (3 of 3 so far). Using tensor parallel + NCCL_P2P_DISABLE=1," ;
+           echo "     which is verified to produce correct output on a pod in exactly this state." ;;
   OK)     echo "  -> healthy. Tensor parallel still used; it is faster than a layer split either way." ;;
   SINGLE) echo "  -> one GPU, nothing to test." ;;
   *)      echo "  -> test did not report cleanly; continuing with the safe configuration." ;;
@@ -137,6 +139,12 @@ for i in $(seq 1 120); do
   if curl -sf -o /dev/null http://127.0.0.1:5000/health; then
     echo "READY" > "$STATUS"
     step "READY"
+    # TabbyAPI generates a key on first start if api_tokens.yml has none. Nothing else prints it, and
+    # the preset needs it, so surface it here rather than making someone go and find the file.
+    if [ -f /root/tabbyAPI/api_tokens.yml ]; then
+      echo "API key for the Formamorph preset:"
+      grep -E "api_key" /root/tabbyAPI/api_tokens.yml | head -1
+    fi
     echo "Tunnel from your own machine, then point the preset at http://localhost:5000 :"
     echo "  ssh -N -L 5000:127.0.0.1:5000 root@\$POD_IP -p \$POD_SSH_PORT -i ~/.ssh/id_ed25519"
     exit 0
