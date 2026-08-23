@@ -15,9 +15,10 @@
 #   RP_HOST=... ./rp.sh 'curl -sL <raw-url-of-this-file> -o /root/pod-setup.sh && bash /root/pod-setup.sh MikeRoz/Behemoth-128B-v3-4.25bpw-h6-exl3'
 # or paste it in with a heredoc if you would rather not fetch it.
 #
-# STATUS: written 2026-08-23, NOT yet run end to end on a pod. The individual steps are each verified —
-# the install from 15.8, the peer-to-peer expectation from 15.9, the config from the working pod — but
-# this script as a whole has not been executed. Treat the first run as the test.
+# STATUS: run against a real pod 2026-08-23. That run failed at the exllamav3 import, and its
+# peer-to-peer check returned a false OK; both are fixed here, and the comments above each say what
+# was measured. Proven so far: the background re-exec, the logging, the status file, the branch-aware
+# download and the failure path. A clean end-to-end run of *this* version is still owed.
 
 set -uo pipefail
 
@@ -51,39 +52,55 @@ step "GPUs"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader || fail "no nvidia-smi"
 
 # --- peer-to-peer, before anything large is downloaded (15.9) -------------------------------------
+# 1,000,000 elements, not a few hundred. Measured 2026-08-23: a 4 KB copy passes on a pod whose 4 MB
+# copies come back 100% zeros, and it passes in some processes and not others on that same pod — so a
+# small buffer is a false-negative generator, not a quick version of this test. 100 KB is worse: it
+# returns *partially* corrupt data, 83-98% zeros, the shape least likely to be noticed.
 step "Peer-to-peer copy test"
 P2P=$(python3 - <<'PY' 2>&1
 import torch
 if torch.cuda.device_count() < 2:
     print("SINGLE"); raise SystemExit
-a = torch.arange(1000, dtype=torch.float32, device="cuda:0")
+n = 1000000
+a = torch.arange(n, dtype=torch.float32, device="cuda:0")
 direct = a.to("cuda:1"); torch.cuda.synchronize()
 staged = a.cpu().to("cuda:1"); torch.cuda.synchronize()
-print("OK" if torch.equal(direct.cpu(), staged.cpu()) else "BROKEN")
+if torch.equal(direct.cpu(), staged.cpu()):
+    print("OK")
+else:
+    print("BROKEN zeros=%d/%d" % (int((direct == 0).sum().item()), n))
 PY
 )
 echo "peer-to-peer: $P2P"
 case "$P2P" in
-  BROKEN) echo "  -> expected on a rented pod (2 of 2 so far). Using tensor parallel + NCCL_P2P_DISABLE=1." ;;
+  BROKEN*) echo "  -> expected on a rented pod (3 of 3 so far). Using tensor parallel + NCCL_P2P_DISABLE=1." ;;
   OK)     echo "  -> healthy. Tensor parallel still used; it is faster than a layer split either way." ;;
   SINGLE) echo "  -> one GPU, nothing to test." ;;
   *)      echo "  -> test did not report cleanly; continuing with the safe configuration." ;;
 esac
 
 # --- install (15.8) -------------------------------------------------------------------------------
-step "Installing TabbyAPI"
+# Into a venv, deliberately. Measured 2026-08-23 on runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404:
+# installing over the system Python pulls torch 2.9.0 onto an image pinned at 2.8.0, leaving torchao
+# 0.15.0 mismatched — after which `import exllamav3` dies with std::bad_alloc, reproducibly, with
+# 433 GB of RAM free. The official TabbyAPI image uses /opt/venv for the same reason.
+step "Installing TabbyAPI into a venv"
+VENV=/root/tabbyenv
+[ -d "$VENV" ] || python3 -m venv "$VENV" || fail "could not create venv"
+PY_BIN="$VENV/bin/python"
 [ -d /root/tabbyAPI ] || git clone --depth 1 https://github.com/theroyallab/tabbyAPI /root/tabbyAPI \
   || fail "clone failed"
 cd /root/tabbyAPI || fail "no /root/tabbyAPI"
-pip install -e ".[cu12]" -q || fail "pip install failed"
-python3 -c "import exllamav3, torch; print('exllamav3 imported; torch', torch.__version__)" \
+"$PY_BIN" -m pip install -q --upgrade pip || fail "pip upgrade failed"
+"$PY_BIN" -m pip install -e ".[cu12]" -q || fail "pip install failed"
+"$PY_BIN" -c "import exllamav3, torch; print('exllamav3 imported; torch', torch.__version__)" \
   || fail "exllamav3 will not import"
 
 # --- model ----------------------------------------------------------------------------------------
 step "Downloading $MODEL_REPO${REVISION:+ (branch $REVISION)}"
 mkdir -p "$MODELS"
 NAME="$(basename "$MODEL_REPO")${REVISION:+-$REVISION}"
-hf download "$MODEL_REPO" ${REVISION:+--revision "$REVISION"} --local-dir "$MODELS/$NAME"   || fail "download failed"
+"$VENV/bin/hf" download "$MODEL_REPO" ${REVISION:+--revision "$REVISION"} --local-dir "$MODELS/$NAME"   || fail "download failed"
 # A branch-based repo's main holds only the measurement and config; without --revision you get no
 # weights and a config.json that looks fine. Check for the tensors, not just the config (15.0).
 [ -f "$MODELS/$NAME/config.json" ] || fail "no config.json in $MODELS/$NAME — wrong repo layout, see 15.0"
@@ -113,7 +130,7 @@ cat /root/tabbyAPI/config.yml
 # --- run -------------------------------------------------------------------------------------------
 step "Starting TabbyAPI"
 cd /root/tabbyAPI || fail "no /root/tabbyAPI"
-NCCL_P2P_DISABLE=1 nohup python3 main.py > "$WORK/tabby.log" 2>&1 &
+NCCL_P2P_DISABLE=1 nohup "$PY_BIN" main.py > "$WORK/tabby.log" 2>&1 &
 echo "server starting; its own log is $WORK/tabby.log"
 
 for i in $(seq 1 120); do
