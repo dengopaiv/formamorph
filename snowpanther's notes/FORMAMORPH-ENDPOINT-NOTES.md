@@ -31,9 +31,11 @@ folder was modified). Written 2026-08-10.
 7. **Slow turns are usually not a config bug.** Two GPUs give koboldcpp capacity, not speed (layer
    split runs them sequentially), and Formamorph fires a **separate request per prompt kind** —
    narration and choices alone are two full calls. See §14.
-8. **Don't use the RunPod HTTP proxy for a streaming endpoint.** It buffers SSE, so narration lands
-   in one dump instead of streaming. Expose the port as **TCP** and use the direct IP. §15 is the
-   full multi-GPU RunPod quickstart, and §15.0 picks the engine for you.
+8. **Don't use the RunPod HTTP proxy for a streaming endpoint** — it buffers SSE, so narration lands
+   in one dump. But **don't use a bare TCP port either**: that sends every scene and your API key
+   across the internet in cleartext. **Tunnel it over SSH** and point the preset at `localhost` —
+   encrypted, still streams, and the URL stops changing on redeploy. §15.3a. §15 is the full
+   multi-GPU RunPod quickstart, and §15.0 picks the engine for you.
 9. **Don't rent three GPUs for a tensor-parallel engine.** vLLM requires both head counts to divide
    by the TP size, and GQA models have 8 KV heads — so **TP 3 refuses to start**. Rent 2 or 4, and
    drop a quant instead. §15.1.
@@ -499,6 +501,8 @@ beside it). The in-app ComfyUI setup dialog still tells you to add `--enable-cor
    model in the list that has a context field.
 5. Expect the seven probe requests. On per-request-billed or cold-start providers, that is not free.
 6. If narration comes back empty with no error: Paragraph Limit → **Auto** (§7).
+7. Is the URL `https://`, loopback, or a LAN/Tailscale address? If it is plain `http://` out to the
+   internet, everything you play crosses it readable — tunnel it instead (§15.3a). The field says so.
 
 ### 11e. Picking a RunPod template
 
@@ -942,6 +946,11 @@ you your GGUF, since you must deploy the safetensors or an AWQ/GPTQ quant instea
 trade, not a free upgrade: different artifact, different outputs from what you tuned against.
 NVLink does not change the picture for llama.cpp; the layer-boundary transfers are tiny either way.
 
+One assumption sits under this whole table: that the two cards can actually copy to each other
+*correctly*. On a rented pod that is not a given, and when it fails nothing errors — you get fluent
+gibberish rather than a crash. **§15.9** is the two-minute check; run it before trusting any
+two-card setup, whichever engine you land on.
+
 ### 14.3. A turn is not one request — verified in 2.12.2
 
 The renderer issues **separate HTTP requests per prompt kind**, sequentially. There are nine kinds:
@@ -1231,6 +1240,8 @@ that won't quite stretch.
 2. **Expose the port as TCP, not HTTP.** This is the important one — see §15.3.
 3. Set `MAX_MODEL_LEN` in the environment if the template offers it, or pass `--max-model-len` in the
    arguments.
+4. **Run the §15.9 peer-to-peer check before you download anything large.** Two GPUs that can't copy
+   to each other correctly produce fluent nonsense from either engine, with no error anywhere.
 
 Launch arguments:
 
@@ -1259,7 +1270,7 @@ Defaults worth knowing, so you only override what matters:
 Prefix caching matters more here than usual: per §14.3 Formamorph re-sends a large, mostly-unchanged
 history several times per turn, and prefix caching is what stops each of those being a full prefill.
 
-### 15.3. Use TCP, not the HTTP proxy — confirmed
+### 15.3. The HTTP proxy buffers SSE — confirmed
 
 **The RunPod HTTP proxy buffers SSE.** Confirmed on this setup by running koboldcpp natively and
 comparing: the same server streams smoothly on a direct connection and arrives as a single delayed
@@ -1279,7 +1290,98 @@ So: **Expose TCP Ports → 8000**, then **Connect → Direct TCP Ports** for the
   URL is stale every single time you redeploy. (§11e says the same about pod ids; here it's both.)
 - **TCP direct is plain HTTP — there is no TLS.** Your `--api-key` crosses the open internet in
   cleartext, as does everything you generate. RunPod's own docs put this on you. Treat that key as
-  disposable and rotate it; don't reuse a password from anywhere else.
+  disposable and rotate it; don't reuse a password from anywhere else. **This is the wrong trade for
+  this app** — §15.3a has the arrangement that keeps the streaming *and* the encryption.
+
+### 15.3a. Keeping it encrypted — tunnel, don't proxy
+
+§15.3 buys smooth streaming by giving up TLS, and that bullet undersells what is being given up.
+
+What crosses the wire here is not telemetry. It is the world, the characters, the scene as it stands,
+and the model's reply — the whole of it, as readable UTF-8, on every hop between this machine and the
+pod. Datacentre transit, the café access point, the ISP, whoever runs the middle. There is nothing to
+decrypt because nothing was encrypted. The `--api-key` rides along in the same clear, so anyone who
+reads one request can also generate on the rented GPUs until the pod comes down.
+
+For this app specifically that is a bad trade at any speed, and the speed being defended is small:
+encrypting a few kilobytes of text per turn is invisible next to a generation that takes seconds.
+**Some latency is acceptable here. Cleartext is not.**
+
+#### The four transports, honestly
+
+| Transport | Encrypted | Streams token-by-token | Cost |
+|---|---|---|---|
+| **Direct TCP** (§15.3) | ❌ nothing | ✅ | none — this is the tempting one |
+| **RunPod HTTPS proxy** | ✅ TLS to Cloudflare | ❌ buffers SSE (§14.7) | narration lands in one dump; 100 s cap |
+| **SSH tunnel** ← *use this* | ✅ end to end | ✅ SSH forwards bytes as they arrive | one terminal left open |
+| **Tailscale on the pod** | ✅ WireGuard | ✅ | install step on each new pod |
+
+The proxy and the direct port are a forced choice between the two properties. A tunnel refuses the
+choice: the transport is encrypted by SSH and the bytes are still forwarded unbuffered, so streaming
+behaves exactly as it does on the direct port.
+
+#### The tunnel
+
+Expose **TCP port 22** on the pod and use **Connect → SSH over exposed TCP** — the address of the
+form `root@<ip> -p <port>`, not the `ssh.runpod.io` one. Then, in a terminal you leave running:
+
+```bash
+ssh -N -L 8000:localhost:8000 root@<POD-IP> -p <POD-SSH-PORT> -i ~/.ssh/id_ed25519
+```
+
+`-N` means "forward only, no shell". `localhost:8000` is resolved **on the pod**, so this works even
+with the inference server bound to loopback — which is the real prize: `--host 127.0.0.1` instead of
+`0.0.0.0` closes the §15.4 `/invocations` hole outright, because there is no longer a public port to
+find. The endpoint URL then becomes:
+
+| Field | Value |
+|---|---|
+| Endpoint URL | `http://localhost:8000` — completed to `/v1/chat/completions` by §3 |
+
+Two consequences worth expecting. The tunnel dies with the terminal, so a dropped connection reads
+in-app as a red *Didn't answer* dot; `-o ServerAliveInterval=30` makes it fail faster and more
+honestly than it otherwise would. And the preset URL now **stops changing on redeploy** — it is
+`localhost` forever, and only the ssh command carries the new IP and port. That is a real second win
+over §15.3, where every redeploy meant editing the preset.
+
+**Use `ssh.runpod.io` only if the exposed-TCP option is not available.** That proxy host is not a
+plain sshd — it refuses exec'd commands and demands a PTY (§15.9's helper script exists because of
+it), and whether it forwards ports at all is untested here.
+
+#### What the app does about it now
+
+The Endpoint URL fields — text and image both — flag a plain-`http://` address that points out to the
+internet, in the row's own helper line, and the warning is wired to the input with `aria-describedby`
+so focusing the field reads it out. Loopback, LAN ranges, `.local` names and Tailscale's `100.64/10`
+are all silent: an `http://` inside a tunnel or a WireGuard mesh is already encrypted underneath, and
+warning about those would only teach you to ignore the warning that matters.
+
+#### What the tunnel does and doesn't cover on a rented pod
+
+On a pod the tunnel is close to a complete answer, and it is worth being clear why. The thing at the far
+end is **your own vLLM or TabbyAPI process**, not a vendor's inference service — nobody is reading the
+prompt in order to answer it. So unlike a hosted provider, where the plaintext at the destination is
+unavoidable by design, here the network really is the whole of the exposure, and encrypting it really
+does close the problem.
+
+What is left over is the *host*, not the path, and no endpoint setting reaches it:
+
+1. **The pod is RunPod's machine.** Weights, KV cache and every prompt in flight sit in that host's RAM
+   while the pod is up, and the container filesystem is their disk. Anyone with hypervisor or datacentre
+   access is inside the boundary no matter what the transport looks like. The only levers are how long
+   the pod stays up and what you leave on its disk — which is another reason to stop it between sessions
+   (§11e).
+2. **Don't turn on prompt logging.** Both servers can log prompts and generations, and a pod's container
+   log is shown in RunPod's own web console — which is a plaintext copy of the session sitting in a web
+   UI, reached by a login rather than by a tunnel. Leave the logging keys off. *(That the option exists in
+   both servers and that RunPod surfaces container logs in its UI is the point; the exact `config.yml` key
+   names are unchecked here — read them before you flip anything.)*
+3. **The API token is stored on your disk in plaintext** regardless (§10, §13.1).
+
+For completeness, the case this section is *not* about: on a hosted catalogue (§12 tier 2 and 3 —
+OpenRouter, Featherless and the rest) the provider necessarily sees every prompt in the clear at their
+end, whatever the retention policy says, and TLS does nothing about that. That is a reason to choose the
+pod, not a reason to skip the tunnel on it.
 
 ### 15.4. Lock it down — the `--api-key` gap
 
@@ -1288,9 +1390,10 @@ So: **Expose TCP Ports → 8000**, then **Connect → Direct TCP Ports** for the
 capability.** So a key alone does not make an internet-reachable vLLM private — anyone who finds the
 host:port can generate on your GPUs through `/invocations`.
 
-Mitigations, in order of preference: keep the pod's TCP port unadvertised and short-lived; put a
-reverse proxy in front that rejects everything except `/v1/*`; or stop the pod when you're not
-playing (which you want to do anyway, §11e).
+Mitigations, in order of preference: **bind the server to `127.0.0.1` and reach it through the §15.3a
+tunnel**, which removes the public port instead of guarding it; failing that, keep the pod's TCP port
+unadvertised and short-lived; put a reverse proxy in front that rejects everything except `/v1/*`; or
+stop the pod when you're not playing (which you want to do anyway, §11e).
 
 ### 15.5. Formamorph preset
 
@@ -1298,7 +1401,7 @@ Add a new preset (§2 — the built-ins are read-only), then:
 
 | Field | Value |
 |---|---|
-| Endpoint URL | `http://<PUBLIC-IP>:<EXTERNAL-PORT>` — bare host, so `nI()` completes it to `/v1/chat/completions` (§3). Note **`http`**, not `https`. |
+| Endpoint URL | Tunnelled (§15.3a, preferred): `http://localhost:8000`. Direct: `http://<PUBLIC-IP>:<EXTERNAL-PORT>` — bare host either way, so `nI()` completes it to `/v1/chat/completions` (§3). Note **`http`**, not `https`; the direct form is the one the field now warns about, and it is right to. |
 | API Token | your `--api-key` string |
 | Model Name | must match `--served-model-name` (or the repo id) **exactly** — vLLM routes on it and a typo only surfaces at generation time (§8) |
 | Context Window | click **Detect** — it works here |
@@ -1379,15 +1482,24 @@ model:
                                      # clone with --revision 5.0bpw_H6, not main
   max_seq_len:                       # set it; otherwise the model's own maximum
   tensor_parallel: false             # MUST become true — the whole point
-  tensor_parallel_backend: native    # native for PCIe, nccl for NVLink
+  tensor_parallel_backend: native    # docs: native for PCIe, nccl for NVLink —
+                                     # but see §15.9: on a pod with broken peer-to-peer,
+                                     # nccl + NCCL_P2P_DISABLE=1 was the only thing that worked
   gpu_split_auto: true
   cache_mode: FP16                   # Q8/Q6/Q4 trade cache quality for context
 ```
 
 Three of those are the entire setup: **`host: 0.0.0.0`**, **`tensor_parallel: true`**, and
-`max_seq_len`. `tensor_parallel_backend: native` is the right pick on A40s unless you've actually
-bridged them — **native is recommended for PCIe, NCCL for NVLink**, and getting this backwards is a
+`max_seq_len`. On the documentation's advice `tensor_parallel_backend: native` is the pick for
+unbridged A40s — **native for PCIe, NCCL for NVLink** — and getting it backwards is described as a
 silent performance loss rather than an error.
+
+**Measured 2026-08-23, and it complicates that advice.** On a 2× A40 pod whose peer-to-peer
+transfers were silently broken (§15.9), `nccl` launched with `NCCL_P2P_DISABLE=1` was the only
+configuration that produced correct output at all. `native` was not tested on that pod — but it is
+the backend that would drive the broken path directly, so where the §15.9 check fails, read the
+PCIe/native recommendation as inverted: **NCCL is the fallback that still works**, at the cost of
+routing collectives through host RAM. On a pod that passes the check, the original advice stands.
 
 API keys go in `api_keys.yml` (copy `api_keys_sample.yml`). It distinguishes an **`api_key`** from an
 **`admin_key`** — the admin key can load and unload models over HTTP. On a pod reachable from the
@@ -1408,14 +1520,114 @@ TabbyAPI exposes the OpenAI v1 schema — `/v1/chat/completions`, `/v1/completio
 everything in §3 and §5 applies unchanged. It also has its own `/v1/model/load` route, which is what
 the admin key guards.
 
-#### Before committing
+#### Measured on Ampere, 2026-08-23
 
-**Benchmark it on Ampere specifically.** Trellis decoding is compute-heavy and exllamav3 has
-historically favoured newer silicon; the headline numbers tend to come from Ada and Hopper cards.
-A40s are sm_86. Measure §14.5-style timings on a short session before you commit a long one —
-this is the one claim in this section I'd least want you to take on trust.
+This section used to say *benchmark it on Ampere specifically — this is the one claim I'd least want
+you to take on trust*. It has now been measured, on 2× A40 (sm_86), TabbyAPI `e632af4` with
+exllamav3 1.4.2, torch 2.9.0+cu128, driver 570.195.03:
 
-### 15.9. Verification status
+| Model | Quant | Cache | Context | Request | Rate |
+|---|---|---|---|---|---|
+| Behemoth-128B-v3 | EXL3 4.25 bpw, h6 | Q8 | 32768 | 50 tokens | 8.1 tok/s |
+| Behemoth-128B-v3 | EXL3 4.25 bpw, h6 | Q8 | 32768 | 200 tokens | **12.0 tok/s** |
+
+Weights landed at 35.3 GB + 34.7 GB across the two cards — an even tensor-parallel split, 68.6 GB of
+weights plus a 32k Q8 cache inside 90 GB of VRAM, with headroom. Load time was ~14 s with the file
+still in page cache. Prose quality was intact; the trellis-decode-is-slow-on-Ampere worry did not
+turn up anything disqualifying.
+
+**Read that as a floor, not a clean number.** That pod's peer-to-peer transfers were broken (§15.9),
+so every collective was detouring through host RAM. A pod that passes the §15.9 check should beat
+it; by how much is still unmeasured.
+
+### 15.9. The peer-to-peer trap — check this before you trust two cards
+
+**The failure.** A two-GPU pod can advertise working peer-to-peer transfers and not have them. On
+RunPod pod `zzbockeqp0d3by` (2× A40, 2026-08-23) a direct `cuda:0 → cuda:1` tensor copy returned
+**all zeros**, while `torch.cuda.can_device_access_peer()` reported `True` in both directions.
+
+Nothing errors. The model loads, VRAM fills plausibly, the server starts, and every token is
+garbage — a wall of `<unk>` at greedy temperature, multilingual token salad at normal ones. At the
+API it is indistinguishable from a corrupted download.
+
+**The check.** Two minutes, once torch is installed, before downloading anything large:
+
+```bash
+python - <<'PY'
+import torch
+a = torch.arange(1000000, dtype=torch.float32, device="cuda:0")
+torch.cuda.synchronize(0); torch.cuda.synchronize(1)
+
+b = a.to("cuda:1")                      # direct — uses peer DMA
+torch.cuda.synchronize(0); torch.cuda.synchronize(1)
+print("DIRECT  :", (a.cpu() - b.cpu()).abs().max().item(), b[:6].tolist())
+
+c = a.cpu().to("cuda:1")                # staged through host RAM
+torch.cuda.synchronize(1)
+print("VIA HOST:", (a.cpu() - c.cpu()).abs().max().item(), c[:6].tolist())
+PY
+```
+
+Both lines must print `0.0` and `[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]`. The broken pod printed:
+
+```
+DIRECT  : 999999.0 [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+VIA HOST: 0.0      [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+```
+
+**The workaround.** `tensor_parallel: true` with `tensor_parallel_backend: nccl` (§15.8), launched
+with `NCCL_P2P_DISABLE=1` so collectives route through host memory:
+
+```bash
+#!/bin/bash
+cd /root/tabbyAPI
+source venv/bin/activate
+export NCCL_P2P_DISABLE=1
+exec python main.py "$@"
+```
+
+`NCCL_P2P_DISABLE=1` on its own does **not** fix it. It redirects NCCL only — not the raw torch copy
+path that exl3's default layer split (`gpu_split_auto` with `tensor_parallel: false`) uses. That is
+precisely why TP works on a broken pod and plain autosplit does not, and it is worth knowing which
+knob is doing the work rather than pasting both and hoping.
+
+**Telling this apart from a bad download.** Three checks, cheapest first:
+
+1. **Greedy decode.** `temperature: 0, top_k: 1` on `"The capital city of France is"`. Sampling
+   problems vanish under greedy; numerical ones don't.
+2. **A 1B control.** `turboderp/Llama-3.2-1B-Instruct-exl3 --revision 4.0bpw` is ~1 GB. If it works
+   on a single card and breaks when forced across both with `gpu_split: [0.5, 4]`, the model is
+   innocent and the pod is not.
+3. **Checksums.** HF publishes the sha256 of every LFS file, so *is my download intact* has an
+   actual answer rather than a shrug:
+
+```bash
+curl -s "https://huggingface.co/api/models/<repo>/tree/main?recursive=1" \
+  | python3 -c 'import json,sys
+for e in json.load(sys.stdin):
+    if e.get("lfs"): print(e["lfs"]["oid"] + "  " + e["path"])' > expected.txt
+sha256sum -c expected.txt
+```
+
+On the broken pod all nine Behemoth shards plus `tokenizer.json` returned `OK` while the output was
+still nonsense. Re-downloading 68 GB would have proved nothing.
+
+**Why it happens.** ACS and IOMMU force PCIe peer transactions through the root complex for security
+checks, and virtualized or containerized hosts frequently break P2P this way. The documented
+*benign* outcome is that the driver reports no P2P support and the runtime migrates allocations to
+system memory — slower, but correct. This pod showed the malignant variant: capability advertised,
+transfers accepted, data silently dropped. So treat "no P2P support" in a log as informational, and
+"P2P available" as unproven until the copy test agrees with it.
+
+**At rental time.** The user reports that RunPod surfaces a warning about this class of limitation
+when you pick a multi-GPU configuration — *unverified; the exact wording and where it appears are
+unrecorded, and nothing in RunPod's published docs was found stating it.* If the warning is there it
+deserves reading rather than clicking past, but it does not replace the check: what happened here
+was silent corruption, not an absent capability, and a listing claiming P2P works is exactly the
+case this section exists for. A failed check is also grounds to redeploy — a new pod is a new
+physical host, and the test costs seconds.
+
+### 15.10. Verification status
 
 **Verified against vLLM and RunPod docs on 2026-08-20:** the flag defaults in §15.2 (`--port` 8000,
 `--tensor-parallel-size` 1, `--gpu-memory-utilization` 0.92, `--max-model-len` derived,
@@ -1425,6 +1637,18 @@ Cloudflare limit, and the TCP-mapping format.
 
 **Verified by the user, on their own hardware:** RunPod's HTTP proxy buffers SSE (§15.3), reproduced
 by comparing against koboldcpp running natively.
+
+**Verified on a rented pod, 2026-08-23** (2× A40, TabbyAPI `e632af4`, exllamav3 1.4.2+cu128.torch2.9.0,
+torch 2.9.0+cu128, Python 3.11.10, driver 570.195.03, Ubuntu 22.04.5): the whole §15.8 install path end
+to end — `pip install -e ".[cu12]"` resolving torch and the matching exl3 wheel by Python version and
+platform; current TabbyAPI being **exl3-only**, with the backend auto-detected from the model's
+`quantization_config` so `backend:` can be left blank; `cache_mode` accepting `FP16`/`Q8`/`Q6`/`Q4` or an
+explicit `"k,v"` bit pair. **EXL3 throughput on Ampere (§15.8) — previously flagged here as the weakest
+claim in the section — is now measured**, though on a pod with broken peer-to-peer, so it stands as a
+floor rather than a clean figure. The §15.9 peer-to-peer corruption was reproduced directly, including
+on a 1B control model split across both cards, and the `nccl` + `NCCL_P2P_DISABLE=1` workaround was
+confirmed to restore correct output; the Behemoth shards checksummed clean against HF's LFS hashes
+while that output was still garbage.
 
 **Verified on Hugging Face, 2026-08-20 (§15.0 worked examples):** every repo id, file size and
 branch list quoted there — the Assistant_Pepe_70B GPTQ `quantization_config` (bits 4, group_size 128,
@@ -1442,14 +1666,38 @@ native is recommended for PCIe and NCCL for NVLink.
 decides whether three cards are usable at all and is worth testing directly. The throughput estimate
 in §15.1 — tensor parallelism doubling bandwidth is
 arithmetic (§14.1), not a measurement on this model. The head-count divisibility rule in §15.7 is a
-known vLLM startup constraint, not something the parallelism doc states. **EXL3 throughput on Ampere
-(§15.8) is the weakest claim in this section** — measure it. Whether an AWQ or EXL3 quant of your
-particular finetune exists is the thing to check first (§15.0) and nothing here can answer it.
+known vLLM startup constraint, not something the parallelism doc states. Whether an AWQ or EXL3 quant
+of your particular finetune exists is the thing to check first (§15.0) and nothing here can answer it.
+
+**Reasoned, not measured — §15.3a, added 2026-08-23:** that an SSH tunnel forwards SSE unbuffered and
+so keeps token-by-token streaming. This follows from SSH being a byte-stream forwarder with no notion of
+HTTP framing — unlike the Cloudflare hop in §14.7, which buffers because it *does* parse the response —
+but it was not run against a live pod. Likewise the claim that the encryption overhead is negligible:
+that is arithmetic on a few kilobytes per turn against a multi-second generation, not a timing.
+
+**Verified in this session, 2026-08-23:** that `ssh.runpod.io` is not a plain sshd — it requires a PTY
+and silently ignores exec'd commands (this is why §15.9's helper pipes commands into an interactive
+shell). **Unverified:** whether it forwards ports at all, which is exactly why §15.3a routes you to
+**SSH over exposed TCP** instead. Also unverified: the `config.yml` key names for prompt logging in
+either server (§15.3a) — that the option exists in both and that RunPod shows container logs in its web
+console is the claim being made, not any particular key. Also unverified: that binding the inference server to `127.0.0.1`
+behind that tunnel closes the §15.4 `/invocations` hole — it follows from there being no public
+listener, but it was not tested by scanning the pod from outside.
+
+**Unverified, added 2026-08-23:** whether `tensor_parallel_backend: native` also fails on a pod with
+broken peer-to-peer (§15.8, §15.9) — only `nccl` was tested there, and `native` is assumed to drive the
+broken path but was never run. What EXL3 throughput looks like on a *healthy* two-card pod, and
+therefore what the §15.9 workaround actually costs. Whether RunPod warns about P2P limitations at
+rental time and in what words (§15.9) — user-reported, and not found in RunPod's published docs.
 
 ---
 
 ## Sources
 
+- [NVIDIA AI Enterprise — Peer-to-Peer (P2P) CUDA transfers (not supported under vGPU)](https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/features/p2p.html)
+- [Multi-GPU NVIDIA P2P capabilities and debugging tips — ACS/IOMMU forcing transfers through the root complex](https://morgangiraud.medium.com/multi-gpu-nvidia-p2p-capabilities-and-debugging-tips-fb7597b4e2b5)
+- [kata-containers #12289 — "PCI peer-to-peer transactions on BARs are not supported" in containerized GPU setups](https://github.com/kata-containers/kata-containers/issues/12289)
+- [vLLM forums — what "there is no P2P support" means in practice](https://discuss.vllm.ai/t/what-means-there-is-no-p2p-support/1928)
 - [Runpod — vLLM OpenAI compatibility (Serverless base URL, model name, /models, streaming)](https://docs.runpod.io/serverless/vllm/openai-compatibility)
 - [Runpod — deploy vLLM on Serverless](https://docs.runpod.io/serverless/vllm/get-started)
 - [vLLM docs — RunPod deployment](https://docs.vllm.ai/en/latest/deployment/frameworks/runpod/)
