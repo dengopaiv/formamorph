@@ -22,6 +22,7 @@
 set -uo pipefail
 
 MODEL_REPO="${1:-}"
+REVISION="${2:-}"   # branch, for the repos that put each bpw on its own branch (15.0)
 WORK="${WORK:-/workspace}"
 [ -d "$WORK" ] || WORK=/root
 LOG="$WORK/pod-setup.log"
@@ -31,9 +32,9 @@ MODELS="${MODELS:-/root/models}"   # container disk: local NVMe, and far faster 
 
 # --- re-exec into the background so the SSH call that started this returns at once ----------------
 if [ "${POD_SETUP_CHILD:-0}" != "1" ]; then
-  [ -n "$MODEL_REPO" ] || { echo "usage: pod-setup.sh <hf-repo-id-of-an-EXL3-quant>"; exit 2; }
+  [ -n "$MODEL_REPO" ] || { echo "usage: pod-setup.sh <hf-repo-id> [branch]   # branch only for repos that put each bpw on its own"; exit 2; }
   echo "RUNNING" > "$STATUS"
-  POD_SETUP_CHILD=1 nohup bash "$0" "$MODEL_REPO" >"$LOG" 2>&1 &
+  POD_SETUP_CHILD=1 nohup bash "$0" "$MODEL_REPO" "$REVISION" >"$LOG" 2>&1 &
   echo "started; watch $LOG, status in $STATUS"
   exit 0
 fi
@@ -79,11 +80,14 @@ python3 -c "import exllamav3, torch; print('exllamav3 imported; torch', torch.__
   || fail "exllamav3 will not import"
 
 # --- model ----------------------------------------------------------------------------------------
-step "Downloading $MODEL_REPO"
+step "Downloading $MODEL_REPO${REVISION:+ (branch $REVISION)}"
 mkdir -p "$MODELS"
-NAME="$(basename "$MODEL_REPO")"
-hf download "$MODEL_REPO" --local-dir "$MODELS/$NAME" || fail "download failed"
+NAME="$(basename "$MODEL_REPO")${REVISION:+-$REVISION}"
+hf download "$MODEL_REPO" ${REVISION:+--revision "$REVISION"} --local-dir "$MODELS/$NAME"   || fail "download failed"
+# A branch-based repo's main holds only the measurement and config; without --revision you get no
+# weights and a config.json that looks fine. Check for the tensors, not just the config (15.0).
 [ -f "$MODELS/$NAME/config.json" ] || fail "no config.json in $MODELS/$NAME — wrong repo layout, see 15.0"
+ls "$MODELS/$NAME"/*.safetensors >/dev/null 2>&1   || fail "no .safetensors in $MODELS/$NAME — this repo probably keeps each quant on its own branch; pass one (15.0)"
 du -sh "$MODELS/$NAME"
 
 # --- config (verified shape, 15.8) -----------------------------------------------------------------
