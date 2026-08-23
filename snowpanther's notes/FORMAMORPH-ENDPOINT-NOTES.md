@@ -1627,7 +1627,90 @@ was silent corruption, not an absent capability, and a listing claiming P2P work
 case this section exists for. A failed check is also grounds to redeploy — a new pod is a new
 physical host, and the test costs seconds.
 
-### 15.10. Verification status
+### 15.10. Pod template spec — and what died in the old one
+
+Editing an old TabbyAPI template into a current one does not work, and the reason is not the CUDA tag.
+**ExLlamaV2 was removed from TabbyAPI's main branch entirely**; the last exl2-compatible commit is kept
+on the `exl2-checkpoint` branch. Every third-party RunPod template from that era — the
+`nvidia/cuda:12.1.0`–`12.4.1-runtime-ubuntu22.04` family, port 7000, models and config both under
+`/app/models` — is on the far side of that break. Bumping its image tag gives you a newer CUDA running
+the same dead backend. Start from a current base instead.
+
+TabbyAPI now publishes its own image, which it did not when those templates were written:
+
+| | |
+|---|---|
+| Registry | `ghcr.io/theroyallab/tabbyapi` |
+| Tags | `latest` (CUDA 12.8) · `cu13` (CUDA 13) · `latest-extras` (12.8 plus the embeddings stack) |
+| Base | `nvidia/cuda:12.8.1-runtime-ubuntu24.04` |
+| Port | `5000` |
+| Models | `/app/models` |
+| Config | `/app/config.yml`, `/app/api_tokens.yml` |
+| Entrypoint | `ENTRYPOINT ["python3"]`, `CMD ["main.py", "--host", "0.0.0.0"]` |
+
+#### Which shape to build
+
+| | Official image | RunPod base + install ← *build this* |
+|---|---|---|
+| Image | `ghcr.io/theroyallab/tabbyapi:latest` | a current RunPod PyTorch/CUDA image |
+| Install | none, it's baked | §15.8's `pip install -e ".[cu12]"`, once per pod |
+| sshd, key injection | **absent** | present, it is what these images are for |
+| §15.3a tunnel | **not available** | works |
+| Transport left to you | HTTPS proxy (buffers, §14.7) or cleartext TCP (§15.3) | encrypted, unbuffered |
+
+The official image is the cleaner artifact and the wrong one here. It is a plain inference container with
+no sshd and no RunPod public-key injection — that plumbing is exactly what the `-runpod` suffix on the old
+third-party images carried. No sshd means no tunnel, which puts you back on the choice §15.3a exists to
+refuse. Its `ENTRYPOINT ["python3"]` compounds it: a start command written as `bash -c "…"` arrives as
+`python3 bash -c "…"`. *(Whether RunPod's Container Start Command replaces CMD only or the entrypoint too
+is unchecked — do not design around either answer without testing it.)*
+
+#### The spec
+
+| Field | Value | Why |
+|---|---|---|
+| **Container image** | a current `runpod/pytorch:*-cuda12.8*` tag | brings sshd and `PUBLIC_KEY` injection. The exact tag used on 2026-08-23 was not recorded; what it resolved to was Ubuntu 22.04.5, Python 3.11.10, driver 570.195.03 |
+| **GPU count** | 2 | and read §15.1 before assuming 3 is allowed |
+| **Container disk** | ≥ 100 GB | local NVMe. The model goes here — see the note below |
+| **Volume disk / mount path** | optional, `/workspace` | RunPod's network volume, survives redeploy |
+| **Expose HTTP ports** | *(none)* | nothing should be publicly reachable |
+| **Expose TCP ports** | **22** | this is the whole point — it is what makes **Connect → SSH over exposed TCP** available, and that is what §15.3a tunnels through |
+| **Container start command** | *(leave empty)* | so RunPod's own `start.sh` runs and brings sshd up. Overriding it risks bypassing that setup — untested, and the failure mode is a pod you cannot SSH into |
+| **Environment** | `HF_TOKEN` for a gated repo, `HF_HUB_ENABLE_HF_TRANSFER=1` | the second is what makes a 68 GB download finish in minutes |
+
+Note the port list: TabbyAPI's own default is **5000**, and it is deliberately not exposed. It stays bound
+to loopback inside the pod and is reached only down the tunnel. `config.yml` already defaults `host` to
+`127.0.0.1`, so this needs nothing done — it needs something *not* done, namely passing `--host 0.0.0.0`
+the way every quickstart tells you to.
+
+**Where to put the weights.** The verified ~14 s load in §15.8 was off container disk. `/workspace` is a
+MooseFS network volume, and pulling 70 GB of shards across it at every start is a different proposition
+— untested, and worth measuring before committing a workflow to it. Container disk is faster and dies
+with the pod; the volume persists and may cost you the load time. Downloading again at ~2–3 minutes with
+`hf_transfer` is cheap enough that container disk is the safe default.
+
+#### Then bring it up
+
+The template gets you a pod with SSH and two cards. The rest is §15.8 unchanged, in this order:
+
+1. **§15.9's peer-to-peer copy test, before downloading anything.** Two minutes against 70 GB.
+2. Install: `git clone https://github.com/theroyallab/tabbyAPI && cd tabbyAPI && pip install -e ".[cu12]"`.
+3. Download the quant with `hf`, checked against the LFS hashes (§15.9).
+4. Write `config.yml` (§15.8), leaving `host` at its `127.0.0.1` default.
+5. Open the tunnel from your own machine (§15.3a) and point the preset at `http://localhost:5000`.
+
+#### Fields from the old template that are now dead
+
+| Old | Status |
+|---|---|
+| `nvidia/cuda:12.x-runtime-ubuntu22.04` base | superseded — and carries the exl2-era install with it |
+| Port **7000** | TabbyAPI's default is **5000** |
+| `config.yml` under `/app/models` | config sits beside the app, not among the weights |
+| Any `.safetensors` exl2 quant | **unloadable** on main — needs an EXL3 quant (§15.0) or the `exl2-checkpoint` branch |
+| `backend:` set explicitly | can be left blank; detected from the model's `quantization_config` |
+| Exposed HTTP port for the API | replaced by TCP 22 and a tunnel (§15.3a) |
+
+### 15.11. Verification status
 
 **Verified against vLLM and RunPod docs on 2026-08-20:** the flag defaults in §15.2 (`--port` 8000,
 `--tensor-parallel-size` 1, `--gpu-memory-utilization` 0.92, `--max-model-len` derived,
@@ -1683,6 +1766,15 @@ either server (§15.3a) — that the option exists in both and that RunPod shows
 console is the claim being made, not any particular key. Also unverified: that binding the inference server to `127.0.0.1`
 behind that tunnel closes the §15.4 `/invocations` hole — it follows from there being no public
 listener, but it was not tested by scanning the pod from outside.
+
+**Read from source, 2026-08-23 (§15.10):** that TabbyAPI's main branch has dropped ExLlamaV2 with the
+last compatible commit on `exl2-checkpoint`; the official image's registry, tags, and its Dockerfile's
+base (`nvidia/cuda:12.8.1-runtime-ubuntu24.04`), `EXPOSE 5000`, `ENTRYPOINT ["python3"]` and
+`CMD ["main.py", "--host", "0.0.0.0"]`; and the old third-party family's CUDA 12.1–12.4 / port 7000 /
+`/app/models` shape. All of that is read off the repositories, not run. **Unverified:** whether RunPod's
+Container Start Command replaces CMD or the entrypoint, what a current `runpod/pytorch` tag is called,
+whether leaving the start command empty is in fact required for sshd, and what a 70 GB model costs to
+load off a `/workspace` network volume rather than container disk.
 
 **Unverified, added 2026-08-23:** whether `tensor_parallel_backend: native` also fails on a pod with
 broken peer-to-peer (§15.8, §15.9) — only `nccl` was tested there, and `native` is assumed to drive the
