@@ -1313,7 +1313,7 @@ encrypting a few kilobytes of text per turn is invisible next to a generation th
 |---|---|---|---|
 | **Direct TCP** (§15.3) | ❌ nothing | ✅ | none — this is the tempting one |
 | **RunPod HTTPS proxy** | ✅ TLS to Cloudflare | ❌ buffers SSE (§14.7) | narration lands in one dump; 100 s cap |
-| **SSH tunnel** ← *use this* | ✅ end to end | ✅ SSH forwards bytes as they arrive | one terminal left open |
+| **SSH tunnel** ← *use this* | ✅ end to end | ✅ **measured** — see below | one terminal left open |
 | **Tailscale on the pod** | ✅ WireGuard | ✅ | install step on each new pod |
 
 The proxy and the direct port are a forced choice between the two properties. A tunnel refuses the
@@ -1344,9 +1344,27 @@ honestly than it otherwise would. And the preset URL now **stops changing on red
 `localhost` forever, and only the ssh command carries the new IP and port. That is a real second win
 over §15.3, where every redeploy meant editing the preset.
 
-**Use `ssh.runpod.io` only if the exposed-TCP option is not available.** That proxy host is not a
-plain sshd — it refuses exec'd commands and demands a PTY (§15.9's helper script exists because of
-it), and whether it forwards ports at all is untested here.
+**`ssh.runpod.io` will not do.** That proxy host is not a plain sshd — it refuses exec'd commands and
+demands a PTY (§15.9's helper script exists because of it), and **it does not forward ports.** Tested
+2026-08-23: `ssh -f -N -L` against it returns success and the local port is genuinely bound, so nothing
+looks wrong — and then every connection through it dies with `curl: (56) Recv failure: Connection was
+reset`. It fails in the shape most likely to be mistaken for a problem at the other end. Expose TCP 22
+and use **Connect → SSH over exposed TCP**; there is no second option.
+
+#### Measured, 2026-08-23
+
+An HTTP server on the pod's own loopback emitting one SSE chunk every 0.4 s, read from a laptop through
+`ssh -N -L 15000:127.0.0.1:5000 root@<ip> -p <port>`:
+
+```
+  0.41s  data: chunk 0        1.62s  data: chunk 3        2.82s  data: chunk 6
+  0.81s  data: chunk 1        2.01s  data: chunk 4        3.22s  data: chunk 7
+  1.21s  data: chunk 2        2.41s  data: chunk 5
+```
+
+0.40 s spacing end to end, no batching — the tunnel is transparent to streaming, where the proxy in
+§14.7 delivers the same stream as one dump. The server was bound to `127.0.0.1` and reachable **only**
+down the tunnel, which is the arrangement §15.4 wants, working.
 
 #### What the app does about it now
 
@@ -1542,6 +1560,12 @@ it; by how much is still unmeasured.
 
 ### 15.9. The peer-to-peer trap — check this before you trust two cards
 
+> **Reproduced on a second pod, 2026-08-23.** `qp2jd6prtg6w6c`, 2× A40 in `CA-MTL-1`, a different
+> machine from the one below: `can_device_access_peer` → `True`, direct `cuda:0→cuda:1` copy → all
+> zeros, host-staged copy → correct. **Two A40 pods out of two.** Treat this as the expected state of a
+> rented multi-GPU pod rather than bad luck, and plan for `tensor_parallel` + `nccl` +
+> `NCCL_P2P_DISABLE=1` from the start — the check below is then a confirmation, not a gamble.
+
 **The failure.** A two-GPU pod can advertise working peer-to-peer transfers and not have them. On
 RunPod pod `zzbockeqp0d3by` (2× A40, 2026-08-23) a direct `cuda:0 → cuda:1` tensor copy returned
 **all zeros**, while `torch.cuda.can_device_access_peer()` reported `True` in both directions.
@@ -1669,13 +1693,13 @@ is unchecked — do not design around either answer without testing it.)*
 
 | Field | Value | Why |
 |---|---|---|
-| **Container image** | a current `runpod/pytorch:*-cuda12.8*` tag | brings sshd and `PUBLIC_KEY` injection. The exact tag used on 2026-08-23 was not recorded; what it resolved to was Ubuntu 22.04.5, Python 3.11.10, driver 570.195.03 |
+| **Container image** | **`runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`** | brings sshd and `PUBLIC_KEY` injection. Read off a live pod 2026-08-23: Ubuntu 24.04.4, Python 3.12.3, torch 2.8.0+cu128, CUDA 12.8.1, driver 570.195.03. (The 2026-08-20 pod was an older tag — Ubuntu 22.04.5, Python 3.11.10 — so check the tag rather than assuming this one is still current) |
 | **GPU count** | 2 | and read §15.1 before assuming 3 is allowed |
 | **Container disk** | ≥ 100 GB | local NVMe. The model goes here — see the note below |
 | **Volume disk / mount path** | optional, `/workspace` | RunPod's network volume, survives redeploy |
 | **Expose HTTP ports** | *(none)* | nothing should be publicly reachable |
 | **Expose TCP ports** | **22** | this is the whole point — it is what makes **Connect → SSH over exposed TCP** available, and that is what §15.3a tunnels through |
-| **Container start command** | *(leave empty)* | so RunPod's own `start.sh` runs and brings sshd up. Overriding it risks bypassing that setup — untested, and the failure mode is a pod you cannot SSH into |
+| **Container start command** | *(leave empty)* | **confirmed by reading `/start.sh` on a live pod:** it ends in `sleep infinity` and never execs anything of yours, so it *is* the CMD. Override it and `setup_ssh` never runs — the failure mode is a pod you cannot SSH into. Put your own setup in **`/pre_start.sh`**, which `start.sh` runs on the way past |
 | **Environment** | `HF_TOKEN` for a gated repo, `HF_HUB_ENABLE_HF_TRANSFER=1` | the second is what makes a 68 GB download finish in minutes |
 
 Note the port list: TabbyAPI's own default is **5000**, and it is deliberately not exposed. It stays bound
@@ -1698,6 +1722,16 @@ The template gets you a pod with SSH and two cards. The rest is §15.8 unchanged
 3. Download the quant with `hf`, checked against the LFS hashes (§15.9).
 4. Write `config.yml` (§15.8), leaving `host` at its `127.0.0.1` default.
 5. Open the tunnel from your own machine (§15.3a) and point the preset at `http://localhost:5000`.
+
+#### One thing the template hands every process on the pod
+
+`env` on a running pod includes **`RUNPOD_API_KEY`**, injected by RunPod. Anyone with a shell there — or
+any process you run, including anything a model download drags in — can read it. Measured 2026-08-23:
+that key is **403 on `rest.runpod.io/v1`** but **authenticates `api.runpod.io/graphql`**, where it
+returned the pod's own `imageName` and host id. So it is not simply an account key, and it is not merely
+decorative either; the scope was not mapped further. Treat a pod you have exposed as having leaked it,
+and note that this is a second reason — beside §15.4's `/invocations` gap — not to leave an inference
+port open to the internet.
 
 #### Fields from the old template that are now dead
 
@@ -1752,28 +1786,38 @@ arithmetic (§14.1), not a measurement on this model. The head-count divisibilit
 known vLLM startup constraint, not something the parallelism doc states. Whether an AWQ or EXL3 quant
 of your particular finetune exists is the thing to check first (§15.0) and nothing here can answer it.
 
-**Reasoned, not measured — §15.3a, added 2026-08-23:** that an SSH tunnel forwards SSE unbuffered and
-so keeps token-by-token streaming. This follows from SSH being a byte-stream forwarder with no notion of
-HTTP framing — unlike the Cloudflare hop in §14.7, which buffers because it *does* parse the response —
-but it was not run against a live pod. Likewise the claim that the encryption overhead is negligible:
-that is arithmetic on a few kilobytes per turn against a multi-second generation, not a timing.
+**Measured on a live pod, 2026-08-23** (`qp2jd6prtg6w6c`, 2× A40, `CA-MTL-1`, image
+`runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404`) — this replaces what §15.3a previously carried as
+*reasoned, not measured*:
 
-**Verified in this session, 2026-08-23:** that `ssh.runpod.io` is not a plain sshd — it requires a PTY
-and silently ignores exec'd commands (this is why §15.9's helper pipes commands into an interactive
-shell). **Unverified:** whether it forwards ports at all, which is exactly why §15.3a routes you to
-**SSH over exposed TCP** instead. Also unverified: the `config.yml` key names for prompt logging in
-either server (§15.3a) — that the option exists in both and that RunPod shows container logs in its web
-console is the claim being made, not any particular key. Also unverified: that binding the inference server to `127.0.0.1`
-behind that tunnel closes the §15.4 `/invocations` hole — it follows from there being no public
-listener, but it was not tested by scanning the pod from outside.
+- **An SSH tunnel forwards SSE unbuffered.** Eight chunks emitted 0.4 s apart arrived 0.40 s apart
+  through `ssh -N -L`, with no batching. The reasoning was right, and it is now a timing.
+- **The tunnel reaches a service bound to the pod's `127.0.0.1`,** which is the §15.4 arrangement — no
+  public listener at all — working end to end.
+- **`ssh.runpod.io` does not forward ports.** `ssh -f -N -L` succeeds against it and binds the local
+  port, then resets every connection through it. Failing in the shape of a problem at the far end is
+  why this is worth stating rather than leaving as "untested".
+- **RunPod's `/start.sh` is the container CMD** — it ends in `sleep infinity` and execs nothing of
+  yours, so overriding the start command skips `setup_ssh` entirely. `/pre_start.sh` is the hook.
+- **`RUNPOD_API_KEY` is injected into the pod environment** (§15.10). 403 on `rest.runpod.io/v1`,
+  accepted by `api.runpod.io/graphql`, where it read the pod's own image name. Scope not mapped
+  further.
+
+**Still unverified:** that binding to `127.0.0.1` closes the §15.4 `/invocations` hole — it follows from
+there being no public listener and the tunnel test is consistent with it, but the pod was never port-
+scanned from outside to prove nothing else answers. The `config.yml` key names for prompt logging in
+either server (§15.3a) — that the option exists and that RunPod surfaces container logs is the claim,
+not any particular key. And the claim that encryption overhead is negligible remains arithmetic on a few
+kilobytes per turn against a multi-second generation, not a timing.
 
 **Read from source, 2026-08-23 (§15.10):** that TabbyAPI's main branch has dropped ExLlamaV2 with the
 last compatible commit on `exl2-checkpoint`; the official image's registry, tags, and its Dockerfile's
 base (`nvidia/cuda:12.8.1-runtime-ubuntu24.04`), `EXPOSE 5000`, `ENTRYPOINT ["python3"]` and
 `CMD ["main.py", "--host", "0.0.0.0"]`; and the old third-party family's CUDA 12.1–12.4 / port 7000 /
-`/app/models` shape. All of that is read off the repositories, not run. **Unverified:** whether RunPod's
-Container Start Command replaces CMD or the entrypoint, what a current `runpod/pytorch` tag is called,
-whether leaving the start command empty is in fact required for sshd, and what a 70 GB model costs to
+`/app/models` shape. All of that is read off the repositories, not run. **Since settled on a live pod** (above): the current `runpod/pytorch` tag, and that leaving the start
+command empty *is* required for sshd. **Still unverified:** whether RunPod's Container Start Command
+field replaces CMD or the entrypoint — moot for the recommended shape, which leaves it empty, but it
+still decides whether the official TabbyAPI image can be driven at all. And what a 70 GB model costs to
 load off a `/workspace` network volume rather than container disk.
 
 **Unverified, added 2026-08-23:** whether `tensor_parallel_backend: native` also fails on a pod with
