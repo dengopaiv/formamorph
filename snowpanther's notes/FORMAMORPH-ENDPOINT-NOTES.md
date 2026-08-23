@@ -1723,6 +1723,47 @@ The template gets you a pod with SSH and two cards. The rest is §15.8 unchanged
 4. Write `config.yml` (§15.8), leaving `host` at its `127.0.0.1` default.
 5. Open the tunnel from your own machine (§15.3a) and point the preset at `http://localhost:5000`.
 
+#### Running it without an interactive shell
+
+Two separate things make a pod hard to drive, and only one of them is about the engine.
+
+**`ssh.runpod.io` ignores exec'd commands.** `ssh pod@ssh.runpod.io "nvidia-smi"` connects, prints the
+banner, runs nothing, and exits successfully. It demands a PTY and drops whatever you hand it. Anything
+built on `ssh host "command"` — a script, a loop, a one-liner — silently does nothing, and nothing
+reports an error. `pod-scripts/rp.sh` works around it by piping the command into an interactive shell and
+stripping the PTY's output back off.
+
+**An interactive session is hostile to a screen reader**, which matters more than it sounds. The RunPod
+login banner is ASCII art. `pip` and `hf download` draw progress bars with carriage returns, redrawing
+hundreds of times a second. The prompt redraws on every keystroke. None of that is readable, and none of
+it is TabbyAPI's fault — it would make any engine feel impossible to install.
+
+So don't sit in a session. `pod-scripts/pod-setup.sh` re-execs itself into the background on the first
+call, which means the command that started it returns in about a second, and everything afterwards is a
+file you read a screenful at a time:
+
+```bash
+RP_HOST=<pod>@ssh.runpod.io ./rp.sh 'cat /workspace/pod-status'          # RUNNING / READY / FAILED
+RP_HOST=<pod>@ssh.runpod.io ./rp.sh 'tail -30 /workspace/pod-setup.log'
+```
+
+The three variables that keep that log readable are worth setting in any session, script or not:
+
+```bash
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+export PIP_PROGRESS_BAR=off
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+```
+
+**Why not `/pre_start.sh`, given §15.10 names it as the hook?** Two reasons, both worth knowing before
+building a template around it. It runs **synchronously and before `setup_ssh`**, so a script that spends
+twenty minutes downloading a model is twenty minutes in which the pod cannot be reached at all — if it
+fails, you have no way in to find out why. And on a stock image there is no way to place a file at `/`
+before boot: the network volume mounts at `/workspace`, not `/`, and RunPod's template form has no file
+upload. `/pre_start.sh` is a hook for an image **you build**, not for a stock one. Until then, running
+the setup script once over `rp.sh` is the practical shape, and it has the better failure behaviour
+anyway.
+
 #### One thing the template hands every process on the pod
 
 `env` on a running pod includes **`RUNPOD_API_KEY`**, injected by RunPod. Anyone with a shell there — or
