@@ -563,3 +563,73 @@ the input shape rather than the question.
    blurb written, pasted into the AI field, brief added afterwards — has a note that agrees with the brief's
    visible lines by coincidence rather than by provenance, and that is the case an author would actually
    bring.
+
+---
+
+## 14. Numbering the brief, and the parser becomes the blocker (2026-08-24)
+
+§13's step 2, run the same day: `--numbered` puts the brief in as a numbered list and
+`candidates/brief-check-numbered.txt` asks for a verdict per line. Same subjects, same seed, 6 runs, 192
+completions. **It moved both models, in opposite directions.**
+
+| model | wording | clean FP | contradiction | omission | laundered | secret recall |
+|---|---|---|---|---|---|---|
+| deepseek-v4-flash | free text | 0% | 96% | 4% | 38% | 32% |
+| deepseek-v4-flash | numbered | 0% | 83% | **0%** | **0%** | **0%** |
+| cydonia-24b-v4.1 | free text | 0% | 4% | 0% | 0% | 0% |
+| cydonia-24b-v4.1 | numbered | 0% | 42% | 33% | **71%** | **46%** |
+
+**Cydonia went from not doing the task to doing it properly.** Under the free-text prompt every non-NONE
+answer it gave was the brief pasted back. Numbered, it works down the list:
+
+```
+6. curt with strangers, slow to warm
+The description accounts for this.
+
+7. SECRET: takes bribes from the night barges to keep their cargo out of the ledger
+The description does not account for this.
+```
+
+Nine lines, six passed and the three missing secrets named — a perfect answer on the arm the shipped check
+scores 0 on, from a 24B roleplay finetune. The diagnosis in §13 was right: a bulleted list invites a
+completing model to continue it, and a numbered list gives it somewhere to put a verdict instead.
+
+**Flash went the other way.** Told to decide line by line, it answers NONE to every laundered run — 24 of 24,
+with three secrets absent each time — and to every omission run. Its free-text 38% and 4% both went to zero.
+Numbering did not make it enumerate; it made it quieter. Whatever is happening on that model, per-line
+instructions are not it.
+
+So there is no single wording for both tiers yet, and the split is the opposite of the usual one: the small
+model needs the structure and the large one is hurt by it.
+
+### The parser is now the binding constraint, and it is an app problem
+
+**Shown cydonia's numbered output, `parseFindings` would list 970 findings across the sweep where the model
+reported 117.** Eight times inflation, and on the harbormaster it means an author opening the dialog on a
+subject with three real problems sees **nine lines, six of which say "The description accounts for this."**
+
+That is the §11 agreement-narration gap again, arriving as the consequence of the format that finally made a
+small model work. `parseFindings` splits on newlines and keeps everything that is not literally NONE, so it
+cannot represent a verdict per line: the fact line reads as a paste and the verdict line carries no fact.
+
+The probe now parses verdicts (`parseLineVerdicts`) and prints both counts side by side, so the gap between
+what the model said and what the app would show is visible on every run. **The correction was worth 71
+points**: this arm scored 4% before the verdict parse and 71% after, on completions already paid for. A
+completely correct answer had been scoring zero, which is the second metric bug in this section's own
+measurements and the one that cost the most.
+
+**If a per-line format ships, it needs a parser that reads verdicts.** That is a real requirement on
+`descriptionCheck.ts`, not a probe detail — and it is cheap next to another prompt rewrite.
+
+### What this changes about the plan
+
+1. **Two prompts, chosen by tier, is now on the table** and was not before. It is unattractive — every
+   prompt in this app is one editable template — but the measurement says the free-text wording is worth 38%
+   on flash and 0% on cydonia, and the numbered wording 0% and 71%. That is not a rounding difference.
+2. **Verdict parsing comes before any further wording work.** It converted a 4% into a 71% without a single
+   new call, and the same parse would let the dialog show three findings instead of nine.
+3. **Few-shot is still unpulled**, and it is now the obvious candidate for the one thing neither wording
+   does: make flash enumerate. It is the only lever that changes what the model *sees* rather than what it
+   is told, and both of these were tellings.
+4. Unchanged from §13: locations are weak, and the note-drafted-from-the-same-brief fixture is not the case
+   an author brings.
