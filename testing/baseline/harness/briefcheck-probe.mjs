@@ -308,10 +308,26 @@ const AGREEMENT = /\b(?:agree\w*|consistent|match(?:es)?|align\w*|accounted for|
 const words = (s) => (s.trim().match(/\S+/g) || []).length;
 
 const norm = (s) => s.replace(/\s+/g, " ").toLowerCase().trim();
+
+// **A finding that is a contiguous run of its own input is a paste, whatever it contains.** That is the whole
+// rule, and it is stronger than what this probe started with in two ways it needed.
+//
+// The 60-character containment rule inherited from `desccheck-probe.mjs` was written for prose descriptions,
+// and a brief is written in short bullets: *"talks fast and chatters, never leaves a pause"* is 46 characters,
+// so it slid under the threshold and scored as a comparison. It was not one. On the first sweep cydonia-24b
+// scored 14 of 24 on the contradiction arm and **every non-NONE answer it gave on that arm was the changed
+// brief line handed straight back** — so the threshold came off.
+//
+// The first correction then tried to spare a genuine finding that quotes the brief, by requiring the absence
+// of comparison words. That was worse than useless: the words live in the source text too, so *"- never
+// injured"* was read as a comparison because the pasted bullet contains "never". Six pastes survived on that
+// alone. The guard is gone, because a real finding names both sides and therefore adds words *outside* any
+// run it quotes — which makes it not a substring. The test is exact and needs no vocabulary.
 function isEcho(finding, arm) {
   const f = norm(finding).replace(/^[^:]{0,40}:\s*/, "");
-  if (f.length < 60) return false;
   const hay = norm(arm.brief) + " || " + norm(arm.note);
+  if (f.length >= 15 && hay.includes(f)) return true;
+  if (f.length < 60) return false;
   for (let i = 0; i + 60 <= f.length; i += 10) if (hay.includes(f.slice(i, i + 60))) return true;
   return false;
 }
@@ -344,7 +360,8 @@ const blank = () => ({
   runs: 0, errors: 0, preamble: 0, rewrote: 0, blob: 0, truncated: 0, emptyTrunc: 0,
   tokSum: 0, tokMax: 0, tokRuns: 0,
   byClass: Object.fromEntries(CLASSES.map((k) => [k, {
-    runs: 0, hits: 0, findSum: 0, agreeWorded: 0, saidNone: 0, echoed: 0, secretsFound: 0, secretsTotal: 0,
+    runs: 0, hits: 0, findSum: 0, agreeWorded: 0, saidNone: 0, echoed: 0, echoOnly: 0,
+    secretsFound: 0, secretsTotal: 0,
   }])),
 });
 
@@ -370,15 +387,24 @@ function scoreRow(T, arm, out, label) {
   // The laundered arm asks a different question than the planted ones: not "was the plant named" but "how
   // much of the authored world came back". A run that names one of three missing secrets is a hit; the
   // recall across all three is what says whether an author could trust the report.
+  // Only a finding that is not a paste can score. A model handing the changed brief line back has compared
+  // nothing, and counting that as a detection is how a degenerate arm reads as a working one. `echoOnly`
+  // keeps the runs that would have scored under the looser rule, so the correction stays legible instead of
+  // being a silently different number.
+  const real = findings.filter((f) => !isEcho(f, arm));
   let named = [];
   let hit;
   if (arm.cls === "laundered") {
-    named = arm.secrets.filter((s) => findings.some((f) => s.re.test(f))).map((s) => s.id);
+    named = arm.secrets.filter((s) => real.some((f) => s.re.test(f))).map((s) => s.id);
     C.secretsFound += named.length;
     C.secretsTotal += arm.secrets.length;
     hit = named.length > 0;
+    if (!hit && arm.secrets.some((s) => findings.some((f) => s.re.test(f)))) C.echoOnly++;
+  } else if (arm.want) {
+    hit = real.some((f) => arm.want.test(f));
+    if (!hit && findings.some((f) => arm.want.test(f))) C.echoOnly++;
   } else {
-    hit = arm.want ? findings.some((f) => arm.want.test(f)) : findings.length === 0;
+    hit = findings.length === 0;
   }
   if (hit) C.hits++;
 
@@ -477,9 +503,10 @@ for (const model of modelList) {
     } else if (k === "laundered") {
       console.log(`  ${"laundered".padEnd(15)}named a missing secret ${C.hits}/${C.runs} (${pct(C.hits, C.runs)}) · `
         + `secret recall ${C.secretsFound}/${C.secretsTotal} (${pct(C.secretsFound, C.secretsTotal)}) · `
-        + `${avg} findings avg · echoed ${C.echoed}`);
+        + `${avg} findings avg · echoed ${C.echoed}${C.echoOnly ? ` · ${C.echoOnly} echo-only` : ""}`);
     } else {
-      console.log(`  ${k.padEnd(15)}found ${C.hits}/${C.runs} (${pct(C.hits, C.runs)}) · ${avg} findings avg · echoed ${C.echoed}`);
+      console.log(`  ${k.padEnd(15)}found ${C.hits}/${C.runs} (${pct(C.hits, C.runs)}) · ${avg} findings avg · `
+        + `echoed ${C.echoed}${C.echoOnly ? ` · ${C.echoOnly} echo-only, a paste that matched the want` : ""}`);
     }
   }
   console.log(`  ${"format".padEnd(15)}rewrites ${T.rewrote} · preamble ${T.preamble} · single-blob ${T.blob}`);
