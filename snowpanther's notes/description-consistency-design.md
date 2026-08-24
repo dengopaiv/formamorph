@@ -5,8 +5,8 @@
 > `ba321a5`, and was put in front of five models the same day. Two of its three findings work. The third —
 > the round trip, §1, the reason this document exists — was detected in **1 of 96 runs** across models from
 > 24B to frontier, and the clean-pair false-positive rate ran from 37% to 100%. §7's staging still holds;
-> §10's done bar does not, and is rewritten at the end. Read §1, §7 and §11 first if you are picking this
-> up cold.
+> §10's done bar does not, and is rewritten at the end. **§12 (2026-08-24) asks whether the check is aimed
+> at the wrong pair of fields at all** — read §1, §7, §11 and §12 if you are picking this up cold.
 
 **Problem.** The World Editor's ✨ drafting buttons write a description from one other field and nothing
 else. Two consequences, and the second is worse than the first:
@@ -391,3 +391,72 @@ What remains open, in order:
 3. **Unlabelled briefs are unmeasured.** The 0-leak figure for brief → player-facing is on briefs that mark
    private lines `SECRET:`. An author who does not mark them is the untested case, and the help text
    recommends the convention precisely because the evidence only covers it.
+4. **The check may be checking the wrong two fields.** The narrator never reads `playerDescription`, so a
+   player-versus-note disagreement is cosmetic and the pair that costs something is brief-versus-note.
+   Ahead of item 2 in priority: it is worth knowing whether the clean arm is a hard problem or the wrong
+   problem before spending a fifth prompt rewrite on it. **§12.**
+
+---
+
+## 12. The check may be aimed at the wrong pair (2026-08-24)
+
+Raised by the author, and checked against the code rather than agreed to. **The narrator never reads
+`playerDescription`.** Every context builder on the turn path takes `aiSummary` or `aiDescription` and
+nothing else — `locationContext.ts`, `stagedPlanning.ts`, `traitTree.ts`, `runtimeCharacters.ts`. The
+player-facing field reaches only the UI panels (`GamePanels`, `EntityModal`, `LocationModal`,
+`TraitsTab`), the editor's search-and-replace in `worldSearch.ts`, and `publishPayload.ts`, which is the
+catalogue blurb for a world listing and not gameplay. It is optional on all four types and nothing falls
+back on its absence. (`locationContext.ts:114` falls back to a legacy `location.description` when there
+is no summary or note — old-world compatibility, not a second channel.)
+
+So the field is what the author says it is: **fixed text a player may be shown, never in the model's
+context, and not required at all.** It exists for someone who wants a specific unchanging description,
+and it is generatable for someone who would rather not write one.
+
+### The consequence for the 🔍 check
+
+`checkDescriptions` compares `playerDescription` against `aiDescription`. Under that reading it is
+comparing a field the narrator reads against a field it never reads, one of which is optional
+decoration. A disagreement between them is a **cosmetic** inconsistency a player might notice. It is not
+a continuity fault in the game, because only one of the two texts was ever in the room.
+
+The pair that costs something is **brief ↔ `aiDescription`**: what the author asserted is true, against
+what the narrator was actually handed. A drift there means the model is running on facts nobody wrote.
+That is the same failure §1 opens with, stated against the star topology `authorBrief` introduced rather
+than against the cycle it replaced.
+
+**This is an open question, not a decision.** It changes what the button is *for*, which is the author's
+call. Recorded because it bears directly on §11's blocker: the clean arm has resisted four prompt
+rewrites and roughly 1,400 calls, and it is worth knowing whether that is a hard problem or the wrong
+problem before spending a fifth rewrite on it.
+
+### Why the retarget might also be easier
+
+A hypothesis, unmeasured, and it should be measured before it is believed. Brief-versus-note is closer to
+fact extraction than to open-ended text comparison: the brief is terse and enumerable, so the question
+becomes *is each asserted fact accounted for* rather than *do these two prose passages disagree*. The
+clean-arm failure mode across every model tested was a model with nothing to report inventing something
+to be useful — and a checklist gives it somewhere to put "yes" that is not a finding. `bridge-probe.mjs`
+already scores fact recall from a bullet brief (94–95%, zero secret leaks), so the fixtures and half the
+scorer exist.
+
+Against it: a brief marks private lines `SECRET:`, and those are *supposed* to be absent from the
+player-facing draft and *present* in the note. A brief-versus-note check has to read that convention or
+it will flag every secret as an omission in one direction and every withheld line in the other. That is
+a real complication and it is the first thing to design if this is taken up.
+
+### What would need deciding
+
+- Does the button check brief ↔ note, replace the pair it checks entirely, or offer both?
+- What does it do on a subject with no brief? The honest answer may be that it has nothing to check and
+  should say so, rather than falling back to the cosmetic pair and looking like it worked.
+- Is a player-facing drift worth reporting at all, given it costs nothing in play? Possibly as a
+  different, quieter thing than a continuity finding.
+
+### One property worth protecting deliberately
+
+If the brief is the only artifact that must be authored, then **every other field is recoverable by
+pressing ✨ again** and a bad generation is never a loss. That is worth holding as a design rule rather
+than an accident. It is also the shape that serves a screen-reader author best — one plain field to write
+into, rather than generated prose to review in three — which is §9's bar approached from the authoring
+side instead of the widget side.
