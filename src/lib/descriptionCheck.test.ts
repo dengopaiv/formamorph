@@ -32,7 +32,17 @@ describe('DEFAULT_DESC_CHECK_PROMPT', () => {
 
   it('still asks the two questions that do work', () => {
     expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/a fact one states and the other contradicts/i);
-    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/does not account for/i);
+    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/never accounts for/i);
+  });
+
+  it('asks the omission question from both sides, which is what makes it land', () => {
+    // Cutting the round-trip bullet took omission detection down with it, because that bullet asked the
+    // same question from the note's side and was priming it. The note-side framing lives inside the
+    // surviving bullet now, and it bought the detections back: flash 75% -> 88%, cydonia 52% -> 78% on the
+    // same fixtures and seeds, pooled 30/47 -> 39/47. Trimming this sentence as redundant is the thing
+    // that was already measured and costs 20 points, so it is pinned here rather than left to taste.
+    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/narrator's only reference/i);
+    expect(DEFAULT_DESC_CHECK_PROMPT).toMatch(/the narrator cannot use/i);
   });
 
   it('names the escape hatch the parser understands', () => {

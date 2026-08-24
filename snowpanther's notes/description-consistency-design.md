@@ -359,9 +359,33 @@ What remains open, in order:
 
    It bought a real but narrow gain: truncations at the 300-token cap fell 11 → 4.
 
-   **Do not restore it.** Shipping a request for a finding that arrives once in ninety-six, to keep a side
-   effect, is the wrong repair. Strengthen the omission bullet directly and re-measure; if omission returns
-   with the clean arm unmoved, the cut was right and the wording was merely thin.
+   **It was not restored.** Shipping a request for a finding that arrives once in ninety-six, to keep a
+   side effect, is the wrong repair. The omission bullet was strengthened directly instead: it now carries
+   the note-side framing the cut bullet had been supplying, saying outright that the AI-facing description
+   is the narrator's only reference and a fact the player is shown that it does not hold is a fact the
+   narrator cannot use.
+
+   **Measured 2026-08-24**, same fixtures, same seed, 6 runs, both models, shipped-before against
+   candidate-after in one session:
+
+   | | omission | clean false positives | said NONE | truncated |
+   |---|---|---|---|---|
+   | flash — thin bullet | 75% | 100% | 0/24 | 1 |
+   | flash — both framings | **88%** | 88% | 3/24 | 5 |
+   | cydonia — thin bullet | 52% | 100% | 0/22 | 1 |
+   | cydonia — both framings | **78%** | 100% | 0/21 | 0 |
+
+   Pooled omission 30/47 → 39/47, Fisher p = 0.03. Per model it is suggestive rather than settled (flash
+   p = 0.21, cydonia p = 0.09); pooled it is real. **The wording was thin, and the cut was right.** Cydonia
+   ends above where the three-bullet prompt had it (74% → 78%) and flash below (100% → 88%), so the
+   round-trip bullet is not owed anything: one call's worth of tokens was saved and the detections came
+   back from a sentence.
+
+   The clean arm did not move in any way worth claiming — flash's three NONE answers out of 24 are
+   p = 0.12, and cydonia is still pinned at 100%. Truncations went 1 → 5 on flash, giving back part of
+   the 11 → 4 the cut had bought; cydonia went 1 → 0. Both the module comment and a test in
+   `descriptionCheck.test.ts` pin the second sentence, because trimming it as redundant is the edit that
+   was just measured at twenty points.
 2. **Few-shot is the one untried lever.** Every attempt so far changed what the model was *told*. A worked
    example of a clean pair answered NONE changes what it *sees*.
 3. **Unlabelled briefs are unmeasured.** The 0-leak figure for brief → player-facing is on briefs that mark

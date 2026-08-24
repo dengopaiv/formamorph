@@ -26,6 +26,14 @@ import { SUBJECT_TOKEN, BRIDGE_SUBJECT, type BridgeKind } from './bridgeDescript
  *
  * What remains is the half that does work: contradictions were found in 100% of runs on every model tested.
  *
+ * The omission bullet carries the round-trip bullet's framing, and that is deliberate. Cutting the third
+ * bullet cost omission detection on both models measured — flash 100% → 75%, cydonia 74% → 58% — because
+ * *"detail the AI-facing description ought to hold and does not"* was a second framing of the omission
+ * question and had been priming it. Folding the note-side framing into the bullet that remains bought it
+ * back without asking for the finding that never arrives: flash 75% → 88%, cydonia 52% → 78% on the same
+ * fixtures and seeds, pooled 30/47 → 39/47 (Fisher p = 0.03), with the clean arm unmoved. Shortening this
+ * bullet to its first sentence is not a tidy-up; it is the change that was measured and cost 20 points.
+ *
  * Persisted per prompt preset and overridable in Settings → Prompts → Authoring.
  */
 export const DEFAULT_DESC_CHECK_PROMPT =
@@ -35,7 +43,9 @@ export const DEFAULT_DESC_CHECK_PROMPT =
   + 'cannot see.\n\n'
   + 'Report only real disagreements:\n'
   + '- A fact one states and the other contradicts.\n'
-  + '- Something the player-facing description asserts that the AI-facing one does not account for.\n\n'
+  + '- A fact the player-facing description states that the AI-facing one never accounts for. The '
+  + "AI-facing description is the narrator's only reference, so a fact the player is shown and it does "
+  + 'not hold is a fact the narrator cannot use. Name that fact.\n\n'
   + 'Write one finding per line, each naming both sides. Do not rewrite either description, do not suggest '
   + 'wording, and do not remark on style. If the two agree, reply with the single word NONE.';
 
