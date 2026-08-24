@@ -430,6 +430,37 @@ call. Recorded because it bears directly on §11's blocker: the clean arm has re
 rewrites and roughly 1,400 calls, and it is worth knowing whether that is a hard problem or the wrong
 problem before spending a fifth rewrite on it.
 
+### The commonest authoring habit is the one the check is blindest to (2026-08-24)
+
+Reported by the author from how people actually fill worlds in: **many write the player-facing
+description, paste it into the AI-facing field, and stop.** That is the `roundtrip` fixture, produced by
+hand rather than by a ✨ button — a note that holds nothing the blurb does not.
+
+And the 🔍 check reports that world as **clean**. The two texts agree perfectly because they are the same
+text. The single most common way a world gets filled in produces the exact state the check cannot see,
+and it looks like a pass rather than like nothing having been checked.
+
+This is the strongest argument in this section, and it arrives from a different direction than the one
+above. Player-versus-note cannot catch the laundered note **in principle** — identical texts never
+disagree, so no prompt rewrite reaches it, which is consistent with the 1-in-96 measured across four
+wordings in §11. Brief-versus-note catches it trivially: the brief asserts things the note does not hold,
+which is the omission finding that already works at 78–88%.
+
+### Two facts about the fields, checked while §12 was written
+
+**The player-facing surfaces never fall back to the AI field.** `EntityModal` renders
+`playerDescription` or nothing; `TraitsTab` the same; `GamePanels` and `LocationModal` fall back to the
+legacy `location.description` and never to `aiDescription`. So a subject with no player-facing text shows
+none, and the separation is enforced by the render path rather than trusted to convention. Discovered
+entities are the proof it holds: `materializeDiscoveredEntity` builds them with an `aiDescription` alone.
+
+**`aiDescription` is not the summary — there are three fields, not two.** `aiSummary` is a separate
+shorter one, and `pickDescription(preferSummary, …)` prefers it in the lightweight planning precall while
+narration gets the full note. It is a **token-budget** device, not a secrecy device. Nothing in the app
+marks any text as secret: `aiDescription` is private only because no player-facing surface renders it,
+and the `SECRET:` convention in a brief is an instruction inside a prompt, not a mechanism. Anything that
+later claims to enforce secrecy has to build it; nothing today does.
+
 ### Why the retarget might also be easier
 
 A hypothesis, unmeasured, and it should be measured before it is believed. Brief-versus-note is closer to
