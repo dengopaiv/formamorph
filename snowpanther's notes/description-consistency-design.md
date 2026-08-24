@@ -491,3 +491,75 @@ pressing ✨ again** and a bad generation is never a loss. That is worth holding
 than an accident. It is also the shape that serves a screen-reader author best — one plain field to write
 into, rather than generated prose to review in three — which is §9's bar approached from the authoring
 side instead of the widget side.
+
+---
+
+## 13. First brief-versus-note measurement (2026-08-24)
+
+`briefcheck-probe.mjs`, default wording, four subjects, four arms, 6 runs, same seed as everything in §11.
+191 completions. **The clean arm moved, and it moved all the way** — on one model.
+
+| | clean FP | contradiction | omission (one bullet) | laundered | secret recall |
+|---|---|---|---|---|---|
+| deepseek-v4-flash | **0%** (NONE 24/24) | 96% | 4% | 38% | 32% |
+| cydonia-24b-v4.1 | 0% (NONE 24/24) | **4%** | 0% | 0% | 0% |
+
+Read the two rows differently. They are not the same result.
+
+### Flash: the blocker is gone, and the detector is coarse
+
+Against the shipped player-versus-note pair this model ran **88–100% false positives** on the clean arm and
+said NONE 0 to 3 times in 24, across four prompt wordings and roughly 1,400 calls. Here it says NONE **24
+times out of 24** and still returns findings on 23 of 24 contradictions. That is discrimination, not silence,
+and it is the first time the clean arm has been anywhere near a shippable number. §10's rewritten bar of
+"silent on a clean pair in at least 7 of 8" is **met at 24 of 24**.
+
+What it is not is enumerative, and two arms say so.
+
+**One missing bullet out of nine reads as agreement: 4%.** The note accounts for eight of the brief's nine
+lines and the model answers NONE. It is judging the pair as a whole rather than checking facts off a list —
+which is the same holistic reading §11 found under a different prompt, arriving here as a false negative
+instead of a false positive.
+
+**On the laundered arm the split is by subject kind, not by how much is missing.** Characters 9 of 12
+(harbormaster 4/6, healer 5/6); locations **1 of 12** (chapel 1/6, nightmarket 0/6). Three whole secrets are
+absent in every one of those runs. A missing motive or a missing crime reads as a gap in a person; a missing
+crypt, a stolen bell, a protection racket and a fire next spring do not read as gaps in a place. Worth
+knowing before anything is built on this, and not something the arm was designed to find — locations were in
+the cast because the bridge probe had them.
+
+Also worth recording: on the laundered arm flash never once returned a finding that was wrong. It was either
+silent or correct — 0 non-NONE misses in 24. The failure mode is under-reporting, not invention, which is the
+opposite of every measurement in §11.
+
+### Cydonia: the prompt does not survive the 24B at all
+
+3 tokens average. NONE to every clean, omission and laundered run. Its only non-NONE answers, all on the
+contradiction arm, were **the brief pasted back** — the changed bullet, or in two runs most of the brief.
+The 4% left after the paste rule was corrected is one run that escaped on a 13-character fragment.
+
+This is not a quiet model. It is a model that has stopped following the instruction and started completing
+the list it was handed, which the bullet-shaped input invites. §11's Rocinante anomaly was the same shape and
+was left unexplained; two of these now say it is worth explaining.
+
+**So the honest reading of §12 is: the retarget works, on a model an author mostly is not running.** The
+clean-arm blocker was real and the pair was wrong — that much is now measured rather than argued. But the
+tier that matters is worse here than it was on the old pair, and the thing that makes it worse is plausibly
+the input shape rather than the question.
+
+### What this points at next, in order
+
+1. **Few-shot, now with two reasons.** §11 wanted it for the clean arm; that arm is fixed on flash and the
+   need moved. What it would fix here is cydonia completing the list instead of comparing — one worked
+   example of a brief, a note and a finding is exactly the demonstration a completing model needs. Still the
+   one lever never pulled.
+2. **Number the brief lines and ask for findings by line.** Cheap, and it attacks both failures at once:
+   it makes the task enumerative rather than holistic (flash's 4%) and turns the input from a list to be
+   continued into a list to be indexed (cydonia's paste).
+3. **Locations need their own fixtures or their own wording.** 1 of 12 is not noise, and the cast was
+   inherited rather than chosen for this question.
+4. **Unmeasured, and it is the real target:** a hand-laundered note against a brief that was never used to
+   draft it. Every fixture here has a note drafted from the same authored facts. The world §12 describes —
+   blurb written, pasted into the AI field, brief added afterwards — has a note that agrees with the brief's
+   visible lines by coincidence rather than by provenance, and that is the case an author would actually
+   bring.
