@@ -5,14 +5,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Button } from "@/components/ui/button";
 import { Loader2, X, GripVertical, Folder, FolderOpen, ChevronLeft } from "lucide-react";
 import { ActionIcon } from "@/lib/actionIcons";
-import {
-  DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext, useSortable, sortableKeyboardCoordinates, verticalListSortingStrategy, arrayMove,
-} from '@dnd-kit/sortable';
+import { type DragEndEvent } from '@dnd-kit/core';
+import { useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { restrictToVerticalAxis, restrictToFirstScrollableAncestor } from '@dnd-kit/modifiers';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { ConfirmDialog } from '../ConfirmDialog';
 import {
   getAllSaveRecords, deleteSaveRecord, putSaveRecord, migrateLegacySaves, getOrder, setOrder,
@@ -27,6 +23,7 @@ import {
   groupSaves, mergeOrder, folderRefFor, FOLDER_ORDER_KEY, type SaveMeta, type SaveFolder, type WorldRef,
 } from '../../lib/saveOrdering';
 import type { SaveRecord } from "@/types";
+import { Tip } from "@/components/ui/tooltip";
 
 const formatGameTime = (time: number) => {
   const hours = Math.floor(time);
@@ -78,14 +75,15 @@ function SortableSaveRow({ row, disabled, busy, onLoad, onExport, onDelete }: {
       )}
     >
       {/* Drag handle — far left */}
-      <span
-        {...attributes}
-        {...listeners}
-        className="cursor-grab touch-none px-1 py-2 text-muted-foreground shrink-0 self-stretch flex items-center"
-        title="Drag to reorder"
-      >
-        <GripVertical className="h-4 w-4" />
-      </span>
+      <Tip tip="Drag to reorder">
+        <span
+          {...attributes}
+          {...listeners}
+          className="cursor-grab touch-none px-1 py-2 text-muted-foreground shrink-0 self-stretch flex items-center"
+        >
+          <GripVertical className="h-4 w-4" />
+        </span>
+      </Tip>
 
       {/* Details — middle column grows, wraps, and loads on click */}
       <div
@@ -109,25 +107,27 @@ function SortableSaveRow({ row, disabled, busy, onLoad, onExport, onDelete }: {
       </div>
 
       {/* Export then Delete — right-anchored */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 w-7 p-0 shrink-0"
-        disabled={busy}
-        title="Export save"
-        onClick={(e) => { e.stopPropagation(); onExport(row); }}
-      >
-        <ActionIcon.export className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 w-7 p-0 shrink-0 text-destructive"
-        title="Delete save"
-        onClick={(e) => { e.stopPropagation(); onDelete(row); }}
-      >
-        <X className="h-4 w-4" />
-      </Button>
+      <Tip tip="Export save">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0 shrink-0"
+          disabled={busy}
+          onClick={(e) => { e.stopPropagation(); onExport(row); }}
+        >
+          <ActionIcon.export className="h-3.5 w-3.5" />
+        </Button>
+      </Tip>
+      <Tip tip="Delete save">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0 shrink-0 text-destructive"
+          onClick={(e) => { e.stopPropagation(); onDelete(row); }}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </Tip>
     </div>
   );
 }
@@ -177,14 +177,15 @@ function SortableFolderRow({ folder, onOpen }: { folder: SaveFolder; onOpen: (f:
       style={style}
       className="flex items-center gap-1 w-full rounded-md border border-input bg-background pr-3 text-left text-label transition-colors hover:bg-accent hover:text-accent-foreground"
     >
-      <span
-        {...attributes}
-        {...listeners}
-        className="cursor-grab touch-none px-1 py-2 text-muted-foreground shrink-0 self-stretch flex items-center"
-        title="Drag to reorder"
-      >
-        <GripVertical className="h-4 w-4" />
-      </span>
+      <Tip tip="Drag to reorder">
+        <span
+          {...attributes}
+          {...listeners}
+          className="cursor-grab touch-none px-1 py-2 text-muted-foreground shrink-0 self-stretch flex items-center"
+        >
+          <GripVertical className="h-4 w-4" />
+        </span>
+      </Tip>
       <div
         role="button"
         tabIndex={0}
@@ -238,11 +239,6 @@ export function LoadGameDialog({ open, onOpenChange, current, onLoad, title, ico
   // In-game cross-world confirm. `targetWorldId` set ⇒ installed world, we'll switch; absent ⇒ warn + load in place.
   const [pendingLoad, setPendingLoad] = React.useState<{ row: SaveRow; targetWorldId?: string } | null>(null);
   const [blockedLoad, setBlockedLoad] = React.useState<SaveRow | null>(null); // cold-start orphan (world not installed)
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
 
   React.useEffect(() => () => { terminateExportWorker(); }, []);
 
@@ -513,31 +509,23 @@ export function LoadGameDialog({ open, onOpenChange, current, onLoad, title, ico
                 height to resolve against, so it sizes to content and clips with no scroll. `overflow-y-auto`
                 treats `max-h` as a real scroll boundary and stays the dnd autoscroll ancestor. */}
             <div className="max-h-[60dvh] overflow-y-auto">
-              <div className="space-y-2 p-1">
+              {/* Flex gap, not `space-y`: the drag layer wraps its rows in an element of its own, and a
+                  `> * + *` rule would stop reaching them. A gap still does, since that wrapper draws no box. */}
+              <div className="flex flex-col gap-2 p-1">
                 {atRoot ? (
                   <>
                     {currentFolder && <PinnedFolderRow folder={currentFolder} onOpen={(f) => setActiveKey(f.key)} />}
-                    <DndContext
-                      sensors={sensors}
-                      collisionDetection={closestCenter}
-                      onDragEnd={handleFolderDragEnd}
-                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                    >
-                      <SortableContext items={listFolders.map(f => f.key)} strategy={verticalListSortingStrategy}>
+                    <EditorDndContext onDragEnd={handleFolderDragEnd}>
+                      <StableSortableContext items={listFolders} getId={(f) => f.key} strategy={verticalListSortingStrategy}>
                         {listFolders.map(f => (
                           <SortableFolderRow key={f.key} folder={f} onOpen={(x) => setActiveKey(x.key)} />
                         ))}
-                      </SortableContext>
-                    </DndContext>
+                      </StableSortableContext>
+                    </EditorDndContext>
                   </>
                 ) : (
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleSaveDragEnd}
-                    modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                  >
-                    <SortableContext items={shownSaves.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                  <EditorDndContext onDragEnd={handleSaveDragEnd}>
+                    <StableSortableContext items={shownSaves} strategy={verticalListSortingStrategy}>
                       {shownSaves.map(row => (
                         <SortableSaveRow
                           key={row.id}
@@ -549,8 +537,8 @@ export function LoadGameDialog({ open, onOpenChange, current, onLoad, title, ico
                           onDelete={(r) => setPendingDelete(r)}
                         />
                       ))}
-                    </SortableContext>
-                  </DndContext>
+                    </StableSortableContext>
+                  </EditorDndContext>
                 )}
 
                 {busy && (

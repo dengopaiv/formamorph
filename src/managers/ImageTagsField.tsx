@@ -1,11 +1,10 @@
 import { useRef, useState } from 'react';
-import {
-  DndContext, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors, type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext, useSortable, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates,
-} from '@dnd-kit/sortable';
+import { type DragEndEvent } from '@dnd-kit/core';
+import { useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
+
+const NO_MODIFIERS: never[] = [];
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -32,6 +31,7 @@ import type { ImageCap } from '../lib/imageOptim';
 import type { ImageSubjectKind } from '@/lib/imagePrompt';
 import { useEditorMode } from '@/lib/editorMode';
 import type { Placeholder } from '@/types';
+import { Tip } from '@/components/ui/tooltip';
 
 interface ImageTagsFieldProps {
   /** Field label above the upload — "Background Image" for locations, "Image" for entities. */
@@ -56,6 +56,8 @@ interface ImageTagsFieldProps {
   /** The world's (or the standalone item's) placeholders, so a tag can be one. None simply means no chip
    *  is ever drawn — the field is the same either way. */
   placeholders?: Placeholder[];
+  /** The entity or location whose tags these are — see `ownerId` on `PlaceholderField`. */
+  ownerId?: string;
 }
 
 /** The big frame the gallery shows its picture in. A character is drawn portrait, a place landscape — the
@@ -81,32 +83,37 @@ const ImageTile = ({ id, url, index, framed, onSelect }: {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({ id });
   const primary = index === 0;
   return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      // Translate, not Transform: the latter bakes in dnd-kit's slot-fit scale and resizes the dragged tile.
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      {...attributes}
-      {...listeners}
-      onClick={onSelect}
-      title={primary
+    // The tip explains the tile; the short spoken name stays on the button.
+    <Tip
+      tip={primary
         ? 'Primary — stands in wherever one image is shown. Drag to reorder.'
         : `Image ${index + 1} — drag to reorder.`}
-      aria-label={primary ? 'Primary image' : `Image ${index + 1}`}
-      aria-pressed={framed}
-      className={cn(
-        'relative h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 touch-none',
-        framed ? 'border-primary' : 'border-border hover:border-muted-foreground',
-        isDragging && 'opacity-50',
-      )}
+      labelsChild={false}
     >
-      <RemoteImg src={url} alt="" className="h-full w-full object-cover" />
-      {primary && (
-        <span className="absolute bottom-0 right-0 rounded-tl bg-overlay/70 p-0.5 text-white">
-          <Star className="h-2.5 w-2.5 fill-current" />
-        </span>
-      )}
-    </button>
+      <button
+        ref={setNodeRef}
+        type="button"
+        // Translate, not Transform: the latter bakes in dnd-kit's slot-fit scale and resizes the dragged tile.
+        style={{ transform: CSS.Translate.toString(transform), transition }}
+        {...attributes}
+        {...listeners}
+        onClick={onSelect}
+        aria-label={primary ? 'Primary image' : `Image ${index + 1}`}
+        aria-pressed={framed}
+        className={cn(
+          'relative h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 touch-none',
+          framed ? 'border-primary' : 'border-border hover:border-muted-foreground',
+          isDragging && 'opacity-50',
+        )}
+      >
+        <RemoteImg src={url} alt="" className="h-full w-full object-cover" />
+        {primary && (
+          <span className="absolute bottom-0 right-0 rounded-tl bg-overlay/70 p-0.5 text-white">
+            <Star className="h-2.5 w-2.5 fill-current" />
+          </span>
+        )}
+      </button>
+    </Tip>
   );
 };
 
@@ -150,7 +157,7 @@ const AddTile = ({ htmlFor, selected, onSelect, onUrl, onFiles, allowFiles }: {
  * chosen, since that is simply the first. Tag generation acts on the subject as a whole rather than on any one
  * slot; a generated picture fills a free slot, and asks which one it replaces when there is none.
  */
-const ImageTagsField = ({ label, images, onImagesChange, slots = 1, embeddedLimit = slots, imageId, cap, description, kind, tags, onTagsChange, placeholders = [] }: ImageTagsFieldProps) => {
+const ImageTagsField = ({ label, images, onImagesChange, slots = 1, embeddedLimit = slots, imageId, cap, description, kind, tags, onTagsChange, placeholders = [], ownerId }: ImageTagsFieldProps) => {
   // SD prompt pulled from an uploaded image, pending the user's OK to use it as Image Tags.
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // A generated picture with nowhere free to go, held while the user picks the slot it replaces.
@@ -282,12 +289,6 @@ const ImageTagsField = ({ label, images, onImagesChange, slots = 1, embeddedLimi
   // The picture itself can't be the id: it is a data URL megabytes long, and two copies of one picture
   // would collide into a single id.
   const tileIds = useStableIds(shown);
-  const sensors = useSensors(
-    // A press only becomes a drag after 5px, so a tap still frames the picture instead of nudging it.
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   /** Reordering is the whole promote gesture: slot 0 is what stands in wherever one picture is shown, and
    *  the order is the order the game shows them in. */
   const handleReorder = ({ active, over }: DragEndEvent) => {
@@ -347,12 +348,12 @@ const ImageTagsField = ({ label, images, onImagesChange, slots = 1, embeddedLimi
         // Frozen while a batch converts: the slots the pictures are landing in are still being written, so
         // reframing or reordering mid-run would act on a list about to change under it.
         <div className={cn('flex flex-wrap items-center gap-2', batch && 'pointer-events-none opacity-50')}>
-          {/* `autoScroll={false}` and `closestCenter`, matching KeywordChips: this strip sits inside the
-              entity editor's ScrollArea, where dnd-kit's auto-scroll chases the dragged item into empty
-              space and an empty collision result flips the sort gap every frame. */}
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleReorder} autoScroll={false}>
+          {/* No modifiers and no auto-scroll, matching KeywordChips: this strip sits inside the entity
+              editor's ScrollArea, where dnd-kit's auto-scroll chases the dragged item into empty space and
+              an empty collision result flips the sort gap every frame. */}
+          <EditorDndContext modifiers={NO_MODIFIERS} autoScroll={false} onDragEnd={handleReorder}>
             {/* rectSortingStrategy (2D), not a single-row one: the strip wraps once there are enough. */}
-            <SortableContext items={tileIds} strategy={rectSortingStrategy}>
+            <StableSortableContext items={tileIds} strategy={rectSortingStrategy}>
               {shown.map((url, i) => (
                 <ImageTile
                   key={tileIds[i]}
@@ -363,8 +364,8 @@ const ImageTagsField = ({ label, images, onImagesChange, slots = 1, embeddedLimi
                   onSelect={() => setShowing(i)}
                 />
               ))}
-            </SortableContext>
-          </DndContext>
+            </StableSortableContext>
+          </EditorDndContext>
           {/* Outside the sortable set: dropping a picture onto "add" would mean nothing. */}
           {openSlot !== -1 && (
             <AddTile
@@ -392,6 +393,7 @@ const ImageTagsField = ({ label, images, onImagesChange, slots = 1, embeddedLimi
           value={tags || ''}
           onChange={onTagsChange}
           placeholders={placeholders}
+          ownerId={ownerId}
           placeholder="booru tags, comma separated"
           aside={<AiGenerateButton mode="tags" kind={kind} source={description} onChange={onTagsChange} />}
         />

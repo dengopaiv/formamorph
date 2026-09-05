@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "react-toastify";
-import { UserPlus, UserMinus } from "lucide-react";
+import { UserPlus, UserMinus, Flag } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -8,9 +8,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
 import { RoleBadge } from "@/components/RoleBadge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserCreationsTab } from "@/components/community/UserCreationsTab";
+import { UserLikesTab } from "@/components/community/UserLikesTab";
+import { ReportDialog } from "@/components/community/ReportDialog";
+import { useReportsEnabled } from "@/lib/useReportsEnabled";
 import { ProfileStats } from "@/components/community/ProfileStats";
 import { parseServerDate } from "@/lib/serverDate";
+import { canModerate, isStaff } from "@/lib/roles";
 import UserService from "@/services/UserService";
 import AuthService from "@/services/AuthService";
 import type { PublicProfile } from "@/types";
@@ -36,8 +41,18 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isFollowBusy, setIsFollowBusy] = useState(false);
+  const [reporting, setReporting] = useState(false);
+  // Which half of the staff view is on show. Ordinary readers never see the strip that sets it.
+  const [tab, setTab] = useState<'creations' | 'likes'>('creations');
+  // Which account Likes has been opened for. Held as the id rather than as a flag reset on change: the
+  // dialog is re-pointed rather than remounted, and a flag would leave one render of the new account's
+  // tab already mounted — long enough for its own effect to read their likes unasked.
+  const [likesOpenedFor, setLikesOpenedFor] = useState<string | null>(null);
 
-  const myId = String(AuthService.getCurrentUser()?.id ?? '');
+  const me = AuthService.getCurrentUser();
+  const myId = String(me?.id ?? '');
+  // Signed-out visitors and servers without the feature get no control at all.
+  const reportsEnabled = useReportsEnabled(Boolean(myId));
 
   useEffect(() => {
     if (!userId) return;
@@ -59,6 +74,8 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
   // Offered only to somebody who could act on it: following needs an account, and following yourself
   // would put your own work in your own news.
   const canFollow = Boolean(profile) && Boolean(myId) && profile?.id !== myId;
+  // The same rule as following, for the same reason: reporting yourself is not a thing to offer.
+  const canReport = reportsEnabled && Boolean(profile) && profile?.id !== myId;
 
   const toggleFollow = async () => {
     if (!profile) return;
@@ -77,6 +94,14 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
   };
   // The name from wherever they were clicked, so the dialog never opens blank.
   const name = profile?.username ?? fallbackUsername ?? null;
+  // What somebody liked is a moderation surface: the tab is staff-only, and nothing hints at it otherwise.
+  const canSeeLikes = isStaff(me);
+  // Clearing them is a further step up the ladder, checked against this account rather than against staff
+  // in general — the profile carries the role, so this is honest before the server answers.
+  const canClearLikes = canModerate(me, profile ? { id: profile.id, accountType: profile.role ?? 'normal' } : null);
+  // Whether this account's likes have been asked for, and which tab that leaves on show.
+  const likesOpened = userId !== null && likesOpenedFor === userId;
+  const activeTab = likesOpened ? tab : 'creations';
 
   return (
     <Dialog open={userId !== null} onOpenChange={onOpenChange}>
@@ -135,8 +160,61 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
         </div>
 
         {/* Straight under the header rather than behind a tab: there is only one thing to show, and a bar
-            with a single trigger on it costs a row of the dialog to say so. */}
-        <UserCreationsTab userId={userId} username={name} onOpenListing={onOpenListing} />
+            with a single trigger on it costs a row of the dialog to say so. Staff have two, so they get
+            the bar and nobody else pays for it. */}
+        {canSeeLikes ? (
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => {
+              setTab(value as 'creations' | 'likes');
+              if (value === 'likes') setLikesOpenedFor(userId);
+            }}
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="creations">Creations</TabsTrigger>
+              <TabsTrigger value="likes">Likes</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="creations">
+              <UserCreationsTab userId={userId} username={name} onOpenListing={onOpenListing} />
+            </TabsContent>
+
+            {/* Mounted only once the tab has been opened, so the fetch follows the click rather than
+                every staff member who looks somebody up — and kept mounted from then on, so switching
+                back to Creations and returning does not read the list a second time. */}
+            <TabsContent value="likes" forceMount={likesOpened ? true : undefined}>
+              {likesOpened && (
+                <UserLikesTab
+                  userId={userId}
+                  username={name}
+                  canModerateAccount={canClearLikes}
+                  onOpenListing={onOpenListing}
+                />
+              )}
+            </TabsContent>
+          </Tabs>
+        ) : (
+          <UserCreationsTab userId={userId} username={name} onOpenListing={onOpenListing} />
+        )}
+
+        {/* Under their work rather than beside their name: an offensive image or username is the reason
+            this exists, and both are already on screen above. */}
+        {canReport && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mx-auto gap-1.5 text-muted-foreground hover:text-destructive"
+            onClick={() => setReporting(true)}
+          >
+            <Flag className="h-3.5 w-3.5" /> Report Profile
+          </Button>
+        )}
+
+        <ReportDialog
+          open={reporting}
+          onOpenChange={setReporting}
+          target={profile ? { kind: 'profile', id: profile.id, name: profile.username } : null}
+        />
       </DialogContent>
     </Dialog>
   );

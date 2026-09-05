@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
@@ -20,7 +20,7 @@ import type { Placeholder } from "@/types";
  * `onActivate` claims the single click/tap for the host (a per-chip popover); text editing then stays on
  * double-click, so the popover must offer its own way to rename on touch. `suffix` trails the label.
  */
-export function EditableChip({ value, onCommit, onRemove, sortable = false, getSuggestions, onActivate, suffix, label, placeholders }: {
+export function EditableChip({ value, onCommit, onRemove, sortable = false, getSuggestions, onActivate, suffix, label, style, placeholders }: {
   value: string;
   onCommit: (next: string) => void;
   onRemove: (value: string) => void;
@@ -28,6 +28,9 @@ export function EditableChip({ value, onCommit, onRemove, sortable = false, getS
   getSuggestions?: (query: string) => string[];
   onActivate?: (value: string) => void;
   suffix?: string;
+  /** The chip's own colors — a placeholder's accent, or a draw chance's tone. Absent ⇒ the neutral tag
+   *  chip. Everything inside — the suffix, the × — inherits it. */
+  style?: CSSProperties;
   /** What to show, when the stored value isn't readable as-is (a value holding placeholder tokens). A node,
    *  so the placeholders inside it can be drawn as chips; `value` still names the chip for a screen reader. */
   label?: ReactNode;
@@ -56,7 +59,11 @@ export function EditableChip({ value, onCommit, onRemove, sortable = false, getS
     if (editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); }
   }, [editing]);
 
-  const startEdit = () => { setText(value); setActive(0); setEditing(true); };
+  // A placeholder value written in the multiline editor holds newlines, and `<input>` strips them from any
+  // value assigned to it — so an inline rename would commit the paragraph flattened. Such a chip is display
+  // only; it is edited in the multiline view it was written in.
+  const renameable = !value.includes('\n');
+  const startEdit = () => { if (renameable) { setText(value); setActive(0); setEditing(true); } };
   const cancel = () => { setEditing(false); setText(value); };
   const finish = (raw: string) => {
     setEditing(false);
@@ -142,13 +149,17 @@ export function EditableChip({ value, onCommit, onRemove, sortable = false, getS
       removeLabel={value}
       onRemove={onRemove}
       innerRef={sortable ? setNodeRef : undefined}
-      style={sortable ? {
-        // Translate (not Transform): Transform bakes in a scale that resizes the dragged chip to the target.
-        transform: CSS.Translate.toString(transform),
-        transition,
-        opacity: isDragging ? 0.5 : 1,
-        zIndex: isDragging ? 1 : undefined,
-      } : undefined}
+      style={{
+        ...style,
+        ...(sortable ? {
+          // Translate (not Transform): Transform bakes in a scale that resizes the dragged chip to the target.
+          transform: CSS.Translate.toString(transform),
+          transition,
+          // A drag dims the chip; at rest it keeps whatever opacity the caller's style gave it.
+          opacity: isDragging ? 0.5 : style?.opacity,
+          zIndex: isDragging ? 1 : undefined,
+        } : undefined),
+      }}
       dragProps={{
         ...(sortable ? { ...attributes, ...listeners } : {}),
         onDoubleClick: startEdit,
@@ -165,8 +176,10 @@ export function EditableChip({ value, onCommit, onRemove, sortable = false, getS
           const kind = pointerType.current ?? (e.nativeEvent as PointerEvent).pointerType;
           if (kind === "touch" || kind === "pen") startEdit();
         },
-        title: onActivate ? "Click to open, double-click to rename" : "Tap or double-click to edit",
       }}
+      tip={!renameable
+        ? (onActivate ? "Click to open — switch to Multiline to edit the text" : "Switch to Multiline to edit this value")
+        : onActivate ? "Click to open, double-click to rename" : "Tap or double-click to edit"}
       grabbable={sortable}
     />
   );

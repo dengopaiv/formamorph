@@ -36,6 +36,32 @@ export const PROMPT_GROUPS: PromptGroup[] = [
   { label: 'Authoring', tabs: [...AUTHORING_TABS] },
 ];
 
+/** Every prompt the Settings rail can select — the `promptTab` ids. A jump target names one of these, so
+ *  a map keyed by it is total and a lookup needs no fallback. */
+export type PromptTab =
+  | 'narration' | 'thinking' | 'director' | 'character' | 'storyboard' | 'choices'
+  | 'statupdates' | 'location' | 'timepassed' | 'timeopening'
+  | 'summary' | 'diary'
+  | 'scenetags';
+
+/** What each prompt is called wherever it is named: the rail's own row, and a jump that says where it
+ *  goes. */
+export const PROMPT_LABELS: Record<PromptTab, string> = {
+  narration: 'Narration',
+  thinking: 'Planning',
+  choices: 'Choices',
+  statupdates: 'Stat Updates',
+  location: 'Location Change',
+  summary: 'Summaries',
+  timepassed: 'Clock',
+  timeopening: 'Opening',
+  scenetags: 'Scene Tags',
+  diary: 'Diary',
+  director: 'Director',
+  character: 'Character',
+  storyboard: 'Storyboard',
+};
+
 /**
  * One line per prompt, saying what job it does in the turn — shown above the editor, where it is read
  * before the prompt rather than after it.
@@ -62,7 +88,8 @@ export const PROMPT_DESCRIPTIONS: Record<string, string> = {
   aisummary: 'Condenses an AI-facing description into the one-line version used in lists.',
 };
 
-/** Which part of the selected prompt is on show. */
+/** Which editor of the selected prompt is on show. Null is the Anatomy hub: the prompt selected with no
+ *  editor open, which is where selecting a prompt lands. */
 export type PromptSurface = 'system' | 'user' | 'messages' | 'options';
 
 export const SURFACE_LABELS: Record<PromptSurface, string> = {
@@ -71,6 +98,14 @@ export const SURFACE_LABELS: Record<PromptSurface, string> = {
   messages: 'Messages',
   options: 'Options',
 };
+
+/** What the hub is called wherever it needs a name of its own — the rail's own row for it, and the
+ *  dev-router's `surface=…` value. */
+export const HUB_LABEL = 'Anatomy';
+export const HUB_ROUTE = 'anatomy';
+
+/** Every `surface=…` value the dev-router accepts: the editors, plus the hub. */
+export const PROMPT_SURFACE_ROUTES: string[] = [...Object.keys(SURFACE_LABELS), HUB_ROUTE];
 
 /**
  * The groups with their unavailable prompts removed, and empty groups dropped — so a player with images

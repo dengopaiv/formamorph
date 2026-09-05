@@ -12,18 +12,27 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { PlaceholderNameField } from '@/components/prompt/PlaceholderField';
+import { PinPopoverButton } from '@/components/editor/PinPopoverButton';
+import { useGameData } from '@/contexts/GameDataContext';
+import { useEditorMode } from '@/lib/editorMode';
+import { labelPlaceholders } from '@/lib/placementLetters';
 import { activeDescriptor } from '@/lib/statContext';
 import {
   convertDescriptorUnits, descriptorSpans, startCaptionLeft, statMax, statMin, statStartValue,
   thresholdInputWidthRem, thresholdTagInsetRem, thresholdUnitOf, thresholdUnitTag, uncoveredSpan,
 } from '@/lib/statDescriptorGeometry';
-import type { Stat, StatDescriptor, ThresholdUnit } from '@/types';
+import type { PlaceholderPin, Stat, StatDescriptor, ThresholdUnit } from '@/types';
+import { Tip } from '@/components/ui/tooltip';
+
+/** What one descriptor field can be written to: its threshold, its text, or its pin list. */
+export type DescriptorFieldValue = string | number | PlaceholderPin[] | undefined;
 
 export interface StatDescriptorsSectionProps {
   stat: Partial<Stat>;
   newDescriptor: { threshold: number | string; description: string };
   setNewDescriptor: (next: { threshold: number | string; description: string }) => void;
-  onDescriptorChange: (index: number, field: string, value: string | number) => void;
+  onDescriptorChange: (index: number, field: string, value: DescriptorFieldValue) => void;
   onDescriptorBlur: () => void;
   onAddDescriptor: () => void;
   onRemoveDescriptor: (id: string | number) => void;
@@ -59,8 +68,8 @@ const UnitInput = ({ value, unit, onChange, onBlur, placeholder, ariaLabel }: {
 
 /** A band of the bar. Its label wraps to two centered lines and steps its font down until it fits, so long
  *  descriptor prose narrows the text rather than dictating it. */
-const BarSegment = ({ text, width, className, title }: {
-  text: string; width: string; className: string; title: string;
+const BarSegment = ({ text, width, className, tip }: {
+  text: string; width: string; className: string; tip: string;
 }) => {
   const boxRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -75,14 +84,15 @@ const BarSegment = ({ text, width, className, title }: {
     }
   }, [text, width]);
   return (
-    <div
-      ref={boxRef}
-      className={`flex items-center justify-center overflow-hidden px-1 text-center leading-tight ${className}`}
-      style={{ width }}
-      title={title}
-    >
-      <span className="line-clamp-2">{text}</span>
-    </div>
+    <Tip tip={tip} labelsChild={false}>
+      <div
+        ref={boxRef}
+        className={`flex items-center justify-center overflow-hidden px-1 text-center leading-tight ${className}`}
+        style={{ width }}
+      >
+        <span className="line-clamp-2">{text}</span>
+      </div>
+    </Tip>
   );
 };
 
@@ -120,6 +130,11 @@ export const StatDescriptorsSection = ({
   stat, newDescriptor, setNewDescriptor, onDescriptorChange, onDescriptorBlur, onAddDescriptor,
   onRemoveDescriptor, onUnitChange,
 }: StatDescriptorsSectionProps) => {
+  const world = useGameData();
+  const { placeholders, placementLetters, placeholderOwners } = world;
+  const { advanced } = useEditorMode();
+  // The bar and the tips are text surfaces: a chip reads there by its name and letter, as it does in a row.
+  const chipText = (text: string) => labelPlaceholders(text, placeholders, { letters: placementLetters, owners: placeholderOwners });
   const min = statMin(stat);
   const max = statMax(stat);
   const range = max - min;
@@ -171,10 +186,10 @@ export const StatDescriptorsSection = ({
             {spans.map((span, i) => (
               <BarSegment
                 key={span.id}
-                text={span.description}
+                text={chipText(span.description)}
                 width={width(span.from, span.to)}
                 className={`${BAND_TINTS[i % BAND_TINTS.length]} text-primary-foreground${span.id === startBand?.id ? ' font-semibold' : ''}`}
-                title={`${span.from} – ${span.to}: ${span.description}`}
+                tip={`${span.from} – ${span.to}: ${chipText(span.description)}`}
               />
             ))}
             {gap && (
@@ -182,7 +197,7 @@ export const StatDescriptorsSection = ({
                 text="no status"
                 width={width(gap.from, gap.to)}
                 className={`bg-destructive/15 text-destructive${startBand ? '' : ' font-semibold'}`}
-                title={`${gap.from} – ${gap.to}: no status`}
+                tip={`${gap.from} – ${gap.to}: no status`}
               />
             )}
           </div>
@@ -198,16 +213,29 @@ export const StatDescriptorsSection = ({
               <UnitInput
                 value={descriptor.threshold}
                 unit={tag}
-                ariaLabel={`Threshold for ${descriptor.description || 'descriptor'}`}
+                ariaLabel={`Threshold for ${chipText(descriptor.description) || 'descriptor'}`}
                 onChange={(v) => onDescriptorChange(index, 'threshold', Number(v))}
                 onBlur={onDescriptorBlur}
               />
-              <Input
-                value={descriptor.description}
-                onChange={(e) => onDescriptorChange(index, 'description', e.target.value)}
-                placeholder="Description"
-                className="flex-grow"
-              />
+              <div className="flex-grow">
+                <PlaceholderNameField
+                  value={descriptor.description}
+                  onChange={(v) => onDescriptorChange(index, 'description', v)}
+                  placeholders={placeholders}
+                  placeholder="Description"
+                  ariaLabel="Description"
+                />
+              </div>
+              {advanced && (
+                <PinPopoverButton
+                  pins={descriptor.placeholderPins ?? []}
+                  onChange={(next) => onDescriptorChange(index, 'placeholderPins', next.length ? next : undefined)}
+                  source={{ kind: 'descriptor', statId: stat.id ?? '', descriptorId: descriptor.id }}
+                  world={world}
+                  placeholders={placeholders}
+                  label={`Pins for ${chipText(descriptor.description) || 'descriptor'}`}
+                />
+              )}
               <Button variant="ghost" size="icon" onClick={() => onRemoveDescriptor(descriptor.id)}>
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -229,13 +257,18 @@ export const StatDescriptorsSection = ({
           ariaLabel="New threshold"
           onChange={(v) => setNewDescriptor({ ...newDescriptor, threshold: v === '' ? '' : Number(v) })}
         />
-        <Input
-          value={newDescriptor.description}
-          onChange={(e) => setNewDescriptor({ ...newDescriptor, description: e.target.value })}
-          placeholder="New Description"
-          className="flex-grow"
-        />
-        <Button onClick={onAddDescriptor} size="icon" className="h-9 w-9 shrink-0" aria-label="Add Descriptor" title="Add Descriptor"><Plus className="h-4 w-4" /></Button>
+        <div className="flex-grow">
+          <PlaceholderNameField
+            value={newDescriptor.description}
+            onChange={(v) => setNewDescriptor({ ...newDescriptor, description: v })}
+            placeholders={placeholders}
+            placeholder="New Description"
+            ariaLabel="New Description"
+          />
+        </div>
+        <Tip tip="Add Descriptor">
+          <Button onClick={onAddDescriptor} size="icon" className="h-9 w-9 shrink-0"><Plus className="h-4 w-4" /></Button>
+        </Tip>
       </div>
     </div>
   );

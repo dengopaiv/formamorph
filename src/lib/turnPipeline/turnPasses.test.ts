@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { TURN_PASSES, TURN_PASS_CAPS } from './turnPasses';
+import { TURN_PASSES, TURN_PASS_CAPS, sceneTagsPass, SCENE_TAGS_EMPTY_CAST } from './turnPasses';
+import { renderPromptTemplate } from '@/lib/promptTemplate';
 import { planTurn } from './planTurn';
-import type { Entity } from '@/types';
+import type { ChatMessage, Entity } from '@/types';
 import type { TurnMaterial, TurnPassId, TurnPassRecord, TurnPlanInput, TurnSettings } from './turnPlan';
+import { runsTile } from '@/lib/requestAnatomy';
 import { TEST_PROMPTS, testInput } from './turnTestInputs';
 import {
   INLINE_THINKING_DIRECTIVE, OPENING_SCENE_CUE, planDirective, defaultChoicesPrompt,
@@ -25,6 +27,8 @@ const material = (over: Partial<TurnMaterial> = {}): TurnMaterial => ({
   sceneEntityTokens: { '<ENTITIES>': 'IN SCENE ONLY' },
   destinations: ['The Far Bank', 'The Sedge Road'],
   narrationSystemPrompt: 'ASSEMBLED NARRATION PROMPT',
+  narrationSystemPromptRuns: [],
+  historyRuns: [],
   trimmedHistory: [
     { role: 'user', content: 'START GAME' },
     { role: 'assistant', content: 'The dock is damp.' },
@@ -38,6 +42,7 @@ const material = (over: Partial<TurnMaterial> = {}): TurnMaterial => ({
   npcCastSize: 2,
   intents: [{ name: 'Bram', text: 'I wait.' }],
   overflow: ['Odette'],
+  sceneCast: ['Bram'],
   ...over,
 });
 
@@ -354,5 +359,219 @@ describe('turn pass requests', () => {
       expect(typeof record.parseResponse).toBe('function');
       expect(record.type.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('the narration request anatomy', () => {
+  const HISTORY: ChatMessage[] = [
+    { role: 'user', content: 'a1' },
+    { role: 'assistant', content: 'g1' },
+  ];
+  const HISTORY_RUNS = [
+    [{ start: 0, end: 2, contextLabel: 'past-action' as const }],
+    [{ start: 0, end: 2, contextLabel: 'past-narration' as const }],
+  ];
+  const withHistory = { trimmedHistory: HISTORY, historyRuns: HISTORY_RUNS };
+  const anatomyOf = (over: Partial<TurnMaterial> = {}, settings: Partial<TurnSettings> = {}, planOver: Partial<TurnPlanInput> = {}) =>
+    build('narration', { ...withHistory, ...over }, planOver, settings).anatomy!;
+  /** The final user turn's runs, paired with the text each one selects. A run a chip produced is named by
+   *  its token; the rest by the editor they came from, or by what the app assembled. */
+  const finalRuns = (over: Partial<TurnMaterial> = {}, settings: Partial<TurnSettings> = {}, planOver: Partial<TurnPlanInput> = {}) => {
+    const request = build('narration', { ...withHistory, ...over }, planOver, settings);
+    const content = request.messages[request.messages.length - 1].content;
+    const runs = request.anatomy!.messages[request.anatomy!.messages.length - 1];
+    return runs.map((r) => [r.chip ?? r.source ?? r.contextLabel, content.slice(r.start, r.end)]);
+  };
+
+  it('sends byte-identical messages whether or not the caller supplied a sidecar', () => {
+    const labeled = build('narration', withHistory, {}, { thinkingMode: 'off' });
+    const unlabeled = build('narration', { trimmedHistory: HISTORY, historyRuns: [] }, {}, { thinkingMode: 'off' });
+    expect(labeled.messages).toEqual(unlabeled.messages);
+    expect(labeled.systemPrompt).toBe(unlabeled.systemPrompt);
+  });
+
+  it('lines the sidecar up with the messages it sends, tiling each one', () => {
+    const request = build('narration', withHistory, {}, { thinkingMode: 'off' });
+    const anatomy = request.anatomy!;
+    expect(anatomy.messages).toHaveLength(request.messages.length);
+    request.messages.forEach((m, i) => expect(runsTile(m.content, anatomy.messages[i])).toBe(true));
+  });
+
+  it('carries the caller assembled system-prompt runs through untouched', () => {
+    const runs = [{ start: 0, end: 8, source: 'system-template' as const }];
+    expect(anatomyOf({ narrationSystemPromptRuns: runs }).system).toEqual(runs);
+  });
+
+  it('carries the history runs through in order, ahead of this turn own', () => {
+    expect(anatomyOf().messages.slice(0, 2)).toEqual(HISTORY_RUNS);
+  });
+
+  it('leaves history unlabeled — never misaligned — when the caller built no sidecar', () => {
+    const anatomy = anatomyOf({ historyRuns: [] });
+    expect(anatomy.messages.slice(0, 2)).toEqual([[], []]);
+    expect(anatomy.messages[2].length).toBeGreaterThan(0);
+  });
+
+  it('splits the user template from the action chip the player typed into', () => {
+    expect(finalRuns({}, { thinkingMode: 'off' })).toEqual([
+      ['user-template', 'Player: '],
+      ['<PLAYER ACTION>', 'I read the notices.'],
+    ]);
+  });
+
+  it('marks the direction rider on a bracketed turn, and leaves no trace without brackets', () => {
+    const bracket = { action: 'I wait. [make her leave]' };
+    expect(finalRuns(bracket, { thinkingMode: 'off' })).toEqual([
+      ['user-template', 'Player: '],
+      ['<PLAYER ACTION>', 'I wait. [make her leave]\n\n'],
+      ['direction', 'OOC RIDER'],
+    ]);
+    expect(finalRuns({}, { thinkingMode: 'off' }).some(([label]) => label === 'direction')).toBe(false);
+    // Thinking on: no user template and no rider, so the action stands alone as context.
+    expect(finalRuns(bracket, { thinkingMode: 'staged' })).toEqual([['action', 'I wait. [make her leave]']]);
+  });
+
+  it('labels the inline thinking directive and the turn plan as context, not as anything authored', () => {
+    const inline = finalRuns({}, { thinkingMode: 'inline' });
+    expect(inline[inline.length - 1][0]).toBe('mode-directive');
+    const planned = finalRuns({ turnPlan: 'Scene: dusk.' }, { thinkingMode: 'staged' });
+    expect(planned[planned.length - 1][0]).toBe('turn-plan');
+    expect(planned[planned.length - 1][1]).toContain('Scene: dusk.');
+  });
+});
+
+describe('every pass request anatomy', () => {
+  /** Which sources each pass's own assembly is expected to name. The narration's system prompt is handed
+   *  to it already assembled, so it names nothing there; a fully assembled user message names nothing
+   *  either — there is no field to point at. */
+  const SOURCES: Record<string, { system: boolean; user: boolean }> = {
+    locationAuto: { system: true, user: true },
+    locationSuggest: { system: true, user: true },
+    thinking: { system: true, user: false },
+    director: { system: true, user: true },
+    character: { system: true, user: false },
+    storyboard: { system: true, user: false },
+    narration: { system: false, user: true },
+    choices: { system: true, user: true },
+    statUpdates: { system: true, user: true },
+    summary: { system: true, user: true },
+    timePassed: { system: true, user: true },
+    openingTime: { system: true, user: true },
+    diary: { system: true, user: false },
+  };
+  const LABELED = Object.keys(SOURCES) as TurnPassId[];
+  const subject = { subject: { name: 'Bram', entity: BRAM, stance: 'at the rail' } };
+  const anatomyOf = (id: TurnPassId) => build(id, subject, {}, { thinkingMode: 'off' });
+
+  it.each(LABELED)('tiles what it assembles itself, and lines the rest up by index (%s)', (id) => {
+    const request = anatomyOf(id);
+    const anatomy = request.anatomy!;
+    // The narration is handed its system prompt and its history already assembled, so those carry the
+    // caller's runs (none here) rather than any this pass built — covered by the narration suite below.
+    if (SOURCES[id].system) expect(runsTile(request.systemPrompt, anatomy.system)).toBe(true);
+    expect(anatomy.messages).toHaveLength(request.messages.length);
+    const own = id === 'narration' ? [request.messages.length - 1] : request.messages.map((_, i) => i);
+    own.forEach((i) => expect(runsTile(request.messages[i].content, anatomy.messages[i])).toBe(true));
+  });
+
+  it.each(LABELED)('names the editor that owns each authored run (%s)', (id) => {
+    const anatomy = anatomyOf(id).anatomy!;
+    const sources = (runs: { source?: string }[]) => new Set(runs.map((r) => r.source).filter(Boolean));
+    expect(sources(anatomy.system)).toEqual(SOURCES[id].system ? new Set(['system-template']) : new Set());
+    const message = sources(anatomy.messages[anatomy.messages.length - 1]);
+    expect(message.has('user-template')).toBe(SOURCES[id].user);
+    // A user message never carries the System Prompt editor's text, and vice versa.
+    expect(message.has('system-template')).toBe(false);
+  });
+
+  it('leaves the discovery pass unlabeled — its prompt is not an editor surface', () => {
+    expect(build('discoverEntity', subject).anatomy).toBeUndefined();
+  });
+
+  it('points the two chips a user message carries at different things', () => {
+    const request = build('choices');
+    const runs = request.anatomy!.messages[0];
+    const content = request.messages[0].content;
+    expect(runs.map((r) => [r.chip ?? r.source, content.slice(r.start, r.end)])).toEqual([
+      ['user-template', 'Choices: '],
+      ['<PLAYER ACTION>', 'I read the notices.'],
+      ['user-template', ' | '],
+      ['<NARRATION>', 'The notices are damp and half-illegible.'],
+    ]);
+    // Those two also name what wrote them, so the anatomy can lead back to the prompt behind each.
+    expect(runs.map((r) => r.contextLabel)).toEqual([undefined, 'action', undefined, 'narration']);
+  });
+
+  it('names the director’s narration as the past — nothing has been written this turn yet', () => {
+    const runs = build('director').anatomy!.messages[0];
+    expect(runs.map((r) => r.contextLabel).filter(Boolean)).toEqual(['past-narration', 'action']);
+  });
+
+  it('splits the planner’s assembled message into the parts it was built from', () => {
+    const request = build('thinking', { plannerRecap: 'Older turns, condensed.' });
+    const content = request.messages[0].content;
+    const runs = request.anatomy!.messages[0];
+    expect(runs.map((r) => [r.contextLabel, content.slice(r.start, r.end)])).toEqual([
+      ['condensed', 'Older turns, condensed.\n\n'],
+      ['past-narration', 'What just happened:\nThe dock is damp.\n\n'],
+      ['action', "The player's next action: I read the notices.\n\n"],
+      ['mode-directive', 'List the cast and lay out the beats now. Do not narrate.'],
+    ]);
+  });
+
+  it('names a wholly assembled user message for what it is, with nothing authored in it', () => {
+    for (const [id, label] of [['character', 'character-brief'], ['storyboard', 'intents'], ['diary', 'diary-brief']] as const) {
+      const runs = build(id, subject).anatomy!.messages[0];
+      expect(runs.map((r) => r.contextLabel)).toEqual([label]);
+      expect(runs.some((r) => r.source)).toBe(false);
+    }
+  });
+
+  it('clamps the choices system runs to the trim its language chip leaves behind', () => {
+    const request = build('choices', {}, {}, { language: 'English' });
+    expect(request.systemPrompt.endsWith(' ')).toBe(false);
+    expect(runsTile(request.systemPrompt, request.anatomy!.system)).toBe(true);
+  });
+});
+
+describe('the scene-tag pass', () => {
+  const tagMaterial = (over: Partial<TurnMaterial> = {}) => material({ narration: 'She turns the pole over once.', ...over });
+  const buildTags = (over: Partial<TurnMaterial> = {}) => sceneTagsPass.buildRequest(input(), tagMaterial(over));
+
+  it('is not dispatched by the turn runner — the scene-image flow drives it', () => {
+    expect(TURN_PASSES.some((p) => p.id === 'sceneTags')).toBe(false);
+  });
+
+  it('builds the request the inline call site did, from the turn context and who is in frame', () => {
+    const request = buildTags({ sceneCast: ['Bram', 'Odette'] });
+    expect(request.systemPrompt).toBe(renderPromptTemplate(TEST_PROMPTS.sceneTags, tagMaterial().ctx));
+    expect(request.messages).toEqual([{
+      role: 'user',
+      content: renderPromptTemplate(TEST_PROMPTS.sceneTagsUser, {
+        '<NARRATION>': 'She turns the pole over once.',
+        '<IN FRAME>': 'Bram, Odette',
+      }),
+    }]);
+    expect(request.maxTokens).toBe(TURN_PASS_CAPS.sceneTags);
+    expect(request.silent).toBe(true);
+    expect(request.attachTurnId).toBe('turn-1');
+  });
+
+  it('says an empty scene outright when the turn put nobody in frame', () => {
+    expect(buildTags({ sceneCast: [] }).messages[0].content).toContain(SCENE_TAGS_EMPTY_CAST);
+  });
+
+  it('names its own runs: the template, the narration, and who is in frame', () => {
+    const request = buildTags({ sceneCast: ['Bram'] });
+    const content = request.messages[0].content;
+    expect(request.anatomy!.messages[0].map((r) => [r.chip ?? r.source, content.slice(r.start, r.end)])).toEqual([
+      ['user-template', 'Draw: '],
+      ['<NARRATION>', 'She turns the pole over once.'],
+      ['user-template', ' | In frame: '],
+      ['<IN FRAME>', 'Bram'],
+    ]);
+    expect(request.anatomy!.messages[0].map((r) => r.contextLabel))
+      .toEqual([undefined, 'narration', undefined, 'scene-cast']);
+    expect(runsTile(request.systemPrompt, request.anatomy!.system)).toBe(true);
   });
 });

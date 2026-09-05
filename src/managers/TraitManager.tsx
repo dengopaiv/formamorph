@@ -1,22 +1,27 @@
 import { useGameData } from '@/contexts/GameDataContext';
 import { useEditingDraft } from '@/lib/useEditingDraft';
 import { Input } from "@/components/ui/input";
-import { TokenAutocomplete } from '@/components/TokenAutocomplete';
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Trash2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import PlaceholderField, { PlaceholderNameField } from '@/components/prompt/PlaceholderField';
-import { describePlaceholders } from '@/lib/placeholders';
+import PlaceholderText from '@/components/prompt/PlaceholderText';
+import { PlaceholderPinRows } from '@/components/editor/PlaceholderPinRows';
+import { labelPlaceholders } from '@/lib/placementLetters';
 import { traitConflicts, type TraitConflict } from '@/lib/traitEffects';
 import { useEditorMode } from '@/lib/editorMode';
 import { HelpButton } from '@/components/HelpButton';
-import type { Trait, StatChange, TraitStatToggle, TraitPlaceholderPin } from '@/types';
+import type { Placeholder, PlaceholderPin, Trait, StatChange, TraitStatToggle } from '@/types';
 
 /** Names another trait that claims the same target, and says which way the tie falls. Silent when nothing
  *  else claims it — the common case, where an extra line would just be noise. */
-const ConflictNote = ({ conflict, onOpen }: { conflict?: TraitConflict; onOpen: (id: string) => void }) => {
+const ConflictNote = ({ conflict, placeholders, onOpen }: {
+  conflict?: TraitConflict;
+  placeholders: Placeholder[];
+  onOpen: (id: string) => void;
+}) => {
   if (!conflict) return null;
   // The winner is whichever claimant sits lowest in the trait list; `others` is in authored order, so
   // when this trait loses, the last one is the one that beats it.
@@ -27,7 +32,7 @@ const ConflictNote = ({ conflict, onOpen }: { conflict?: TraitConflict; onOpen: 
       className="underline underline-offset-2 hover:text-foreground"
       onClick={() => onOpen(t.id)}
     >
-      {t.name}
+      <PlaceholderText text={t.name} placeholders={placeholders} />
     </button>
   );
   return (
@@ -40,7 +45,8 @@ const ConflictNote = ({ conflict, onOpen }: { conflict?: TraitConflict; onOpen: 
 };
 
 const TraitManager = ({ trait, onOpenTrait }: { trait: Trait; onOpenTrait: (id: string) => void }) => {
-  const { updateTrait, stats, placeholders, traits, traitGroups } = useGameData();
+  const world = useGameData();
+  const { updateTrait, stats, placeholders, placementLetters, placeholderOwners, traits, traitGroups } = world;
   const { draft: editingTrait, apply, setField: handleChange } = useEditingDraft<Trait>(trait, updateTrait);
 
   const handleStatChangeAdd = () => {
@@ -69,9 +75,7 @@ const TraitManager = ({ trait, onOpenTrait }: { trait: Trait; onOpenTrait: (id: 
   const conflicts = traitConflicts(editingTrait, traits, traitGroups);
 
   const pins = editingTrait.placeholderPins ?? [];
-  const setPins = (next: TraitPlaceholderPin[]) => apply({ placeholderPins: next.length ? next : undefined });
-  const updatePin = (index: number, patch: Partial<TraitPlaceholderPin>) =>
-    setPins(pins.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+  const setPins = (next: PlaceholderPin[]) => apply({ placeholderPins: next.length ? next : undefined });
 
   const { advanced } = useEditorMode();
 
@@ -135,7 +139,7 @@ const TraitManager = ({ trait, onOpenTrait }: { trait: Trait; onOpenTrait: (id: 
               <SelectContent>
                 {stats.map((stat) => (
                   <SelectItem key={stat.id} value={stat.id}>
-                    {describePlaceholders(stat.name, placeholders)}
+                    {labelPlaceholders(stat.name, placeholders, { letters: placementLetters, owners: placeholderOwners })}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -186,7 +190,7 @@ const TraitManager = ({ trait, onOpenTrait }: { trait: Trait; onOpenTrait: (id: 
               </SelectTrigger>
               <SelectContent>
                 {stats.map((stat) => (
-                  <SelectItem key={stat.id} value={stat.id}>{describePlaceholders(stat.name, placeholders)}</SelectItem>
+                  <SelectItem key={stat.id} value={stat.id}>{labelPlaceholders(stat.name, placeholders, { letters: placementLetters, owners: placeholderOwners })}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -208,7 +212,7 @@ const TraitManager = ({ trait, onOpenTrait }: { trait: Trait; onOpenTrait: (id: 
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
-          <ConflictNote conflict={conflicts.stats[toggle.statId]} onOpen={onOpenTrait} />
+          <ConflictNote conflict={conflicts.stats[toggle.statId]} placeholders={placeholders} onOpen={onOpenTrait} />
           </div>
         ))}
         <Button size="sm" onClick={() => setStatToggles([...statToggles, { statId: '', enabled: true }])}>
@@ -223,46 +227,14 @@ const TraitManager = ({ trait, onOpenTrait }: { trait: Trait; onOpenTrait: (id: 
           <Label>Placeholder Pins</Label>
           <HelpButton topicId="worldEditor.placeholderPins" className="h-6 w-6" />
         </div>
-        {pins.map((pin, index) => (
-          <div key={index} className="space-y-1">
-          <div className="flex space-x-2">
-            <Select value={pin.placeholderId} onValueChange={(v) => updatePin(index, { placeholderId: v })}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select placeholder" />
-              </SelectTrigger>
-              <SelectContent>
-                {placeholders.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* Free text with the placeholder's authored values suggested — a trait may pin a value the
-                list doesn't carry (a "Redhead" trait naming a shade nobody else rolls). */}
-            {/* w-full to match the SelectTrigger beside it — equal flex bases split the row in half,
-                exactly as the plain Input this replaced did. */}
-            <div className="w-full min-w-0">
-              <TokenAutocomplete
-                single
-                openOnFocus
-                values={pin.value ? [pin.value] : []}
-                onChange={(vals) => updatePin(index, { value: vals[0] ?? '' })}
-                options={placeholders.find((p) => p.id === pin.placeholderId)?.values ?? []}
-                ariaLabel="Pinned value"
-                placeholder="Pinned value"
-              />
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setPins(pins.filter((_, i) => i !== index))}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-          <ConflictNote conflict={conflicts.placeholders[pin.placeholderId]} onOpen={onOpenTrait} />
-          </div>
-        ))}
-        <Button size="sm" onClick={() => setPins([...pins, { placeholderId: '', value: '' }])}>Add Placeholder Pin</Button>
+        <PlaceholderPinRows
+          pins={pins}
+          onChange={setPins}
+          source={{ kind: 'trait', id: editingTrait.id }}
+          world={world}
+          placeholders={placeholders}
+          onOpenTrait={onOpenTrait}
+        />
       </div>
       )}
     </div>

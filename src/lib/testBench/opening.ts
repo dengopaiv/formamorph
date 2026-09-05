@@ -15,18 +15,21 @@
  * Pure and world-shaped: no React, no storage, no world mutation.
  */
 import { defaultNarrationUserPrompt, defaultSystemPrompt } from '@/components/game/GamePrompts';
+import { allPlaceholders } from '@/lib/placeholderHomes';
 import { DEFAULT_MAX_TOKENS } from '@/contexts/settingsDefaults';
 import { authoredPreviewValues } from '@/lib/authoredPreviewValues';
 import { estimateTokens } from '@/lib/memoryUtils';
 import {
-  collectPlaceholderPlacements, placeholderChances, primeRolls, resolvePlaceholders,
+  collectPlaceholderPlacements, decodePlaceholderToken, describePlaceholders, lonePlaceholderToken,
+  placeholderChances, primeRolls, resolvePlaceholders,
   type PlaceholderPick,
 } from '@/lib/placeholders';
 import { resolveOpeningCue } from '@/lib/openingCue';
 import { NONE_PLACEHOLDER } from '@/lib/promptFallbacks';
 import { renderPromptTemplate } from '@/lib/promptTemplate';
 import { activeDescriptor } from '@/lib/statContext';
-import { activePlaceholderPins, activeStatEnabled, enabledStats } from '@/lib/traitEffects';
+import { allPinTexts, collectPins, valuePinRollChips } from '@/lib/placeholderPins';
+import { activeStatEnabled, enabledStats } from '@/lib/traitEffects';
 import { acquireTrait, seedStatBases, type TraitRuntimeState } from '@/lib/traitRuntime';
 import { buildNarrationPrompt } from '@/lib/turnPipeline/narrationPrompt';
 import { startingLocations } from '@/lib/startingLocation';
@@ -69,12 +72,24 @@ export interface OpeningTrait {
   toggles: { stat: string; enabled: boolean }[];
 }
 
+/** One option in a wildcard's pool, as the row prints it. A value that is exactly one chip of another
+ *  placeholder is not drawn until the roll lands on it, so it reads as that placeholder's name — marked, so
+ *  the row can draw it in that placeholder's color — rather than as text invented for a branch that did
+ *  not fire. */
+export interface OpeningPoolOption {
+  value: string;
+  /** Chance of being drawn, as a percentage. */
+  chance: number;
+  /** The placeholder this option references, when it is one. */
+  reference?: string;
+}
+
 /** One wildcard a fresh game rolls: its draws, each value's true odds, and the repeat risk. */
 export interface OpeningRollGroup {
   placeholderId: string;
   name: string;
-  /** Each value's chance of being drawn, in value order, as percentages. */
-  chances: { value: string; chance: number }[];
+  /** Each value's chance of being drawn, in value order. */
+  chances: OpeningPoolOption[];
   /** An active trait's pin masking every chip of this placeholder — then the rolls below never show. */
   pinnedValue?: string;
   /** The one shared roll World-mode chips read. */
@@ -110,21 +125,50 @@ export const EMPTY_OPENING: OpeningData = {
   stats: [], disabledStats: [], traits: [], rolls: [], system: '', user: '', totalTokens: 0,
 };
 
-/** The pins every active trait imposes — the fresh game's, not just the lens PC's, because a default
- *  trait's pin binds every playthrough. */
-const openingPins = (world: OpeningWorld, lens: BenchLens): Record<string, string> =>
-  activePlaceholderPins(lensActiveTraits(world, lens));
+/** What a fresh game as the lens PC stands on at turn one: the traits in force, the stats they settle, and
+ *  the starting location — the three sources the opening pins come from. */
+interface OpeningStart {
+  active: Trait[];
+  settled: PlayerStat[];
+  seeded: PlayerStat[];
+  /** The random pool play draws the start from, shown deterministically as its first member. */
+  pool: GameLocation[];
+  location: GameLocation | null;
+}
+
+function openingStart(world: OpeningWorld, lens: BenchLens): OpeningStart {
+  const active = lensActiveTraits(world, lens);
+  const locations = world.locations ?? [];
+  const flagged = startingLocations(locations);
+  const pool = flagged.length > 0 ? flagged : locations;
+  return { active, ...settleOpeningStats(world, active), pool, location: pool[0] ?? null };
+}
+
+/** The pins the fresh game opens under, from every source — the active traits (a default trait's pin binds
+ *  every playthrough, not just the lens PC's), the starting location, the band each settled stat lands in,
+ *  and the value pins those and `rolls` settle — through the same collector Enter World runs. */
+const openingPins = (world: OpeningWorld, start: OpeningStart, rolls: PlaceholderRolls): Record<string, string> =>
+  collectPins({
+    traits: start.active, location: start.location, stats: start.settled, placeholders: allPlaceholders(world), rolls,
+  });
+
+/** Every text any source pins a placeholder to — walked beside the rolls, exactly as Enter World walks them. */
+const openingPinTexts = (world: OpeningWorld): Record<string, string[]> =>
+  allPinTexts({ traits: world.traits, locations: world.locations, stats: world.stats, placeholders: allPlaceholders(world) });
 
 /**
  * Roll every wildcard placement a fresh game would prime, keeping whatever `existing` already holds — the
- * exact pass Enter World runs, over the same field list.
+ * exact pass Enter World runs, over the same field list and the same pins.
  */
 export function primeOpeningRolls(
   world: OpeningWorld,
   existing: PlaceholderRolls = {},
   pick?: PlaceholderPick,
 ): PlaceholderRolls {
-  return primeRolls(world.placeholders ?? [], chipBearingTexts(world), existing, pick);
+  const placeholders = allPlaceholders(world);
+  return primeRolls(
+    placeholders, [...chipBearingTexts(world), ...valuePinRollChips(placeholders)], existing, pick, openingPinTexts(world),
+  );
 }
 
 /**
@@ -138,19 +182,30 @@ export function rerollOpeningRolls(
   previous: PlaceholderRolls,
   pick?: PlaceholderPick,
 ): PlaceholderRolls {
-  const pins = openingPins(world, lens);
-  const texts = chipBearingTexts(world);
-  const { unique } = collectPlaceholderPlacements(texts);
+  // Rolls are what is being redrawn, so a pin that only holds because of a roll is no reason to keep one;
+  // value pins count here only where a source above them, or a sole value, fixes the pinner.
+  const pins = openingPins(world, openingStart(world, lens), {});
+  const placeholders = allPlaceholders(world);
+  const texts = [...chipBearingTexts(world), ...valuePinRollChips(placeholders)];
+  const pinTexts = openingPinTexts(world);
+  // A pin's own chips are placements too, so a pinned one keeps its roll like any other.
+  const { unique } = collectPlaceholderPlacements([...texts, ...Object.values(pinTexts).flat()]);
   const placementOwner = new Map(unique.map((u) => [u.placementId, u.id]));
   const keep = (entries: Record<string, string> | undefined, ownerOf: (key: string) => string | undefined) =>
     Object.fromEntries(Object.entries(entries ?? {}).filter(([key]) => {
       const owner = ownerOf(key);
       return owner != null && pins[owner] != null;
     }));
-  return primeRolls(world.placeholders ?? [], texts, {
+  // A Unique roll under a nested chip is keyed by its placement chain, whose last step is the placeholder's
+  // own id; only a chain root is keyed by the bare placement id.
+  const uniqueOwner = (key: string) => {
+    const tail = key.slice(key.lastIndexOf('/') + 1);
+    return tail === key ? placementOwner.get(key) : tail;
+  };
+  return primeRolls(placeholders, texts, {
     world: keep(previous.world, (id) => id),
-    unique: keep(previous.unique, (placementId) => placementOwner.get(placementId)),
-  }, pick);
+    unique: keep(previous.unique, uniqueOwner),
+  }, pick, pinTexts);
 }
 
 /** Chance that `draws` independent picks over `chances` (fractions summing to 1) repeat a value:
@@ -185,18 +240,12 @@ function settleOpeningStats(world: OpeningWorld, active: Trait[]): { settled: Pl
  * a fresh game always begins at the world's starting location, wherever the lens is standing.
  */
 export function buildOpening(world: OpeningWorld, lens: BenchLens, rolls: PlaceholderRolls): OpeningData {
-  const placeholders = world.placeholders ?? [];
-  const locations = world.locations ?? [];
-  const active = lensActiveTraits(world, lens);
-  const pins = openingPins(world, lens);
+  const placeholders = allPlaceholders(world);
+  const start = openingStart(world, lens);
+  const { active, settled, seeded, pool, location } = start;
+  const pins = openingPins(world, start, rolls);
   const resolve = (text: string) => resolvePlaceholders(text, { placeholders, rolls, pins });
 
-  // The random pool play draws the start from; shown deterministically as its first member.
-  const flagged = startingLocations(locations);
-  const pool = flagged.length > 0 ? flagged : locations;
-  const location = pool[0] ?? null;
-
-  const { settled, seeded } = settleOpeningStats(world, active);
   const seededValue = new Map(seeded.map((stat) => [stat.id, stat.value]));
   const enabled = activeStatEnabled(world.stats ?? [], active);
   const liveStats = enabledStats(settled, enabled);
@@ -225,14 +274,25 @@ export function buildOpening(world: OpeningWorld, lens: BenchLens, rolls: Placeh
     id: trait.id,
     name: resolveLensText(trait.name, placeholders, pins),
     isPc: trait.id === lens.pc?.id,
+    // A pin's text is chip-capable, so it reads through the same rolls as everything else here.
     pins: (trait.placeholderPins ?? [])
       .filter((pin) => pin.placeholderId && pin.value)
-      .map((pin) => ({ placeholder: placeholderName.get(pin.placeholderId) ?? pin.placeholderId, value: pin.value })),
+      .map((pin) => ({ placeholder: placeholderName.get(pin.placeholderId) ?? pin.placeholderId, value: resolve(pin.value) })),
     toggles: (trait.statToggles ?? []).map((toggle) => ({
       stat: statName.get(toggle.statId) ?? toggle.statId,
       enabled: toggle.enabled,
     })),
   }));
+
+  // A pool option as the row prints it. Only the drawn value resolves; an option the roll passed over reads
+  // as the placeholder it references, or as its own text described, so no branch shows invented text.
+  const poolOption = (text: string, chance: number): OpeningPoolOption => {
+    const lone = lonePlaceholderToken(text);
+    const ref = lone ? decodePlaceholderToken(lone)?.id : undefined;
+    const target = ref ? placeholderName.get(ref) : undefined;
+    if (ref && target) return { value: target, chance, reference: ref };
+    return { value: describePlaceholders(text, placeholders), chance };
+  };
 
   // The wildcards a fresh game rolls, in placeholder order: every placement the priming pass covers.
   const { worldIds, unique } = collectPlaceholderPlacements(chipBearingTexts(world));
@@ -242,18 +302,20 @@ export function buildOpening(world: OpeningWorld, lens: BenchLens, rolls: Placeh
     if (!worldIds.has(ph.id) && uniquePlacements.length === 0) return [];
     const chances = placeholderChances(ph);
     const pinned = pins[ph.id];
+    const worldValue = rolls.world?.[ph.id];
+    // A stored roll is the value's own text, chips and all; what the row shows is what play would show.
     return [{
       placeholderId: ph.id,
       name: ph.name || ph.id,
-      chances: ph.values.map((value) => ({ value, chance: chances[value] })),
-      ...(pinned != null ? { pinnedValue: pinned } : {}),
-      ...(worldIds.has(ph.id) ? { worldValue: rolls.world?.[ph.id] } : {}),
+      chances: ph.values.map((value) => poolOption(value.text, chances[value.id])),
+      ...(pinned != null ? { pinnedValue: resolve(pinned) } : {}),
+      ...(worldIds.has(ph.id) ? { worldValue: worldValue != null ? resolve(worldValue) : undefined } : {}),
       uniqueValues: uniquePlacements.flatMap((u) => {
         const value = rolls.unique?.[u.placementId];
-        return value != null ? [value] : [];
+        return value != null ? [resolve(value)] : [];
       }),
       ...(uniquePlacements.length >= 2 && pinned == null
-        ? { collisionChance: collisionChance(ph.values.map((v) => chances[v] / 100), uniquePlacements.length) * 100 }
+        ? { collisionChance: collisionChance(ph.values.map((v) => chances[v.id] / 100), uniquePlacements.length) * 100 }
         : {}),
     }];
   });

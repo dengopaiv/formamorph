@@ -1,16 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import type { Stat, Trait, TraitGroup } from '@/types';
+import type { Placeholder, Stat, Trait, TraitGroup } from '@/types';
+import { phValues, phValueId } from '@/test/placeholderValues';
+import { reconcilePlaceholderValues } from './placeholders';
 import {
   traitOrderIndex,
   inAuthoredOrder,
   activeStatEnabled,
   enabledStats,
-  activePlaceholderPins,
   exclusiveSiblings,
   traitConflicts,
   collapseExclusiveDefaults,
   refreshChosenTraits,
+  renamedPlaceholderValues,
+  repinRenamedValues,
 } from './traitEffects';
+import { activePlaceholderPins, withPinnedValue } from './placeholderPins';
 
 const T = (id: string, extra: Partial<Trait> = {}): Trait => ({
   id, name: id, statChanges: [], ...extra,
@@ -159,23 +163,23 @@ describe('conflict detection', () => {
   });
 
   it('does not flag exclusive siblings, which can never both be active', () => {
-    const red = T('red', { name: 'Redhead', groupId: 'excl', order: 0, placeholderPins: [{ placeholderId: 'hair', value: 'red' }] });
-    const raven = T('raven', { name: 'Raven', groupId: 'excl', order: 1, placeholderPins: [{ placeholderId: 'hair', value: 'black' }] });
-    expect(traitConflicts(red, [red, raven], groups).placeholders.hair).toBeUndefined();
+    const red = T('red', { name: 'Redhead', groupId: 'excl', order: 0, statToggles: [{ statId: 'sun', enabled: false }] });
+    const raven = T('raven', { name: 'Raven', groupId: 'excl', order: 1, statToggles: [{ statId: 'sun', enabled: true }] });
+    expect(traitConflicts(red, [red, raven], groups).stats.sun).toBeUndefined();
   });
 
   it('still flags a rival outside the exclusive group', () => {
-    const red = T('red', { name: 'Redhead', groupId: 'excl', order: 0, placeholderPins: [{ placeholderId: 'hair', value: 'red' }] });
-    const raven = T('raven', { name: 'Raven', groupId: 'excl', order: 1, placeholderPins: [{ placeholderId: 'hair', value: 'black' }] });
-    const dyed = T('dyed', { name: 'Dyed', groupId: 'plain', order: 0, placeholderPins: [{ placeholderId: 'hair', value: 'green' }] });
-    expect(traitConflicts(red, [red, raven, dyed], groups).placeholders.hair)
+    const red = T('red', { name: 'Redhead', groupId: 'excl', order: 0, statToggles: [{ statId: 'sun', enabled: false }] });
+    const raven = T('raven', { name: 'Raven', groupId: 'excl', order: 1, statToggles: [{ statId: 'sun', enabled: true }] });
+    const dyed = T('dyed', { name: 'Dyed', groupId: 'plain', order: 0, statToggles: [{ statId: 'sun', enabled: true }] });
+    expect(traitConflicts(red, [red, raven, dyed], groups).stats.sun)
       .toEqual({ others: [{ id: 'dyed', name: 'Dyed' }], winsHere: false });
   });
 
   it('ignores half-filled rows rather than reporting a conflict on the empty id', () => {
     const a = T('a', { name: 'A', statToggles: [{ statId: '', enabled: true }] });
     const b = T('b', { name: 'B', statToggles: [{ statId: '', enabled: false }] });
-    expect(traitConflicts(a, [a, b], [])).toEqual({ stats: {}, placeholders: {} });
+    expect(traitConflicts(a, [a, b], [])).toEqual({ stats: {} });
   });
 });
 
@@ -193,5 +197,101 @@ describe('collapseExclusiveDefaults', () => {
 
   it('leaves non-exclusive groups and ungrouped traits alone', () => {
     expect(collapseExclusiveDefaults(['c', 'd', 'loose'], traits, groups)).toEqual(['c', 'd', 'loose']);
+  });
+});
+
+describe('pins following a placeholder value rename', () => {
+  const P = (placeholderId: string, value: string) => ({ placeholderId, value });
+  // The author-visible operation: the editor's own edit to a value list, then the sweep the world runs over
+  // it. Composed here so the tests state behavior, not the shape of the intermediate pairs.
+  const afterEdit = (traits: Trait[], placeholderId: string, prev: string[], next: string[]) => {
+    const before = phValues(prev);
+    const after = reconcilePlaceholderValues(before, next);
+    return repinRenamedValues(traits, placeholderId, renamedPlaceholderValues(before, after));
+  };
+  const pinsOf = (traits: Trait[]) => traits.map((t) => t.placeholderPins ?? []);
+
+  it('carries a text-keyed pin onto the renamed value', () => {
+    const traits = [T('t', { placeholderPins: [P('hair', 'Red')] })];
+    expect(pinsOf(afterEdit(traits, 'hair', ['Red', 'Blue'], ['Crimson', 'Blue'])))
+      .toEqual([[P('hair', 'Crimson')]]);
+  });
+
+  it('leaves pins alone when the values were only reordered', () => {
+    const traits = [T('t', { placeholderPins: [P('hair', 'Red')] })];
+    expect(afterEdit(traits, 'hair', ['Red', 'Blue'], ['Blue', 'Red'])).toBe(traits);
+  });
+
+  it('treats a delete plus an add as two edits, not a rename', () => {
+    const traits = [T('t', { placeholderPins: [P('hair', 'Red')] })];
+    // Each surviving value keeps its own id, so neither edit claims anything was renamed into anything.
+    expect(afterEdit(traits, 'hair', ['Red', 'Blue'], ['Blue'])).toBe(traits);
+    expect(afterEdit(traits, 'hair', ['Red', 'Blue'], ['Red', 'Blue', 'Green'])).toBe(traits);
+  });
+
+  it('reaches every trait in the world and every matching pin within a trait', () => {
+    const traits = [
+      T('a', { placeholderPins: [P('hair', 'Red'), P('eyes', 'Red')] }),
+      T('b', { placeholderPins: [P('hair', 'Red')] }),
+      T('c'),
+    ];
+    expect(pinsOf(afterEdit(traits, 'hair', ['Red'], ['Crimson']))).toEqual([
+      [P('hair', 'Crimson'), P('eyes', 'Red')],
+      [P('hair', 'Crimson')],
+      [],
+    ]);
+  });
+
+  it('never rewrites a custom pin the author typed off the value list', () => {
+    const traits = [T('t', { placeholderPins: [P('hair', 'Ash-Gray')] })];
+    expect(afterEdit(traits, 'hair', ['Red'], ['Crimson'])).toBe(traits);
+  });
+
+  it('leaves a half-filled pin row alone even when a blank value is renamed', () => {
+    const traits = [T('t', { placeholderPins: [P('hair', ''), P('', 'Red')] })];
+    expect(afterEdit(traits, 'hair', ['', 'Red'], ['Crimson', 'Red'])).toBe(traits);
+  });
+
+  it('carries the pin through each keystroke of a rename', () => {
+    let traits = [T('t', { placeholderPins: [P('hair', 'Red')] })];
+    traits = afterEdit(traits, 'hair', ['Red'], ['Re']);
+    traits = afterEdit(traits, 'hair', ['Re'], ['Cr']);
+    traits = afterEdit(traits, 'hair', ['Cr'], ['Crimson']);
+    expect(pinsOf(traits)).toEqual([[P('hair', 'Crimson')]]);
+  });
+
+  it('leaves a pin naming its value by id alone — the id already follows the rename', () => {
+    const traits = [T('t', { placeholderPins: [{ ...P('hair', 'Red'), valueId: phValueId('Red') }] })];
+    expect(afterEdit(traits, 'hair', ['Red'], ['Crimson'])).toBe(traits);
+  });
+});
+
+describe('pins naming their value by id', () => {
+  const hair = (texts: string[]): Placeholder => ({ id: 'hair', name: 'Hair', values: phValues(texts) });
+
+  it('reads the value’s current text, so a rename moves the pin with it', () => {
+    const trait = T('t', { placeholderPins: [{ placeholderId: 'hair', value: 'Red', valueId: phValueId('Red') }] });
+    // The stored text is the pin as written; the list has since been re-spelled under the same id.
+    const renamed: Placeholder = { id: 'hair', name: 'Hair', values: [{ id: phValueId('Red'), text: 'Crimson' }] };
+    expect(activePlaceholderPins([trait], [renamed])).toEqual({ hair: 'Crimson' });
+  });
+
+  it('falls back to the written text when the id names nothing', () => {
+    const trait = T('t', { placeholderPins: [{ placeholderId: 'hair', value: 'Ash-Gray', valueId: 'v:gone' }] });
+    expect(activePlaceholderPins([trait], [hair(['Red'])])).toEqual({ hair: 'Ash-Gray' });
+  });
+
+  it('names a picked value by id and leaves a typed one free text', () => {
+    const pin = { placeholderId: 'hair', value: '' };
+    expect(withPinnedValue(pin, 'Red', [hair(['Red', 'Blue'])]))
+      .toEqual({ placeholderId: 'hair', value: 'Red', valueId: phValueId('Red') });
+    expect(withPinnedValue(pin, 'Ash-Gray', [hair(['Red', 'Blue'])]))
+      .toEqual({ placeholderId: 'hair', value: 'Ash-Gray' });
+  });
+
+  it('drops a stale id when the pin is retyped off the list', () => {
+    const pin = { placeholderId: 'hair', value: 'Red', valueId: phValueId('Red') };
+    expect(withPinnedValue(pin, 'Ash-Gray', [hair(['Red'])]))
+      .toEqual({ placeholderId: 'hair', value: 'Ash-Gray' });
   });
 });

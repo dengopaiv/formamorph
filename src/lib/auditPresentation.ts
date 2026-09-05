@@ -17,6 +17,18 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   avatar_removed: 'Image removed',
   role_changed: 'Role changed',
   feedback_edited: 'Feedback edited',
+  event_created: 'Event scheduled',
+  event_edited: 'Event edited',
+  event_cancelled: 'Event canceled',
+  event_deleted: 'Event deleted',
+  results_announced: 'Results announced',
+  podium_edited: 'Podium edited',
+  entry_withdrawn: 'Entry withdrawn',
+  report_actioned: 'Report actioned',
+  report_dismissed: 'Report dismissed',
+  like_removed: 'Like removed',
+  likes_cleared: 'Likes cleared',
+  signals_viewed: 'Linked accounts viewed',
 };
 
 /** The tint each action carries, so a scan down the list separates removals from the rest. */
@@ -36,6 +48,20 @@ export const AUDIT_ACTION_STYLES: Record<AuditAction, string> = {
   avatar_removed: 'bg-destructive/10 text-destructive',
   role_changed: 'bg-info/10 text-info',
   feedback_edited: 'bg-info/10 text-info',
+  event_created: 'bg-info/10 text-info',
+  event_edited: 'bg-info/10 text-info',
+  event_cancelled: 'bg-warning/10 text-warning',
+  event_deleted: 'bg-destructive/10 text-destructive',
+  results_announced: 'bg-success/10 text-success',
+  podium_edited: 'bg-info/10 text-info',
+  entry_withdrawn: 'bg-muted text-muted-foreground',
+  // A decision, not a removal: what was actually done to the content is logged by the act itself.
+  report_actioned: 'bg-warning/10 text-warning',
+  report_dismissed: 'bg-muted text-muted-foreground',
+  like_removed: 'bg-destructive/10 text-destructive',
+  likes_cleared: 'bg-destructive/10 text-destructive',
+  // Nothing was done to anybody — somebody looked. Tinted as the neutral entry it is.
+  signals_viewed: 'bg-muted text-muted-foreground',
 };
 
 /** The filter's options, in the order the server declares them. */
@@ -153,8 +179,62 @@ export function auditPredicate(entry: AuditEntry): string {
       return target
         ? `edited the ${noun ?? 'thread'}${name ? ` “${name}”` : ''} by ${target}`
         : `edited a ${noun ?? 'thread'}${name ? ` “${name}”` : ''}`;
-    default:
+    case 'event_created':
+      return `scheduled the event${name ? ` “${name}”` : ''}`;
+    case 'event_edited':
+      return `edited the event${name ? ` “${name}”` : ''}`;
+    case 'event_cancelled':
+      return `canceled the event${name ? ` “${name}”` : ''}`;
+    case 'event_deleted':
+      return `deleted the event${name ? ` “${name}”` : ''}`;
+    // The podium itself is the snippet, so the sentence only says which contest.
+    case 'results_announced':
+      return `announced the results of${name ? ` “${name}”` : ' a contest'}`;
+    case 'podium_edited':
+      return `corrected the podium of${name ? ` “${name}”` : ' a contest'}`;
+    // The contest it left is the snippet; the sentence names what was pulled.
+    case 'entry_withdrawn':
+      return target
+        ? `withdrew ${name ? `the ${noun ?? 'listing'} “${name}”` : `a ${noun ?? 'listing'}`} by ${target} from a contest`
+        : `withdrew their own ${noun ?? 'listing'}${name ? ` “${name}”` : ''} from a contest`;
+    // Closed a whole report group; the staff note, if any, is the snippet.
+    case 'report_actioned':
+      return `acted on the reports${name ? ` about “${name}”` : ''}${target ? ` by ${target}` : ''}`;
+    case 'report_dismissed':
+      return `dismissed the reports${name ? ` about “${name}”` : ''}${target ? ` by ${target}` : ''}`;
+    // Whose like it was, and on what. The listing is the target, so the account it came from is the
+    // target user — the reverse of a deletion, where the account owns the thing that went.
+    case 'like_removed':
+      return target
+        ? `removed a like by ${target} on ${name ? `“${name}”` : `a ${noun ?? 'listing'}`}`
+        : `removed a like on ${name ? `“${name}”` : `a ${noun ?? 'listing'}`}`;
+    // How many went is the whole size of the action, and the snippet is where the server puts it.
+    case 'likes_cleared': {
+      const count = entry.snippet ? Number(entry.snippet.match(/\d+/)?.[0]) : Number.NaN;
+      const many = Number.isFinite(count) ? `${count} ${count === 1 ? 'like' : 'likes'}` : 'every like';
+
+      return `cleared ${many} given by ${target || 'an account'}`;
+    }
+    // A look, not an act. It is logged because linkage data is the one record that says where a person
+    // was, so reading it is accountable too.
+    case 'signals_viewed': {
+      // Two reads share the action: the accounts linked to one account, and the likes on one listing.
+      // What was looked at is what separates them, so the target's kind is what the sentence turns on.
+      const kind = entry.target?.kind;
+      if (kind && kind !== 'account') {
+        return `audited the likes on ${name ? `“${name}”` : `a ${KIND_NOUNS[kind] ?? kind}`}${target ? ` by ${target}` : ''}`;
+      }
+
+      return target
+        ? `viewed the accounts linked to ${target}`
+        : 'viewed the accounts linked to their own account';
+    }
+    // Unreachable while the switch covers `AuditAction`; kept for a server newer than this build.
+    default: {
+      const unhandled: never = entry.action;
+      void unhandled;
       return 'did something the app does not recognize';
+    }
   }
 }
 

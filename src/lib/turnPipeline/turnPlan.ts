@@ -1,4 +1,5 @@
 import type { AIRequestType, ChatMessage, Entity } from '@/types';
+import type { AnatomyRun, RequestAnatomy } from '@/lib/requestAnatomy';
 import type { ThinkingMode } from '@/contexts/SettingsContext';
 
 /**
@@ -25,7 +26,8 @@ export type TurnPassId =
   | 'timePassed'
   | 'openingTime'
   | 'diary'
-  | 'discoverEntity';
+  | 'discoverEntity'
+  | 'sceneTags';
 
 /** Where a pass sits relative to the narration. Passes run in stage order, then in plan order. */
 export type TurnStage = 'preNarration' | 'planning' | 'narration' | 'postNarration';
@@ -79,6 +81,8 @@ export interface TurnPrompts {
   openingTimeUser: string;
   diary: string;
   discoverEntity: string;
+  sceneTags: string;
+  sceneTagsUser: string;
 }
 
 /** Everything the planner decides from. Plain values only — no React, no clock, no globals. */
@@ -130,8 +134,12 @@ export interface TurnMaterial {
    * notes fallback that produce it are the narration request's own assembly, not a turn decision.
    */
   narrationSystemPrompt: string;
+  /** Request Anatomy runs over `narrationSystemPrompt`. Empty leaves the system prompt unlabeled. */
+  narrationSystemPromptRuns: AnatomyRun[];
   /** The trimmed history the narration rides on; this turn's user message is appended to it. */
   trimmedHistory: ChatMessage[];
+  /** Request Anatomy runs, one list per entry of `trimmedHistory`. Empty leaves the history unlabeled. */
+  historyRuns: AnatomyRun[][];
   /** The narration text this turn produced; empty before the narration pass has answered. */
   narration: string;
   /** The last narration the planning stages recap from. */
@@ -150,6 +158,9 @@ export interface TurnMaterial {
   intents: { name: string; text: string }[];
   /** Cast members beyond the active-character cap, named to the storyboarder but not asked. */
   overflow: string[];
+  /** Who the scene-tag pass has in frame, in narration order, already capped to what a booru model holds
+   *  apart. Empty draws an empty scene. */
+  sceneCast: string[];
   /** Who each fan-out pass runs for. A pass with no entry, or an empty one, sends nothing. */
   subjects?: Partial<Record<TurnPassId, TurnPassSubject[]>>;
   /** The being this request is about, for a fan-out pass. */
@@ -166,7 +177,9 @@ export function emptyTurnMaterial(seed: TurnMaterialSeed): TurnMaterial {
     ctx: {},
     sceneEntityTokens: {},
     narrationSystemPrompt: "",
+    narrationSystemPromptRuns: [],
     trimmedHistory: [],
+    historyRuns: [],
     narration: "",
     lastStory: "",
     plannerRecap: "",
@@ -176,6 +189,7 @@ export function emptyTurnMaterial(seed: TurnMaterialSeed): TurnMaterial {
     npcCastSize: 0,
     intents: [],
     overflow: [],
+    sceneCast: [],
   };
 }
 
@@ -186,6 +200,12 @@ export interface TurnPassRequest {
   messages: ChatMessage[];
   /** The cap the pass asks for; null means the request type's own default applies downstream. */
   maxTokens: number | null;
+  /**
+   * The Request Anatomy sidecar: which runs of `systemPrompt` and `messages` are authored prompt text and
+   * which are assembled context. Inspection only — the request layer builds its body from `systemPrompt`
+   * and `messages` alone, so nothing here can reach an endpoint. Absent means unlabeled.
+   */
+  anatomy?: RequestAnatomy;
   silent: boolean;
   /** The turn a silent request summarizes; absent on foreground passes. */
   attachTurnId?: string;

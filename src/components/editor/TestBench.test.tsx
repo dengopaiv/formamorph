@@ -14,6 +14,7 @@ import type {
 } from '@/lib/testBench/benchProps';
 import { TestBench, TestBenchButton } from './TestBench';
 
+import { phValues } from '@/test/placeholderValues';
 // The panel renders whatever the rule pass produced, so the fixture goes through the real engine rather
 // than hand-built groups — a row shape the rules can't actually emit would prove nothing. The base world
 // is structurally sound and described (a starting location, every entity placed with both descriptions,
@@ -116,6 +117,14 @@ describe('TestBench panel', () => {
     expect(issues.onOpenItem).toHaveBeenCalledWith('entities', 'e2');
   });
 
+  it('carries each chip’s full name as its tooltip — the chip truncates, the tip must not', async () => {
+    renderBench(defective);
+
+    await userEvent.hover(screen.getByRole('button', { name: 'Old Tobb' }));
+
+    expect(await screen.findByText('Old Tobb', { selector: 'div' })).toBeVisible();
+  });
+
   it('reports a clean world as verified, with the number of rules that ran', () => {
     renderBench(world([{ id: 'e1', name: 'Maren', aliases: ['Wren'] }]));
     expect(screen.getByText('No Problems Found')).toBeInTheDocument();
@@ -210,7 +219,7 @@ describe('TestBench lens bar', () => {
       },
       { id: 't-reach', name: 'Reach-Born', groupId: 'g-origin', statChanges: [], order: 1 },
     ],
-    placeholders: [{ id: 'ph-hair', name: 'Hair Color', values: ['ash', 'copper'] }],
+    placeholders: [{ id: 'ph-hair', name: 'Hair Color', values: phValues(['ash', 'copper']) }],
   };
 
   // On a lens tab: Issues is the one instrument that reads nothing from the lens, so the bar isn't there.
@@ -319,19 +328,19 @@ describe('TestBench lens bar', () => {
 
   it('says so when the PC pins a placeholder the world no longer has', () => {
     renderPinned('ph-gone', 'teal');
-    expect(screen.getByText(/Pins a placeholder that doesn’t exist, so “teal” is never applied/))
+    expect(screen.getByText(/“Trait: .+” pins a placeholder that doesn’t exist, so “teal” is never applied/))
       .toBeInTheDocument();
   });
 
   // Pinning off-list is the feature — play applies it verbatim, so the lens reads the same as playing it.
   it('is silent about a pin naming a value the placeholder does not offer', () => {
     renderPinned('ph-hair', 'teal');
-    expect(screen.queryByText(/Pins a placeholder/)).toBeNull();
+    expect(screen.queryByText(/pins a placeholder/i)).toBeNull();
   });
 
   it('is silent about pins the world honors', () => {
     renderLens({ pcTraitId: 't-sedge', locationId: null });
-    expect(screen.queryByText(/Pins a placeholder/)).toBeNull();
+    expect(screen.queryByText(/pins a placeholder/i)).toBeNull();
   });
 
   it('names the stats the PC switches away from the world’s defaults', () => {
@@ -541,12 +550,12 @@ describe('TestBench Opening instrument', () => {
         { id: 'd2', threshold: 100, description: 'Iron' },
       ],
     }],
-    placeholders: [{ id: 'ph-coin', name: 'Coin Bird', values: ['gull', 'wren'] }],
+    placeholders: [{ id: 'ph-coin', name: 'Coin Bird', values: phValues(['gull', 'wren']) }],
   };
   const openingData = () => buildOpening(
     openingWorld,
     buildLens(openingWorld, EMPTY_LENS),
-    primeOpeningRolls(openingWorld, {}, (values) => values[0]),
+    primeOpeningRolls(openingWorld, {}, (values) => values[0].text),
   );
   const renderOpening = () =>
     renderBench(openingWorld, { tab: 'opening', opening: { data: openingData() } });

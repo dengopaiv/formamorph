@@ -1,9 +1,10 @@
 /**
  * Detects whether a world holds anything Simple mode hides, so the World Editor can say so beside the
- * mode switch. Mirrors the hidden surfaces in `docs-internal/world-editor-simple-mode.md`: the two
+ * mode switch. Mirrors the hidden surfaces in `docs-internal/designs/world-editor-simple-mode/design.md`: the two
  * hidden tabs, and every Advanced-only field.
  */
 import { hasValue } from './editorMode';
+import { allPlaceholders } from './placeholderHomes';
 import { storedOpeningCue } from './openingCue';
 import { storedWorldPrompt, WORLD_PROMPT_KINDS } from './worldPrompt';
 import type { Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
@@ -23,7 +24,7 @@ export interface AdvancedDataInput {
  * omit any of them, and a world with nothing to look through hides nothing.
  */
 export function worldUsesAdvancedFeatures(w: AdvancedDataInput): boolean {
-  if ((w.placeholders ?? []).length > 0) return true;
+  if (allPlaceholders(w).length > 0) return true;
   // The Dictionary tab itself is visible in Simple, so only the parts of it Simple can't show count:
   // an entry using a hidden option, or anything muted (the enable toggles are Advanced-only).
   if ((w.dictionaries ?? []).some((d) => d.enabled === false || (d.entries ?? []).some((e) =>

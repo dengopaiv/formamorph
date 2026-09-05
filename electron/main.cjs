@@ -7,7 +7,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 const { collect: collectVram } = require('./vramCollect.cjs');
-const llmEngine = require('./llmEngine.cjs');
+// The engine runs in a utility process; this is its main-process face, with the same API the engine module
+// exports. See llmEngineProxy.cjs.
+const llmEngine = require('./llmEngineProxy.cjs');
+const { selectEngineDevice, ENGINE_DEVICE_AUTO } = require('./engineDevice.cjs');
 const modelDownload = require('./modelDownload.cjs');
 const { scanModels, resolveModelRef, isRootRef } = require('./modelScan.cjs');
 const modelMove = require('./modelMove.cjs');
@@ -15,6 +18,7 @@ const { portableUserDataDir, migratePersistentStores } = require('./portableProf
 const { corsResponse } = require('./corsShim.cjs');
 const { contextMenuTemplate } = require('./contextMenu.cjs');
 const updater = require('./updater.cjs');
+const perfMeter = require('./perfMeter.cjs');
 
 // Portable/AppImage builds keep their whole profile (settings, saves, worlds, library) beside the exe so
 // copying the folder carries everything; installed (mac dmg) and dev keep the OS-default userData (dev would
@@ -40,7 +44,56 @@ let mainWindow = null;
 // gpuLayers null = auto-offload all that fit.
 // gpuLayers -1 = AUTO (fit as many layers as VRAM allows); -2 = MAX (all layers); >=0 = literal count.
 // Must match the renderer's DEFAULT_LOCAL_GPU_LAYERS so a fresh boot doesn't trigger a needless reload.
-let engineOptions = { contextSize: 8192, gpuLayers: -1, flashAttention: true, parallelRequests: 2 };
+// gpuDevice is a device *name* (or 'auto'), resolved to an index against the live enumeration at each
+// start — an index saved across a driver change would point at a different card.
+let engineOptions = { contextSize: 8192, gpuLayers: -1, flashAttention: true, parallelRequests: 2, gpuDevice: ENGINE_DEVICE_AUTO };
+
+// Every GPU the engine's backend can see, unfiltered. A pinned engine only ever reports its own device, so
+// this is cached from unpinned enumerations and refreshed by a short-lived probe when it's cold.
+let deviceEnumeration = null;
+
+/** Enumerate devices in a child of its own, which dies with the answer: a backend keeps whatever device
+ *  visibility it was initialized with, so the process that enumerates unfiltered can't then run pinned.
+ *  Always answers — a backend that never came back is a null backend with no devices, which is a cacheable
+ *  answer rather than a reason to fork another process on the next load. */
+async function probeDevices() {
+  const probe = llmEngine.createEngineProxy();
+  try {
+    const info = await probe.listDevices();
+    if (info && Array.isArray(info.gpuDeviceNames)) return info;
+  } catch { /* fall through to the no-backend answer */ }
+  finally { probe.dispose(); }
+  return { gpuBackend: null, gpuDeviceNames: [] };
+}
+
+// One probe at a time: a desktop boot can ask twice at once (the engine manager starting a model while the
+// settings panel fills its picker), and each extra probe is a whole process spinning up a Vulkan backend.
+let devicesInFlight = null;
+
+async function currentEnumeration() {
+  if (deviceEnumeration) return deviceEnumeration;
+  devicesInFlight ??= probeDevices().finally(() => { devicesInFlight = null; });
+  deviceEnumeration = await devicesInFlight;
+  return deviceEnumeration;
+}
+
+/** The device pin for one start: which index to restrict the backend to, where the pick came from, and the
+ *  list it was picked from — the engine can't report that last one once it is pinned to a single device. */
+async function resolveEngineDevice() {
+  const enumeration = await currentEnumeration();
+  // The pin is a Vulkan mechanism (GGML_VK_VISIBLE_DEVICES); no other backend has anything to filter.
+  if (enumeration.gpuBackend !== 'vulkan') return { gpuDeviceIndex: null, gpuDeviceOrigin: null, gpuDeviceOptions: null };
+  let nvidiaGpus = [];
+  try { nvidiaGpus = (await collectVram()).gpus; } catch { /* no nvidia-smi: the name-pattern fallback stands */ }
+  const pick = selectEngineDevice({ deviceNames: enumeration.gpuDeviceNames, nvidiaGpus, setting: engineOptions.gpuDevice });
+  return { gpuDeviceIndex: pick.index, gpuDeviceOrigin: pick.origin, gpuDeviceOptions: enumeration.gpuDeviceNames };
+}
+
+/** The engine's load options for a model: the renderer's settings plus the resolved device pin. */
+async function startOptions(modelPath) {
+  const { gpuDevice: _wanted, ...load } = engineOptions;
+  return { modelPath, ...load, ...(await resolveEngineDevice()) };
+}
 
 // Keep the (multi-GB) models beside the app so a portable build stays self-contained — burying them in
 // AppData orphans them for a portable exe with no uninstaller. Portable Windows builds run from a temp
@@ -113,6 +166,14 @@ function detectLmStudioDir() {
 
 // Push every engine status change to the renderer (it also polls once on mount via 'llm-status').
 llmEngine.onStatus((state) => {
+  // An unpinned engine enumerated every device there is — the picker's list, free of a probe.
+  if (state.gpuDeviceIndex == null && Array.isArray(state.gpuDeviceNames)) {
+    deviceEnumeration = { gpuBackend: state.gpuBackend, gpuDeviceNames: state.gpuDeviceNames };
+  }
+  // A pin that left the backend with nothing means the cached enumeration is behind the hardware (a card
+  // removed mid-session): an index past the end drops llama.cpp to the CPU rather than erroring. Forget the
+  // cache so the next load resolves against a fresh one.
+  if (state.gpuDeviceIndex != null && state.gpuBackend === 'cpu') deviceEnumeration = null;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('llm-status', state);
 });
 
@@ -197,11 +258,12 @@ ipcMain.handle('net-fetch', async (_event, { url, method = 'GET', headers = {}, 
 // separate helper. Mirrors the standalone helper's "no GPU" payload when nvidia-smi is missing/errors.
 ipcMain.handle('vram-stats', async () => {
   try {
-    // selfPid lets the renderer pick our own row out of the per-process list (the bundled engine runs in
-    // this process), to attribute Formamorph's VRAM share on the widget.
-    return { ...(await collectVram()), selfPid: process.pid };
+    // selfPid lets the renderer pick our own row out of the per-process list, to attribute Formamorph's VRAM
+    // share on the widget. Our VRAM is the bundled engine's, so it's the engine child's pid whenever one is
+    // running; with no engine there's nothing of ours in the list either way.
+    return { ...(await collectVram()), selfPid: llmEngine.enginePid() ?? process.pid };
   } catch {
-    return { error: 'nvidia-smi-not-found', gpus: [], processes: [], selfPid: process.pid };
+    return { error: 'nvidia-smi-not-found', gpus: [], processes: [], selfPid: llmEngine.enginePid() ?? process.pid };
   }
 });
 
@@ -214,32 +276,50 @@ ipcMain.handle('llm-load', async (_event, ref) => {
   const modelPath = resolveModelRef(ref, scanOptions());
   if (!modelPath) throw new Error('That model is no longer in a searched folder.');
   await llmEngine.stop();
-  return llmEngine.start({ modelPath, ...engineOptions });
+  return llmEngine.start(await startOptions(modelPath));
 });
 ipcMain.handle('llm-stop', () => llmEngine.stop());
 ipcMain.handle('llm-status', () => llmEngine.getState());
 ipcMain.handle('llm-models-dir', () => modelsDir());
 
-// Update engine load options (context size / GPU layers). Reloads the current model if one is loaded and
-// the options actually changed, so the new context/VRAM budget takes effect.
+// Update engine load options (context size / GPU layers / GPU device). Reloads the current model if one is
+// loaded and the options actually changed, so the new context/VRAM budget takes effect.
 ipcMain.handle('llm-set-options', async (_event, opts) => {
   const next = {
     contextSize: opts.contextSize,
     gpuLayers: opts.gpuLayers,
     flashAttention: opts.flashAttention === true,
     parallelRequests: typeof opts.parallelRequests === 'number' ? opts.parallelRequests : engineOptions.parallelRequests,
+    gpuDevice: typeof opts.gpuDevice === 'string' ? opts.gpuDevice : engineOptions.gpuDevice,
   };
   const changed = next.contextSize !== engineOptions.contextSize
     || next.gpuLayers !== engineOptions.gpuLayers
     || next.flashAttention !== engineOptions.flashAttention
-    || next.parallelRequests !== engineOptions.parallelRequests;
+    || next.parallelRequests !== engineOptions.parallelRequests
+    // A device change needs a fresh process either way: an initialized backend keeps its device set.
+    || next.gpuDevice !== engineOptions.gpuDevice;
   engineOptions = next;
   const loaded = llmEngine.getState().modelPath;
   if (changed && loaded) {
     await llmEngine.stop();
-    return llmEngine.start({ modelPath: loaded, ...engineOptions });
+    return llmEngine.start(await startOptions(loaded));
   }
   return llmEngine.getState();
+});
+
+// Every GPU the engine could be pinned to, for the device picker: { backend, devices, autoPick }. An empty
+// list with a 'cpu' backend is a machine with no GPU, which the picker says rather than offering nothing.
+// autoPick is the card Auto would use right now, so the dropdown can show it next to the word.
+ipcMain.handle('llm-list-devices', async () => {
+  const enumeration = await currentEnumeration();
+  let autoPick = null;
+  if (enumeration.gpuBackend === 'vulkan') {
+    let nvidiaGpus = [];
+    try { nvidiaGpus = (await collectVram()).gpus; } catch { /* the name-pattern fallback stands */ }
+    const pick = selectEngineDevice({ deviceNames: enumeration.gpuDeviceNames, nvidiaGpus });
+    if (pick.index != null) autoPick = enumeration.gpuDeviceNames[pick.index] ?? null;
+  }
+  return { backend: enumeration.gpuBackend, devices: enumeration.gpuDeviceNames, autoPick };
 });
 
 // Installed GGUF filenames across every searched folder (used where only names matter).
@@ -313,7 +393,7 @@ ipcMain.handle('llm-move-models', async (_event, { from, to }) => {
     const name = path.basename(loadedBefore);
     // Reload from the new folder if it made the trip, otherwise from where it stayed.
     const back = result.moved.includes(name) ? path.join(to, name) : loadedBefore;
-    if (fs.existsSync(back)) await llmEngine.start({ modelPath: back, ...engineOptions });
+    if (fs.existsSync(back)) await llmEngine.start(await startOptions(back));
   }
   return result;
 });
@@ -337,7 +417,7 @@ ipcMain.handle('llm-download', async (_event, { url, fileName, autoLoad = true }
   });
   if (autoLoad !== false) {
     await llmEngine.stop();
-    await llmEngine.start({ modelPath: finalPath, ...engineOptions });
+    await llmEngine.start(await startOptions(finalPath));
   }
   return { path: finalPath };
 });
@@ -396,5 +476,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Free the model + close the local server before the process exits.
-app.on('will-quit', () => { llmEngine.stop(); });
+// Opt-in responsiveness meter (`npm run desktop:perf`). A no-op without the flag, and its renderer half is
+// injected rather than bundled, so nothing reaches a normal build.
+const stopPerfMeter = perfMeter.start({
+  getWindow: () => mainWindow,
+  getEnginePid: () => llmEngine.enginePid(),
+});
+
+// Free the model + close the local server before the process exits. Kill rather than await a stop: quit
+// won't wait for the round trip, and ending the engine child is what releases the model either way.
+app.on('will-quit', () => { stopPerfMeter(); llmEngine.dispose(); });

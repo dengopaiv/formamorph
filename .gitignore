@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# The Cloudflare Pages upload root the deploy assembles locally.
+out
 coverage
 release
 docs-api
@@ -48,6 +50,9 @@ launcher/*.syso
 .claude/
 docs/agents/
 
+# Agent scratch space; work that outlives a task belongs in docs-internal/
+.scratch/
+
 # Real authored worlds used as extraction test corpora (large, and not ours to publish).
 testing/authored-worlds/
 
@@ -62,3 +67,8 @@ test-results/
 playwright-report/
 .playwright/
 _shots/
+
+# Android signing material never enters the repo; the keystore lives outside it (see scripts/android-signing-wizard.sh).
+*.p12
+*.jks
+*.keystore

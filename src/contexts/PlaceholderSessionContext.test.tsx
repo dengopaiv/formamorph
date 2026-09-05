@@ -103,6 +103,24 @@ describe('PlaceholderSessionProvider', () => {
     expect(TOWN.values).toContain(h.rolls().unique?.['cue-1']);
   });
 
+  it('rolls a Wildcard that appears only in a stat description or descriptor', () => {
+    // Both texts reach the player and the AI resolved, so a chip only they carry has to be primed too.
+    const w = world();
+    w.stats = [{
+      id: 's1', name: 'Favor', type: 'number', min: 0, max: 100, regen: 0,
+      description: `Standing in ${encodePlaceholderToken({ id: TOWN.id, mode: 'unique', placementId: 'meaning-1' })}`,
+      descriptors: [{
+        id: 'b1', threshold: 50,
+        description: `Shunned in ${encodePlaceholderToken({ id: TOWN.id, mode: 'unique', placementId: 'band-1' })}`,
+      }],
+    }];
+    const h = mount();
+    h.loadWorld(w);
+    h.begin();
+    expect(TOWN.values).toContain(h.rolls().unique?.['meaning-1']);
+    expect(TOWN.values).toContain(h.rolls().unique?.['band-1']);
+  });
+
   it('keeps its rolls when the session is reopened on the way into the game view', () => {
     const h = mount();
     h.loadWorld();
@@ -135,6 +153,35 @@ describe('PlaceholderSessionProvider', () => {
     expect(h.rolls().world?.[TOWN.id]).toBe('Marrow');
     // ...and the placement the save predates still gets one, rather than resolving to nothing all game.
     expect(HAIR.values).toContain(h.rolls().world?.[HAIR.id]);
+  });
+
+  it('rolls a Wildcard reached only through another placeholder’s value', () => {
+    // A value that is exactly one chip is a structural child, so the character's own roll is not the last
+    // one a render needs. A nested key priming misses is drawn again on every render.
+    const CHARACTER = { id: 'ph-char', name: 'Character', values: [tok(HAIR.id, 'v-hair')] };
+    const w = world([TOWN, HAIR, CHARACTER]);
+    w.entities[0].name = `${tok(CHARACTER.id, 'p3')} stranger`;
+    const h = mount();
+    h.loadWorld(w);
+    h.begin();
+    expect(HAIR.values).toContain(h.rolls().world?.[HAIR.id]);
+  });
+
+  it('rolls a Wildcard reached only through a trait’s pin', () => {
+    // A pin masks a roll with text of its own, and that text is chip-capable. A chip there is read whenever
+    // the trait is on, so its roll has to exist before the first render that shows it.
+    const w = world();
+    w.traits = [{
+      id: 't1', name: 'Charmed', statChanges: [],
+      placeholderPins: [{
+        placeholderId: TOWN.id,
+        value: `${encodePlaceholderToken({ id: HAIR.id, mode: 'unique', placementId: 'pin-1' })} Hollow`,
+      }],
+    }];
+    const h = mount();
+    h.loadWorld(w);
+    h.begin();
+    expect(HAIR.values).toContain(h.rolls().unique?.['pin-1']);
   });
 
   it('drops its rolls when the session ends, so the next entry draws again', () => {

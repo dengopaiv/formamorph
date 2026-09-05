@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import EventService from '@/services/EventService';
 import { COMMUNITY_ENABLED } from '@/lib/featureFlags';
+import { useDevEventSample } from '@/lib/useDevEventSample';
 import { useDevRoute } from '@/lib/devRouter';
 import type { ServerEvent } from '@/types';
 
@@ -10,12 +11,31 @@ export const EVENTS_POLL_MS = 5 * 60 * 1000;
 /** The closest together two focus-driven reads may land. Alt-tabbing is not news about an event. */
 export const EVENTS_FOCUS_FLOOR_MS = 60 * 1000;
 
+/** The mounted polls, so an admin's event write can nudge them without threading a callback down. */
+const pollers = new Set<() => void>();
+
+/**
+ * Re-read every mounted events poll now.
+ *
+ * Called after an admin creates, edits, cancels, or decides an event: the poll is minutes-slow by
+ * design, and an extended deadline that reopens a contest must reach the publish flow before then.
+ */
+export function refreshActiveEvents(): void {
+  pollers.forEach((poll) => poll());
+}
+
 interface ActiveEventsOptions {
   /**
    * Called after every successful poll. The server pushes nothing, so this is the app's one chance to
    * notice a mid-session broadcast — the events poll nudges the unread badge along with itself.
    */
   onPoll?: () => void;
+  /**
+   * Whether to poll at all. Defaults to true. A surface that only shows events while it is open passes
+   * its own open state, so a mounted-but-hidden consumer costs no requests — this is the app's one
+   * polling interval, and a second permanent one would double it.
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -27,7 +47,7 @@ interface ActiveEventsOptions {
  * failed read is logged and swallowed. A first read that fails leaves the list empty, so every surface
  * built on it simply doesn't appear.
  */
-export function useActiveEvents({ onPoll }: ActiveEventsOptions = {}): ServerEvent[] {
+export function useActiveEvents({ onPoll, enabled = true }: ActiveEventsOptions = {}): ServerEvent[] {
   const [events, setEvents] = useState<ServerEvent[]>([]);
   const devRoute = useDevRoute();
   const devFixture = import.meta.env.DEV && devRoute?.modal === 'eventAck';
@@ -56,9 +76,10 @@ export function useActiveEvents({ onPoll }: ActiveEventsOptions = {}): ServerEve
   }, []);
 
   useEffect(() => {
-    if (!COMMUNITY_ENABLED || devFixture) return;
+    if (!COMMUNITY_ENABLED || devFixture || !enabled) return;
 
     void refresh();
+    pollers.add(refresh);
     const timer = window.setInterval(() => { void refresh(); }, EVENTS_POLL_MS);
     const onFocus = () => {
       if (Date.now() - lastReadAt.current < EVENTS_FOCUS_FLOOR_MS) return;
@@ -68,20 +89,22 @@ export function useActiveEvents({ onPoll }: ActiveEventsOptions = {}): ServerEve
 
     return () => {
       readId.current += 1;
+      pollers.delete(refresh);
       window.clearInterval(timer);
       window.removeEventListener('focus', onFocus);
     };
-  }, [refresh, devFixture]);
+  }, [refresh, devFixture, enabled]);
 
   // DEV: `#dev?modal=eventAck` serves a canned event instead of the network, so the banner and the
-  // acknowledge modal are checkable offline and whether or not one is really running. The import is
-  // DEV-gated, so the sample never ships (the changelog sample's precedent).
-  useEffect(() => {
-    if (!devFixture) return;
-    void import('@/lib/devEventSample').then(({ devEventSample }) => {
-      setEvents([devEventSample(devRoute?.tab === 'end' ? 'end' : 'start')]);
-    });
-  }, [devFixture, devRoute?.tab]);
+  // acknowledge modal are checkable offline and whether or not one is really running.
+  const samples = useDevEventSample(devFixture);
+  const phase = devRoute?.tab === 'end' ? 'end' : 'start';
+  // Memoized because the sample's id is fresh per call: built in the render body it would be a new event
+  // every frame, and an acknowledgment keyed by id would never stick.
+  const devEvents = useMemo(
+    () => (samples ? [samples.devEventSample(phase)] : []),
+    [samples, phase],
+  );
 
-  return events;
+  return devFixture ? devEvents : events;
 }

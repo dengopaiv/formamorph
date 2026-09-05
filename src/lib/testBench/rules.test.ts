@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import type { Dictionary, DictionaryEntry, Entity, GameLocation, Stat, Trait, WorldOverview } from '@/types';
+import type {
+  Dictionary, DictionaryEntry, Entity, GameLocation, Placeholder, PlaceholderPin, Stat, Trait, WorldOverview,
+} from '@/types';
 import { estimateTokens } from '@/lib/memoryUtils';
+import { IMAGE_CAPS } from '@/lib/imageOptim';
+import { phValueId, phValues } from '@/test/placeholderValues';
 import {
   applyRuleFix, runRules, groupFindings, isAdvancedRule, isRuleFixable, selectMatchingFindings,
   MATCHING_RULES, RULES, STAT_CODE_EXECUTION, type RuleWorld,
@@ -161,19 +165,20 @@ describe('alias hygiene rules', () => {
     ]))).toEqual([]);
   });
 
-  it('reads placeholder chips as the text they stand for', () => {
+  it('compares placeholder chips as the text they stand for, and names them as the list does', () => {
     // A name written as a chip has to be compared as its resolved value, or an authored collision hides.
+    // The finding then names the entity the way the editor's list labels it: by the chip, not by a value.
     const chip = '{{ph:p1:world:Visitor}}';
     const findings = runRules({
       ...world([
         { id: 'e1', name: chip },
         { id: 'e2', name: 'Maren', aliases: ['Maren'] },
       ]),
-      placeholders: [{ id: 'p1', name: 'Visitor', values: ['Maren'] }],
+      placeholders: [{ id: 'p1', name: 'Visitor', values: phValues(['Maren']) }],
     });
     const collision = findings.filter((f) => f.ruleId === 'entity-match-collision');
     expect(collision).toHaveLength(1);
-    expect(collision[0].items.map((i) => i.name)).toEqual(['Maren', 'Maren']);
+    expect(collision[0].items.map((i) => i.name)).toEqual(['Visitor', 'Maren']);
   });
 });
 
@@ -245,30 +250,56 @@ describe('reference-integrity rules', () => {
     expect(runRules(toggled('s1'))).toEqual([]);
   });
 
-  it('flags a pin to a placeholder that doesn’t exist', () => {
+  it('flags a pin to a placeholder that doesn’t exist, from any of the four sources, opening on the source', () => {
+    const hue: Placeholder = { id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) };
+    const gone = { placeholderId: 'gone', value: 'red' };
     const found = only(base({
-      placeholders: [{ id: 'p1', name: 'Hue', values: ['red', 'blue'] }],
-      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'gone', value: 'red' }] })],
-    }), 'trait-pin-invalid');
-    expect(found).toHaveLength(1);
-    expect(found[0].severity).toBe('error');
-    expect(found[0].message).toContain('doesn’t exist');
+      placeholders: [hue, { id: 'p2', name: 'Region', values: [{ id: 'v-n', text: 'Northern', pins: [gone] }] }],
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [gone] })],
+      locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, placeholderPins: [gone] }],
+      stats: [stat({ id: 's1', name: 'Hunger', descriptors: [{ id: 'd1', threshold: 20, description: 'Starving', placeholderPins: [gone] }] })],
+    }), 'placeholder-pin-broken');
+    expect(found.map((f) => f.message)).toEqual([
+      '“Hunger ≤ 20” pins a placeholder that doesn’t exist',
+      '“Location: Harbor Steps” pins a placeholder that doesn’t exist',
+      '“Trait: Dyed” pins a placeholder that doesn’t exist',
+      '“Region = Northern” pins a placeholder that doesn’t exist',
+    ]);
+    expect(found.every((f) => f.severity === 'error' && f.section === 'placeholders')).toBe(true);
+    expect(found.map((f) => f.items[0])).toEqual([
+      { id: 's1', name: 'Hunger ≤ 20', section: 'stats' },
+      { id: 'harbor', name: 'Harbor Steps', section: 'locations' },
+      { id: 't1', name: 'Dyed', section: 'traits' },
+      { id: 'p2', name: 'Region = Northern', section: 'placeholders' },
+    ]);
+  });
+
+  it('quiets once the pinned placeholder exists, and never counts an empty pin row', () => {
+    const pinned = (placeholderId: string) => base({
+      placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }],
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId, value: 'red' }] })],
+      locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, placeholderPins: [{ placeholderId, value: 'blue' }] }],
+    });
+    expect(only(pinned('gone'), 'placeholder-pin-broken')).toHaveLength(2);
+    expect(only(pinned('p1'), 'placeholder-pin-broken')).toEqual([]);
+    // A fresh Add Placeholder Pin row is an edit in progress, not a pin to a deleted placeholder.
+    expect(only(pinned(''), 'placeholder-pin-broken')).toEqual([]);
   });
 
   // Pinning off-list is the feature, not a fault: a trait may force a value nobody else rolls.
   it('says nothing about a pin to a value the placeholder doesn’t offer', () => {
     const pinned = (value: string) => base({
-      placeholders: [{ id: 'p1', name: 'Hue', values: ['red', 'blue'] }],
+      placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }],
       traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'p1', value }] })],
     });
-    expect(runRules(pinned('green'))).toEqual([]);
-    expect(runRules(pinned('red'))).toEqual([]);
+    expect(runRules(pinned('green')).map((f) => f.ruleId)).toEqual(['placeholder-pinned-unused']);
+    expect(runRules(pinned('red')).map((f) => f.ruleId)).toEqual(['placeholder-pinned-unused']);
   });
 
   it('flags a chip pointing at a placeholder that doesn’t exist, opening on the owner’s own tab', () => {
     const chipped = (id: string) => ({
       ...world([{ id: 'e1', name: 'Maren', aiDescription: `A {{ph:${id}:world:pl1}} of the fen.` }]),
-      placeholders: [{ id: 'p1', name: 'Visitor', values: ['Maren'] }],
+      placeholders: [{ id: 'p1', name: 'Visitor', values: phValues(['Maren']) }],
     });
     const found = only(chipped('gone'), 'chip-unknown-placeholder');
     expect(found).toHaveLength(1);
@@ -286,8 +317,8 @@ describe('reference-integrity rules', () => {
         trait({ id: 't2', name: 'Woven', placeholderPins: [{ placeholderId: 'lost', value: 'blue' }] }),
       ],
     })));
-    const pins = groups.find((g) => g.ruleId === 'trait-pin-invalid')!;
-    expect(pins.headline).toContain('2 trait placeholder pins');
+    const pins = groups.find((g) => g.ruleId === 'placeholder-pin-broken')!;
+    expect(pins.headline).toContain('2 placeholder pins');
     expect(pins.items.map((i) => i.id)).toEqual(['t1', 't2']);
   });
 
@@ -307,32 +338,25 @@ describe('reference-integrity rules', () => {
     expect(found[0].items[0]).toMatchObject({ id: 'overview', section: 'overview' });
   });
 
-  it('flags a chip in a stat description even when its placeholder exists — nothing resolves it there', () => {
-    const described = (description: string) => ({
-      // The placeholder earns its place in a field that does resolve, so removing the stat's chip leaves a
-      // world with nothing else wrong with it.
-      ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
-      placeholders: [{ id: 'p1', name: 'Vice', values: ['ale'] }],
-      stats: [stat({ id: 's1', name: 'Vigor', description })],
+  it('reads a chip in a stat description or descriptor as a placement, since both fields resolve', () => {
+    const w = base({
+      placeholders: [{ id: 'p1', name: 'Vice', values: phValues(['ale']) }],
+      // Threshold at Max so this fixture is banding-clean — the chips are the only thing to read.
+      stats: [stat({
+        id: 's1', name: 'Vigor', description: 'Craving for {{ph:p1:world:pl1}}.',
+        descriptors: [{ id: 1, threshold: 100, description: 'Weak from {{ph:p1:world:pl2}}.' }],
+      })],
     });
-    const found = only(described('Craving for {{ph:p1:world:pl1}}.'), 'chip-never-scanned');
-    expect(found).toHaveLength(1);
-    expect(found[0].severity).toBe('error');
-    expect(found[0].items.map((i) => i.id)).toEqual(['s1']);
-    expect(runRules(described('Craving for ale.'))).toEqual([]);
+    expect(runRules(w)).toEqual([]);
   });
 
-  it('flags a chip in a stat descriptor', () => {
-    const described = (description: string) => ({
-      ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
-      placeholders: [{ id: 'p1', name: 'Vice', values: ['ale'] }],
-      // Threshold at Max so this fixture is banding-clean — the defect under test is the chip alone.
-      stats: [stat({ id: 's1', name: 'Vigor', descriptors: [{ id: 1, threshold: 100, description }] })],
+  it('flags a chip in stat text that points at a placeholder that does not exist', () => {
+    const w = base({
+      stats: [stat({ id: 's1', name: 'Vigor', descriptors: [{ id: 1, threshold: 100, description: 'Weak from {{ph:gone:world:pl1}}.' }] })],
     });
-    const found = only(described('Weak from {{ph:p1:world:pl1}}.'), 'chip-never-scanned');
+    const found = only(w, 'chip-unknown-placeholder');
     expect(found).toHaveLength(1);
-    expect(found[0].message).toContain('descriptors');
-    expect(runRules(described('Weak from ale.'))).toEqual([]);
+    expect(found[0].items.map((i) => i.id)).toEqual(['s1']);
   });
 
   it('flags stat code looking up a stat name that doesn’t exist, in either comparison direction', () => {
@@ -832,36 +856,114 @@ describe('stat sanity rules', () => {
 
 describe('the unused-placeholder rule', () => {
   it('flags a placeholder nothing in the world reaches for', () => {
-    const found = only(base({ placeholders: [{ id: 'p1', name: 'Hue', values: ['red', 'blue'] }] }), 'placeholder-unused');
+    const found = only(base({ placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }] }), 'placeholder-unused');
     expect(found).toHaveLength(1);
     expect(found[0].severity).toBe('info');
     expect(found[0].items.map((i) => i.id)).toEqual(['p1']);
     expect(found[0].message).toContain('Hue');
   });
 
-  it('counts a trait pin as a use', () => {
-    expect(runRules(base({
-      placeholders: [{ id: 'p1', name: 'Hue', values: ['red', 'blue'] }],
+  it('routes a pinned but unplaced placeholder to the pinned rule, never this one', () => {
+    expect(only(base({
+      placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }],
       traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'p1', value: 'red' }] })],
-    }))).toEqual([]);
+    }), 'placeholder-unused')).toEqual([]);
   });
 
-  it('counts a chip parked where it never resolves as a use — the chip is the problem, not the placeholder', () => {
-    // A chip in a stat description is its own error; reading it as "no mention" would offer to delete the
-    // placeholder underneath it and turn that error into a broken reference.
+  it('counts a chip in a stat description as a use', () => {
     const w = base({
-      placeholders: [{ id: 'p1', name: 'Vice', values: ['ale'] }],
+      placeholders: [{ id: 'p1', name: 'Vice', values: phValues(['ale']) }],
       stats: [stat({ id: 's1', name: 'Vigor', description: 'Craving for {{ph:p1:world:pl1}}.' })],
     });
     expect(only(w, 'placeholder-unused')).toEqual([]);
-    expect(only(w, 'chip-never-scanned')).toHaveLength(1);
   });
 
   it('counts a chip in the world blurb as a use', () => {
     expect(only(base({
       worldOverview: { name: 'Sedge Landing', description: 'A fen of {{ph:p1:world:pl1}}.', systemPrompt: '' } as WorldOverview,
-      placeholders: [{ id: 'p1', name: 'Weather', values: ['rain'] }],
+      placeholders: [{ id: 'p1', name: 'Weather', values: phValues(['rain']) }],
     }), 'placeholder-unused')).toEqual([]);
+  });
+});
+
+describe('the pinned-but-unplaced rule', () => {
+  const pinnedOnly = base({
+    placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }],
+    traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'p1', value: 'red' }] })],
+  });
+
+  it('flags a placeholder a trait pins but no text places, naming both sides', () => {
+    const found = only(pinnedOnly, 'placeholder-pinned-unused');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    // The placeholder is the defect; each pinning trait rides along as its own way in, labeled with
+    // what it pins so the chip reads on its own.
+    expect(found[0].items.map((i) => [i.id, i.section])).toEqual([['p1', undefined], ['t1', 'traits']]);
+    expect(found[0].items[1].name).toBe('Dyed (pins “Hue”)');
+    expect(found[0].message).toContain('Hue');
+    expect(found[0].message).toContain('Dyed');
+  });
+
+  it('labels a trait with every flagged placeholder it pins, identically in each finding', () => {
+    // The grouped row dedups items by id, keeping the first occurrence — so the one chip that survives
+    // must already name both placeholders, or the second finding loses its trait entirely.
+    const found = only(base({
+      placeholders: [
+        { id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) },
+        { id: 'p2', name: 'Tint', values: phValues(['warm', 'cool']) },
+      ],
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [
+        { placeholderId: 'p1', value: 'red' }, { placeholderId: 'p2', value: 'warm' },
+      ] })],
+    }), 'placeholder-pinned-unused');
+    expect(found).toHaveLength(2);
+    expect(found[0].items[1].name).toBe('Dyed (pins “Hue” and “Tint”)');
+    expect(found[1].items[1].name).toBe(found[0].items[1].name);
+  });
+
+  it('keeps a pin to a placed placeholder out of the label — that pin is not the problem', () => {
+    const found = only(base({
+      worldOverview: { name: 'Sedge Landing', description: '', systemPrompt: 'A fen of {{ph:p2:world:pl1}}.' } as WorldOverview,
+      placeholders: [
+        { id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) },
+        { id: 'p2', name: 'Tint', values: phValues(['warm', 'cool']) },
+      ],
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [
+        { placeholderId: 'p1', value: 'red' }, { placeholderId: 'p2', value: 'warm' },
+      ] })],
+    }), 'placeholder-pinned-unused');
+    expect(found).toHaveLength(1);
+    expect(found[0].items[1].name).toBe('Dyed (pins “Hue”)');
+  });
+
+  it('says nothing once the pinned placeholder is placed somewhere', () => {
+    expect(runRules({
+      ...pinnedOnly,
+      worldOverview: { ...pinnedOnly.worldOverview, readme: 'A fen of {{ph:p1:world:pl1}}.' } as WorldOverview,
+    })).toEqual([]);
+  });
+
+  it('counts an empty-value pin as pinned — intent, not effect, is what the rule reads', () => {
+    const w = base({
+      placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }],
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'p1', value: '' }] })],
+    });
+    expect(only(w, 'placeholder-pinned-unused')).toHaveLength(1);
+    // And never the plain rule — its delete-fix would orphan the pin.
+    expect(only(w, 'placeholder-unused')).toEqual([]);
+  });
+
+  it('leaves a pin naming an unknown placeholder to the invalid-pin rule', () => {
+    const w = base({
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'gone', value: 'red' }] })],
+    });
+    expect(only(w, 'placeholder-pinned-unused')).toEqual([]);
+    expect(only(w, 'placeholder-pin-broken')).toHaveLength(1);
+  });
+
+  it('offers no fix — only the author knows where the chip belongs', () => {
+    expect(isRuleFixable('placeholder-pinned-unused')).toBe(false);
+    expect(applyRuleFix(pinnedOnly, 'placeholder-pinned-unused')).toBe(pinnedOnly);
   });
 });
 
@@ -975,7 +1077,7 @@ describe('entity completeness rules', () => {
   it('flags an entity name that doubles as a Wildcard value, plural tolerance included', () => {
     const pooled = (values: string[]) => ({
       ...world([{ id: 'e1', name: 'Gull', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
-      placeholders: [{ id: 'p1', name: 'Coin Bird', values }],
+      placeholders: [{ id: 'p1', name: 'Coin Bird', values: phValues(values) }],
     });
     const found = only(pooled(['gulls', 'wren']), 'entity-name-in-wildcard-pool');
     expect(found).toHaveLength(1);
@@ -988,7 +1090,7 @@ describe('entity completeness rules', () => {
   it('leaves a Variable alone — one fixed value is not a roll that can impersonate anyone', () => {
     const w = {
       ...world([{ id: 'e1', name: 'Gull', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
-      placeholders: [{ id: 'p1', name: 'Coin Bird', values: ['gull'] }],
+      placeholders: [{ id: 'p1', name: 'Coin Bird', values: phValues(['gull']) }],
     };
     expect(only(w, 'entity-name-in-wildcard-pool')).toEqual([]);
   });
@@ -1155,7 +1257,7 @@ describe('entity completeness rules', () => {
     const chips = (count: number) => '{{ph:p1:world:pl1}}'.repeat(count);
     const chipWorld = (aiDescription: string, values: string[], over: Partial<Entity> = {}): RuleWorld => ({
       ...world([{ id: 'e1', name: 'Maren', aiDescription, ...over }]),
-      placeholders: [{ id: 'p1', name: 'Coin Bird', values }],
+      placeholders: [{ id: 'p1', name: 'Coin Bird', values: phValues(values) }],
     });
     // 480 characters of prose and ten chips: 670 raw, so a raw-length estimate calls it long — and 520 once
     // the chips resolve to a bird, which is what the prompt actually pays for.
@@ -1242,25 +1344,265 @@ describe('trait group rules', () => {
   });
 });
 
+describe('placeholder pin rules', () => {
+  const hue: Placeholder = { id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) };
+  // Hue is placed, so the unplaced rules stay quiet and the pin rules are the only ones speaking about it.
+  const placed = world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]);
+  /** The same pin on all four sources. */
+  const everywhere = (pin: PlaceholderPin): RuleWorld => ({
+    ...placed,
+    placeholders: [hue, { id: 'p2', name: 'Region', values: [{ id: 'v-n', text: 'Northern', pins: [pin] }] }],
+    traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [pin] })],
+    locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, placeholderPins: [pin] }],
+    stats: [stat({ id: 's1', name: 'Hunger', descriptors: [{ id: 'd1', threshold: 20, description: 'Starving', placeholderPins: [pin] }] })],
+  });
+
+  it('flags a pin whose value id names a value the placeholder no longer has, from any source', () => {
+    const found = only(everywhere({ placeholderId: 'p1', value: 'crimson', valueId: 'v:crimson' }), 'placeholder-pin-unknown-value');
+    expect(found.map((f) => f.message)).toEqual([
+      '“Hunger ≤ 20” pins “Hue” to a value it no longer has — “crimson” is forced as written',
+      '“Location: Harbor Steps” pins “Hue” to a value it no longer has — “crimson” is forced as written',
+      '“Trait: Dyed” pins “Hue” to a value it no longer has — “crimson” is forced as written',
+      '“Region = Northern” pins “Hue” to a value it no longer has — “crimson” is forced as written',
+    ]);
+    expect(found[0].severity).toBe('warning');
+    // The source first, so Open lands on the row to fix; the placeholder beside it, since the value went there.
+    expect(found[0].items.map((i) => i.id)).toEqual(['s1', 'p1']);
+  });
+
+  it('says what a dead id with no text behind it does: nothing', () => {
+    const [found] = only(everywhere({ placeholderId: 'p1', value: '', valueId: 'v:crimson' }), 'placeholder-pin-unknown-value');
+    expect(found.message).toBe('“Hunger ≤ 20” pins “Hue” to a value it no longer has — the pin applies nothing');
+  });
+
+  it('quiets for a live value id whatever the stored text says, and for a plain off-list text', () => {
+    // A live id is what the pin follows; its text is a stale spelling play never reads.
+    expect(only(everywhere({ placeholderId: 'p1', value: 'red', valueId: 'v:blue' }), 'placeholder-pin-unknown-value')).toEqual([]);
+    expect(only(everywhere({ placeholderId: 'p1', value: 'crimson' }), 'placeholder-pin-unknown-value')).toEqual([]);
+  });
+
+  it('leaves a pin to a deleted placeholder to the broken-pin rule', () => {
+    const w = everywhere({ placeholderId: 'gone', value: 'red', valueId: 'v:red' });
+    expect(only(w, 'placeholder-pin-unknown-value')).toEqual([]);
+    expect(only(w, 'placeholder-pin-broken')).toHaveLength(4);
+  });
+
+  describe('conflicts across sources', () => {
+    const pinTo = (value: string): PlaceholderPin => ({ placeholderId: 'p1', value });
+    const origin = { id: 'g1', name: 'Origin', parentId: null, exclusive: true };
+    const contest = (over: Partial<RuleWorld>): RuleWorld => ({ ...placed, placeholders: [hue], ...over });
+
+    it('names every source that can pin the placeholder at once, and the one precedence picks', () => {
+      const found = only(contest({
+        traits: [trait({ id: 't1', name: 'Sworn', placeholderPins: [pinTo('red')] })],
+        locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, placeholderPins: [pinTo('blue')] }],
+      }), 'placeholder-pin-conflict');
+      expect(found).toHaveLength(1);
+      expect(found[0].severity).toBe('info');
+      expect(found[0].message).toBe(
+        '“Hue” is pinned by “Location: Harbor Steps” and “Trait: Sworn” — “Location: Harbor Steps” wins whenever it is in force',
+      );
+      expect(found[0].items).toEqual([
+        { id: 'p1', name: 'Hue' },
+        { id: 'harbor', name: 'Harbor Steps', section: 'locations' },
+        { id: 't1', name: 'Sworn', section: 'traits' },
+      ]);
+    });
+
+    it('picks the later trait among two that can both be on', () => {
+      const [found] = only(contest({
+        traits: [
+          trait({ id: 't1', name: 'Sworn', placeholderPins: [pinTo('red')] }),
+          trait({ id: 't2', name: 'Woven', placeholderPins: [pinTo('blue')] }),
+        ],
+      }), 'placeholder-pin-conflict');
+      expect(found.message).toContain('“Trait: Woven” wins whenever it is in force');
+    });
+
+    it('stays quiet for pins that can never be in force together: exclusive siblings, bands of one stat', () => {
+      const siblings = contest({
+        traitGroups: [origin],
+        traits: [
+          trait({ id: 't1', name: 'Sworn', groupId: 'g1', placeholderPins: [pinTo('red')] }),
+          trait({ id: 't2', name: 'Woven', groupId: 'g1', placeholderPins: [pinTo('blue')] }),
+        ],
+      });
+      expect(only(siblings, 'placeholder-pin-conflict')).toEqual([]);
+      const bands = contest({
+        stats: [stat({ id: 's1', name: 'Hunger', descriptors: [
+          { id: 'd1', threshold: 20, description: 'Starving', placeholderPins: [pinTo('red')] },
+          { id: 'd2', threshold: 60, description: 'Peckish', placeholderPins: [pinTo('blue')] },
+        ] })],
+      });
+      expect(only(bands, 'placeholder-pin-conflict')).toEqual([]);
+    });
+
+    it('stays quiet when every competing pin forces the same value', () => {
+      expect(only(contest({
+        traits: [trait({ id: 't1', name: 'Sworn', placeholderPins: [pinTo('red')] })],
+        locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, placeholderPins: [pinTo('red')] }],
+      }), 'placeholder-pin-conflict')).toEqual([]);
+    });
+
+    it('names both siblings as winners when either would beat the only rival', () => {
+      const [found] = only(contest({
+        traitGroups: [origin],
+        traits: [
+          trait({ id: 't1', name: 'Sworn', groupId: 'g1', placeholderPins: [pinTo('red')] }),
+          trait({ id: 't2', name: 'Woven', groupId: 'g1', placeholderPins: [pinTo('blue')] }),
+        ],
+        placeholders: [hue, { id: 'p2', name: 'Region', values: [{ id: 'v-n', text: 'Northern', pins: [pinTo('blue')] }] }],
+      }), 'placeholder-pin-conflict');
+      expect(found.message).toBe(
+        '“Hue” is pinned by “Trait: Sworn”, “Trait: Woven” and “Region = Northern” — “Trait: Sworn” or “Trait: Woven” wins, whichever is in force',
+      );
+    });
+  });
+
+  describe('value pins that never settle', () => {
+    /** A placeholder whose values each pin something: `[text, pins]` per value. */
+    const pinner = (id: string, name: string, values: Array<[string, PlaceholderPin[]]>): Placeholder => ({
+      id, name, values: values.map(([text, pins]) => ({ id: `v:${text}`, text, ...(pins.length ? { pins } : {}) })),
+    });
+    const at = (placeholderId: string, value: string): PlaceholderPin => ({ placeholderId, value });
+    const looping = (): RuleWorld => ({
+      ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Of {{ph:a:world:pl1}} and {{ph:b:world:pl2}}.' }]),
+      placeholders: [
+        // a1 → b2 → a2 → b1 → a1: every step flips the other, so no state holds.
+        pinner('a', 'Alpha', [['a1', [at('b', 'b2')]], ['a2', [at('b', 'b1')]]]),
+        pinner('b', 'Beta', [['b1', [at('a', 'a1')]], ['b2', [at('a', 'a2')]]]),
+      ],
+    });
+
+    it('reports the loop once, with the rolls that start it and the states it flips between', () => {
+      const found = only(looping(), 'placeholder-pin-cycle');
+      expect(found).toHaveLength(1);
+      expect(found[0].severity).toBe('error');
+      expect(found[0].message).toBe(
+        '“Alpha” and “Beta” pin each other in a loop: rolled Alpha = a1, Beta = b1, they flip to Alpha = a2, Beta = b2, then Alpha = a1, Beta = b1, and round again',
+      );
+      expect(found[0].items.map((i) => i.id)).toEqual(['a', 'b']);
+    });
+
+    it('stays quiet for a chain that settles and for two values that merely exclude each other', () => {
+      const settles = { ...looping(), placeholders: [
+        pinner('a', 'Alpha', [['a1', [at('b', 'b2')]], ['a2', []]]),
+        pinner('b', 'Beta', [['b1', []], ['b2', [at('a', 'a1')]]]),
+      ] };
+      expect(only(settles, 'placeholder-pin-cycle')).toEqual([]);
+      const excludes = { ...looping(), placeholders: [
+        pinner('a', 'Alpha', [['a1', [at('b', 'b2')]], ['a2', []]]),
+        pinner('b', 'Beta', [['b1', [at('a', 'a2')]], ['b2', []]]),
+      ] };
+      expect(only(excludes, 'placeholder-pin-cycle')).toEqual([]);
+    });
+
+    it('finds a loop that only some rolls start', () => {
+      // a0 with b0 pins nothing and settles at once; a0 with b1 is pulled into the a1 ↔ b2, a2 ↔ b1 loop.
+      const partial = { ...looping(), placeholders: [
+        pinner('a', 'Alpha', [['a0', []], ['a1', [at('b', 'b2')]], ['a2', [at('b', 'b1')]]]),
+        pinner('b', 'Beta', [['b0', []], ['b1', [at('a', 'a1')]], ['b2', [at('a', 'a2')]]]),
+      ] };
+      const found = only(partial, 'placeholder-pin-cycle');
+      expect(found).toHaveLength(1);
+      expect(found[0].message).toContain('rolled Alpha = a0, Beta = b1');
+    });
+  });
+
+  describe('a value pinning its own placeholder', () => {
+    /** Region's `Northern` pins whatever `pins` says; Region is placed, so no unplaced rule speaks about it. */
+    const region = (pins: PlaceholderPin[]): RuleWorld => ({
+      ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Of {{ph:p1:world:pl1}} and {{ph:p2:world:pl2}}.' }]),
+      placeholders: [hue, { id: 'p2', name: 'Region', values: [{ id: 'v-n', text: 'Northern', pins }] }],
+    });
+
+    it('names the value and the placeholder it belongs to', () => {
+      const found = only(region([{ placeholderId: 'p2', value: 'Northern' }]), 'placeholder-pin-self');
+      expect(found).toHaveLength(1);
+      expect(found[0].severity).toBe('error');
+      expect(found[0].message).toBe(
+        '“Region = Northern” pins “Region”, the placeholder that value belongs to — a value cannot hold its own placeholder, so the pin applies nothing',
+      );
+      expect(found[0].items.map((i) => i.id)).toEqual(['p2']);
+    });
+
+    it('stays quiet for a value pinning another placeholder, and for a two-step loop the cycle rule owns', () => {
+      expect(only(region([{ placeholderId: 'p1', value: 'red' }]), 'placeholder-pin-self')).toEqual([]);
+      const twoStep: RuleWorld = {
+        ...region([{ placeholderId: 'p1', value: 'red' }]),
+        placeholders: [
+          { id: 'p1', name: 'Hue', values: [{ id: 'v-r', text: 'red', pins: [{ placeholderId: 'p2', value: 'Northern' }] }] },
+          { id: 'p2', name: 'Region', values: [{ id: 'v-n', text: 'Northern', pins: [{ placeholderId: 'p1', value: 'red' }] }] },
+        ],
+      };
+      expect(only(twoStep, 'placeholder-pin-self')).toEqual([]);
+    });
+
+    it('fixes by removing the self-pin and leaving every other pin on the value', () => {
+      const w = region([{ placeholderId: 'p2', value: 'Northern' }, { placeholderId: 'p1', value: 'red' }]);
+      const fixed = applyRuleFix(w, 'placeholder-pin-self');
+      expect(fixed.placeholders?.[1].values[0].pins).toEqual([{ placeholderId: 'p1', value: 'red' }]);
+      expect(only(fixed, 'placeholder-pin-self')).toEqual([]);
+      // A value left with no pin at all stores none.
+      const bare = applyRuleFix(region([{ placeholderId: 'p2', value: 'Northern' }]), 'placeholder-pin-self');
+      expect(bare.placeholders?.[1].values[0]).not.toHaveProperty('pins');
+      // Hue carried no self-pin, so its record is the one the author wrote.
+      expect(bare.placeholders?.[0]).toBe(w.placeholders?.[0]);
+    });
+  });
+
+  it('re-links a dead id to the value spelled the same, else drops the id and keeps the text, on every source', () => {
+    const relink = { placeholderId: 'p1', value: 'red', valueId: 'v:gone' };
+    const orphan = { placeholderId: 'p1', value: 'crimson', valueId: 'v:gone-too' };
+    const w: RuleWorld = {
+      ...everywhere(relink),
+      traits: [trait({ id: 't1', name: 'Dyed', placeholderPins: [relink, orphan] })],
+    };
+    const fixed = applyRuleFix(w, 'placeholder-pin-unknown-value');
+    expect(fixed.traits[0].placeholderPins).toEqual([
+      { placeholderId: 'p1', value: 'red', valueId: 'v:red' }, { placeholderId: 'p1', value: 'crimson' },
+    ]);
+    expect(fixed.locations[0].placeholderPins).toEqual([{ placeholderId: 'p1', value: 'red', valueId: 'v:red' }]);
+    expect(fixed.stats[0].descriptors[0].placeholderPins).toEqual([{ placeholderId: 'p1', value: 'red', valueId: 'v:red' }]);
+    expect(fixed.placeholders?.[1].values[0].pins).toEqual([{ placeholderId: 'p1', value: 'red', valueId: 'v:red' }]);
+    // Hue itself carried no dead pin, so its record is the one the author wrote.
+    expect(fixed.placeholders?.[0]).toBe(w.placeholders?.[0]);
+    expect(only(fixed, 'placeholder-pin-unknown-value')).toEqual([]);
+  });
+});
+
 describe('placeholder pool rules', () => {
   // No rule counts Unique chips against the pool size: Unique mode is independent rolls per placement,
   // not sampling without replacement, so repeats are normal at any chip count — never a defect.
+  // Weights key by value id, so a fixture writes them against the ids `phValues` minted; a key naming no
+  // value is what a deleted value leaves behind.
   const weighted = (weights: Record<string, number>) => ({
     ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
-    placeholders: [{ id: 'p1', name: 'Vice', values: ['ale', 'dice'], weights }],
+    placeholders: [{
+      id: 'p1',
+      name: 'Vice',
+      values: phValues(['ale', 'dice']),
+      weights: Object.fromEntries(Object.entries(weights).map(([text, w]) => [phValueId(text), w])),
+    }],
   });
 
-  it('flags a weight naming a value the pool doesn’t contain', () => {
+  it('flags a weight left behind by a value the pool no longer has', () => {
     const found = only(weighted({ ale: 2, grog: 3 }), 'placeholder-weight-unknown-value');
     expect(found).toHaveLength(1);
     expect(found[0].severity).toBe('warning');
-    expect(found[0].message).toContain('grog');
+    // A dead key is a value id, so the finding counts them rather than naming one.
+    expect(found[0].message).toBe('“Vice” weights a value it no longer has — that weight applies to nothing');
     expect(runRules(weighted({ ale: 2, dice: 1 }))).toEqual([]);
+  });
+
+  it('counts the dead weights when there is more than one', () => {
+    const found = only(weighted({ grog: 3, mead: 1 }), 'placeholder-weight-unknown-value');
+    expect(found[0].message).toBe('“Vice” weights 2 values it no longer has — those weights apply to nothing');
   });
 
   it('drops only the dead weights as its fix, keeping the live ones', () => {
     const fixed = applyRuleFix(weighted({ ale: 2, grog: 3 }), 'placeholder-weight-unknown-value');
-    expect(fixed.placeholders?.[0].weights).toEqual({ ale: 2 });
+    expect(fixed.placeholders?.[0].weights).toEqual({ [phValueId('ale')]: 2 });
   });
 
   it('removes an emptied weight map entirely — absent already means a uniform draw', () => {
@@ -1279,6 +1621,447 @@ describe('placeholder pool rules', () => {
     // Zeroing everything still draws uniformly (weightedPick), so the Wildcard varies after all.
     expect(only(weighted({ ale: 0, dice: 0 }), 'wildcard-single-value')).toEqual([]);
     expect(runRules(weighted({ ale: 2, dice: 1 }))).toEqual([]);
+  });
+});
+
+describe('structured placeholder rules', () => {
+  const chip = (id: string, path?: string) => `{{ph:${id}:world:pl-${id}${path ? `:${path}` : ''}}}`;
+
+  // The parts a variant is built from. Two of each name, one per variant, so a slot path has something real
+  // to route to and the duplicate-name rule has two genuine candidates to confuse.
+  const parts: Placeholder[] = [
+    { id: 'hair-fen', name: 'Hair', values: phValues(['flaxen']) },
+    { id: 'eyes-fen', name: 'Eyes', values: phValues(['gray']) },
+    { id: 'hair-coast', name: 'Hair', values: phValues(['black']) },
+    { id: 'eyes-coast', name: 'Eyes', values: phValues(['dark']) },
+  ];
+
+  /** The prototype's rolled character: Molly draws one of two variants, each a record joining its own parts.
+   *  `coast` is the variant a test reaches into to author the one defect it is about. */
+  const character = (coast: string[] = [chip('hair-coast'), chip('eyes-coast')]): Placeholder[] => [
+    ...parts,
+    { id: 'fen', name: 'Fen-born', values: phValues([chip('hair-fen'), chip('eyes-fen')]), roll: false },
+    { id: 'coast', name: 'Coast-born', values: phValues(coast), roll: false },
+    { id: 'molly', name: 'Molly', values: phValues([chip('fen'), chip('coast')]) },
+  ];
+
+  /** A world placing `text` on a described resident — the placement that makes a path a *placed* path. */
+  const placing = (text: string, placeholders: Placeholder[]): RuleWorld => ({
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: text }]),
+    placeholders,
+  });
+
+  const hairPath = `Her hair is ${chip('molly', 'sHair')}.`;
+  const eyesPath = `Her eyes are ${chip('molly', 'sEyes')}.`;
+
+  const STRUCTURED_RULES = [
+    'placeholder-slot-miss', 'placeholder-dangling-reference', 'placeholder-reference-cycle',
+    'placeholder-empty-record', 'placeholder-duplicate-slot',
+  ];
+
+  it('flags a slot the rolled variant cannot carry, even while the other variant can', () => {
+    // Coast-born lost its Eyes. One roll in two still reads correctly, which is exactly why a rule has to
+    // sweep the variants rather than resolve the world once and look at the result.
+    const found = only(placing(eyesPath, character([chip('hair-coast')])), 'placeholder-slot-miss');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].section).toBe('placeholders');
+    expect(found[0].items.map((i) => i.id)).toEqual(['coast']);
+    expect(found[0].message).toContain('Coast-born');
+    expect(found[0].message).toContain('Eyes');
+    expect(only(placing(eyesPath, character()), 'placeholder-slot-miss')).toEqual([]);
+  });
+
+  it('says nothing about a slot no text places', () => {
+    // The gap is real, but nothing asks for it — the rule is about placed paths, not about tidiness.
+    expect(only(placing('Plainly dressed.', character([chip('hair-coast')])), 'placeholder-slot-miss')).toEqual([]);
+  });
+
+  it('flags a chip inside a value whose placeholder is gone, which no chip rule can see', () => {
+    const orphaned = placing(hairPath, character([chip('hair-coast'), chip('gone')]));
+    const found = only(orphaned, 'placeholder-dangling-reference');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('error');
+    expect(found[0].items.map((i) => i.id)).toEqual(['coast']);
+    // The shipped chip rule reads the root id of a chip in *world text*, so this reference is invisible to it.
+    expect(only(orphaned, 'chip-unknown-placeholder')).toEqual([]);
+    expect(only(placing(hairPath, character()), 'placeholder-dangling-reference')).toEqual([]);
+  });
+
+  it('flags a drill path picking a placeholder that is gone, and leaves the slot rule out of it', () => {
+    const drilled = placing(`Her hair is ${chip('molly', 'vgone>sHair')}.`, character());
+    const found = only(drilled, 'placeholder-dangling-reference');
+    expect(found).toHaveLength(1);
+    expect(found[0].items.map((i) => i.id)).toEqual(['e1']);
+    // The walk reports the same step as a miss; an explicit pick at nothing is a dead reference, not a
+    // variant coming up short, so only one of the two rules speaks.
+    expect(only(drilled, 'placeholder-slot-miss')).toEqual([]);
+  });
+
+  it('flags two placeholders referencing each other, once for the whole loop', () => {
+    const found = only(placing(`A ${chip('a')} thing.`, [
+      { id: 'a', name: 'Alpha', values: phValues([chip('b')]) },
+      { id: 'b', name: 'Beta', values: phValues([chip('a')]) },
+    ]), 'placeholder-reference-cycle');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('error');
+    expect(found[0].items.map((i) => i.id).sort()).toEqual(['a', 'b']);
+    expect(found[0].message).toContain('Alpha');
+    expect(found[0].message).toContain('Beta');
+  });
+
+  it('flags a placeholder whose own value points back at it', () => {
+    const found = only(placing(`A ${chip('a')} thing.`,
+      [{ id: 'a', name: 'Alpha', values: phValues([chip('a')]) }]), 'placeholder-reference-cycle');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('references itself');
+  });
+
+  it('leaves a deep chain that never closes alone', () => {
+    expect(only(placing(`A ${chip('a')} thing.`, [
+      { id: 'a', name: 'Alpha', values: phValues([chip('b')]) },
+      { id: 'b', name: 'Beta', values: phValues([chip('c')]) },
+      { id: 'c', name: 'Gamma', values: phValues(['salt-worn']) },
+    ]), 'placeholder-reference-cycle')).toEqual([]);
+  });
+
+  it('flags a record whose whole placement joins to nothing', () => {
+    const kit = (coat: string[]) => placing(`She wears ${chip('kit')}.`, [
+      { id: 'coat', name: 'Coat', values: phValues(coat) },
+      { id: 'kit', name: 'Kit', values: phValues([chip('coat')]), roll: false },
+    ]);
+    const found = only(kit([]), 'placeholder-empty-record');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].items.map((i) => i.id)).toEqual(['kit']);
+    // The part gets the value it was always meant to have, and the join has something to say again.
+    expect(only(kit(['a salt-stiff coat']), 'placeholder-empty-record')).toEqual([]);
+  });
+
+  it('flags a record of blank values, chips or no chips', () => {
+    const found = only(placing(`She wears ${chip('kit')}.`,
+      [{ id: 'kit', name: 'Kit', values: phValues(['', '']), roll: false }]), 'placeholder-empty-record');
+    expect(found).toHaveLength(1);
+    expect(found[0].items.map((i) => i.id)).toEqual(['kit']);
+  });
+
+  it('names the kind it actually found, since one value is a Variable however it is declared', () => {
+    // One value: a Variable, whatever `roll` says — calling it an Object would be the wrong word for it.
+    const one = only(placing(`She wears ${chip('kit')}.`,
+      [{ id: 'kit', name: 'Kit', values: phValues(['']), roll: false }]), 'placeholder-empty-record');
+    expect(one[0].message).toContain('is a Variable');
+    const many = only(placing(`She wears ${chip('kit')}.`,
+      [{ id: 'kit', name: 'Kit', values: phValues(['', '']), roll: false }]), 'placeholder-empty-record');
+    expect(many[0].message).toContain('is an Object');
+  });
+
+  it('leaves a choice alone — one blank option is a pool the author owns, not a broken join', () => {
+    expect(only(placing(`She wears ${chip('kit')}.`,
+      [{ id: 'kit', name: 'Kit', values: phValues(['', 'a salt-stiff coat']) }]), 'placeholder-empty-record')).toEqual([]);
+  });
+
+  it('leaves a loop’s emptiness to the cycle rule rather than saying it twice', () => {
+    const cyclic = placing(`A ${chip('a')} thing.`, [
+      { id: 'a', name: 'Alpha', values: phValues([chip('b')]), roll: false },
+      { id: 'b', name: 'Beta', values: phValues([chip('a')]), roll: false },
+    ]);
+    expect(only(cyclic, 'placeholder-reference-cycle')).toHaveLength(1);
+    expect(only(cyclic, 'placeholder-empty-record')).toEqual([]);
+  });
+
+  it('flags two parts under one name, which a path can only ever reach the first of', () => {
+    const twinned = placing(hairPath, character([chip('hair-coast'), chip('hair-fen')]));
+    const found = only(twinned, 'placeholder-duplicate-slot');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].items.map((i) => i.id)).toEqual(['coast']);
+    expect(found[0].message).toContain('Hair');
+    expect(only(placing(hairPath, character()), 'placeholder-duplicate-slot')).toEqual([]);
+  });
+
+  it('reads a part reached only through another placeholder’s value as used', () => {
+    // `placeholder-unused` deletes what it flags, so a structural child read as unused is a Fix button that
+    // guts the character it belongs to.
+    expect(only(placing(hairPath, character()), 'placeholder-unused')).toEqual([]);
+  });
+
+  it('says nothing at all about a structured world that resolves', () => {
+    const clean = placing(`${hairPath} ${eyesPath}`, character());
+    for (const ruleId of STRUCTURED_RULES) expect([ruleId, only(clean, ruleId)]).toEqual([ruleId, []]);
+  });
+
+  it('says nothing at all about a flat world, which is every world shipped before this', () => {
+    const flat = placing(`Fond of ${chip('vice')}.`, [{ id: 'vice', name: 'Vice', values: phValues(['ale', 'dice']) }]);
+    for (const ruleId of STRUCTURED_RULES) expect([ruleId, only(flat, ruleId)]).toEqual([ruleId, []]);
+  });
+});
+
+/**
+ * The conditions ownership and sharing create. Each is diagnosable only from world data — no gesture in the
+ * app reaches any of them, since the store releases a stale owner on every write and prunes an override map
+ * with the row it belonged to. A hand-edited file is what gets here.
+ */
+describe('placeholder ownership rules', () => {
+  const chip = (id: string) => `{{ph:${id}:world:pl-${id}}}`;
+
+  /** Molly holding one nested row. `ownerId` decides whether that row belongs to her or is a shared row
+   *  pointing at a top-level original; `holds` drops the value the ownership was ever written against.
+   *  Both placeholders are placed in world text, so no fixture leans on the unused rule for its silence. */
+  const nested = ({ ownerId, holds = true }: { ownerId?: string; holds?: boolean } = {}): RuleWorld => ({
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: `She is ${chip('molly')}, and ${chip('north')}.` }]),
+    placeholders: [
+      {
+        id: 'molly', name: 'Molly', roll: false,
+        values: holds ? [{ id: 'v-north', text: chip('north') }] : phValues(['plainly dressed']),
+      },
+      { id: 'north', name: 'Northern', values: phValues(['pale', 'ash-blonde']), ...(ownerId ? { ownerId } : {}) },
+    ],
+  });
+
+  it('says nothing about a world whose ownership and sharing both hold together', () => {
+    // Owned, and shared: the two shapes the tree draws, each with nothing wrong with it.
+    expect(runRules(nested({ ownerId: 'molly' }))).toEqual([]);
+    expect(runRules(nested())).toEqual([]);
+  });
+
+  it('flags an owned placeholder whose owner does not exist', () => {
+    const found = only(nested({ ownerId: 'gone' }), 'placeholder-owner-orphan');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].section).toBe('placeholders');
+    expect(found[0].items.map((i) => i.id)).toEqual(['north']);
+    expect(found[0].message).toBe(
+      '“Northern” belongs to a placeholder that no longer exists, so it sits at the top level instead');
+  });
+
+  it('flags an owned placeholder its owner no longer holds, naming both sides', () => {
+    const found = only(nested({ ownerId: 'molly', holds: false }), 'placeholder-owner-dropped');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].items.map((i) => i.id)).toEqual(['north']);
+    expect(found[0].message).toBe(
+      '“Northern” says it belongs to “Molly”, which no longer holds it — so it sits at the top level instead');
+  });
+
+  it('keeps the two conditions apart — each fires on its own and stays out of the other', () => {
+    expect(only(nested({ ownerId: 'gone' }), 'placeholder-owner-dropped')).toEqual([]);
+    expect(only(nested({ ownerId: 'molly', holds: false }), 'placeholder-owner-orphan')).toEqual([]);
+  });
+
+  it('drops the dead owner reference as its fix, leaving the placeholder otherwise alone', () => {
+    for (const [ruleId, before] of [
+      ['placeholder-owner-orphan', nested({ ownerId: 'gone' })],
+      ['placeholder-owner-dropped', nested({ ownerId: 'molly', holds: false })],
+    ] as const) {
+      const north = applyRuleFix(before, ruleId).placeholders?.find((p) => p.id === 'north');
+      expect([ruleId, north && 'ownerId' in north]).toEqual([ruleId, false]);
+      expect([ruleId, north?.values]).toEqual([ruleId, phValues(['pale', 'ash-blonde'])]);
+    }
+  });
+
+  /** One broken world drawn twice: with its nested rows shared, which is how every world shipped before
+   *  ownership reads, and with them owned. Ownership is organizational and the resolver never reads it, so
+   *  the structural rules have to say the same thing about both. */
+  const broken = (owned: boolean): RuleWorld => {
+    const owns = (ownerId: string) => (owned ? { ownerId } : {});
+    return {
+      ...world([{
+        id: 'e1', name: 'Maren',
+        aiDescription: `Her hair is {{ph:molly:world:pl-a:sHair}}, and ${chip('loop')}.`,
+      }]),
+      placeholders: [
+        {
+          id: 'molly', name: 'Molly',
+          values: [{ id: 'v-north', text: chip('north') }, { id: 'v-south', text: chip('south') }],
+        },
+        { id: 'north', name: 'Northern', roll: false, values: [{ id: 'v-hair', text: chip('hair') }], ...owns('molly') },
+        { id: 'south', name: 'Southern', roll: false, values: [{ id: 'v-gone', text: chip('gone') }], ...owns('molly') },
+        { id: 'hair', name: 'Hair', values: phValues(['flaxen']), ...owns('north') },
+        { id: 'loop', name: 'Loop', values: [{ id: 'v-loop', text: chip('loop') }] },
+      ],
+    };
+  };
+
+  it('reads the slot-miss, dangling and cycle rules the same whether a row is owned or shared', () => {
+    const shape = (w: RuleWorld) =>
+      runRules(w).map((f) => `${f.ruleId}|${f.items.map((i) => i.id).join(',')}`).sort();
+    expect(shape(broken(true))).toEqual(shape(broken(false)));
+    // All three fire, so the agreement above is about findings rather than about two silent worlds.
+    expect(shape(broken(true))).toEqual([
+      'placeholder-dangling-reference|south', 'placeholder-reference-cycle|loop', 'placeholder-slot-miss|south',
+    ]);
+  });
+
+  it('gains the owner in the name once the row is owned, and nothing else', () => {
+    expect(only(broken(false), 'placeholder-slot-miss')[0].message).toContain('“Southern” carries no “Hair”');
+    expect(only(broken(true), 'placeholder-slot-miss')[0].message).toContain('“Molly › Southern” carries no “Hair”');
+  });
+
+  it('leaves the other rule’s finding standing — a fix repairs only what its row named', () => {
+    // Two stale references at once, one of each kind. The store's own release helper would clear both;
+    // a Fix button that quietly repaired a row the author never saw would be lying about its scope.
+    const both: RuleWorld = {
+      ...nested({ ownerId: 'gone' }),
+      placeholders: [
+        { id: 'molly', name: 'Molly', roll: false, values: phValues(['plainly dressed']) },
+        { id: 'north', name: 'Northern', values: phValues(['pale']), ownerId: 'gone' },
+        { id: 'south', name: 'Southern', values: phValues(['dark']), ownerId: 'molly' },
+      ],
+    };
+    const fixed = applyRuleFix(both, 'placeholder-owner-orphan');
+    expect(fixed.placeholders?.find((p) => p.id === 'north')?.ownerId).toBeUndefined();
+    expect(fixed.placeholders?.find((p) => p.id === 'south')?.ownerId).toBe('molly');
+  });
+});
+
+describe('shared row weight rules', () => {
+  const chip = (id: string) => `{{ph:${id}:world:pl-${id}}}`;
+
+  /** Molly sharing a top-level Eye Color, with her own weights laid over its pool. The chip value's id is
+   *  the override key, exactly as the panel writes it. */
+  const shared = (over: Record<string, number>, key = 'v-eyes'): RuleWorld => ({
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: `Her eyes are ${chip('molly')}.` }]),
+    placeholders: [
+      { id: 'eyes', name: 'Eye Color', values: phValues(['blue', 'green', 'hazel']) },
+      {
+        id: 'molly', name: 'Molly', roll: false, values: [{ id: 'v-eyes', text: chip('eyes') }],
+        sharedWeights: { [key]: over },
+      },
+    ],
+  });
+
+  /** One level deeper: Molly shares Eye Color, which holds a Shade of its own. The key walks both. */
+  const deeper = (over: Record<string, number>, key = 'v-eyes/shade'): RuleWorld => ({
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: `Her eyes are ${chip('molly')}.` }]),
+    placeholders: [
+      { id: 'shade', name: 'Shade', values: phValues(['pale', 'deep']) },
+      {
+        id: 'eyes', name: 'Eye Color', roll: false,
+        values: [{ id: 'v-shade', text: chip('shade') }, ...phValues(['blue'])],
+      },
+      {
+        id: 'molly', name: 'Molly', roll: false, values: [{ id: 'v-eyes', text: chip('eyes') }],
+        sharedWeights: { [key]: over },
+      },
+    ],
+  });
+
+  it('says nothing about an override that benches a value its original really carries', () => {
+    expect(runRules(shared({ [phValueId('blue')]: 0 }))).toEqual([]);
+    expect(runRules(deeper({ [phValueId('pale')]: 0 }))).toEqual([]);
+  });
+
+  it('flags a shared row weighting a value its original no longer carries', () => {
+    const found = only(shared({ [phValueId('blue')]: 0, [phValueId('grog')]: 3 }),
+      'placeholder-shared-weight-unknown-value');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].section).toBe('placeholders');
+    // The override lives on the holder, so that is where Open lands and what the repair edits.
+    expect(found[0].items.map((i) => i.id)).toEqual(['molly']);
+    expect(found[0].message).toBe(
+      '“Molly” weights a value “Eye Color” no longer carries — that weight applies to nothing');
+  });
+
+  it('counts the dead weights when there is more than one', () => {
+    const found = only(shared({ [phValueId('grog')]: 3, [phValueId('mead')]: 1 }),
+      'placeholder-shared-weight-unknown-value');
+    expect(found[0].message).toBe(
+      '“Molly” weights 2 values “Eye Color” no longer carries — those weights apply to nothing');
+  });
+
+  it('names the original the key actually walks to, not the row it started from', () => {
+    const found = only(deeper({ [phValueId('grog')]: 0 }), 'placeholder-shared-weight-unknown-value');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('“Shade”');
+    expect(found[0].message).not.toContain('“Eye Color”');
+  });
+
+  it('says nothing where the key’s own route is gone — a broken chip is the dangling rule’s finding', () => {
+    // Stated boundary: the override survives its row being cut only in a hand-edited file, and what it
+    // points through is already reported in the terms the author can act on.
+    expect(only(shared({ [phValueId('grog')]: 3 }, 'v-missing'),
+      'placeholder-shared-weight-unknown-value')).toEqual([]);
+    expect(only(deeper({ [phValueId('grog')]: 3 }, 'v-eyes/gone'),
+      'placeholder-shared-weight-unknown-value')).toEqual([]);
+  });
+
+  it('says nothing where the key walks into a placeholder the level above never held', () => {
+    // Shade is real and Eye Color is real, but Eye Color does not nest Shade, so no row ever opened this
+    // key. Following it anyway would weigh a pool this holder does not reach and report a defect in it.
+    const unheld: RuleWorld = {
+      ...world([{ id: 'e1', name: 'Maren', aiDescription: `Her eyes are ${chip('molly')}, ${chip('shade')}.` }]),
+      placeholders: [
+        { id: 'shade', name: 'Shade', values: phValues(['pale', 'deep']) },
+        { id: 'eyes', name: 'Eye Color', values: phValues(['blue', 'green']) },
+        {
+          id: 'molly', name: 'Molly', roll: false, values: [{ id: 'v-eyes', text: chip('eyes') }],
+          sharedWeights: { 'v-eyes/shade': { [phValueId('grog')]: 3 } },
+        },
+      ],
+    };
+    expect(only(unheld, 'placeholder-shared-weight-unknown-value')).toEqual([]);
+  });
+
+  it('leaves the original’s own weight map to the rule that already covers it', () => {
+    const w = shared({ [phValueId('blue')]: 0 });
+    const eyes = w.placeholders?.[0] as Placeholder;
+    const world2: RuleWorld = {
+      ...w,
+      placeholders: [{ ...eyes, weights: { [phValueId('grog')]: 2 } }, ...(w.placeholders ?? []).slice(1)],
+    };
+    expect(only(world2, 'placeholder-weight-unknown-value')).toHaveLength(1);
+    expect(only(world2, 'placeholder-shared-weight-unknown-value')).toEqual([]);
+  });
+
+  it('drops only the dead weights as its fix, keeping the bench the author meant', () => {
+    const fixed = applyRuleFix(shared({ [phValueId('blue')]: 0, [phValueId('grog')]: 3 }),
+      'placeholder-shared-weight-unknown-value');
+    expect(fixed.placeholders?.[1].sharedWeights).toEqual({ 'v-eyes': { [phValueId('blue')]: 0 } });
+  });
+
+  it('removes an emptied override map entirely — absent already means the original’s own odds', () => {
+    const fixed = applyRuleFix(shared({ [phValueId('grog')]: 3 }), 'placeholder-shared-weight-unknown-value');
+    const molly = fixed.placeholders?.[1];
+    expect(molly && 'sharedWeights' in molly).toBe(false);
+  });
+});
+
+/**
+ * A placeholder reads by its bare name at the top level and qualified with `›` under an owner, so a world
+ * carrying three rows named `Hair` says which Hair a finding is about. Every rule naming a placeholder goes
+ * through one helper, so a new rule cannot opt out of it.
+ */
+describe('placeholder names in findings', () => {
+  const chip = (id: string) => `{{ph:${id}:world:pl-${id}}}`;
+
+  const twins = (): RuleWorld => ({
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: `She is ${chip('molly')}.` }]),
+    placeholders: [
+      { id: 'molly', name: 'Molly', roll: false, values: [{ id: 'v-hair', text: chip('hair') }] },
+      {
+        id: 'hair', name: 'Hair', ownerId: 'molly', values: phValues(['flaxen', 'peat-brown']),
+        weights: { [phValueId('gone')]: 2 },
+      },
+    ],
+  });
+
+  it('qualifies an owned placeholder by its owner', () => {
+    const found = only(twins(), 'placeholder-weight-unknown-value');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('“Molly › Hair”');
+    // The item keeps the placeholder's own id, so Open still lands on the row rather than on its owner.
+    expect(found[0].items.map((i) => i.id)).toEqual(['hair']);
+  });
+
+  it('leaves a top-level placeholder bare, since nothing above it needs saying', () => {
+    const flat = twins();
+    const found = only({ ...flat, placeholders: (flat.placeholders ?? []).map((p) => {
+      const { ownerId: _owned, ...rest } = p;
+      return rest;
+    }) }, 'placeholder-weight-unknown-value');
+    expect(found[0].message).toContain('“Hair”');
+    expect(found[0].message).not.toContain('›');
   });
 });
 
@@ -1361,7 +2144,8 @@ describe('world-level rules', () => {
   });
 
   it('flags an embedded image over its byte budget and points at Optimize Images', () => {
-    const big = `data:image/png;base64,${'A'.repeat(280_000)}`;
+    // Sized off the live budget, so a cap change cannot quietly turn this fixture small.
+    const big = `data:image/png;base64,${'A'.repeat(Math.ceil((IMAGE_CAPS.thumbnail.maxBytes * 4) / 3) + 8)}`;
     const found = only(overview({ thumbnail: big }), 'world-oversized-images');
     expect(found).toHaveLength(1);
     expect(found[0].severity).toBe('info');
@@ -1554,8 +2338,7 @@ const STRIPPED = {
 describe('a world whose “required” arrays are absent', () => {
   it('diagnoses it rather than throwing on it', () => {
     const ids = new Set(runRules(STRIPPED).map((f) => f.ruleId));
-    // The chip parked in a stat description is a finding; the descriptors the stat never carried are not.
-    expect(ids).toContain('chip-never-scanned');
+    // The descriptors the stat never carried are not a finding.
     expect(ids).not.toContain('stat-start-no-descriptor');
   });
 
@@ -1567,7 +2350,7 @@ describe('a world whose “required” arrays are absent', () => {
   });
 
   it('leaves a pin at a values-less placeholder alone, since the placeholder is the part that must exist', () => {
-    expect(only(STRIPPED, 'trait-pin-invalid')).toEqual([]);
+    expect(only(STRIPPED, 'placeholder-pin-broken')).toEqual([]);
   });
 
   it('diagnoses a stat that lost its id instead of tripping over the missing lookup', () => {
@@ -1589,9 +2372,9 @@ describe('a world whose “required” arrays are absent', () => {
       placeholders: [{ id: 'p1', name: 'Hue' }],
     } as unknown as RuleWorld;
     const found = only(chipNamed, 'alias-leading-article');
-    // The chip resolves to nothing, so the entity reads as Untitled rather than taking the pass down.
+    // The chip has no values, and the entity still reads by its chip's name rather than taking the pass down.
     expect(found).toHaveLength(1);
-    expect(found[0].items[0].name).toBe('Untitled');
+    expect(found[0].items[0].name).toBe('Hue');
   });
 
   it('diagnoses a world carrying no collections at all', () => {
@@ -1627,7 +2410,7 @@ const FIX_FIXTURES: Record<string, RuleWorld> = {
   // The Centaur Breeder shape: the legacy flag is the world's only surviving record of where play starts.
   'legacy-start-location': base({ locations: [{ id: 'pasture', name: 'Pasture', isStartLocation: true } as GameLocation] }),
   'entity-location-orphan': base({ entities: [{ id: 'e1', name: 'Maren', locations: ['harbor', 'gone'] }] }),
-  'placeholder-unused': base({ placeholders: [{ id: 'p1', name: 'Hue', values: ['red', 'blue'] }] }),
+  'placeholder-unused': base({ placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }] }),
   // A percentage stat whose range was authored before the editor pinned it, with a start the pinning moves.
   'stat-percentage-bounds': base({ stats: [stat({ id: 's1', name: 'Fertility', type: 'percentage', min: 0, max: 200, starting: 150 })] }),
   // The floor-misreading shape: "from 70, Steady" leaves 70–100 silent; the fix stretches Steady to Max.
@@ -1643,7 +2426,50 @@ const FIX_FIXTURES: Record<string, RuleWorld> = {
   }),
   'placeholder-weight-unknown-value': {
     ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
-    placeholders: [{ id: 'p1', name: 'Vice', values: ['ale', 'dice'], weights: { ale: 2, grog: 3 } }],
+    placeholders: [{ id: 'p1', name: 'Vice', values: phValues(['ale', 'dice']), weights: { [phValueId('ale')]: 2, [phValueId('grog')]: 3 } }],
+  },
+  // A value holding its own placeholder beside one it may legitimately hold: only the first goes.
+  'placeholder-pin-self': {
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}} and {{ph:p2:world:pl2}}.' }]),
+    placeholders: [
+      { id: 'p1', name: 'Vice', values: phValues(['ale', 'dice']) },
+      { id: 'p2', name: 'Region', values: [{ id: 'v-n', text: 'Northern', pins: [
+        { placeholderId: 'p2', value: 'Northern' }, { placeholderId: 'p1', value: 'ale' },
+      ] }] },
+    ],
+  },
+  // One pin still spelled like a live value, one whose value is gone for good — the fix re-links the first
+  // and lets the second stand as the free text play already applies.
+  'placeholder-pin-unknown-value': {
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
+    placeholders: [{ id: 'p1', name: 'Vice', values: phValues(['ale', 'dice']) }],
+    traits: [trait({ id: 't1', name: 'Sot', placeholderPins: [
+      { placeholderId: 'p1', value: 'ale', valueId: 'v:gone' }, { placeholderId: 'p1', value: 'grog', valueId: 'v:grog' },
+    ] })],
+  },
+  // A shared row Molly benches a colour on, plus one the pool lost — the live bench has to survive the repair.
+  'placeholder-shared-weight-unknown-value': {
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Her eyes are {{ph:molly:world:pl1}}.' }]),
+    placeholders: [
+      { id: 'eyes', name: 'Eye Color', values: phValues(['blue', 'green', 'hazel']) },
+      {
+        id: 'molly', name: 'Molly', roll: false, values: [{ id: 'v-eyes', text: '{{ph:eyes:world:pl2}}' }],
+        sharedWeights: { 'v-eyes': { [phValueId('blue')]: 0, [phValueId('grog')]: 3 } },
+      },
+    ],
+  },
+  // An owner reference naming nothing at all, and one naming an owner that dropped the value it was written
+  // against. Only a hand-edited file reaches either; both repair to the top level the tree already draws.
+  'placeholder-owner-orphan': {
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: 'She is {{ph:north:world:pl1}}.' }]),
+    placeholders: [{ id: 'north', name: 'Northern', values: phValues(['pale']), ownerId: 'gone' }],
+  },
+  'placeholder-owner-dropped': {
+    ...world([{ id: 'e1', name: 'Maren', aiDescription: 'She is {{ph:molly:world:pl1}}, and {{ph:north:world:pl2}}.' }]),
+    placeholders: [
+      { id: 'molly', name: 'Molly', roll: false, values: phValues(['plainly dressed']) },
+      { id: 'north', name: 'Northern', values: phValues(['pale']), ownerId: 'molly' },
+    ],
   },
   // JPEG magic numbers under a PNG label — the fix rewrites the label to what the bytes say.
   'image-mislabeled': world([{ id: 'e1', name: 'Maren', images: ['data:image/png;base64,/9j/4AAQSkZJRgAB'] }]),
@@ -1696,7 +2522,7 @@ describe('quick fixes', () => {
   it('leaves an article that arrives from a chip’s value — there is nothing in the text to strip', () => {
     const chipped = {
       ...world([{ id: 'e1', name: 'Maren', aliases: ['{{ph:p1:world:pl1}} visitor'] }]),
-      placeholders: [{ id: 'p1', name: 'Article', values: ['the'] }],
+      placeholders: [{ id: 'p1', name: 'Article', values: phValues(['the']) }],
     };
     expect(only(chipped, 'alias-leading-article')).toHaveLength(1);
     expect(applyRuleFix(chipped, 'alias-leading-article').entities[0].aliases).toEqual(['{{ph:p1:world:pl1}} visitor']);
@@ -1754,8 +2580,8 @@ describe('quick fixes', () => {
     const fixed = applyRuleFix({
       ...world([{ id: 'e1', name: 'Maren', aiDescription: 'Fond of {{ph:p1:world:pl1}}.' }]),
       placeholders: [
-        { id: 'p1', name: 'Vice', values: ['ale'] },
-        { id: 'p2', name: 'Hue', values: ['red', 'blue'] },
+        { id: 'p1', name: 'Vice', values: phValues(['ale']) },
+        { id: 'p2', name: 'Hue', values: phValues(['red', 'blue']) },
       ],
     }, 'placeholder-unused');
     expect(fixed.placeholders?.map((p) => p.id)).toEqual(['p1']);
@@ -1803,7 +2629,7 @@ describe('the matching subset Triggers surfaces', () => {
       { id: 'e2', name: 'Maren Vosk', aliases: ['Maren'] },
     ]),
     dictionaries: [book([entry({ id: 'd1', name: 'Orphan' })])],
-    placeholders: [{ id: 'p1', name: 'Harbor', values: ['Sedge Landing'] }],
+    placeholders: [{ id: 'p1', name: 'Harbor', values: phValues(['Sedge Landing']) }],
   };
 
   it('carries every matching rule and nothing structural', () => {
@@ -1849,14 +2675,27 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'alias-lowercase-no-twin': 'advanced',
   'alias-self-duplicate': 'advanced',
   'ai-summary-hides-description': 'advanced',
-  'chip-never-scanned': 'advanced',
   'chip-unknown-placeholder': 'advanced',
   'dictionary-disabled': 'advanced',
   'dictionary-regex-invalid': 'advanced',
   'dictionary-secondary-without-primary': 'advanced',
   'entity-long-description-no-summary': 'advanced',
   'entity-name-in-wildcard-pool': 'advanced',
+  'placeholder-dangling-reference': 'advanced',
+  'placeholder-duplicate-slot': 'advanced',
+  'placeholder-empty-record': 'advanced',
+  'placeholder-reference-cycle': 'advanced',
+  'placeholder-slot-miss': 'advanced',
+  'placeholder-owner-dropped': 'advanced',
+  'placeholder-owner-orphan': 'advanced',
+  'placeholder-pin-broken': 'advanced',
+  'placeholder-pin-conflict': 'advanced',
+  'placeholder-pin-cycle': 'advanced',
+  'placeholder-pin-self': 'advanced',
+  'placeholder-pin-unknown-value': 'advanced',
   'placeholder-unused': 'advanced',
+  'placeholder-pinned-unused': 'advanced',
+  'placeholder-shared-weight-unknown-value': 'advanced',
   'placeholder-weight-unknown-value': 'advanced',
   'stat-ai-lock-frozen': 'advanced',
   'stat-code-execution': 'advanced',
@@ -1868,7 +2707,6 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'stat-descriptor-out-of-range': 'advanced',
   'stat-start-no-descriptor': 'advanced',
   'stat-trait-delta-clamped': 'advanced',
-  'trait-pin-invalid': 'advanced',
   'trait-toggle-missing-stat': 'advanced',
   'wildcard-single-value': 'advanced',
   // Names, placement, structure, stat bounds, lore keywords, the world itself.
@@ -1932,5 +2770,33 @@ describe('the rule registry', () => {
     expect(rule?.fix).toBeUndefined();
     expect(rule?.asyncFix).toBe(true);
     expect(FIX_FIXTURES['image-not-webp']).toBeUndefined();
+  });
+});
+
+describe('placeholders an entity carries', () => {
+  const eyes = { id: 'p-eyes', name: 'Eyes', values: phValues(['amber']) };
+  const molly = (name: string, ph: Placeholder = eyes): Entity => ({ ...resident, id: 'molly', name, placeholders: [ph] });
+
+  it('reads a scoped placeholder, so a chip at it is known and the placeholder counts as used', () => {
+    const w = base({ entities: [resident, molly('Molly {{ph:p-eyes:world:pl1}}')] });
+    expect(only(w, 'chip-unknown-placeholder')).toEqual([]);
+    expect(only(w, 'placeholder-unused')).toEqual([]);
+  });
+
+  it('flags an unused scoped placeholder, and the fix removes it from the entity rather than the world', () => {
+    const w = base({ entities: [resident, molly('Molly')] });
+    expect(only(w, 'placeholder-unused')[0]?.items.map((i) => i.id)).toEqual(['p-eyes']);
+    const fixed = applyRuleFix(w, 'placeholder-unused');
+    expect(fixed.entities.find((e) => e.id === 'molly')?.placeholders).toBeUndefined();
+    expect(fixed.placeholders).toBe(w.placeholders);
+    expect(only(fixed, 'placeholder-unused')).toEqual([]);
+  });
+
+  it('repairs a dead weight on a scoped placeholder where it lives', () => {
+    const w = base({ entities: [resident, molly('Molly {{ph:p-eyes:world:pl1}}', { ...eyes, weights: { 'v:gone': 2 } })] });
+    expect(only(w, 'placeholder-weight-unknown-value')).toHaveLength(1);
+    const fixed = applyRuleFix(w, 'placeholder-weight-unknown-value');
+    expect(fixed.entities.find((e) => e.id === 'molly')?.placeholders?.[0].weights).toBeUndefined();
+    expect(fixed.placeholders).toBe(w.placeholders);
   });
 });

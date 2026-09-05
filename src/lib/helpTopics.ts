@@ -270,7 +270,25 @@ When two active traits switch the same stat, the one lower in the trait list win
 
 The pinned value doesn't have to come from the placeholder's own list: the box suggests the authored values, but anything you type is used as written, so a trait can force a value nobody else rolls.
 
-When two active traits pin the same placeholder, the one lower in the trait list wins — the row says so whenever that applies.`,
+A value that is a chip pins that part — pin a Wildcard to the value holding *isAsian* and every chip of it takes that variant. The box names such a value after the part it holds, exactly as the Values list does, so you pick by the thing rather than by the words it joins to. A chip inside a longer value is prose, so that one reads as what it will resolve to.
+
+When two active traits pin the same placeholder, the one lower in the trait list wins — the row says so whenever that applies. A location's pin outranks a trait's, and a stat band's outranks both; a placeholder value's pin sits under all three.`,
+  },
+  'worldEditor.locationPins': {
+    title: 'Placeholder Pins',
+    body: `Holds a placeholder at a fixed value while the player is here — the *Fen* pinning Weather to *fog*. The pin releases the moment the player leaves, and the playthrough's own roll shows through again. A sub-location does not inherit its parent's pins.
+
+The pinned value doesn't have to come from the placeholder's own list: the box suggests the authored values, but anything you type is used as written.
+
+A stat band's pin outranks a location's; a location's outranks a trait's and a placeholder value's. Two locations never compete, since only one is current at a time. The row says who wins whenever another source pins the same placeholder.`,
+  },
+  'worldEditor.pinsOnPlaceholder': {
+    title: 'Placeholder Pins',
+    body: `Every pin aimed at this placeholder, from any source: a trait, a location, a stat band, or another placeholder's value. The pins live on those sources — this list only gathers them — so a change here is a change on that trait, location, stat or placeholder, and shows there too.
+
+Rows sit in the order the game settles them: a stat band outranks a location, a location a trait, and a trait a placeholder value. Within one kind the lower in its own list wins, and each row says who else claims the placeholder and which one the rules pick.
+
+**Add Pin** picks the kind of source, then the source, and writes an empty pin there for you to fill in. A row's first box re-aims its pin at another source of the same kind; the value box suggests this placeholder's values, but anything you type is used as written.`,
   },
   'worldEditor.placeholders': {
     title: 'Placeholders',
@@ -280,10 +298,15 @@ When two active traits pin the same placeholder, the one lower in the trait list
 
 They exist so a world can vary without being rewritten. Author *"the {{Eye Color}} stranger"* once, and it reads as a real detail every playthrough — sometimes the same detail on purpose, sometimes a fresh one each time.
 
-**The kind is set by how many values you give it:**
+**The Kind row says what a placeholder is:**
 
-- **One value → a Variable.** It always resolves to that value. Change it here once and every chip updates. Good for a name or a fact you want consistent and easy to edit.
-- **Two or more → a Wildcard.** It resolves to a *random* one of the values. Good for variety — a crowd of strangers who aren't all identical.
+- **Wildcard** — it randomizes. One of its values is picked, and every chip of it shows that pick. Good for variety — a crowd of strangers who aren't all identical.
+- **Object** — it holds. All of its values apply, joined together wherever it is placed. Good for a thing made of parts.
+- **Variable** — what either kind is called while it has one value. It always resolves to that value, so changing it here updates every chip.
+
+New placeholders are born Wildcards, and one you have never touched reads as the kind its value count already implies.
+
+**Parts.** A value that is exactly one chip is a **part** of the placeholder holding it, addressable as \`Name › Part\`. That is how an Object is built out of other placeholders.
 
 **World vs. Unique** (Wildcards only). Each chip you place chooses how its roll is shared:
 

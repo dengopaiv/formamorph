@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { encodePlaceholderToken } from '@/lib/placeholders';
+import { placementLetters } from '@/lib/placementLetters';
 import { collectSearchTargets, findMatches, replaceAll, spliceText } from '@/lib/worldSearch';
 import type { SearchSources, SearchTarget } from '@/lib/worldSearch';
 import type { Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
 
+import { phValueId, phValues } from '@/test/placeholderValues';
 const LOOSE = { matchCase: false, wholeWord: false };
 
 const overview = (over: Partial<WorldOverview> = {}): WorldOverview => ({
@@ -52,6 +54,12 @@ describe('collectSearchTargets', () => {
     expect(collectSearchTargets(updatersOnly)).toEqual([]);
   });
 
+  it('keeps scanning a placeholder that carries no values array at all', () => {
+    // Same reason as the slice above: hand-edited world JSON can omit it, and the scan runs in the render.
+    const { src } = sources({ placeholders: [{ id: 'p1', name: 'Season' } as Placeholder] });
+    expect(collectSearchTargets(src).map((t) => t.fieldKey)).toEqual(['name']);
+  });
+
   it('keeps scanning the books that have entries when one book has none', () => {
     const { src } = sources({
       dictionaries: [
@@ -82,6 +90,18 @@ describe('collectSearchTargets', () => {
     expect(keys).not.toContain('code');
     expect(keys).not.toContain('images');
     expect(collectSearchTargets(src).some((t) => t.value.includes('return value'))).toBe(false);
+  });
+
+  it('lets a stat description and each descriptor take a chip', () => {
+    const { src } = sources({
+      stats: [{
+        id: 's1', name: 'Vigor', type: 'number', description: 'Stamina', min: 0, max: 100, regen: 0,
+        descriptors: [{ id: 'b1', threshold: 30, description: 'Winded' }],
+      } as Stat],
+    });
+    const targets = collectSearchTargets(src);
+    expect(targetFor(targets, 'description')).toMatchObject({ value: 'Stamina', chipCapable: true });
+    expect(targetFor(targets, 'descriptors[0].description')).toMatchObject({ value: 'Winded', chipCapable: true });
   });
 
   it('gives each element of a string-array field its own target', () => {
@@ -193,11 +213,38 @@ describe('collectSearchTargets', () => {
     expect(keys).not.toContain('promptOverrides.statUpdatesPrompt');
   });
 
-  it('carries a placeholder value weight across an edit to that value', () => {
-    const ph: Placeholder = { id: 'p1', name: 'Season', values: ['spring', 'winter'], weights: { spring: 3, winter: 1 } };
+  it('keeps a value’s id when it rewrites the text, so the weight stays put with nothing carried', () => {
+    const ph: Placeholder = {
+      id: 'p1',
+      name: 'Season',
+      values: phValues(['spring', 'winter']),
+      weights: { [phValueId('spring')]: 3, [phValueId('winter')]: 1 },
+    };
     const { src, writes } = sources({ placeholders: [ph] });
     targetFor(collectSearchTargets(src), 'values[0]').write('summer');
-    expect(writes[0][1]).toMatchObject({ values: ['summer', 'winter'], weights: { summer: 3, winter: 1 } });
+    // The value keeps its id, so the weight follows it and nothing is carried across the edit.
+    expect(writes[0][1]).toMatchObject({
+      values: [{ id: phValueId('spring'), text: 'summer' }, { id: phValueId('winter'), text: 'winter' }],
+      weights: { [phValueId('spring')]: 3, [phValueId('winter')]: 1 },
+    });
+  });
+
+  it('names a retyped pin’s value by id when the list carries it, and drops the id when it does not', () => {
+    const ph: Placeholder = { id: 'hair', name: 'Hair', values: phValues(['Red', 'Crimson']) };
+    const pinned = {
+      id: 't1', name: 'Ember', statChanges: [],
+      placeholderPins: [{ placeholderId: 'hair', value: 'Red', valueId: phValueId('Red') }],
+    } as unknown as Trait;
+    const onList = sources({ placeholders: [ph], traits: [pinned] });
+    targetFor(collectSearchTargets(onList.src), 'placeholderPins[0].value').write('Crimson');
+    expect(onList.writes[0][1]).toMatchObject({
+      placeholderPins: [{ placeholderId: 'hair', value: 'Crimson', valueId: phValueId('Crimson') }],
+    });
+    const offList = sources({ placeholders: [ph], traits: [pinned] });
+    targetFor(collectSearchTargets(offList.src), 'placeholderPins[0].value').write('Ash-Gray');
+    // Strict, so a stale id left behind on the pin fails rather than reading as absent.
+    expect((offList.writes[0][1] as Trait).placeholderPins)
+      .toStrictEqual([{ placeholderId: 'hair', value: 'Ash-Gray' }]);
   });
 });
 
@@ -243,6 +290,97 @@ describe('findMatches', () => {
   it('finds nothing for an empty query', () => {
     const { src } = sources({ entities: [entity({ aiDescription: 'fen' })] });
     expect(findMatches(collectSearchTargets(src), '', LOOSE)).toHaveLength(0);
+  });
+});
+
+describe('findMatches — chips', () => {
+  const town: Placeholder = { id: 'ph-town', name: 'Town Name', values: phValues(['Sedge Landing', 'Harrow']) };
+  const unique = (placementId: string, label?: string) =>
+    encodePlaceholderToken({ id: 'ph-town', mode: 'unique', placementId, ...(label ? { label } : {}) });
+  const first = unique('pl-1');
+  const second = unique('pl-2', 'Hometown');
+  const stored = `The ${second} inn`;
+  const setup = () => {
+    const { src } = sources({
+      entities: [entity({ name: first, aiDescription: stored })],
+      placeholders: [town],
+    });
+    const targets = collectSearchTargets(src);
+    const chips = { placeholders: [town], letters: placementLetters([first, stored]) };
+    return { targets, chips };
+  };
+
+  // The placeholder's own name and values are text targets of their own, so only the chip hits are counted.
+  const chipHits = (matches: ReturnType<typeof findMatches>) => matches.filter((m) => m.chip).map((m) => m.chip);
+
+  it('names a chip-named item in the results line by its placement label, never by its token', () => {
+    const { targets } = setup();
+    expect(targets.find((t) => t.fieldKey === 'name')?.itemLabel).toBe('Town Name (A)');
+  });
+
+  it('matches a chip by its placeholder name, its letter label and its author label', () => {
+    const { targets, chips } = setup();
+    expect(chipHits(findMatches(targets, 'town name', LOOSE, chips))).toEqual([first, second]);
+    expect(chipHits(findMatches(targets, '(A)', LOOSE, chips))).toEqual([first]);
+    expect(chipHits(findMatches(targets, 'hometown', LOOSE, chips))).toEqual([second]);
+  });
+
+  it('matches a chip by any of its values', () => {
+    const { targets, chips } = setup();
+    expect(chipHits(findMatches(targets, 'harrow', LOOSE, chips))).toEqual([first, second]);
+  });
+
+  it('takes a dot, a space, or a chevron for the separator an owned chip reads with', () => {
+    const mood: Placeholder = { id: 'ph-mood', name: 'Mood', values: phValues(['sour']) };
+    const chip = encodePlaceholderToken({ id: 'ph-mood', mode: 'world', placementId: 'pl-9' });
+    const { src } = sources({ entities: [entity({ name: '', aiDescription: `She is ${chip}.` })] });
+    const chips = {
+      placeholders: [mood],
+      letters: placementLetters([]),
+      owners: new Map([['ph-mood', { kind: 'entity' as const, id: 'keeper', name: 'Keeper' }]]),
+    };
+    const targets = collectSearchTargets(src);
+    for (const query of ['keeper.mood', 'keeper mood', 'keeper>mood', 'keeper › mood', 'mood']) {
+      expect(chipHits(findMatches(targets, query, LOOSE, chips)), query).toEqual([chip]);
+    }
+    expect(chipHits(findMatches(targets, 'fen › mood', LOOSE, chips))).toEqual([]);
+    // Folding is for the chip's reading only: prose still reads exactly as it is stored.
+    expect(findMatches(targets, 'she.is', LOOSE, chips)).toHaveLength(0);
+  });
+
+  it('spans the whole token and interleaves with text hits by position', () => {
+    const { targets, chips } = setup();
+    const hits = findMatches(targets, 'n', LOOSE, chips).filter((m) => m.target.value === stored);
+    // "The " has no n; the chip comes next, then the "n" in "inn".
+    expect(hits.map((m) => m.chip ?? stored.slice(m.start, m.end))).toEqual([second, 'n', 'n']);
+    const chipHit = hits[0];
+    expect(stored.slice(chipHit.start, chipHit.end)).toBe(second);
+  });
+
+  it('still never reads a token as text, and reads no chip at all without the chip context', () => {
+    const { targets, chips } = setup();
+    expect(findMatches(targets, 'ph-town', LOOSE, chips)).toHaveLength(0);
+    expect(chipHits(findMatches(targets, 'town name', LOOSE))).toEqual([]);
+  });
+
+  it('honors whole word against a chip reading', () => {
+    const { targets, chips } = setup();
+    expect(chipHits(findMatches(targets, 'harr', { matchCase: false, wholeWord: true }, chips))).toEqual([]);
+    expect(chipHits(findMatches(targets, 'harrow', { matchCase: false, wholeWord: true }, chips))).toEqual([first, second]);
+  });
+
+  it('answers to a label even when the placeholder is gone', () => {
+    const { src } = sources({ entities: [entity({ name: second })] });
+    const chips = { placeholders: [], letters: placementLetters([]) };
+    expect(findMatches(collectSearchTargets(src), 'hometown', LOOSE, chips)).toHaveLength(1);
+  });
+
+  it('is left alone by replaceAll, and counted', () => {
+    const { targets, chips } = setup();
+    const matches = findMatches(targets, 'n', LOOSE, chips).filter((m) => m.target.value === stored);
+    const summary = replaceAll(matches, () => 'N');
+    expect(summary.chips).toBe(1);
+    expect(summary.replaced).toBe(2);
   });
 });
 

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useGameData } from './GameDataContext';
-import { primeRolls } from '@/lib/placeholders';
+import { primeRolls, weightedPick } from '@/lib/placeholders';
+import { allPinTexts, valuePinRollChips } from '@/lib/placeholderPins';
 import type { PlaceholderRolls } from '@/types';
 
 /**
@@ -74,7 +75,8 @@ export function PlaceholderSessionProvider({ children }: { children: ReactNode }
 
   // Eager priming: roll every Wildcard placement across the world's authored text once the session opens,
   // so resolution stays a pure lookup everywhere else. Names are primed alongside descriptions — a name
-  // resolved from an unprimed roll would draw a new value on every render.
+  // resolved from an unprimed roll would draw a new value on every render. Trait pins are chip-capable and
+  // read the moment their trait is on, so their chips are primed too, whichever traits get picked.
   useEffect(() => {
     if (!sessionActive || placeholders.length === 0) return;
     const texts = [
@@ -86,15 +88,18 @@ export function PlaceholderSessionProvider({ children }: { children: ReactNode }
       ...entities.flatMap((e) => [e.name, ...(e.aliases ?? []), e.playerDescription, e.aiDescription, e.aiSummary, e.imageTags]),
       ...locations.flatMap((l) => [l.name, l.playerDescription, l.aiDescription, l.aiSummary, l.description, l.imageTags]),
       ...dictionaries.flatMap((b) => b.entries.flatMap((en) => [en.name, ...(en.key ?? []), ...(en.secondaryKeys ?? []), en.value])),
-      ...stats.map((s) => s.name),
+      ...stats.flatMap((s) => [s.name, s.description, ...(s.descriptors ?? []).map((d) => d.description)]),
       ...traits.flatMap((t) => [t.name, t.playerDescription, t.aiDescription]),
       ...traitGroups.flatMap((g) => [g.name, g.playerDescription, g.aiDescription]),
     ].filter((t): t is string => !!t);
     // Keep the previous object when nothing new was rolled. `primeRolls` always returns a fresh object, and
     // this effect depends on `rolls` so a save restoring mid-session gets its missing placements primed —
     // without the identity guard those two facts are a render loop.
+    // A placeholder whose values pin something reads its own world roll, so it gets one whether or not any
+    // text places it.
+    const pinTexts = allPinTexts({ traits, locations, stats, placeholders });
     setRolls((prev) => {
-      const next = primeRolls(placeholders, texts, prev);
+      const next = primeRolls(placeholders, [...texts, ...valuePinRollChips(placeholders)], prev, weightedPick, pinTexts);
       return sameRolls(prev, next) ? prev : next;
     });
   }, [sessionActive, rolls, placeholders, entities, locations, dictionaries, stats, traits, traitGroups, worldOverview]);

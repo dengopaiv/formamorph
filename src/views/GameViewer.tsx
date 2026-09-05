@@ -1,9 +1,10 @@
 import { randomUUID } from "@/lib/uuid";
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useGameData } from "../contexts/GameDataContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useSettingsOpenRequest } from "@/lib/useSettingsOpenRequest";
 import { useGameplay } from "@/contexts/GameplayContext";
+import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
 import { processStatCode } from "@/contexts/GameplayContextUtils";
 import { usesStatClock, type StatClock } from "@/lib/statCodeExecutor";
 import { Button } from "@/components/ui/button";
@@ -22,11 +23,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { Pager } from "@/components/ui/pagination";
-import { Music, SquarePen, Database, ScrollText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, Eye, EyeOff } from "lucide-react";
+import { Music, SquarePen, Database, ScrollText, ChevronDown, ChevronRight, ChevronUp, ChevronsDownUp, ChevronsUpDown, Search, Eye, EyeOff } from "lucide-react";
 import { ActionIcon } from '@/lib/actionIcons';
 import IndeterminateProgress from "../components/ui/indeterminate-progress";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tip } from "@/components/ui/tooltip";
 import { toast } from "react-toastify";
 import { ThemedToastContainer } from "@/components/ThemedToastContainer";
 import "react-toastify/dist/ReactToastify.css";
@@ -35,7 +37,8 @@ import ReadmeModal from "../components/game/ReadmeModal";
 import { useReadmeVisibility } from "@/lib/useReadmeVisibility";
 import { resolveOpeningCue } from "@/lib/openingCue";
 import { resolveWorldPrompt, useWorldPromptOptOut } from "@/lib/worldPrompt";
-import { useWorldPromptPresets } from "@/lib/worldPromptPreset";
+import { useWorldPromptPresets, resolveEffectivePreset } from "@/lib/worldPromptPreset";
+import { groupPromptPreset, loadTabOrganization } from "@/lib/libraryOrganization";
 import { EntityModal } from "../components/modals/EntityModal";
 import { LocationModal } from "../components/modals/LocationModal";
 import { SettingsModal } from "../components/modals/SettingsModal";
@@ -73,7 +76,7 @@ import {
   type ParsedDirector,
 } from "../lib/stagedPlanning";
 import { selectRelevantDiary } from "../lib/semanticDiary";
-import { selectDueDiscovery, materializeDiscoveredEntity, discoveredAsEntities, cleanDiscoveredDescription } from "../lib/runtimeCharacters";
+import { selectDueDiscovery, materializeDiscoveredEntity, discoveredAsEntities, cleanDiscoveredDescription, pruneDiscoveredToHistory, INITIAL_SOURCE_TURN_ID } from "../lib/runtimeCharacters";
 import { entityIdsAt } from "../lib/entityPresence";
 import { selectRegenSource, buildRegenContext, buildRegenUserMessage, REGEN_LABELS } from "../lib/discoveredRegen";
 import { trimToLastSentence } from "../lib/outputLength";
@@ -97,6 +100,7 @@ import {
   statUpdatesSystemPrompt,
   summaryUserMessage,
   discoverUserMessage,
+  sceneTagsPass,
 } from "../lib/turnPipeline/turnPasses";
 import { buildNarrationPrompt, type DictionaryDebug } from "../lib/turnPipeline/narrationPrompt";
 import { buildPlannerBand } from "../lib/turnPipeline/plannerBand";
@@ -105,8 +109,14 @@ import { planTurn, planHasPass } from "../lib/turnPipeline/planTurn";
 import { runTurn, type TurnAdvance, type TurnRequestAdapter } from "../lib/turnPipeline/turnRunner";
 import { computeTurnCommit, type TurnCommit } from "../lib/turnPipeline/computeTurnCommit";
 import { classifyTurnError, type TurnErrorKind } from "../lib/turnPipeline/turnErrors";
-import { emptyTurnMaterial, type TurnMaterial, type TurnPrompts, type TurnSettings } from "../lib/turnPipeline/turnPlan";
+import { emptyTurnMaterial, type TurnMaterial, type TurnPlanInput, type TurnPrompts, type TurnSettings } from "../lib/turnPipeline/turnPlan";
 import { parseTurns, buildVerbatimHistory, buildBandedHistory, extractKeywords, type BandCounts } from "../lib/turnBanding";
+import { anatomyRegions, toAnatomyBlocks, type RequestAnatomy } from "../lib/requestAnatomy";
+import type { PromptJumpTarget } from "../lib/promptJump";
+import { RequestAnatomyView } from "../components/game/RequestAnatomyView";
+import {
+  markFindHits, markFraction, parseFindTerms, planFindHits, type FindMarked,
+} from "@/lib/findMarks";
 import { buildStamper, formatAbsolute, hoursByPosition, FLAT_HOURS_PER_TURN } from "../lib/gameClock";
 import { milestoneCandidates, agedMilestoneCandidates, resolveMilestoneDrop, resolveMilestoneKeep, buildIncrementalMilestoneUserMessage, parseIncrementalMilestoneReply, applyIncrementalVerdict } from "../lib/milestoneMemory";
 import { applyMemoryOverrides, activeNotes } from "../lib/memoryOverrides";
@@ -137,10 +147,11 @@ import { useDeferredSnapshot } from "../lib/useDeferredSnapshot";
 import { statMorphMap } from "../lib/bodyMorphs";
 import {
   inAuthoredOrder, refreshChosenTraits, activeStatEnabled, enabledStats,
-  activePlaceholderPins,
 } from "../lib/traitEffects";
+import { collectPins } from "../lib/placeholderPins";
+import { usePlaceholderSession } from "../contexts/PlaceholderSessionContext";
 import {
-  acquireTrait, seedStatBases, setTraitEnabled, type TraitRuntimeState,
+  acquireTrait, seedNewGameStats, setTraitEnabled, type TraitRuntimeState,
 } from "../lib/traitRuntime";
 import { parseKeywords, locateMatches, type EntryActivation, type MatchHit, type MatchRule } from "../lib/dictionaryUtils";
 import { highlightSegments, HIGHLIGHT_PALETTE, type HighlightRule, type HighlightSegment } from "../lib/highlightUtils";
@@ -186,6 +197,10 @@ interface DebugRequest {
   id?: string;
   // Narration only: the dictionary activation behind this turn's injected lore.
   dictionary?: DictionaryDebug;
+  // Which runs of the sent messages are authored prompt text and which are assembled context (see
+  // lib/requestAnatomy). Absent on drainer requests, re-rolls, and pre-anatomy captures — the viewer
+  // draws the same region/chat layout either way; runs only matter to the Settings anatomy hub.
+  anatomy?: RequestAnatomy;
 }
 interface DebugTurn {
   action: string;
@@ -222,6 +237,12 @@ interface AiCallArgs {
   maxTokens?: number | null;
   signal?: AbortSignal;
   /**
+   * Inspection sidecar for the AI-context viewer (see lib/requestAnatomy). Captured with the request and
+   * dropped here — the request spec is built from `systemPrompt` and `messages` alone, so it never reaches
+   * the network.
+   */
+  anatomy?: RequestAnatomy;
+  /**
    * Silent requests (the memory digest) run without UI noise: no "Generating…" label, and they surface in
    * the status bar / AI-context viewer only when the "Show Silent Requests" setting is on. When captured,
    * they attach to the turn named by `attachTurnId` (the turn the digest summarizes — usually the one just
@@ -239,9 +260,6 @@ interface AiCallArgs {
 
 // A stable empty array for turns with no scene image, so the panel's prop identity doesn't churn.
 const EMPTY_IMAGES: string[] = [];
-
-// The scene-tag pass answers with one line of tags; enough for a rich action line, not for prose.
-const SCENE_TAGS_MAX_TOKENS = 120;
 
 // How many of a character's own recent diary entries to feed into its motivation pass (its memory).
 const DIARY_MEMORY_ENTRIES = 5;
@@ -321,12 +339,23 @@ const GameViewer = ({
   // global selection. Re-pinning from Settings writes back through `setWorldPreset`.
   const { worldPreset, setWorldPreset } = useWorldPromptPresets();
   const { beginSessionPreset, endSessionPreset } = settings;
+  // A library folder can carry a preset for every world inside it. The world's own pin still wins, and a
+  // level naming a deleted preset drops silently to the next — the arrangement is read straight from
+  // device-local storage, since it is a library preference the game never writes back to.
+  const groupPreset = useMemo(
+    () => (worldId ? groupPromptPreset(loadTabOrganization('worlds'), worldId) : undefined),
+    [worldId],
+  );
   useEffect(() => {
-    beginSessionPreset(worldPreset(worldId) ?? null, (id) => setWorldPreset(worldId, id));
+    const effective = resolveEffectivePreset(worldPreset(worldId), groupPreset, {
+      presets: settings.promptPresets,
+    });
+    beginSessionPreset(effective.presetId, (id) => setWorldPreset(worldId, id));
     return () => endSessionPreset();
-    // Re-runs only when the world changes; `worldPreset`/`setWorldPreset` are recreated every render.
+    // Re-runs only when the world or its folder's preset changes; `worldPreset`/`setWorldPreset` and the
+    // preset list are recreated every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [worldId, beginSessionPreset, endSessionPreset]);
+  }, [worldId, groupPreset, beginSessionPreset, endSessionPreset]);
   const {
     bgmEnabled,
     setBgmEnabled,
@@ -509,6 +538,8 @@ const GameViewer = ({
     entities, locations, stats, traits, traitGroups, dictionary, playerStats, viewStats,
     currentLocation, traitOrder, resolvePH, resolveWith, resolveTraitText,
   } = useResolvedWorld();
+  // The session's rolls, for the one pass that collects pins before they are in state (the init effect).
+  const { rolls: sessionRolls } = usePlaceholderSession();
 
   // --- Active traits and what they switch on ------------------------------------------------------------
   // A chosen trait the player has switched off contributes nothing: no AI text, no stat toggle, no pin. Its
@@ -547,7 +578,7 @@ const GameViewer = ({
         ...stats.map((s) => s.name),
         ...traits.map((t) => t.name),
         ...dictionary.flatMap((entry) => [entry.name ?? '', ...parseKeywords(entry)]),
-        ...placeholders.flatMap((p) => [p.name, ...p.values]),
+        ...placeholders.flatMap((p) => [p.name, ...p.values.map((v) => v.text)]),
         // The player's name lives in free-text notes, so every capitalized run there is off-limits.
         ...(playerNotes.match(/\b[A-Z][A-Za-z'’-]+/g) ?? []),
       ]),
@@ -716,8 +747,21 @@ const GameViewer = ({
   // Filing needs an account, so the in-game entry point is only offered to someone signed in.
   const [showBugReport, setShowBugReport] = useState(false);
   const canReportBug = COMMUNITY_ENABLED && Boolean(AuthService.token);
+
+  // Lend that composer to the account-deletion flow, which stands above this screen and tells a
+  // suspended account to ask the team here. The Privacy Policy prompt can raise the flow mid-game, so
+  // without this the step names Feedback on a screen with no way to reach it.
+  const { setFeedbackOpener } = useAccountDeletion();
+  useEffect(() => {
+    setFeedbackOpener(() => setShowBugReport(true));
+
+    return () => setFeedbackOpener(null);
+  }, [setFeedbackOpener]);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId | undefined>(undefined);
   const [settingsEndpointTab, setSettingsEndpointTab] = useState<string | undefined>(undefined);
+  // Where a click on a highlighted run in the AI-context viewer sends Settings: the prompt that owns the
+  // text, its editor, and — for the stacked narration lines — which field.
+  const [settingsPrompt, setSettingsPrompt] = useState<PromptJumpTarget | undefined>(undefined);
   useSettingsOpenRequest((tab, endpointTab) => {
     setSettingsTab(tab);
     setSettingsEndpointTab(endpointTab);
@@ -736,7 +780,8 @@ const GameViewer = ({
     aiGateShownRef.current = true;
     setAiGateOpen(true);
   }, [aiReachable]);
-  // The AI came up while the warning was showing — nothing is queued behind it, so just dismiss.
+  // The player took the gate's Continue action once setup finished — nothing is queued behind it, so
+  // just dismiss.
   const handleAiGateReady = useCallback(() => setAiGateOpen(false), []);
 
   // DEV dev-router: open an in-game modal when the hash asks for it (Menu routes via MenuModal's own
@@ -748,6 +793,7 @@ const GameViewer = ({
       case 'settings': setIsSettingsOpen(true); break;
       case 'export': setIsExportModalOpen(true); break;
       case 'location': setIsLocationModalOpen(true); break;
+      case 'aiContext': setIsDebugOpen(true); break;
     }
   }, [devRoute?.modal]);
   // Entity modal is a per-entity detail view (needs a selected entity), so open the first one — and wait
@@ -796,6 +842,17 @@ const GameViewer = ({
   const [debugHighlightMode, setDebugHighlightMode] = useState<"dictionary" | "hydrations">("dictionary");
   const [disabledHydrations, setDisabledHydrations] = useState<Record<string, boolean>>({});
   const [debugSearch, setDebugSearch] = useState("");
+  const debugFindTerms = useMemo(() => parseFindTerms(debugSearch), [debugSearch]);
+  // Which hit the find bar is on, counted in the current turn's document order. The ref shadows it so a
+  // second step taken before React re-renders still moves on from the first, rather than repeating it.
+  const [debugHitIndex, setDebugHitIndex] = useState(0);
+  const debugHitRef = useRef(0);
+  // Requests a search folded shut for having no hits, that the reader opened anyway. Separate from
+  // `collapsedDebug` so the fold never touches the arrangement they made for themselves.
+  const [debugUnfolded, setDebugUnfolded] = useState<Record<string, boolean>>({});
+  // The overview ruler: one tick per hit currently on screen, as a fraction of the scrollable height.
+  const [debugTicks, setDebugTicks] = useState<{ index: number; fraction: number }[]>([]);
+  const debugViewportRef = useRef<HTMLDivElement>(null);
   const [collapsedDebug, setCollapsedDebug] = useState<Record<string | number, boolean>>({});
   // When on (default), the viewer hides turns that aren't part of the live context — re-generated,
   // rolled-back (pruned), and aborted ones — leaving only the pages the AI currently sees.
@@ -810,6 +867,59 @@ const GameViewer = ({
   useEffect(() => {
     if (visibleDebugTurns.length > 0) setDebugPage(visibleDebugTurns.length);
   }, [visibleDebugTurns.length]);
+  // A new query, or a new turn, starts at the first hit again and drops the folds opened by hand.
+  useEffect(() => {
+    debugHitRef.current = 0;
+    setDebugHitIndex(0);
+    setDebugUnfolded({});
+  }, [debugSearch, debugPage]);
+  /**
+   * Redraw the overview ruler from what is on screen: one tick per mounted hit, at its share of the
+   * scrollable height. Hits inside a collapsed section aren't mounted, so they simply get no tick — the
+   * counter still counts them, since it reads the turn's text rather than the viewport.
+   */
+  const syncDebugTicks = useCallback(() => {
+    const viewport = debugViewportRef.current;
+    const marks = viewport ? [...viewport.querySelectorAll<HTMLElement>("[data-find-hit]")] : [];
+    const top = viewport?.getBoundingClientRect().top ?? 0;
+    const next = viewport
+      ? marks.map((el) => ({
+          index: Number(el.dataset.findHit),
+          fraction: markFraction(
+            el.getBoundingClientRect().top - top + viewport.scrollTop,
+            viewport.scrollHeight,
+          ),
+        }))
+      : [];
+    setDebugTicks((prev) =>
+      prev.length === next.length && prev.every((t, i) => t.index === next[i].index && t.fraction === next[i].fraction)
+        ? prev
+        : next,
+    );
+  }, []);
+  // Scroll the hit being read to the middle of the view. Instant, never smooth: a jump between mentions
+  // is navigation, and animating it is motion the reader never asked for.
+  useLayoutEffect(() => {
+    if (!isDebugOpen) return;
+    const target = debugViewportRef.current?.querySelector<HTMLElement>(`[data-find-hit="${debugHitIndex}"]`);
+    target?.scrollIntoView({ block: "center", behavior: "instant" });
+  }, [isDebugOpen, debugHitIndex, debugSearch, debugPage]);
+  // The ruler follows the document: a new hit set, a section opened or closed, or content that resized.
+  useLayoutEffect(() => {
+    syncDebugTicks();
+  }, [syncDebugTicks, isDebugOpen, debugHitIndex, debugSearch, debugPage, collapsedDebug, debugUnfolded, debugHighlightMode]);
+  useEffect(() => {
+    const viewport = isDebugOpen && debugFindTerms.length > 0 ? debugViewportRef.current : null;
+    if (!viewport) return;
+    const resize = new ResizeObserver(() => syncDebugTicks());
+    if (viewport.firstElementChild) resize.observe(viewport.firstElementChild);
+    // A section opens and closes by mounting and unmounting its content, and Radix does that in a pass of
+    // its own — after this render's effects have already measured. Watching the tree catches it; the
+    // resize observer above catches everything that changes height without changing the tree.
+    const mutations = new MutationObserver(() => syncDebugTicks());
+    mutations.observe(viewport, { childList: true, subtree: true });
+    return () => { resize.disconnect(); mutations.disconnect(); };
+  }, [isDebugOpen, debugFindTerms, syncDebugTicks]);
   const isMobile = useIsMobile();
   const [mobilePanel, setMobilePanel] = useState("game");
   const [showPotatoPCDialog, setShowPotatoPCDialog] = useState(false);
@@ -831,6 +941,17 @@ const GameViewer = ({
   }, [setPlayerStats]);
   const messagesPerPage = 2; // One AI message + one user message
 
+  // Shared rewind sweep: cut the flat history at `page` and prune everything keyed by turn id to the
+  // surviving turns — the (player-edited) discovered cast drops only characters whose introducing turn
+  // was discarded (named again by a fresh roll, they are discovered anew), and scene images go with
+  // their turns. Suppressed names stay whole; a deletion has no turn anchor to prune by.
+  const rewindHistoryToPage = (page: number) => {
+    const rewound = sliceHistoryToPage(fullMessageHistory, page, messagesPerPage);
+    setFullMessageHistory(rewound);
+    setDiscoveredEntities((prev) => pruneDiscoveredToHistory(prev, rewound));
+    setSceneImages((prev) => pruneSceneImages(prev, rewound));
+  };
+
   const handleRollback = () => {
     if (currentPage >= totalPages) return;
     const targetState = rollbackState(gameStates, currentPage);
@@ -843,11 +964,7 @@ const GameViewer = ({
     // A render still in flight targets a turn this rollback discards — stop it, or its finished image
     // would land back under the dead turn id (and ride into any opted-in save, invisible and unprunable).
     cancelSceneImage();
-    const rewound = sliceHistoryToPage(fullMessageHistory, currentPage, messagesPerPage);
-    setFullMessageHistory(rewound);
-    // Scene images live beside the history now, so a rolled-away turn's pictures have to be swept
-    // explicitly — inside the message they used to go with it.
-    setSceneImages((prev) => pruneSceneImages(prev, rewound));
+    rewindHistoryToPage(currentPage);
     setUserPage(null); // the rolled-back turn is now the latest — resume following it
     // Seed the live notes scratchpad from the rolled-back turn's own notes (per-turn notes live on the
     // message, and keepLiveHistory skips the snapshot's notes) so a later re-generate/action uses them.
@@ -936,13 +1053,11 @@ const GameViewer = ({
     if (!previousState || action === null) return;
     // Restore the prior turn's mechanical state but keep the live narration + notes (see handleRollback),
     // rewinding the flat history to just before the turn being re-rolled. The re-send appends a fresh turn.
-    loadGameState(previousState, locations, { keepLiveHistory: true });
+    if (!loadGameState(previousState, locations, { keepLiveHistory: true })) return;
     // Stop a render aimed at the turn being re-rolled: left running, it would finish into a dead turn id
     // AND overlap the re-roll's language-model request on the one GPU.
     cancelSceneImage();
-    const rewound = sliceHistoryToPage(fullMessageHistory, currentPage - 1, messagesPerPage);
-    setFullMessageHistory(rewound);
-    setSceneImages((prev) => pruneSceneImages(prev, rewound)); // the re-rolled turn's pictures go with it
+    rewindHistoryToPage(currentPage - 1);
     // The notes scratchpad is left alone: regen only targets the latest page, where the live scratchpad is
     // always at least as fresh as the message's frozen notes (a stopped turn freezes none at all —
     // re-seeding from the message here wiped the player's notes).
@@ -1153,12 +1268,12 @@ const GameViewer = ({
       // the player's standing notes. Probed on real failure turns (now-line-probe.mjs): removed the
       // scene-reset / roleplay-identity-inversion class entirely; without it the recap reads as backstory.
       // In-world time (experimental): each remembered moment is stamped with when it happened — the recap
-      // otherwise reads as an undated chronicle (docs-internal/time-system-design.md).
+      // otherwise reads as an undated chronicle (docs-internal/designs/time-system/design.md).
       const stamp = timeContext ? buildStamper({ nowHours: gameTime, hoursAt: hoursByPosition(turns), calendar }) : undefined;
       // Assembled from the same context values every other prompt uses: each chip carries its own wording
       // in its affixes and disappears with its value, so any combination still reads as a sentence.
       const nowLine = currentLocation ? renderPromptTemplate(nowLinePrompt, buildContextValuesRef.current()) : undefined;
-      const { messages, counts, bandTurnIds, rehydratedTurnIds } = buildBandedHistory({
+      const { messages, runs, counts, bandTurnIds, rehydratedTurnIds } = buildBandedHistory({
         turns,
         contextWindow,
         promptTokens,
@@ -1187,7 +1302,7 @@ const GameViewer = ({
         setContextMemoryIds(bandTurnIds);
         setRehydratedMemoryIds(rehydratedTurnIds);
       }
-      return messages;
+      return { messages, runs };
     }
     lastBandCountsRef.current = null;
     // Digests off: no band to anchor into, so the player's own memories lead as a standing block.
@@ -1507,6 +1622,20 @@ const GameViewer = ({
     diary: diaryPrompt,
     // Not a preset surface, so the pass sends it as authored.
     discoverEntity: defaultDiscoverEntityPrompt,
+    sceneTags: sceneTagsPrompt,
+    sceneTagsUser: sceneTagsUserPrompt,
+  });
+
+  /** The plan input a pass dispatched outside a turn builds its request from — the scene-tag pass, which
+   *  the scene-image flow drives on a turn already stored. */
+  const standalonePassInput = (): TurnPlanInput => ({
+    action: "",
+    isGameStarted: true,
+    destinationCount: 0,
+    locationCount: locations.length,
+    hasCurrentLocation: !!currentLocation,
+    settings: turnSettings(),
+    prompts: turnPrompts(),
   });
 
   /** The settings-derived booleans this turn's shape depends on. */
@@ -1770,7 +1899,7 @@ const GameViewer = ({
         // diary retrieval). Null = all semantic features quietly off for this turn.
         actionVec = await embedActionVec(effectiveAction);
 
-        const { prompt, dictionaryDebug } = buildNarrationPrompt({
+        const { prompt, runs, dictionaryDebug } = buildNarrationPrompt({
           template: systemPrompt,
           ctx,
           action: effectiveAction,
@@ -1795,7 +1924,7 @@ const GameViewer = ({
         // The context meter re-trims with the same scores + action vector so its counts mirror this turn.
         lastRelevanceScoresRef.current = relevanceScores;
         lastActionVecRef.current = actionVec;
-        const trimmedHistory = getTrimmedMessageHistory(estimateTokens(prompt.length), effectiveAction, relevanceScores, actionVec, true);
+        const { messages: trimmedHistory, runs: historyRuns } = getTrimmedMessageHistory(estimateTokens(prompt.length), effectiveAction, relevanceScores, actionVec, true);
 
         // Add user message to history after getting trimmed history. Stores the proxy on the opening turn so
         // later turns' context is byte-identical to the old flow (the real opening text lives in openingActionRef).
@@ -1835,7 +1964,9 @@ const GameViewer = ({
         return {
           ctx,
           narrationSystemPrompt: prompt,
+          narrationSystemPromptRuns: runs,
           trimmedHistory,
+          historyRuns,
           lastStory: band?.lastStory ?? lastStory,
           plannerRecap: band?.recap ?? "",
           activeCharacterGuidance: activeCharacterGuidance(limitActiveCharacters, activeCharacterLimit),
@@ -2300,6 +2431,7 @@ const GameViewer = ({
     silent = false,
     attachTurnId,
     quiet: quietLabel = false,
+    anatomy,
   }: AiCallArgs) => {
     // The parity recording observes the seam itself: exactly the arguments this call received, in
     // dispatch order, before anything downstream shapes them. Inert unless the harness armed it.
@@ -2356,6 +2488,9 @@ const GameViewer = ({
             messages: spec.body.messages,
             id: captureId,
             dictionary,
+            // The sidecar indexes the messages the caller stated; the wire list prepends the system
+            // message, which `toAnatomyBlocks` accounts for when the viewer lines the two up.
+            anatomy,
             endpoint: toDebugEndpoint(target),
           },
         ],
@@ -2719,21 +2854,13 @@ const GameViewer = ({
     if (signal.aborted) return "";
     // The tag pass is silent and attached to this turn, so it shows in the AI-context viewer under the
     // scene it describes (with Show Silent Requests on) rather than under whatever turn is current.
-    const actionTags = await makeAIRequest({
-      systemPrompt: renderPromptTemplate(sceneTagsPrompt, buildContextValues()),
-      messages: [{
-        role: "user",
-        content: renderPromptTemplate(sceneTagsUserPrompt, {
-          "<NARRATION>": narration,
-          "<IN FRAME>": cast.length ? cast.map((c) => c.name).join(", ") : "nobody - an empty scene",
-        }),
-      }],
-      type: "sceneTags",
-      maxTokens: SCENE_TAGS_MAX_TOKENS,
-      signal,
-      silent: true,
-      attachTurnId: turnId,
+    const request = sceneTagsPass.buildRequest(standalonePassInput(), {
+      ...emptyTurnMaterial({ action: "", effectiveAction: "", turnId, baseCtx: {}, destinations: [] }),
+      ctx: buildContextValues(),
+      narration,
+      sceneCast: cast.map((c) => c.name),
     });
+    const actionTags = await makeAIRequest({ ...request, signal });
     if (signal.aborted) return "";
     const line = composeSceneTags({ characters: cast, locationTags, actionTags, places, knownTags });
     // Stored whether or not an image follows, so the player can read and edit what would be sent.
@@ -3398,12 +3525,7 @@ const GameViewer = ({
       // Seeded from the AUTHORED stats, chips and all: names resolve on the way out of state, never in, so
       // a resolved name written in here would freeze whatever pins happened to be active at game start and
       // no later pin could ever move it.
-      const seeded = seedStatBases(
-        authoredStats.map((stat) => {
-          const value = stat.value || stat.min || 0;
-          return { ...stat, value, starting: stat.starting ?? value };
-        }),
-      );
+      const seeded = seedNewGameStats(authoredStats);
 
       // Authored order, not click order: stat changes apply in sequence, so a deterministic order is what
       // makes two players who picked the same traits end up with the same stats. Authored traits for the
@@ -3428,12 +3550,17 @@ const GameViewer = ({
 
       // Use the player's chosen starting location, else a random starting point (fallback: any location).
       const location = resolveStartingLocation(locations, initialLocationId);
-      if (location) {
+      const authoredLocation = location ? authoredLocations.find((l) => l.id === location.id) ?? location : null;
+      // The pins the game opens under, from every source: the traits just applied, the starting location
+      // and the bands the post-trait stats fall in. None of it is in state yet, so anything written in this
+      // pass resolves against these rather than the (empty) pins still in force.
+      const openingPins = collectPins({
+        traits: chosenList, location: authoredLocation, stats: seedState.stats, placeholders, rolls: sessionRolls,
+      });
+      if (location && authoredLocation) {
         changeLocation(location);
-        // A log line is frozen the moment it is written, and the traits just applied are not in state yet —
-        // so resolve against the pins they are about to impose rather than the (empty) ones still in force.
-        const authored = authoredLocations.find((l) => l.id === location.id) ?? location;
-        addLogEntry(`Starting in location: ${resolveWith(activePlaceholderPins(chosenList), authored.name)}`);
+        // A log line is frozen the moment it is written.
+        addLogEntry(`Starting in location: ${resolveWith(openingPins, authoredLocation.name)}`);
       }
 
       // Seed the per-playthrough dictionary set: the entry-step selection, or the world's authored books
@@ -3453,20 +3580,22 @@ const GameViewer = ({
       // to the authored world). They flow through the existing discovered-entity path; loadGame overrides.
       if (location && initialCharacters && initialCharacters.length > 0) {
         setDiscoveredEntities(
-          initialCharacters.map((entity) => ({ entity, locationId: location.id, sourceTurnId: 'initial' })),
+          initialCharacters.map((entity) => ({ entity, locationId: location.id, sourceTurnId: INITIAL_SOURCE_TURN_ID })),
         );
       }
 
       // Pre-fill the editable opening cue so the player can shape the first turn before submitting it. The
       // world's own cue when it has one, resolved here (against the pins the traits above are about to
       // impose) so the player reads and edits plain prose, never raw chips.
-      setPlayerInput(resolveWith(activePlaceholderPins(chosenList), resolveOpeningCue(worldOverview)));
+      setPlayerInput(resolveWith(openingPins, resolveOpeningCue(worldOverview)));
     }
   }, [
     initialSaveId,
     loadGame,
     initialTraits,
     initialLocationId,
+    placeholders,
+    sessionRolls,
     initialDictionaries,
     initialCharacters,
     dictionaries,
@@ -3605,7 +3734,7 @@ const GameViewer = ({
   // not on every render.
   const memoryStats = useMemo(() => {
     const promptTokens = estimateTokens(lastPromptChars);
-    const trimmed = getTrimmedMessageHistory(promptTokens, "", lastRelevanceScoresRef.current, lastActionVecRef.current);
+    const { messages: trimmed } = getTrimmedMessageHistory(promptTokens, "", lastRelevanceScoresRef.current, lastActionVecRef.current);
     return {
       promptTokens,
       trimmed,
@@ -3636,14 +3765,13 @@ const GameViewer = ({
     return (
       <div className="flex items-center gap-2 mb-1">
         <Popover>
-          <PopoverTrigger asChild>
-            <button
-              className="text-muted-foreground hover:text-foreground"
-              title="Memory usage"
-            >
-              <Database className="h-4 w-4" />
-            </button>
-          </PopoverTrigger>
+          <Tip tip="Memory usage">
+            <PopoverTrigger asChild>
+              <button className="text-muted-foreground hover:text-foreground">
+                <Database className="h-4 w-4" />
+              </button>
+            </PopoverTrigger>
+          </Tip>
           <PopoverContent align="start" className="w-64 text-meta space-y-1">
             <div className="font-semibold">Context window: {windowTokens.toLocaleString()} tok</div>
             {row("Prompt", promptTokens)}
@@ -3874,15 +4002,16 @@ const GameViewer = ({
       {/* Hide-UI toggle: reveals the background image. While the UI is hidden the button fades out completely
           until hovered. Hidden on mobile — the panels already fill the screen there, so it isn't needed. */}
       {!isMobile && (
-      <Button
-        onClick={() => setUiHidden((h) => !h)}
-        title={uiHidden ? "Show UI" : "Hide UI"}
-        className={`absolute bottom-2 left-2 z-30 flex items-center justify-center rounded-full w-10 h-10 p-0 transition-opacity ${
-          uiHidden ? "opacity-0 hover:opacity-100" : "opacity-100"
-        }`}
-      >
-        {uiHidden ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-      </Button>
+      <Tip tip={uiHidden ? "Show UI" : "Hide UI"}>
+        <Button
+          onClick={() => setUiHidden((h) => !h)}
+          className={`absolute bottom-2 left-2 z-30 flex items-center justify-center rounded-full w-10 h-10 p-0 transition-opacity ${
+            uiHidden ? "opacity-0 hover:opacity-100" : "opacity-100"
+          }`}
+        >
+          {uiHidden ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+        </Button>
+      </Tip>
       )}
 
       {/* BGM + AI-context buttons — desktop only. On mobile the music toggle is dropped and AI context moves
@@ -3897,26 +4026,28 @@ const GameViewer = ({
             className={`h-5 w-5 ${bgmEnabled ? "" : "text-muted-foreground"}`}
           />
         </Button>
-        <Button
-          onClick={() => setIsDebugOpen(true)}
-          className="flex items-center justify-center rounded-full w-10 h-10 p-0"
-          title="Show the full AI context sent each turn"
-        >
-          <ScrollText className="h-5 w-5" />
-        </Button>
+        <Tip tip="Show the full AI context sent each turn">
+          <Button
+            onClick={() => setIsDebugOpen(true)}
+            className="flex items-center justify-center rounded-full w-10 h-10 p-0"
+          >
+            <ScrollText className="h-5 w-5" />
+          </Button>
+        </Tip>
       </div>
       )}
 
       {/* Edit-world + Menu buttons — desktop only. On mobile both fold into the tab-row menu. */}
       {!uiHidden && !isMobile && (
       <div className="absolute top-16 right-2 md:top-2 flex gap-2">
-        <Button
-          onClick={() => setIsEditingWorld(true)}
-          className="flex items-center justify-center rounded-full w-10 h-10 p-0"
-          title="Edit World"
-        >
-          <SquarePen className="h-5 w-5" />
-        </Button>
+        <Tip tip="Edit World">
+          <Button
+            onClick={() => setIsEditingWorld(true)}
+            className="flex items-center justify-center rounded-full w-10 h-10 p-0"
+          >
+            <SquarePen className="h-5 w-5" />
+          </Button>
+        </Tip>
         {menuModal()}
       </div>
       )}
@@ -3993,7 +4124,7 @@ const GameViewer = ({
 
       {/* Full AI context sent each turn, paginated by turn */}
       <Dialog open={isDebugOpen} onOpenChange={setIsDebugOpen}>
-        <DialogContent aria-describedby={undefined} className="max-w-[90vw] w-[90vw] h-[85dvh] flex flex-col overflow-hidden">
+        <DialogContent aria-describedby={undefined} className="max-w-[95vw] w-[95vw] h-[90dvh] flex flex-col overflow-hidden">
           {(() => {
             const palette = HIGHLIGHT_PALETTE;
             // Stable per-entry color + name lookups (by the live dictionary's order), shared by the legend,
@@ -4004,26 +4135,52 @@ const GameViewer = ({
               colorMap[entry.id] = palette[i % palette.length];
               nameById.set(entry.id, entry.name || parseKeywords(entry)[0] || "unnamed");
             });
-            const searchTerms = debugSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
-            const searchActive = searchTerms.length > 0;
-            // Keep only lines matching any search term; collapse each run of dropped lines into "...".
-            const filterLines = (text: string) => {
-              const out = [];
-              let pendingGap = false;
-              let shownAny = false;
-              text.split("\n").forEach((line) => {
-                if (searchTerms.some((t) => line.toLowerCase().includes(t))) {
-                  if (pendingGap) out.push("...");
-                  out.push(line);
-                  shownAny = true;
-                  pendingGap = false;
-                } else {
-                  pendingGap = true;
-                }
-              });
-              if (shownAny && pendingGap) out.push("...");
-              return shownAny ? out.join("\n") : "";
+            // Search marks the text where it stands and steps between the marks. It never rewrites what
+            // is on screen, so the regions, the chat stagger, and the dictionary highlights all survive it.
+            const findTerms = debugFindTerms;
+            const searchActive = findTerms.length > 0;
+            // Page = turn; show the requests captured for the currently selected (visible) turn.
+            const totalDebugPages = visibleDebugTurns.length;
+            const pageIndex = Math.min(Math.max(debugPage, 1), Math.max(totalDebugPages, 1)) - 1;
+            const currentTurn = visibleDebugTurns[pageIndex];
+            const currentRequests = currentTurn?.requests ?? [];
+            /* Every block of this turn, in the order the viewer draws them: each request's input blocks
+               (System Prompt region before Messages, as the anatomy lays them out), then its raw output.
+               Numbering the hits over that sequence is what makes "3 of 11" mean the third mention of the
+               turn, whatever the reader has collapsed. */
+            const findChunks = currentRequests.flatMap((req, i) => {
+              const regions = anatomyRegions(toAnatomyBlocks(req.messages, req.anatomy));
+              const inputs = [...regions.system, ...regions.messages].map(([block, bi]) => ({ blockIndex: bi, text: block.content }));
+              const chunks = inputs.map(({ blockIndex, text }) => ({
+                key: `${i}:in:${blockIndex}`, group: `group-${i}`, section: i as string | number, request: i, text,
+              }));
+              if (typeof req.response === "string") {
+                chunks.push({ key: `${i}:out`, group: `group-${i}`, section: `out-${i}`, request: i, text: req.response });
+              }
+              return chunks;
+            });
+            const findPlan = planFindHits(findChunks.map((c) => c.text), findTerms);
+            const findByKey = new Map(findChunks.map((c, k) => [c.key, findPlan.blocks[k]]));
+            // Which request and section owns each hit, so navigating to one opens whatever hides it, and
+            // how many hits each request holds, which is what decides the fold.
+            const hitOwners: { group: string; section: string | number }[] = [];
+            const hitsPerRequest = currentRequests.map(() => 0);
+            findChunks.forEach((chunk, k) => {
+              hitsPerRequest[chunk.request] += findPlan.blocks[k].hits.length;
+              findPlan.blocks[k].hits.forEach(() => hitOwners.push({ group: chunk.group, section: chunk.section }));
+            });
+            const hitTotal = findPlan.total;
+            const currentHit = hitTotal > 0 ? Math.min(debugHitIndex, hitTotal - 1) : 0;
+            const goToHit = (next: number) => {
+              if (hitTotal === 0) return;
+              const wrapped = ((next % hitTotal) + hitTotal) % hitTotal;
+              const owner = hitOwners[wrapped];
+              // A hit inside something collapsed is still a hit; opening it is part of going there.
+              if (owner) setCollapsedDebug((prev) => ({ ...prev, [owner.group]: false, [owner.section]: false }));
+              debugHitRef.current = wrapped;
+              setDebugHitIndex(wrapped);
             };
+            const stepHit = (delta: number) => goToHit(debugHitRef.current + delta);
             // One inline match-chip: the entry it belongs to plus the exact hit behind it (drives the popover).
             interface DictChip { entryId: string; color: string; activation: EntryActivation; hit: MatchHit; }
             // A rendered run of text — plain, a legacy flat color mark (hydrations), or a dictionary match-chip.
@@ -4031,14 +4188,12 @@ const GameViewer = ({
             // Dictionary highlighter — the truthful path. Marks ONLY the real activation hits, located inside
             // the exact scanned strings (`dict.sources`) captured for this turn, so a highlight means the text
             // genuinely drove an entry to activate. `dict` is undefined for non-narration requests and raw
-            // output (never scanned) — those render plain. Honors the search filter and the legend toggles.
+            // output (never scanned) — those render plain. Honors the legend toggles.
             const buildDictSegments = (text: string, dict?: DictionaryDebug): Seg[] => {
-              const shown = searchActive ? filterLines(text) : text;
-              if (searchActive && !shown) return [];
-              if (!dict) return shown ? [{ text: shown }] : [];
+              if (!dict) return text ? [{ text }] : [];
               // Locate real activation hits (lib does the offset math + overlap resolution); paint on the color.
               return locateMatches(
-                shown,
+                text,
                 dict.report,
                 dict.sources,
                 (entryId) => disabledHighlights[entryId] || !colorMap[entryId],
@@ -4048,13 +4203,9 @@ const GameViewer = ({
                   : { text: seg.text },
               );
             };
-            // Hydration highlighter: no section/declaration logic — just mark the (active) hydration terms,
-            // honoring the search filter and returning [] when search hides everything.
-            const buildHydrationSegments = (text: string, rules: HighlightRule[]): HighlightSegment[] => {
-              const t = searchActive ? filterLines(text) : text;
-              if (searchActive && !t) return [];
-              return highlightSegments(t, rules);
-            };
+            // Hydration highlighter: no section/declaration logic — just mark the (active) hydration terms.
+            const buildHydrationSegments = (text: string, rules: HighlightRule[]): HighlightSegment[] =>
+              highlightSegments(text, rules);
             // Human labels for a scanned region + an entry's match rule, shown in the reason popover.
             // Scene regions are the prompt token that produced the block, so the label names the scope the
             // player actually sees in the prompt (here / sub-locations / nearby).
@@ -4112,15 +4263,31 @@ const GameViewer = ({
                 </div>
               );
             };
-            const renderSegs = (segs: Seg[]) =>
+            /* A search hit's face: one amber accent over whatever the highlighters already drew, with a
+               stronger fill for the hit being read. On a dictionary chip the accent is a ring, so the
+               entry keeps its own color and its popover keeps answering — a find mark opens nothing. */
+            const findFill = (find: FindMarked<Seg>["find"], onChip: boolean) => {
+              if (!find) return "";
+              const current = find.index === currentHit;
+              if (onChip) return current ? "ring-2 ring-amber-600" : "ring-1 ring-amber-500";
+              return current
+                ? "bg-amber-400 text-black ring-2 ring-amber-600"
+                : "bg-amber-200 text-black ring-1 ring-amber-500";
+            };
+            // Only the run holding a hit's first character is addressable, so a hit split across runs is
+            // still one place to scroll to and one tick on the ruler.
+            const findAttrs = (find: FindMarked<Seg>["find"]) =>
+              find?.head ? { "data-find-hit": String(find.index) } : {};
+            const renderSegs = (segs: FindMarked<Seg>[]) =>
               segs.map((seg, k) => {
                 if (seg.chip) {
                   return (
                     <Popover key={k}>
                       <PopoverTrigger asChild>
                         <mark
+                          {...findAttrs(seg.find)}
                           style={{ backgroundColor: seg.color, color: "#000" }}
-                          className="rounded px-0.5 cursor-pointer hover:ring-2 hover:ring-ring"
+                          className={`rounded px-0.5 cursor-pointer hover:ring-2 hover:ring-ring ${findFill(seg.find, true)}`}
                         >
                           {seg.text}
                         </mark>
@@ -4131,23 +4298,26 @@ const GameViewer = ({
                     </Popover>
                   );
                 }
-                return seg.color ? (
-                  <mark
-                    key={k}
-                    style={{ backgroundColor: seg.color, color: "#000" }}
-                    className="rounded px-0.5"
-                  >
+                if (seg.color) {
+                  return (
+                    <mark
+                      key={k}
+                      {...findAttrs(seg.find)}
+                      style={{ backgroundColor: seg.color, color: "#000" }}
+                      className={`rounded px-0.5 ${findFill(seg.find, true)}`}
+                    >
+                      {seg.text}
+                    </mark>
+                  );
+                }
+                return seg.find ? (
+                  <mark key={k} {...findAttrs(seg.find)} className={`rounded px-0.5 ${findFill(seg.find, false)}`}>
                     {seg.text}
                   </mark>
                 ) : (
                   <span key={k}>{seg.text}</span>
                 );
               });
-            // Page = turn; show the requests captured for the currently selected (visible) turn.
-            const totalDebugPages = visibleDebugTurns.length;
-            const pageIndex = Math.min(Math.max(debugPage, 1), Math.max(totalDebugPages, 1)) - 1;
-            const currentTurn = visibleDebugTurns[pageIndex];
-            const currentRequests = currentTurn?.requests ?? [];
             // This turn's narration activation report drives the legend's activated/dimmed state.
             const activationById = new Map(
               (currentRequests.find((r) => r.type === "narration")?.dictionary?.report ?? []).map((a) => [a.entryId, a]),
@@ -4181,6 +4351,14 @@ const GameViewer = ({
               debugHighlightMode === "hydrations"
                 ? buildHydrationSegments(text, req.type === "narration" ? activeHydrationRules : [])
                 : buildDictSegments(text, isOutput ? undefined : req.dictionary);
+            /* One slice of one block, marked by the highlighters and then by the search. `key` names the
+               block in this turn's hit plan and `start` is where the slice begins inside it, so a block
+               drawn in pieces still marks the same hits under the same numbers. */
+            const renderBlock = (text: string, req: DebugRequest, isOutput: boolean, key: string, start = 0) => {
+              const segs = segmentsFor(text, req, isOutput);
+              const plan = searchActive ? findByKey.get(key) : undefined;
+              return renderSegs(plan ? markFindHits(segs, plan.hits, start, plan.base) : segs);
+            };
             // The memory digest for this turn (stored on its assistant message), if one has been generated.
             const currentSummary = currentTurn?.turnId
               ? fullMessageHistory
@@ -4208,22 +4386,58 @@ const GameViewer = ({
             };
             return (
               <>
-                <DialogHeader className="flex-shrink-0">
-                  <div className="flex items-center justify-between gap-2 pr-8">
-                    <DialogTitle className="flex items-center gap-2"><ScrollText className="h-4 w-4" /> AI context</DialogTitle>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={handleExportDebugContext}
-                      disabled={debugTurns.length === 0}
-                      title="Download the full turn history as JSON"
-                    >
-                      <ActionIcon.export className="h-4 w-4" />
-                      Export
-                    </Button>
+                {/* The header row: the title beside the search field; pr-8 keeps it clear of the
+                    dialog's Close button. Below md the title goes back to being screen-reader-only. */}
+                <div className="flex items-center gap-2 flex-shrink-0 pr-8">
+                  <DialogTitle className="sr-only md:not-sr-only md:flex md:flex-shrink-0 md:items-center md:gap-1.5">
+                    <ScrollText className="h-5 w-5" />
+                    AI Context
+                  </DialogTitle>
+                  {/* The find controls share the search field's frame, so the toolbar keeps its one row. */}
+                  <div className="relative min-w-0 flex-grow">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      value={debugSearch}
+                      onChange={(e) => setDebugSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        e.preventDefault();
+                        stepHit(e.shiftKey ? -1 : 1);
+                      }}
+                      placeholder="Search (space-separated terms)…"
+                      className={`pl-8 ${searchActive ? "pr-28" : ""}`}
+                    />
+                    {searchActive && (
+                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                        <span className="px-1 text-meta tabular-nums text-muted-foreground">
+                          {hitTotal > 0 ? `${currentHit + 1} of ${hitTotal}` : "0 of 0"}
+                        </span>
+                        <Tip tip="Previous match (Shift+Enter)">
+                          <button
+                            type="button"
+                            onClick={() => stepHit(-1)}
+                            disabled={hitTotal === 0}
+                            aria-label="Previous match"
+                            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+                          >
+                            <ChevronUp className="h-4 w-4" />
+                          </button>
+                        </Tip>
+                        <Tip tip="Next match (Enter)">
+                          <button
+                            type="button"
+                            onClick={() => stepHit(1)}
+                            disabled={hitTotal === 0}
+                            aria-label="Next match"
+                            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+                          >
+                            <ChevronDown className="h-4 w-4" />
+                          </button>
+                        </Tip>
+                      </div>
+                    )}
                   </div>
-                </DialogHeader>
+                </div>
                 <div className="flex flex-wrap items-center gap-2 flex-shrink-0 text-meta">
                   {/* Highlight-mode toggle: dictionary entries vs the per-turn rehydration signal. */}
                   <div className="inline-flex flex-shrink-0 overflow-hidden rounded border border-border">
@@ -4252,36 +4466,38 @@ const GameViewer = ({
                         const label = (semantic ? "≈ " : "") + (entry.name || parseKeywords(entry)[0] || "unnamed");
                         if (!activated) {
                           return (
-                            <span
-                              key={entry.id}
-                              className="rounded border border-border px-1.5 py-0.5 opacity-40 text-muted-foreground"
-                              title="Did not activate this turn"
-                            >
-                              {label}
-                            </span>
+                            <Tip key={entry.id} tip="Did not activate this turn" labelsChild={false}>
+                              <span className="rounded border border-border px-1.5 py-0.5 opacity-40 text-muted-foreground">
+                                {label}
+                              </span>
+                            </Tip>
                           );
                         }
                         const disabled = disabledHighlights[entry.id];
                         return (
-                          <button
+                          <Tip
                             key={entry.id}
-                            onClick={() =>
-                              setDisabledHighlights((prev) => ({ ...prev, [entry.id]: !prev[entry.id] }))
-                            }
-                            className="rounded border px-1.5 py-0.5"
-                            style={
-                              disabled
-                                ? { borderColor: colorMap[entry.id], opacity: 0.5 }
-                                : { backgroundColor: colorMap[entry.id], borderColor: colorMap[entry.id], color: "#000" }
-                            }
-                            title={
+                            labelsChild={false}
+                            tip={
                               semantic
                                 ? `Activated by meaning (similarity ${activation?.semanticSimilarity?.toFixed(2) ?? "?"}) — no keyword hit to highlight`
                                 : disabled ? "Click to show highlights" : "Click to hide highlights"
                             }
                           >
-                            {label}
-                          </button>
+                            <button
+                              onClick={() =>
+                                setDisabledHighlights((prev) => ({ ...prev, [entry.id]: !prev[entry.id] }))
+                              }
+                              className="rounded border px-1.5 py-0.5"
+                              style={
+                                disabled
+                                  ? { borderColor: colorMap[entry.id], opacity: 0.5 }
+                                  : { backgroundColor: colorMap[entry.id], borderColor: colorMap[entry.id], color: "#000" }
+                              }
+                            >
+                              {label}
+                            </button>
+                          </Tip>
                         );
                       })
                     ) : (
@@ -4292,44 +4508,55 @@ const GameViewer = ({
                       const disabled = disabledHydrations[term];
                       const color = hydrationColorMap[term.toLowerCase()];
                       return (
-                        <button
+                        <Tip
                           key={term}
-                          onClick={() =>
-                            setDisabledHydrations((prev) => ({ ...prev, [term]: !prev[term] }))
-                          }
-                          className="rounded border px-1.5 py-0.5"
-                          style={
-                            disabled
-                              ? { borderColor: color, opacity: 0.5 }
-                              : { backgroundColor: color, borderColor: color, color: "#000" }
-                          }
-                          title={disabled ? "Click to enable highlight" : "Click to disable highlight"}
+                          labelsChild={false}
+                          tip={disabled ? "Click to enable highlight" : "Click to disable highlight"}
                         >
-                          {term}
-                        </button>
+                          <button
+                            onClick={() =>
+                              setDisabledHydrations((prev) => ({ ...prev, [term]: !prev[term] }))
+                            }
+                            className="rounded border px-1.5 py-0.5"
+                            style={
+                              disabled
+                                ? { borderColor: color, opacity: 0.5 }
+                                : { backgroundColor: color, borderColor: color, color: "#000" }
+                            }
+                          >
+                            {term}
+                          </button>
+                        </Tip>
                       );
                     })
                   ) : (
                     <span className="text-muted-foreground">No hydration terms for this turn.</span>
                   )}
                 </div>
+                {/* The turn line and the view controls share one row: the text truncates on the left,
+                    the buttons keep their size on the right. */}
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <div className="relative flex-grow">
-                    <Search className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      value={debugSearch}
-                      onChange={(e) => setDebugSearch(e.target.value)}
-                      placeholder="Search lines (space-separated terms)…"
-                      className="pl-8 h-8 text-meta"
-                    />
+                  <div className="min-w-0 flex-grow truncate text-meta text-muted-foreground">
+                    {currentTurn && (
+                      <>
+                        <span className={currentTurn.regenerated || currentTurn.pruned ? "line-through" : ""}>
+                          Turn {pageIndex + 1} of {totalDebugPages}
+                          {currentTurn.action ? ` — "${currentTurn.action}"` : ""}
+                        </span>
+                        {currentTurn.regenerated ? (
+                          <span className="ml-2 font-medium text-warning">Re-generated</span>
+                        ) : currentTurn.pruned ? (
+                          <span className="ml-2 font-medium text-warning">Pruned</span>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={toggleAll}
-                    disabled={searchActive || currentRequests.length === 0}
+                    disabled={currentRequests.length === 0}
                     className="h-8 flex-shrink-0 gap-1"
-                    title={searchActive ? "Disabled while searching" : undefined}
                   >
                     {allCollapsed ? (
                       <ChevronsUpDown className="h-4 w-4" />
@@ -4345,20 +4572,19 @@ const GameViewer = ({
                     />
                     Current context only
                   </label>
+                  <Tip tip="Download the full turn history as JSON" labelsChild={false}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 flex-shrink-0 gap-1.5"
+                      onClick={handleExportDebugContext}
+                      disabled={debugTurns.length === 0}
+                    >
+                      <ActionIcon.export className="h-4 w-4" />
+                      Export
+                    </Button>
+                  </Tip>
                 </div>
-                {currentTurn && (
-                  <div className="flex-shrink-0 text-meta text-muted-foreground truncate">
-                    <span className={currentTurn.regenerated || currentTurn.pruned ? "line-through" : ""}>
-                      Turn {pageIndex + 1} of {totalDebugPages}
-                      {currentTurn.action ? ` — "${currentTurn.action}"` : ""}
-                    </span>
-                    {currentTurn.regenerated ? (
-                      <span className="ml-2 font-medium text-warning">Re-generated</span>
-                    ) : currentTurn.pruned ? (
-                      <span className="ml-2 font-medium text-warning">Pruned</span>
-                    ) : null}
-                  </div>
-                )}
                 {showSilentRequests && currentSummary && (
                   <div className="flex-shrink-0 rounded-md border border-border bg-muted/40 p-2 text-meta">
                     <div className="mb-1 font-semibold text-muted-foreground">Memory summary</div>
@@ -4366,7 +4592,21 @@ const GameViewer = ({
                   </div>
                 )}
                 <div className="flex-grow min-h-0">
-                  <ScrollArea className="h-full">
+                  {/* While searching, the bar stays out so its ticks do — an overview that hides when the
+                      pointer leaves is no overview. */}
+                  <ScrollArea
+                    className="h-full"
+                    viewportRef={debugViewportRef}
+                    type={searchActive ? "always" : undefined}
+                    marks={searchActive
+                      ? debugTicks.map((tick) => ({
+                          fraction: tick.fraction,
+                          current: tick.index === currentHit,
+                          label: `Match ${tick.index + 1} of ${hitTotal}`,
+                        }))
+                      : undefined}
+                    onMarkSelect={(k) => goToHit(debugTicks[k].index)}
+                  >
                     <div className="space-y-4 text-meta">
                       {totalDebugPages === 0 ? (
                         <p className="text-muted-foreground">
@@ -4376,49 +4616,47 @@ const GameViewer = ({
                         </p>
                       ) : (
                         currentRequests.map((req, i) => {
-                          const msgSegs = req.messages.map((m) => ({
-                            role: m.role,
-                            segs: segmentsFor(m.content, req, false),
-                          }));
-                          const hasReqMatch = msgSegs.some((ms) => ms.segs.length > 0);
-                          // Raw, unmodified AI output for this request (captured in makeAIRequest).
-                          const outSegs =
-                            typeof req.response === "string" ? segmentsFor(req.response, req, true) : null;
-                          const hasOutMatch = outSegs !== null && outSegs.length > 0;
-                          // While searching, drop the whole block only if neither the request nor its output matches.
-                          if (searchActive && !hasReqMatch && !hasOutMatch) return null;
-                          const groupOpen = searchActive ? true : !collapsedDebug[`group-${i}`];
-                          const reqOpen = searchActive ? true : !collapsedDebug[i];
-                          const outOpen = searchActive ? true : !collapsedDebug[`out-${i}`];
+                          /* A search folds a request with no hits shut and says so, so the turn keeps its
+                             shape without the noise. The fold is derived, never stored: it neither reads
+                             nor writes the reader's own collapse map, so clearing the search restores
+                             exactly the arrangement they made. Opening a folded request by hand still works. */
+                          const folded = searchActive && hitsPerRequest[i] === 0;
+                          const groupOpen = folded ? !!debugUnfolded[`group-${i}`] : !collapsedDebug[`group-${i}`];
+                          const reqOpen = !collapsedDebug[i];
+                          const outOpen = !collapsedDebug[`out-${i}`];
                           return (
                             <Collapsible
                               key={i}
                               open={groupOpen}
-                              onOpenChange={(o) =>
-                                setCollapsedDebug((prev) => ({ ...prev, [`group-${i}`]: !o }))
-                              }
+                              onOpenChange={(o) => (folded
+                                ? setDebugUnfolded((prev) => ({ ...prev, [`group-${i}`]: o }))
+                                : setCollapsedDebug((prev) => ({ ...prev, [`group-${i}`]: !o })))}
                               className="border border-border rounded-md"
                             >
                               <CollapsibleTrigger asChild>
                                 <button className="flex w-full items-center justify-between gap-2 p-2 text-left font-semibold">
                                   <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                                    <span>Request {i + 1}: {req.type}</span>
+                                    <span>
+                                      Request {i + 1}: {req.type}
+                                      {folded && <span className="font-normal text-muted-foreground"> · no matches</span>}
+                                    </span>
                                     {/* Which endpoint served it. A routed prompt is called out; one following
                                         the active preset is shown quietly, since that is the norm. */}
                                     {req.endpoint && (
-                                      <span
-                                        // The routed chip is marked by a tinted border + the arrow, not by
-                                        // colored text: `primary` is a pale accent that all but vanishes as
-                                        // text on a light surface (measured 1.24:1).
-                                        className={`rounded px-1.5 py-0.5 text-meta font-normal ${
-                                          req.endpoint.routed
-                                            ? "border border-primary/60 bg-primary/15 text-foreground"
-                                            : "bg-muted text-muted-foreground"
-                                        }`}
-                                        title={`${req.endpoint.model} · ${req.endpoint.url}`}
-                                      >
-                                        {req.endpoint.routed ? "→ " : ""}{req.endpoint.preset} · {req.endpoint.model}
-                                      </span>
+                                      <Tip tip={`${req.endpoint.model} · ${req.endpoint.url}`} labelsChild={false}>
+                                        <span
+                                          // The routed chip is marked by a tinted border + the arrow, not by
+                                          // colored text: `primary` is a pale accent that all but vanishes as
+                                          // text on a light surface (measured 1.24:1).
+                                          className={`rounded px-1.5 py-0.5 text-meta font-normal ${
+                                            req.endpoint.routed
+                                              ? "border border-primary/60 bg-primary/15 text-foreground"
+                                              : "bg-muted text-muted-foreground"
+                                          }`}
+                                        >
+                                          {req.endpoint.routed ? "→ " : ""}{req.endpoint.preset} · {req.endpoint.model}
+                                        </span>
+                                      </Tip>
                                     )}
                                   </span>
                                   {groupOpen ? (
@@ -4429,42 +4667,38 @@ const GameViewer = ({
                                 </button>
                               </CollapsibleTrigger>
                               <CollapsibleContent className="space-y-2 p-2 pt-0">
-                                {(!searchActive || hasReqMatch) && (
-                                  <Collapsible
-                                    open={reqOpen}
-                                    onOpenChange={(o) =>
-                                      setCollapsedDebug((prev) => ({ ...prev, [i]: !o }))
-                                    }
-                                    className="border border-border rounded-md"
-                                  >
-                                    <CollapsibleTrigger asChild>
-                                      <button className="flex w-full items-center justify-between gap-2 p-2 text-left font-semibold">
-                                        <span>Prompt</span>
-                                        {reqOpen ? (
-                                          <ChevronDown className="h-4 w-4 flex-shrink-0" />
-                                        ) : (
-                                          <ChevronRight className="h-4 w-4 flex-shrink-0" />
-                                        )}
-                                      </button>
-                                    </CollapsibleTrigger>
-                                    <CollapsibleContent className="p-2 pt-0">
-                                      {msgSegs.map((ms, j) => {
-                                        if (searchActive && ms.segs.length === 0) return null;
-                                        return (
-                                          <div key={j} className="mb-2">
-                                            <div className="font-medium text-muted-foreground uppercase">
-                                              {ms.role}
-                                            </div>
-                                            <pre className="whitespace-pre-wrap break-words bg-muted/50 p-2 rounded">
-                                              {renderSegs(ms.segs)}
-                                            </pre>
-                                          </div>
-                                        );
-                                      })}
-                                    </CollapsibleContent>
-                                  </Collapsible>
-                                )}
-                                {outSegs !== null && (!searchActive || hasOutMatch) && (
+                                <Collapsible
+                                  open={reqOpen}
+                                  onOpenChange={(o) =>
+                                    setCollapsedDebug((prev) => ({ ...prev, [i]: !o }))
+                                  }
+                                  className="border border-border rounded-md"
+                                >
+                                  <CollapsibleTrigger asChild>
+                                    <button className="flex w-full items-center justify-between gap-2 p-2 text-left font-semibold">
+                                      <span>Raw Input</span>
+                                      {reqOpen ? (
+                                        <ChevronDown className="h-4 w-4 flex-shrink-0" />
+                                      ) : (
+                                        <ChevronRight className="h-4 w-4 flex-shrink-0" />
+                                      )}
+                                    </button>
+                                  </CollapsibleTrigger>
+                                  <CollapsibleContent className="p-2 pt-0">
+                                    {/* Every request gets the region/chat shape — a missing anatomy sidecar
+                                        (drainer requests, re-rolls, pre-anatomy captures) just means no runs,
+                                        which `plain` never draws anyway. Provenance reading lives in the
+                                        Settings anatomy hub. */}
+                                    <RequestAnatomyView
+                                      blocks={toAnatomyBlocks(req.messages, req.anatomy)}
+                                      mode="resolved"
+                                      plain
+                                      renderText={(text, _block, blockIndex, start) =>
+                                        renderBlock(text, req, false, `${i}:in:${blockIndex}`, start)}
+                                    />
+                                  </CollapsibleContent>
+                                </Collapsible>
+                                {typeof req.response === "string" && (
                                   <Collapsible
                                     open={outOpen}
                                     onOpenChange={(o) =>
@@ -4483,13 +4717,15 @@ const GameViewer = ({
                                       </button>
                                     </CollapsibleTrigger>
                                     <CollapsibleContent className="p-2 pt-0">
-                                      <pre className="whitespace-pre-wrap break-words bg-muted/50 p-2 rounded">
+                                      {/* Same face as the Raw Input blocks: this is the same conversation,
+                                          read top to bottom. */}
+                                      <p className="whitespace-pre-wrap break-words text-label rounded-lg border border-border p-3">
                                         {req.response ? (
-                                          renderSegs(outSegs)
+                                          renderBlock(req.response, req, true, `${i}:out`)
                                         ) : (
                                           <span className="text-muted-foreground">(empty output)</span>
                                         )}
-                                      </pre>
+                                      </p>
                                     </CollapsibleContent>
                                   </Collapsible>
                                 )}
@@ -4541,11 +4777,13 @@ const GameViewer = ({
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        onOpenChange={(v) => { setIsSettingsOpen(v); if (!v) { setSettingsTab(undefined); setSettingsEndpointTab(undefined); } }}
+        onOpenChange={(v) => { setIsSettingsOpen(v); if (!v) { setSettingsTab(undefined); setSettingsEndpointTab(undefined); setSettingsPrompt(undefined); } }}
         previewValues={promptPreviewValues}
         initialTab={settingsTab ?? asSettingsTab(devRoute?.tab)}
         initialEndpointTab={settingsEndpointTab}
-        initialPromptTab={devRoute?.subtab}
+        initialPromptTab={settingsPrompt?.tab ?? devRoute?.subtab}
+        initialPromptSurface={settingsPrompt?.surface ?? devRoute?.surface}
+        initialPromptField={settingsPrompt?.field}
       />
 
       <AiSetupGate
@@ -4556,7 +4794,7 @@ const GameViewer = ({
         reachable={aiReachable}
         recheck={aiRecheck}
         onOpenChange={(v) => { if (!v) setAiGateOpen(false); }}
-        onOpenSettings={() => { setAiGateOpen(false); setIsSettingsOpen(true); }}
+        onOpenSettings={() => { setAiGateOpen(false); setSettingsTab('endpoints'); setIsSettingsOpen(true); }}
         onReady={handleAiGateReady}
       />
 

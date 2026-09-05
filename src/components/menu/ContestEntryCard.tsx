@@ -14,8 +14,19 @@ interface ContestEntryCardProps {
   onCheckedChange: (next: boolean) => void;
   /** The listing this author already has in the contest, when they have one. */
   enteredName?: string | null;
+  /** Take that entry back out. Absent leaves the card's advice to be acted on elsewhere. */
+  onWithdraw?: () => void;
+  /** Whether a withdrawal is in flight, which quiets the control. */
+  withdrawing?: boolean;
   /** A refusal the server gave, shown where the switch was. */
   error?: string | null;
+  /**
+   * The listing being replaced is the one already entered: the card is context, not a control.
+   *
+   * Nothing here is offered, because nothing here applies — the update keeps the entry either way, and a
+   * withdraw beside an update reads as a choice about the upload rather than about the entry.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -29,10 +40,12 @@ interface ContestEntryCardProps {
  * refuse. The rules sit behind the same dialog the contest tab shows, because publishing into a contest
  * is the moment they are agreed to.
  */
-export function ContestEntryCard({ contest, checked, onCheckedChange, enteredName, error }: ContestEntryCardProps) {
+export function ContestEntryCard({
+  contest, checked, onCheckedChange, enteredName, onWithdraw, withdrawing, error, readOnly = false,
+}: ContestEntryCardProps) {
   const [rulesOpen, setRulesOpen] = useState(false);
-  // Either one takes the switch away: there is nothing this publish can still opt into.
-  const armed = !enteredName && !error;
+  // Any of the three takes the switch away: there is nothing this publish can still opt into.
+  const armed = !readOnly && !enteredName && !error;
 
   return (
     <div
@@ -47,7 +60,11 @@ export function ContestEntryCard({ contest, checked, onCheckedChange, enteredNam
         {/* Nothing here truncates: on a narrow screen the clip takes the contest's own name, or the
             one-entry-per-creator half of the line under it. Both are what an author is agreeing to. */}
         <div className="text-label font-semibold">{contest.title}</div>
-        {enteredName ? (
+        {readOnly ? (
+          <div className="text-meta text-muted-foreground">
+            This listing is your entry. Updating it keeps the entry.
+          </div>
+        ) : enteredName ? (
           <div className="text-meta text-muted-foreground">
             You already entered {enteredName}. Withdraw it first to enter something else.
           </div>
@@ -58,9 +75,23 @@ export function ContestEntryCard({ contest, checked, onCheckedChange, enteredNam
             Enter this world · closes {formatServerDate(contest.endsAt)} · one entry per creator
           </div>
         )}
-        <Button variant="link" className="px-0 h-auto text-meta" onClick={() => setRulesOpen(true)}>
-          Contest rules
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button variant="link" className="px-0 h-auto text-meta" onClick={() => setRulesOpen(true)}>
+            Contest Rules
+          </Button>
+          {/* Beside the line that advises it, so "withdraw it first" is something to press rather than a
+              trip to another screen. */}
+          {!readOnly && enteredName && onWithdraw && (
+            <Button
+              variant="link"
+              className="px-0 h-auto text-meta text-destructive"
+              disabled={withdrawing}
+              onClick={onWithdraw}
+            >
+              {withdrawing ? 'Withdrawing…' : 'Withdraw Entry'}
+            </Button>
+          )}
+        </div>
       </div>
 
       {armed && (

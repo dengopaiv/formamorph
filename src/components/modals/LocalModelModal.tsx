@@ -1,14 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import { SortableContext, arrayMove, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
-import { restrictToVerticalAxis, restrictToFirstScrollableAncestor } from '@dnd-kit/modifiers';
+import { type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -51,6 +44,7 @@ import {
   type LocalMoveProgress,
   type LocalMoveResult,
 } from '@/lib/imageGen/desktop';
+import { Tip } from '@/components/ui/tooltip';
 
 /** Catalog display name keyed by GGUF filename, for labeling installed files we recognize. */
 const CATALOG_BY_FILE = new Map(LOCAL_MODELS.map((m) => [m.fileName, m.name]));
@@ -101,9 +95,11 @@ function InstalledRow({ item, engine, busyFile, onLoad, onUnload, onDelete }: {
         </div>
         {known && <div className="truncate text-meta text-muted-foreground">{item.fileName}</div>}
         {external && (
-          <div className="truncate text-meta text-muted-foreground" title={item.path}>
-            {item.subpath ? `From ${item.subpath}` : 'From your other folder'}
-          </div>
+          <Tip tip={item.path} labelsChild={false}>
+            <div className="truncate text-meta text-muted-foreground">
+              {item.subpath ? `From ${item.subpath}` : 'From your other folder'}
+            </div>
+          </Tip>
         )}
       </div>
       <span className="shrink-0 text-meta tabular-nums text-muted-foreground">{formatModelSize(item.size)}</span>
@@ -180,8 +176,12 @@ function MoveModelsDialog({ flow, onMove, onSkip, onCancel, onDone }: {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-2 text-meta">
-              <div className="truncate font-mono text-muted-foreground" title={flow.from}>From {flow.from}</div>
-              <div className="truncate font-mono text-muted-foreground" title={flow.to}>To {flow.to}</div>
+              <Tip tip={flow.from} labelsChild={false}>
+                <div className="truncate font-mono text-muted-foreground">From {flow.from}</div>
+              </Tip>
+              <Tip tip={flow.to} labelsChild={false}>
+                <div className="truncate font-mono text-muted-foreground">To {flow.to}</div>
+              </Tip>
               <p className="text-warning">
                 The old folder is no longer searched, so anything left there won&apos;t appear in your model list.
               </p>
@@ -302,7 +302,9 @@ function SearchLocations({ locations, onChange, onChangeDownloadDir, autoLoad, o
           {/* The path gets its own row above the buttons: these run long, and truncating one to make
               room for controls hides the part that identifies the folder. */}
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 flex-grow truncate font-mono text-meta" title={rootDir}>{rootDir}</span>
+            <Tip tip={rootDir} labelsChild={false}>
+              <span className="min-w-0 flex-grow truncate font-mono text-meta">{rootDir}</span>
+            </Tip>
             {freeBytes !== null && (
               <span className="shrink-0 text-meta tabular-nums text-muted-foreground">
                 {formatModelSize(freeBytes)} free
@@ -349,11 +351,13 @@ function SearchLocations({ locations, onChange, onChangeDownloadDir, autoLoad, o
           >
             Folder
           </RowLabel>
-          <div className="min-w-0 truncate text-meta" title={externalDir ?? undefined}>
-            {externalDir
-              ? <span className="font-mono">{externalDir}</span>
-              : <span className="text-muted-foreground">Not set</span>}
-          </div>
+          <Tip tip={externalDir ?? undefined} labelsChild={false}>
+            <div className="min-w-0 truncate text-meta">
+              {externalDir
+                ? <span className="font-mono">{externalDir}</span>
+                : <span className="text-muted-foreground">Not set</span>}
+            </div>
+          </Tip>
           <div className="flex items-center gap-2 sm:col-start-2">
             {!externalDir && lmStudioDir && (
               <Button
@@ -465,8 +469,6 @@ export function LocalModelModal({ open, onOpenChange }: { open: boolean; onOpenC
   useEffect(() => subscribeLocalMove((p) => {
     setMoveFlow((prev) => (prev?.phase === 'moving' ? { ...prev, progress: p } : prev));
   }), []);
-
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const handleDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
@@ -594,7 +596,7 @@ export function LocalModelModal({ open, onOpenChange }: { open: boolean; onOpenC
 
         {/* Engine status + GPU memory (shared with the endpoint panel). */}
         <EngineStatusLine engine={engine} className="shrink-0" />
-        <GpuMemoryBox stats={vram} className="shrink-0" {...resolveOwnVram(vram, engine.engineVramMB)} />
+        <GpuMemoryBox stats={vram} engine={engine} className="shrink-0" {...resolveOwnVram(vram, engine.engineVramMB)} />
 
         {/* Top-level view: what's installed, what we suggest, and where all of it lives. */}
         <ToggleGroup
@@ -625,28 +627,22 @@ export function LocalModelModal({ open, onOpenChange }: { open: boolean; onOpenC
         ) : view === 'installed' ? (
           <>
           <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-2">
+            {/* Flex gap, not `space-y`: the drag layer wraps its rows in an element of its own, and a
+                `> * + *` rule would stop reaching them. A gap still does, since that wrapper draws no box. */}
+            <div className="flex flex-col gap-2">
             {installed.length === 0 ? (
               <div className="pt-8 text-center text-helper text-muted-foreground">
                 No models installed. Grab one from the Recommended tab, drop a `.gguf` into your download
                 folder, or point us at a folder you already keep models in from the Options tab.
               </div>
             ) : (
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
+              <EditorDndContext
+                // A longer reach before a press becomes a drag than the editor lists take: a row here is a
+                // dense block of controls, and 5px is inside the slop of a tap on one.
+                activationDistance={8}
                 onDragEnd={handleDragEnd}
-                // Lock drags to the vertical axis and clamp them to this scroll frame; never auto-scroll the
-                // page/window (that's the runaway "infinite scroll"). Mirrors the world/dictionary lists.
-                modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                autoScroll={{
-                  canScroll: (el) =>
-                    el !== document.scrollingElement &&
-                    el !== document.body &&
-                    el !== document.documentElement,
-                }}
               >
-                <SortableContext items={installed.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                <StableSortableContext items={installed} strategy={verticalListSortingStrategy}>
                   {installed.map((item) => (
                     <InstalledRow
                       key={item.id}
@@ -658,8 +654,8 @@ export function LocalModelModal({ open, onOpenChange }: { open: boolean; onOpenC
                       onDelete={(it, name) => setConfirmDelete({ fileName: it.fileName, name })}
                     />
                   ))}
-                </SortableContext>
-              </DndContext>
+                </StableSortableContext>
+              </EditorDndContext>
             )}
             </div>
           </ScrollArea>

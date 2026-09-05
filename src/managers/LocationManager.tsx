@@ -7,18 +7,23 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { MultiSelect } from "@/components/ui/multi-select";
 import AiGenerateButton from "@/components/AiGenerateButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
-import { describePlaceholders } from '@/lib/placeholders';
+import { labelPlaceholders } from '@/lib/placementLetters';
 import { SoundUpload } from '../lib/UtilityComponents';
 import { IMAGE_CAPS } from '../lib/imageOptim';
 import ImageTagsField from './ImageTagsField';
 import LocationConnections from './LocationConnections';
 import { useEditorMode } from '@/lib/editorMode';
-import type { GameLocation } from '@/types';
+import { HelpButton } from '@/components/HelpButton';
+import { PlaceholderPinRows } from '@/components/editor/PlaceholderPinRows';
+import type { GameLocation, PlaceholderPin } from '@/types';
 
 const LocationManager = ({ location }: { location: GameLocation }) => {
-  const { updateLocation, entities, updateEntity, entityGroups, placeholders } = useGameData();
-  const { draft: editingLocation, setField: handleChange } = useEditingDraft(location, updateLocation);
+  const world = useGameData();
+  const { updateLocation, entities, updateEntity, entityGroups, placeholders, placementLetters, placeholderOwners } = world;
+  const { draft: editingLocation, setField: handleChange, apply } = useEditingDraft(location, updateLocation);
   const { advanced } = useEditorMode();
+  const pins = editingLocation?.placeholderPins ?? [];
+  const setPins = (next: PlaceholderPin[]) => apply({ placeholderPins: next.length ? next : undefined });
 
   // Membership is entity-owned, so location-first authoring reads the inversion and writes each changed
   // entity's own list — the same edit, expressed from the other side.
@@ -109,7 +114,7 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
         <Label>Entities</Label>
         <MultiSelect
           key={editingLocation.id}
-          options={entitiesInTreeOrder(entityGroups, entities).map((e) => ({ label: describePlaceholders(e.name, placeholders), value: e.id }))}
+          options={entitiesInTreeOrder(entityGroups, entities).map((e) => ({ label: labelPlaceholders(e.name, placeholders, { letters: placementLetters, owners: placeholderOwners }), value: e.id }))}
           defaultValue={presentIds}
           onValueChange={handleEntitiesChange}
           placeholder="Select entities"
@@ -117,6 +122,21 @@ const LocationManager = ({ location }: { location: GameLocation }) => {
         />
       </div>
       <LocationConnections location={editingLocation} />
+      {advanced && (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Label>Placeholder Pins</Label>
+          <HelpButton topicId="worldEditor.locationPins" className="h-6 w-6" />
+        </div>
+        <PlaceholderPinRows
+          pins={pins}
+          onChange={setPins}
+          source={{ kind: 'location', id: editingLocation.id }}
+          world={world}
+          placeholders={placeholders}
+        />
+      </div>
+      )}
       <ImageTagsField
         label="Background Image"
         images={editingLocation.backgroundImage ? [editingLocation.backgroundImage] : []}

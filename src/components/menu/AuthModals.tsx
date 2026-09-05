@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "react-toastify";
-import { AlertTriangle, Key, LogOut } from "lucide-react";
+import { AlertTriangle, Key, LogOut, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -18,13 +18,16 @@ import { ProfileAvatarEditor } from "@/components/menu/ProfileAvatarEditor";
 import { type ProfileTab } from "@/components/menu/profileTabs";
 import { NotificationsTab } from "@/components/menu/NotificationsTab";
 import { TermsTab } from "@/components/menu/TermsTab";
+import { PolicyDialog } from "@/components/menu/PolicyDialog";
+import { usePrivacyPolicy } from "@/contexts/PrivacyPolicyContext";
+import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
 import PolicyService from "@/services/PolicyService";
 import AuthService from "@/services/AuthService";
 import UserService from "@/services/UserService";
 import { useResetOnOpen } from "@/lib/useResetOnOpen";
 import { parseServerDate } from "@/lib/serverDate";
 import { type WorldRecord } from "@/components/WorldDetails";
-import type { PublicProfile } from "@/types";
+import type { PublicProfile, PublicPrivacyPolicy } from "@/types";
 import { ProfileStats } from "@/components/community/ProfileStats";
 
 interface AuthModalsProps {
@@ -130,6 +133,20 @@ export function AuthModals({
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
+  // The Privacy Policy shown before an account is created, and null whenever there is nothing to show:
+  // no policy switched on, or the reader has not reached that step. Read without a token, because at
+  // this point there is no account to hold one.
+  const [signupPolicy, setSignupPolicy] = useState<PublicPrivacyPolicy | null>(null);
+  const [signupBusy, setSignupBusy] = useState(false);
+
+  // The signed-in prompt. Registration answers the policy on its own, but a sign-in has to ask the
+  // server whether this account already has.
+  const { checkNow: checkPrivacyPolicy } = usePrivacyPolicy();
+
+  // Ending the account, and the notice that signing in has just called such an ending off. Both live
+  // above the menu, because the privacy prompt raises the same flow from over the top of every screen.
+  const { startDeletion, noticeCancelled } = useAccountDeletion();
+
   const resetAuthForms = () => {
     setUsername('');
     setPassword('');
@@ -160,11 +177,17 @@ export function AuthModals({
     }
 
     try {
-      await AuthService.login(username, password);
+      const { deletionCancelled } = await AuthService.login(username, password);
       onAuthenticated();
       setShowAuthDialog(false);
       resetAuthForms();
       toast.success('Logged in successfully');
+      // Signing in is what cancels a pending deletion, and the server does it without being asked. The
+      // account may not remember asking, so it is said out loud rather than left to be noticed.
+      if (deletionCancelled) noticeCancelled();
+      // After the dialog closes, so the prompt is not raised behind it. An account that has already
+      // accepted sees nothing.
+      void checkPrivacyPolicy();
     } catch (error) {
       setAuthError((error as Error).message || 'Login failed');
     }
@@ -199,15 +222,87 @@ export function AuthModals({
       return;
     }
 
+    // The policy is read and answered before the account exists, so declining leaves nothing behind.
+    // A read that fails is not a reason to refuse a signup: the account is created, and the signed-in
+    // prompt asks at the first refused request instead.
+    setSignupBusy(true);
+    let policy: PublicPrivacyPolicy | null = null;
+    try {
+      policy = await PolicyService.fetchPublicPrivacyPolicy();
+    } catch (error) {
+      console.error('Failed to read the privacy policy before signup:', error);
+    } finally {
+      setSignupBusy(false);
+    }
+
+    if (policy) {
+      setSignupPolicy(policy);
+      return;
+    }
+
+    // No policy to answer, so the account is made here and reported exactly as the answered path
+    // reports it.
+    if (await createAccount()) finishSignup();
+  };
+
+  /** Register, and report a refusal the same way whichever path arrived here. */
+  const createAccount = async (): Promise<boolean> => {
     try {
       await AuthService.register(username, password);
-      onAuthenticated();
-      setShowAuthDialog(false);
-      resetAuthForms();
-      toast.success('Registered successfully');
+      return true;
     } catch (error) {
       setAuthError((error as Error).message || 'Registration failed');
+      return false;
     }
+  };
+
+  /** Hand the new session to the parent and close up. Both signup paths end here, so neither can
+   *  quietly skip a step the other takes. */
+  const finishSignup = () => {
+    setSignupPolicy(null);
+    onAuthenticated();
+    setShowAuthDialog(false);
+    resetAuthForms();
+    toast.success('Registered successfully');
+  };
+
+  /**
+   * Accepting the policy at signup: create the account, then record the acceptance against it.
+   *
+   * The two cannot be one request — the acceptance needs the token registration issues — so the second
+   * one is retried once. A second failure leaves a real account that has answered nothing, which is a
+   * state the server already knows how to handle: it refuses, and the signed-in prompt asks again. What
+   * it must never do is pass silently.
+   */
+  const acceptAtSignup = async () => {
+    setSignupBusy(true);
+    try {
+      if (!await createAccount()) {
+        setSignupPolicy(null);
+        return;
+      }
+
+      try {
+        await PolicyService.acceptPrivacyPolicy();
+      } catch {
+        try {
+          await PolicyService.acceptPrivacyPolicy();
+        } catch (error) {
+          console.error('Failed to record the privacy acceptance after signup:', error);
+          toast.warn('Your account was created, but recording your acceptance failed. You will be asked again.');
+          void checkPrivacyPolicy();
+        }
+      }
+
+      finishSignup();
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
+  /** Declining at signup. Nothing has been sent, and nothing is: the account is never created. */
+  const declineAtSignup = () => {
+    setSignupPolicy(null);
   };
 
   const handleChangePassword = async () => {
@@ -294,6 +389,7 @@ export function AuthModals({
 
             <Button
               onClick={authMode === 'login' ? handleLogin : handleRegister}
+              disabled={signupBusy}
               className="sm:order-2"
             >
               {authMode === 'login' ? 'Login' : 'Register'}
@@ -334,6 +430,11 @@ export function AuthModals({
                 </Button>
                 <Button variant="destructive" size="sm" onClick={onLogout}>
                   <LogOut className="mr-2 h-4 w-4" /> Logout
+                </Button>
+                {/* Shown to a suspended account too: the flow's first step is where it learns that the
+                    team does this one, rather than a control that is missing without explanation. */}
+                <Button variant="ghost" size="sm" className="text-destructive" onClick={startDeletion}>
+                  <Trash2 className="mr-2 h-4 w-4" /> Delete Account
                 </Button>
               </div>
             </div>
@@ -451,6 +552,21 @@ export function AuthModals({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Shown before the account exists. Declining closes it and creates nothing — the reader is still
+          signed out, with the form behind this untouched. */}
+      {signupPolicy && (
+        <PolicyDialog
+          open
+          title={signupPolicy.title}
+          body={signupPolicy.body}
+          confirmLabel="Accept and Create Account"
+          cancelLabel="Decline"
+          onConfirm={() => { void acceptAtSignup(); }}
+          onCancel={declineAtSignup}
+          busy={signupBusy}
+        />
+      )}
     </>
   );
 }
