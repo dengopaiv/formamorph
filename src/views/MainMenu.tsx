@@ -4,7 +4,9 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useGameData } from '../contexts/GameDataContext';
 import { usePlaceholderSession } from '../contexts/PlaceholderSessionContext';
 import { useResolvedAuthoredWorld } from '@/lib/useResolvedWorld';
-import { activePlaceholderPins, inAuthoredOrder, traitOrderIndex } from '@/lib/traitEffects';
+import { inAuthoredOrder, traitOrderIndex } from '@/lib/traitEffects';
+import { collectPins } from '@/lib/placeholderPins';
+import { startingStatsWith } from '@/lib/traitRuntime';
 import { useUserProfile } from '../contexts/userProfileStore';
 import { useDevRoute, registerDevHook } from '../lib/devRouter';
 import { MAIN_MENU_CARD_TABS, type MainMenuCardTab } from './mainMenuTabs';
@@ -15,12 +17,14 @@ import { ThemedToastContainer } from '@/components/ThemedToastContainer';
 import 'react-toastify/dist/ReactToastify.css';
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tip, Tooltip, TooltipTrigger, TooltipPortal, TooltipPositioner, TooltipPopup } from "@/components/ui/tooltip";
 import {ConfirmDialog} from "@/components/ConfirmDialog";
 import {FilePlus2, DoorOpen, Pencil, AlertTriangle, Code, User, Shield, Globe, LayoutGrid, GalleryThumbnails, Columns2, RectangleVertical, Menu, Earth, BookOpen, ChevronLast, MoreHorizontal, PersonStanding, MessageSquarePlus, FolderOpen, Archive, Settings, ScrollText, type LucideIcon } from "lucide-react";
 import { ActionIcon } from '@/lib/actionIcons';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageZoomViewer } from "@/components/ImageZoomViewer";
 import { cn } from "@/lib/utils";
+import { THUMB_FRAME, thumbFit } from "@/lib/thumbAspect";
 import { usePersistentState, boolCodec } from "@/lib/usePersistentState";
 import {
   Dialog,
@@ -29,8 +33,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import CharacterCustomization, { defaultCharacterData } from './CharacterCustomization';
 import { SettingsModal } from '../components/modals/SettingsModal';
 import { asSettingsTab, type SettingsTabId } from '../components/modals/settingsTabs';
@@ -41,22 +43,8 @@ import { AiSetupGate, type GateReason } from '../components/AiSetupGate';
 import { useAiReachable } from '@/lib/useAiReachable';
 import { LoadGameDialog } from '../components/modals/LoadGameDialog';
 import WorldEditor from './WorldEditor';
-import {
-  DndContext,
-  closestCenter,
-  MouseSensor,
-  TouchSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-} from '@dnd-kit/sortable';
-import { restrictToFirstScrollableAncestor } from '@dnd-kit/modifiers';
-import { CONTAINED_AUTO_SCROLL } from '@/lib/dndAutoScroll';
+import { LibraryTileGrid } from '@/components/library/LibraryTileGrid';
+import { useLibraryTiles } from '@/lib/useLibraryTiles';
 import TraitSelectionModal from './TraitSelectionModal';
 import StartingLocationModal from './StartingLocationModal';
 import DictionarySelectionModal from './DictionarySelectionModal';
@@ -70,7 +58,7 @@ import DictionaryStorageService from '../services/DictionaryStorageService';
 import EntityStorageService from '../services/EntityStorageService';
 import ModelStorageService from '../services/ModelStorageService';
 import AuthService from '../services/AuthService';
-import type { World, Stat, CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata } from '@/types';
+import type { World, Stat, CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, ServerEvent, WorldOverview } from '@/types';
 import { migrateWorld } from '@/lib/version';
 import { isDesktop } from '@/lib/imageGen/desktop';
 import { useIsMobile } from '@/lib/useIsMobile';
@@ -86,9 +74,11 @@ import { withOptimizeProgress } from '@/lib/optimizeProgress';
 import { remoteWorldImages } from '@/lib/embedRemoteImages';
 import { warmCachedImages } from '@/lib/remoteImageCache';
 import { filesFrom, importSummaryToast } from '@/lib/importFiles';
-import CommunityCreationsBrowser from './CommunityCreationsBrowser';
+import CommunityBrowserHost from './CommunityBrowserHost';
 import { WorldDetailsColumn, DateTimeText, type WorldRecord } from "@/components/WorldDetails";
 import SortableWorldCard from "@/components/SortableWorldCard";
+import { PlaceBadges } from "@/components/PlaceBadges";
+import { LibraryWorldCard } from "@/components/LibraryWorldCard";
 import { WorldActionButton } from "@/components/WorldActionButton";
 import { GradientButton } from "@/components/GradientButton";
 import DictionaryEditorModal from "@/components/modals/DictionaryEditorModal";
@@ -102,19 +92,30 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { UserName } from "@/components/UserName";
 import { badgeKind, UNREAD_MARK_STYLES } from "@/lib/unreadSeverity";
 import UserService from "@/services/UserService";
+import ReportService from "@/services/ReportService";
 import { type MyFeedbackTabKey } from "@/components/menu/myFeedbackTabs";
 import { type AdminPanelTab } from "@/components/menu/adminPanelTabs";
 import { type PoliciesTab as PoliciesSubTab } from "@/components/menu/policiesTabs";
 import { type FeedbackTab as FeedbackSubTab } from "@/components/menu/feedbackTabs";
 import MessageService from "@/services/MessageService";
+import { useActiveEvents } from "@/lib/useActiveEvents";
+import { asBrowseTab, type BrowseTab } from "@/lib/browseTabs";
+import { isContestEvent } from "@/lib/serverEvents";
+import { placementsBy, judgingContestsOf } from "@/lib/contests";
+import { useContests } from "@/lib/useContests";
+import { EventBanner, EventBannerChips } from "@/components/events/EventBanner";
+import { useEventBanners } from "@/components/events/useEventBanners";
+import { EventAckModal } from "@/components/events/EventAckModal";
 import FeedbackService from "@/services/FeedbackService";
 import { FeedbackHubDialog } from "@/components/menu/FeedbackHubDialog";
 import { AuthModals } from "@/components/menu/AuthModals";
 import { PublishModal } from "@/components/menu/PublishModal";
 import { worldPublishPayload, entityPublishPayload, dictionaryPublishPayload, type PublishPayload } from "@/lib/publishPayload";
-import { type CatalogKind } from "@/lib/catalogKinds";
 import { BackupRestoreDialog } from "@/components/menu/BackupRestoreDialog";
 import { COMMUNITY_ENABLED } from "@/lib/featureFlags";
+import { useAgeGate } from "@/contexts/AgeGateContext";
+import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
+import { isAgeAttested } from "@/lib/ageGate";
 import { isStaff } from "@/lib/roles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useReadmeVisibility } from "@/lib/useReadmeVisibility";
@@ -124,6 +125,7 @@ import {
   customizedPromptKinds, promptKindsPhrase, worldPrompt, useWorldPromptOptOut, WORLD_PROMPT_KIND_LABELS,
   type WorldPromptKind,
 } from "@/lib/worldPrompt";
+import { PromptDiff, PromptDiffModeToggle, type PromptDiffMode } from "@/components/game/PromptDiff";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorldPromptPresets, GLOBAL_PRESET_VALUE } from "@/lib/worldPromptPreset";
 import PatreonIcon from "@/components/PatreonIcon";
@@ -144,12 +146,6 @@ interface MainMenuProps {
 const AI_SETUP_SEEN_KEY = 'FORMAMORPH_aiSetupSeen';
 
 
-// User-defined world/dictionary ordering is a UI preference, persisted as an ordered list of ids.
-const WORLD_ORDER_KEY = 'FORMAMORPH_worldOrder';
-const DICTIONARY_ORDER_KEY = 'FORMAMORPH_dictionaryOrder';
-const ENTITY_ORDER_KEY = 'FORMAMORPH_entityOrder';
-const MODEL_ORDER_KEY = 'FORMAMORPH_modelOrder';
-
 /** The library's card-type tabs, with their icon + label, so the top switcher and the mobile bottom bar
  *  render from one source and can't drift. */
 const CARD_TABS: { value: MainMenuCardTab; label: string; Icon: LucideIcon }[] = [
@@ -169,36 +165,18 @@ const listSaves = (names: string[]): string => {
 };
 
 
-// Responsive column counts for the card grids. Tailwind only emits classes it sees literally, so map each
-// count to its class string; the counts themselves are the single source of truth (the entity grid derives
-// from the world grid by math, not a hard-coded number).
-const GRID_COL_CLASS: Record<'base' | 'sm' | 'lg', Record<number, string>> = {
-  base: { 1: 'grid-cols-1', 2: 'grid-cols-2' },
-  sm: { 2: 'sm:grid-cols-2', 4: 'sm:grid-cols-4' },
-  lg: { 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 6: 'lg:grid-cols-6' },
-};
-const gridColsClass = (base: number, sm: number, lg: number) =>
-  `${GRID_COL_CLASS.base[base]} ${GRID_COL_CLASS.sm[sm]} ${GRID_COL_CLASS.lg[lg]}`;
-// The landscape world grid's columns per breakpoint. Portrait character cards are ~half the width, so the
-// Entities grid fits twice as many (`× 2`).
-const WORLD_GRID_COLS = { base: 1, sm: 2, lg: 3 };
-const ENTITY_GRID_CLASS = gridColsClass(WORLD_GRID_COLS.base * 2, WORLD_GRID_COLS.sm * 2, WORLD_GRID_COLS.lg * 2);
-/** Columns for the detailed (community-card) layout — the wide card needs the same room a world's does. */
-const DETAILED_GRID_CLASS = gridColsClass(WORLD_GRID_COLS.base, WORLD_GRID_COLS.sm, 4);
+// The card grids fit as many columns as the width allows, from a per-tab minimum tile width. The
+// landscape minimum is the narrowest a medium world tile ever rendered under the old breakpoint
+// ladder (a 640px window's pair), so no window shows fewer columns than it used to — wider ones
+// simply gain more. Portrait character tiles are half a world tile less half a gutter.
+const WORLD_MIN_TILE = 296;
+const ENTITY_MIN_TILE = (WORLD_MIN_TILE - 16) / 2;
+/** Columns for the detailed (community-card) layout — pure CSS, since it keeps no cell arrangement.
+ *  The minimum matches the narrowest card the old four-across breakpoint produced. */
+const DETAILED_GRID_CLASS = 'grid-cols-[repeat(auto-fill,minmax(236px,1fr))]';
 const LAYOUT_MODE_KEY = 'FORMAMORPH_layoutMode';
 // Persisted preference to force the local world modal's single-column (portrait) layout at any width.
 const WORLD_MODAL_COLLAPSED_KEY = 'FORMAMORPH_worldModalCollapsed';
-
-const loadOrder = (key: string): string[] => {
-  try { return JSON.parse(localStorage.getItem(key) || '[]'); }
-  catch { return []; }
-};
-const loadWorldOrder = (): string[] => loadOrder(WORLD_ORDER_KEY);
-// Sort by saved order; ids not in the saved order keep their relative order at the end.
-const applyWorldOrder = <T extends { id: string }>(list: T[], order: string[]): T[] => {
-  const rank = (id: string) => { const i = order.indexOf(id); return i === -1 ? Infinity : i; };
-  return [...list].sort((a, b) => rank(a.id) - rank(b.id));
-};
 
 
 /**
@@ -239,27 +217,39 @@ const WorldNotice = ({ tone, icon: Icon, children, actionLabel, actionIcon: Acti
 
 const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = false }: MainMenuProps) => {
   const {
-    traits: rawTraits, traitGroups: rawTraitGroups, stats: rawStats, placeholders, loadWorldData,
-    dictionaries: worldBooks, getWorldData,
+    traits: rawTraits, traitGroups: rawTraitGroups, stats: rawStats, locations: rawLocations, placeholders,
+    loadWorldData, dictionaries: worldBooks, getWorldData,
   } = useGameData();
-  const { beginSession, endSession } = usePlaceholderSession();
+  const { beginSession, endSession, rolls } = usePlaceholderSession();
   const { showReadme, setShowReadme } = useReadmeVisibility();
   const { applyWorldPrompt, setApplyWorldPrompt } = useWorldPromptOptOut();
   const { worldPreset, setWorldPreset } = useWorldPromptPresets();
   // Only the preset list is needed here; the pin is applied by GameViewer when the world opens.
   const { builtinPresets, promptPresets } = useSettings();
+  /** A preset id as the player knows it, or undefined when nothing names that id any more. */
+  const presetName = useCallback(
+    (id: string | undefined) =>
+      [...builtinPresets, ...promptPresets].find((preset) => preset.id === id)?.name,
+    [builtinPresets, promptPresets],
+  );
   const { promptWorld, promptWorldsBatch, promptImagesBatch, promptEntity, dialog: downscaleDialog } = useDownscalePrompt();
   const { exportWorld, dialog: worldExportDialog } = useWorldExport(promptWorld);
   const [selectedWorld, setSelectedWorld] = useState<WorldRecord | null>(null);
+  // DEV only: a canned override the prompt viewer falls back to, so its dev route is reachable on a
+  // library holding no world that rewrites a prompt. Never set in prod.
+  const [devPromptSample, setDevPromptSample] = useState<WorldOverview | null>(null);
+  const promptOverview = selectedWorld?.data?.worldOverview ?? devPromptSample ?? undefined;
   // Which passes the selected world rewrites — what the details notice names, what the viewer tabs, and
   // what the single opt-out declines. A world that stores a prompt but switched it off customizes nothing.
-  const customPromptKinds = useMemo(
-    () => customizedPromptKinds(selectedWorld?.data?.worldOverview), [selectedWorld]);
+  const customPromptKinds = useMemo(() => customizedPromptKinds(promptOverview), [promptOverview]);
   // Falls back to whichever kind the world does customize, so the viewer never opens on an empty tab.
   const [promptTab, setPromptTab] = useState<string>('narration');
   const shownPromptTab = customPromptKinds.includes(promptTab as WorldPromptKind)
     ? promptTab
     : customPromptKinds[0] ?? 'narration';
+  // Changes vs Raw, reset every time the viewer opens: which one you last read is a reading preference for
+  // that sitting, not a setting, and the diff is the view that answers "what did this world change".
+  const [promptView, setPromptView] = useState<PromptDiffMode>('changes');
   // Library grid layout: "grid" (compact cards) or "detailed" (community-browser-style card + info
   // beneath). Kept per tab and persisted: the four libraries hold different-shaped things, and wanting
   // worlds as big cards says nothing about wanting the same of a hundred characters. Worlds keep the
@@ -307,18 +297,29 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // The library characters chosen at the entry step to place in the starting location; null = none/skipped.
   const [selectedCharacters, setSelectedCharacters] = useState<Entity[] | null>(null);
 
-  // The pins the *draft* trait selection would impose. A trait can pin a placeholder, and the trait picker is
-  // where traits are chosen — so these screens resolve against the boxes ticked so far, and a pinned name
-  // changes the moment its trait is ticked. Pins mask the roll rather than replacing it, so unticking the
-  // trait brings the rolled value back.
+  // The pins the *draft* selection would impose: the traits ticked so far, the starting location picked, and
+  // the bands the starting stats fall in once those traits have applied — so these screens resolve the way
+  // the game will open, and a pinned name changes the moment its source is picked. Pins mask the roll
+  // rather than replacing it, so unticking the trait brings the rolled value back.
   const draftPins = useMemo(() => {
-    const chosen = rawTraits.filter((t) => selectedTraits.includes(t.id));
-    return activePlaceholderPins(inAuthoredOrder(chosen, traitOrderIndex(rawTraits, rawTraitGroups)));
-  }, [selectedTraits, rawTraits, rawTraitGroups]);
+    const chosen = inAuthoredOrder(
+      rawTraits.filter((t) => selectedTraits.includes(t.id)), traitOrderIndex(rawTraits, rawTraitGroups),
+    );
+    const starting = startingStatsWith(rawStats, chosen, { traits: rawTraits, groups: rawTraitGroups });
+    return collectPins({
+      traits: chosen,
+      location: rawLocations.find((l) => l.id === selectedLocationId),
+      stats: starting,
+      placeholders,
+      rolls,
+    });
+  }, [selectedTraits, selectedLocationId, rawTraits, rawTraitGroups, rawStats, rawLocations, placeholders, rolls]);
   const { traits, traitGroups, stats, locations, resolvePH, resolveTraitText } = useResolvedAuthoredWorld(draftPins);
 
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [showWorldPrompts, setShowWorldPrompts] = useState(false);
+  // Every opening lands on Changes, whichever view the last one was left on.
+  useEffect(() => { if (showWorldPrompts) setPromptView('changes'); }, [showWorldPrompts]);
   const [showSettings, setShowSettings] = useState(false);
   // Forces Settings to a specific tab when something deep-links into it (the AI setup gate → Endpoint).
   // Cleared on close so the next deep-link re-triggers the modal's initialTab effect.
@@ -333,21 +334,54 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // DEV dev-router: open Settings (or the Load menu) when the hash asks. Tree-shaken in prod.
   const devRoute = useDevRoute();
   const isMobile = useIsMobile();
+  // The age attestation every community surface waits on (see AgeGateContext).
+  const { attested, gateOpen, requireAttestation } = useAgeGate();
+
+  /**
+   * Open Community Creations, asking for the age attestation first.
+   *
+   * Every way in comes through here — the menu button, a contest poster's View Entries, a notification
+   * jumping to a listing, the dev router — so there is no side door past the gate. Declining simply
+   * leaves it shut, and the next attempt asks again.
+   */
+  const openCommunityBrowser = useCallback((tab?: BrowseTab) => {
+    requireAttestation({
+      onAccept: () => {
+        setCommunityTab(tab);
+        setShowCommunityBrowser(true);
+      },
+    });
+  }, [requireAttestation]);
+
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     if (devRoute?.modal === 'settings') setShowSettings(true);
     if (devRoute?.modal === 'menu') setShowLoadDialog(true);
     if (devRoute?.modal === 'backup') setShowBackup(true);
-    if (devRoute?.modal === 'community') setShowCommunityBrowser(true);
+    if (devRoute?.modal === 'community') openCommunityBrowser();
+    // The likers list hangs off a listing's details, so this route opens the catalog and lands there.
+    if (devRoute?.modal === 'likers') openCommunityBrowser();
     if (devRoute?.modal === 'profile') setShowProfileDialog(true);
     if (devRoute?.modal === 'feedbackHub') setShowFeedback(true);
     if (devRoute?.modal === 'adminPanel') setShowAdminPanel(true);
     if (devRoute?.modal === 'worldEditor') setShowWorldEditor(true);
     if (devRoute?.modal === 'avatar') setShowCharacterCustomization(true);
     if (devRoute?.modal === 'aiSetup') setGate({ reason: 'firstRun' });
+    // The prompt viewer reads a world's overrides, so it opens on a canned one rather than on whatever the
+    // library happens to hold — a world really selected from a card still wins over it.
+    if (devRoute?.modal === 'worldPrompts') {
+      setShowWorldPrompts(true);
+      void import('@/lib/devWorldPromptSample')
+        .then(({ devWorldPromptOverview }) => setDevPromptSample(devWorldPromptOverview()));
+    }
     // Library editors open on a blank draft — nothing is stored, so these are reachable on a fresh profile.
     if (devRoute?.modal === 'entityEditor') setDraftEntity({ id: randomUUID(), name: 'New Character' });
     if (devRoute?.modal === 'dictionaryEditor') setDraftDictionary({ id: randomUUID(), name: 'New Dictionary', enabled: true, entries: [] });
+    // The publish dialog names itself from a payload, so it opens on a canned world rather than on
+    // whatever the library happens to hold — it is reachable on an empty profile that way.
+    if (devRoute?.modal === 'publish') {
+      void import('@/lib/devPublishSample').then(({ devPublishPayload }) => openPublish(devPublishPayload()));
+    }
     // Unlike the editors above, a model preview needs a real model — open the first one, if the library has any.
     if (devRoute?.modal === 'modelDetails') {
       setCardType('models');
@@ -358,7 +392,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     if (!devRoute?.modal && devRoute?.tab && (MAIN_MENU_CARD_TABS as readonly string[]).includes(devRoute.tab)) {
       setCardType(devRoute.tab as typeof cardType);
     }
-  }, [devRoute?.modal, devRoute?.tab]);
+  }, [devRoute?.modal, devRoute?.tab, openCommunityBrowser]);
 
   // DEV: open the World Editor on a *stored* world. The `worldEditor` modal route opens a blank draft, so
   // authoring an existing world otherwise means clicking through the library grid.
@@ -374,7 +408,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const { reachable, mode, blocker, recheck } = useAiReachable();
   const [gate, setGate] = useState<{ reason: GateReason } | null>(null);
 
-  // Close the first-run nudge the moment the engine comes up — nothing is queued behind it any more.
+  // The player took the gate's Start Playing action once setup finished — nothing is queued behind the
+  // nudge, so just dismiss it.
   const handleGateReady = useCallback(() => setGate(null), []);
 
   // First-run nudge: once the intro is done and we know the bundled engine has nothing to run, offer the
@@ -407,6 +442,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const modelImportRef = useRef<HTMLInputElement | null>(null);
   const [worlds, setWorlds] = useState<WorldRecord[]>([]);
   const [isLoadingWorlds, setIsLoadingWorlds] = useState(true);
+  // One blank record per stored world, built from the id read that beats the metadata read to the screen.
+  // The ids and their order are the same ones the metadata arrives in, so the grid the player waits in
+  // front of is the grid they end up with: same tiles, same sizes, same folders, filled in where it stands.
+  const [skeletonWorlds, setSkeletonWorlds] = useState<WorldRecord[]>([]);
   // Local dictionary library (metadata only) shown on the Dictionaries tab.
   const [dictionaries, setDictionaries] = useState<DictionaryMetadata[]>([]);
   const [isLoadingDictionaries, setIsLoadingDictionaries] = useState(true);
@@ -450,8 +489,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // What the publish modal is publishing. Deliberately not cleared on close: the modal names itself from
   // the payload's kind, so dropping it would flash the title back to "World" during the fade-out.
   const [publishPayload, setPublishPayload] = useState<PublishPayload | null>(null);
-  const openPublish = (payload: PublishPayload) => {
+  // Which local world the open payload came from, so a successful publish can link the two. Only worlds
+  // pass one; the other kinds publish without a local record to point at a listing.
+  const [publishLocalId, setPublishLocalId] = useState<string | undefined>(undefined);
+  const openPublish = (payload: PublishPayload, localId?: string) => {
     setPublishPayload(payload);
+    setPublishLocalId(localId);
     setShowPublishModal(true);
   };
 
@@ -484,12 +527,16 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const handleNotificationsRead = useCallback(() => setFollowCountNonce((n) => n + 1), []);
   const handleBugsChange = useCallback(() => setBugCountNonce((n) => n + 1), []);
   const handleOpenListing = useCallback((listing: { id: string; kind: string }) => {
-    setShowProfileDialog(false);
-    setPendingListing(listing);
-    // A no-op when the request came from a profile opened inside the browser: it is already open, and the
-    // listing it was handed is what it reacts to either way.
-    setShowCommunityBrowser(true);
-  }, []);
+    requireAttestation({
+      onAccept: () => {
+        setShowProfileDialog(false);
+        setPendingListing(listing);
+        // A no-op when the request came from a profile opened inside the browser: it is already open, and
+        // the listing it was handed is what it reacts to either way.
+        setShowCommunityBrowser(true);
+      },
+    });
+  }, [requireAttestation]);
 
   // Lend the same jump to the profile dialog, which lives at the app root and cannot reach any of this.
   const { setListingOpener } = useUserProfile();
@@ -499,6 +546,15 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     return () => setListingOpener(null);
   }, [setListingOpener, handleOpenListing]);
 
+  // The same lending for Feedback: a suspended account is told to ask there, and the deletion flow that
+  // tells it stands above this screen. Withdrawn on unmount, so the step offers no button it cannot honor.
+  const { setFeedbackOpener } = useAccountDeletion();
+  useEffect(() => {
+    setFeedbackOpener(() => setShowFeedback(true));
+
+    return () => setFeedbackOpener(null);
+  }, [setFeedbackOpener]);
+
   const openImageViewer = (src: string | undefined, alt: string | undefined) => {
     if (!src) return;
     setViewerImage({ src, alt: alt || 'World image' });
@@ -507,6 +563,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
   // Admin "Manage Users" dialog: open state here; its list/paging/fetch live in the dialog component.
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  // Targets with an open report on them, for the badge on the Admin Panel button. Staff only, and zero
+  // against a server without the feature — the button simply wears no badge there.
+  const [openReports, setOpenReports] = useState(0);
+  // Bumped after a resolution, so the badge follows the queue rather than the session.
+  const [reportCountNonce, setReportCountNonce] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
   // The loudest unread message, which is what colors the badge. Null when the inbox holds nothing new.
   const [messageSeverity, setMessageSeverity] = useState<string | null>(null);
@@ -514,6 +575,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // Feedback button rather than the profile circle: that is where the threads are now, and a count is
   // easiest to act on sitting on the thing it is about.
   const [unreadBugs, setUnreadBugs] = useState(0);
+  const feedbackLabel = unreadBugs > 0 ? `Feedback (${unreadBugs} unread)` : 'Feedback';
   // Bumped to re-read the bug count after a thread is opened or replied to.
   const [bugCountNonce, setBugCountNonce] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -537,8 +599,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
   // Check authentication status on component mount (skipped when community features are disabled — the
   // hosted build never contacts the auth server).
+  //
+  // It also waits on the age attestation, which is what makes a held token harmless until the player has
+  // answered: nothing here runs, so the badge reads below it stay off, and a decline — which signs the
+  // token out — is never overtaken by a session this adopted first.
   useEffect(() => {
-    if (!COMMUNITY_ENABLED) return;
+    if (!COMMUNITY_ENABLED || !attested) return;
     const checkAuth = async () => {
       const isLoggedIn = AuthService.isAuthenticated();
       setIsAuthenticated(isLoggedIn);
@@ -572,7 +638,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     };
 
     checkAuth();
-  }, []);
+  }, [attested]);
 
   // Reload the world grid from storage. Reused on mount and after the World Editor modal closes so the
   // grid reflects renames/edits/deletes without remounting MainMenu (mirrors refreshDictionaries/Entities).
@@ -585,11 +651,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         isLoading: false,
         defaultName: DEFAULT_WORLDS.find(dw => dw.id === world.id)?.defaultName || world.name
       }));
-      const ordered = applyWorldOrder(mapped, loadWorldOrder());
-      setWorlds(ordered);
+      setWorlds(mapped);
       // Returned as well as set: a caller that has to re-derive something from the fresh list can't read it
       // back out of state in the same tick.
-      return ordered;
+      return mapped;
     } catch (error) {
       console.error('Error loading worlds:', error);
       return [];
@@ -636,8 +701,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     const initializeWorlds = async () => {
       try {
         await WorldStorageService.initialize();
-        const existingWorlds = await WorldStorageService.getWorldMetadata();
-        const firstRun = existingWorlds.length === 0;
+        // Ids alone: this read only ever answered "is the library empty", and asking for the metadata
+        // deserialized every stored world to count them. It also arrives early enough to draw the grid.
+        const existingIds = await WorldStorageService.getWorldIds();
+        setSkeletonWorlds(existingIds.map((id) => ({ id, isLoading: true })));
+        const firstRun = existingIds.length === 0;
         const { failed, updated } = await WorldStorageService.loadDefaultWorlds(DEFAULT_WORLDS);
         if (firstRun) {
           if (failed.length === 0) toast.success("Loaded default worlds");
@@ -662,7 +730,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     try {
       await DictionaryStorageService.initialize();
       const metadata = await DictionaryStorageService.getDictionaryMetadata();
-      setDictionaries(applyWorldOrder(metadata, loadOrder(DICTIONARY_ORDER_KEY)));
+      setDictionaries(metadata);
     } catch (error) {
       console.error('Error loading dictionaries:', error);
     } finally {
@@ -679,7 +747,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       await ModelStorageService.initialize();
       await ModelStorageService.seedDefaultModel(DEFAULT_AVATAR_URL);
       const metadata = await ModelStorageService.getModelMetadata();
-      setModels(applyWorldOrder(metadata, loadOrder(MODEL_ORDER_KEY)));
+      setModels(metadata);
     } catch (error) {
       console.error('Error loading models:', error);
     } finally {
@@ -725,7 +793,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     try {
       await EntityStorageService.initialize();
       const metadata = await EntityStorageService.getEntityMetadata();
-      setEntities(applyWorldOrder(metadata, loadOrder(ENTITY_ORDER_KEY)));
+      setEntities(metadata);
     } catch (error) {
       console.error('Error loading characters:', error);
     } finally {
@@ -734,6 +802,18 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   }, []);
 
   useEffect(() => { refreshEntities(); }, [refreshEntities]);
+
+  // A download lands in the browser's copy of the library, not this one, so the grids re-read on the way
+  // out — the same handoff the World Editor modal has. Nothing here updates mid-browse, and nothing needs
+  // to: the grids are behind a full-screen surface until this fires.
+  const handleCommunityBrowserOpenChange = useCallback((next: boolean) => {
+    setShowCommunityBrowser(next);
+    if (next) return;
+    setCommunityTab(undefined);
+    void refreshWorlds();
+    void refreshEntities();
+    void refreshDictionaries();
+  }, [refreshWorlds, refreshEntities, refreshDictionaries]);
 
   // Check if any stat has code
   const hasStatWithCode = (statsArray: Stat[]) => {
@@ -1205,22 +1285,22 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     }
   };
 
-  // Pull the admin-message badge whenever the session changes: on mount for an already-signed-in user,
-  // and again right after a login. The first count of a session also raises a toast, so a message sent
-  // while the player was away is noticed without opening the profile dialog.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED || !isAuthenticated) {
-      setUnreadMessages(0);
-      setMessageSeverity(null);
-      announcedUnreadRef.current = false;
-      return;
-    }
-
-    let current = true;
+  // Re-read the admin-message badge. The first count of a session also raises a toast, so a message
+  // sent while the player was away is noticed without opening the profile dialog.
+  //
+  // Counted rather than fire-and-forget: the auth effect and the events poll both call this, so two
+  // reads can be in flight at once, and a signing-out-and-back-in-as-someone-else round trip would
+  // otherwise let the previous account's count land last.
+  const unreadReadId = useRef(0);
+  const refreshUnreadCount = useCallback(() => {
+    // Read straight from the flag rather than from the context: the events poll holds this callback, and a
+    // new identity every time the attestation changed would restart the poll.
+    if (!COMMUNITY_ENABLED || !isAgeAttested() || !AuthService.isAuthenticated()) return;
+    const read = (unreadReadId.current += 1);
 
     MessageService.fetchUnreadCount()
       .then(({ unread, topSeverity }) => {
-        if (!current) return;
+        if (read !== unreadReadId.current) return;
         setUnreadMessages(unread);
         setMessageSeverity(topSeverity);
 
@@ -1231,9 +1311,65 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       })
       // The badge is not worth a toast of its own when the community server is unreachable.
       .catch((error) => console.error('Failed to load unread message count:', error));
+  }, []);
+
+  // Whenever the session changes: on mount for an already-signed-in user, and again right after a login.
+  useEffect(() => {
+    if (!COMMUNITY_ENABLED || !isAuthenticated) {
+      setUnreadMessages(0);
+      setMessageSeverity(null);
+      announcedUnreadRef.current = false;
+      // Retires any read still in flight from the session that just ended.
+      unreadReadId.current += 1;
+      return;
+    }
+
+    refreshUnreadCount();
+  }, [isAuthenticated, refreshUnreadCount]);
+
+  // Running community events, polled. The poll nudges the badge along with itself: the server pushes
+  // nothing, so this is the only thing that notices a broadcast sent mid-session.
+  const activeEvents = useActiveEvents({ onPoll: refreshUnreadCount });
+
+  // The contests feed, read once at launch. The events poll carries only what is running, so a contest
+  // that closed while nobody was looking is invisible to it — and the poster saying judging has begun
+  // would only ever reach whoever happened to be online at the deadline.
+  const { contests } = useContests(COMMUNITY_ENABLED);
+
+  // What the acknowledge poster may show: what is running, plus contests waiting on results. An announce or
+  // a cancellation drops one out of the second list, so no stale "judging has begun" survives the news.
+  const announceable = useMemo(
+    () => [...activeEvents, ...judgingContestsOf(contests)],
+    [activeEvents, contests],
+  );
+
+  // Which Community Creations tab to open on. Set when an event banner sends the player to its content;
+  // cleared as the browser closes, so the next plain visit lands on the catalog again.
+  const [communityTab, setCommunityTab] = useState<BrowseTab | undefined>(undefined);
+
+  /** Take the player to where an event's content lives — the contest tab, for a contest. */
+  const openEvent = useCallback((event: ServerEvent) => {
+    openCommunityBrowser(isContestEvent(event) ? 'contest' : undefined);
+  }, [openCommunityBrowser]);
+
+  const banners = useEventBanners(activeEvents);
+
+  // The staff half of the badge story. Its own channel because it counts work rather than news: it is
+  // the same number for every staff member, and it clears when somebody — anybody — resolves a group.
+  useEffect(() => {
+    if (!COMMUNITY_ENABLED || !isAuthenticated || !isStaff(currentUser)) {
+      setOpenReports(0);
+      return;
+    }
+
+    let current = true;
+
+    ReportService.fetchOpenCount()
+      .then((open) => { if (current) setOpenReports(open); })
+      .catch((error) => console.error('Failed to load the open report count:', error));
 
     return () => { current = false; };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, currentUser, reportCountNonce]);
 
   // The feedback half of the badge. Separate from messages because reading a thread changes it, so it is
   // re-read on demand rather than only when auth changes.
@@ -1268,45 +1404,50 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     return () => { current = false; };
   }, [isAuthenticated, followCountNonce]);
 
-  // Handle logout
-  const handleLogout = () => {
-    AuthService.logout();
+  // Signing out is raised from more than this screen's button — the privacy prompt ends the session
+  // too, and so does a 401 answering any request — so the identity follows the service rather than only
+  // the one handler that used to clear it.
+  useEffect(() => AuthService.onSessionEnded(() => {
     setIsAuthenticated(false);
     setCurrentUser(null);
     setShowProfileDialog(false);
     setUnreadMessages(0);
+  }), []);
+
+  // Handle logout
+  const handleLogout = () => {
+    AuthService.logout();
     toast.success('Logged out successfully');
   };
 
-  // Mouse drags immediately (8px); touch requires a short press-and-hold so a swipe scrolls the grid instead
-  // of grabbing a card (no scroll wheel on mobile). Shared by the worlds, dictionary, and entity grids.
-  const worldSensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
-  );
+  // Every library grid's tile arrangement — folders, sizes, and the order the two sit in. Device-local,
+  // one record per tab, seeded from the flat card order the library kept before tiles.
+  // The blanks stand in only until the metadata lands; `isLoadingWorlds` is what says which list is real,
+  // rather than the length, so a genuinely empty library still reaches its empty state.
+  const shownWorlds = isLoadingWorlds ? skeletonWorlds : worlds;
+  const worldIds = useMemo(() => shownWorlds.map((world) => world.id as string), [shownWorlds]);
+  const entityIds = useMemo(() => entities.map((entity) => entity.id), [entities]);
+  const dictionaryIds = useMemo(() => dictionaries.map((dictionary) => dictionary.id), [dictionaries]);
+  const modelIds = useMemo(() => models.map((model) => model.id), [models]);
+  const worldTiles = useLibraryTiles('worlds', worldIds, !isLoadingWorlds);
+  const entityTiles = useLibraryTiles('entities', entityIds, !isLoadingEntities);
+  const dictionaryTiles = useLibraryTiles('dictionaries', dictionaryIds, !isLoadingDictionaries);
+  const modelTiles = useLibraryTiles('models', modelIds, !isLoadingModels);
 
-  // Reorder one library grid and persist the new id order — shared by the worlds, dictionary, and
-  // character grids, which differ only in their state setter and storage key. The loose `id` constraint
-  // is for WorldRecord (the sanctioned Record<string, any>), which can't satisfy `{ id: string }`.
-  const makeDragEndHandler = <T extends { id?: unknown }>(
-    setItems: React.Dispatch<React.SetStateAction<T[]>>,
-    orderKey: string,
-  ) => (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    setItems((prev) => {
-      const oldIndex = prev.findIndex((item) => item.id === active.id);
-      const newIndex = prev.findIndex((item) => item.id === over.id);
-      if (oldIndex === -1 || newIndex === -1) return prev;
-      const next = arrayMove(prev, oldIndex, newIndex);
-      localStorage.setItem(orderKey, JSON.stringify(next.map((item) => item.id)));
-      return next;
-    });
-  };
-  const handleWorldDragEnd = makeDragEndHandler(setWorlds, WORLD_ORDER_KEY);
-  const handleDictionaryDragEnd = makeDragEndHandler(setDictionaries, DICTIONARY_ORDER_KEY);
-  const handleEntityDragEnd = makeDragEndHandler(setEntities, ENTITY_ORDER_KEY);
-  const handleModelDragEnd = makeDragEndHandler(setModels, MODEL_ORDER_KEY);
+  // A world in a folder can take the folder's preset. The details popup names it, because the dropdown
+  // there shows the world's own pin and an unpinned world would otherwise read as following the global
+  // selection. A setting naming a deleted preset resolves to nothing, exactly as a stale world pin does.
+  const selectedGroupPreset = useMemo(() => {
+    if (!selectedWorld) return null;
+    const group = worldTiles.groupOfItem(selectedWorld.id);
+    const name = presetName(group?.settings.promptPreset);
+    return group && name ? { group, name } : null;
+  }, [selectedWorld, worldTiles, presetName]);
+  const effectivePresetNote = selectedWorld
+    && !presetName(worldPreset(selectedWorld.id))
+    && selectedGroupPreset
+    ? `From group “${selectedGroupPreset.group.name}”: ${selectedGroupPreset.name}`
+    : null;
 
   // The singular noun for the selected card type — drives the contextual New/Import button labels.
   const cardNoun = cardType === 'worlds' ? 'World'
@@ -1321,7 +1462,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       {COMMUNITY_ENABLED && (
         <GradientButton
           tone="indigo"
-          onClick={() => setShowCommunityBrowser(true)}
+          onClick={() => openCommunityBrowser()}
         >
           <Globe className="mr-2 h-4 w-4" /> Community Creations
         </GradientButton>
@@ -1359,6 +1500,14 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           onClick={() => setShowAdminPanel(true)}
         >
           <Shield className="mr-2 h-4 w-4" /> Admin Panel
+          {/* Reports are the one thing in this panel that waits on somebody. The count rides the button
+              rather than the profile circle: that badge is what is waiting for *you*, and a report queue
+              is waiting for whichever of the team gets to it. */}
+          {openReports > 0 && (
+            <span className="ml-2 rounded-full bg-destructive px-1.5 text-meta font-semibold text-destructive-foreground">
+              {openReports > 9 ? '9+' : openReports}
+            </span>
+          )}
         </GradientButton>
       )}
     </>
@@ -1386,6 +1535,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       {worldExportDialog}
       <ThemedToastContainer />
 
+      {/* Running-event banner. In-flow and shrink-0 like the mobile nav and footer, so it compresses the
+          scroll frame rather than covering anything; the root's top padding already clears the fixed bar. */}
+      {COMMUNITY_ENABLED && <EventBanner banners={banners} onOpenEvent={openEvent} />}
+
       {/* Top control bar: card-type switcher (left) + action buttons/hamburger (center) + view toggle &
           settings (right). items-center keeps every control on the settings cog's centerline (the cog is
           tallest). The side cells are equal flex-1 so the center section sits at true viewport-center when
@@ -1404,10 +1557,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
             onValueChange={(v) => { if (v) setCardType(v as typeof cardType); }}
           >
             {CARD_TABS.map(({ value, label, Icon }) => (
-              <ToggleGroupItem key={value} value={value} aria-label={label} title={label}>
-                <Icon className="h-5 w-5 min-[1100px]:hidden" />
-                <span className="hidden min-[1100px]:inline">{label}</span>
-              </ToggleGroupItem>
+              <Tip key={value} tip={label}>
+                <ToggleGroupItem value={value}>
+                  <Icon className="h-5 w-5 min-[1100px]:hidden" />
+                  <span className="hidden min-[1100px]:inline">{label}</span>
+                </ToggleGroupItem>
+              </Tip>
             ))}
           </ToggleGroup>
         </div>
@@ -1444,34 +1599,46 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           </Popover>
         </div>
 
-        {/* Grid/detailed view toggle + settings (cog stays right-most) */}
-        <div className="flex-1 flex items-center justify-end gap-2">
+        {/* Grid/detailed view toggle + settings (cog stays right-most). min-w-0 so a chip beside them can
+            be squeezed rather than pushing the cell past the bar's right edge. */}
+        <div className="flex-1 min-w-0 flex items-center justify-end gap-2">
+          {/* Dismissed banners, centered in the slack this cell was already holding rather than pushed
+              against the buttons beside it. It takes the free width and gives it back as it shrinks, so
+              a chip costs the bar no row and never crowds the controls it sits between. */}
+          {COMMUNITY_ENABLED && (
+            <EventBannerChips banners={banners} onOpenEvent={openEvent} className="grow justify-center" />
+          )}
           <ToggleGroup
             type="single"
             value={layoutMode}
+            // shrink-0 here and on the menu beside it: a chip in this cell is the one thing that may give
+            // width back, so the controls it sits beside keep theirs at every viewport.
+            className="shrink-0"
             // Clicking the active item again would otherwise clear the layout mode, which has no empty state.
             onValueChange={(v) => { if (v) setLayoutMode(v as 'grid' | 'detailed'); }}
           >
-            <ToggleGroupItem value="grid" aria-label="Grid view" title="Grid view">
-              <LayoutGrid className="h-5 w-5" />
-            </ToggleGroupItem>
-            <ToggleGroupItem value="detailed" aria-label="Detailed view" title="Detailed view">
-              <GalleryThumbnails className="h-5 w-5" />
-            </ToggleGroupItem>
+            <Tip tip="Grid view">
+              <ToggleGroupItem value="grid">
+                <LayoutGrid className="h-5 w-5" />
+              </ToggleGroupItem>
+            </Tip>
+            <Tip tip="Detailed view">
+              <ToggleGroupItem value="detailed">
+                <GalleryThumbnails className="h-5 w-5" />
+              </ToggleGroupItem>
+            </Tip>
           </ToggleGroup>
           {/* Right menu — hidden below 1000px, where its items fold into the center hamburger; the view toggle
               then becomes the right-most control. */}
-          <div className="hidden min-[1000px]:block">
+          <div className="hidden min-[1000px]:block shrink-0">
             <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  className="p-3 bg-secondary text-secondary-foreground rounded-full shadow-lg hover:bg-secondary/80 transition-colors"
-                  aria-label="Menu"
-                  title="Menu"
-                >
-                  <Menu className="h-6 w-6" />
-                </button>
-              </PopoverTrigger>
+              <Tip tip="Menu">
+                <PopoverTrigger asChild>
+                  <button className="p-3 bg-secondary text-secondary-foreground rounded-full shadow-lg hover:bg-secondary/80 transition-colors">
+                    <Menu className="h-6 w-6" />
+                  </button>
+                </PopoverTrigger>
+              </Tip>
               {/* Sized for `Backup & Restore` plus its icon; w-48 left it scrunched. */}
               <PopoverContent align="end" className="w-60 p-1">
                 <div className="flex flex-col">
@@ -1497,6 +1664,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         initialTab={settingsTab ?? asSettingsTab(devRoute?.tab)}
         initialEndpointTab={settingsEndpointTab}
         initialPromptTab={devRoute?.subtab}
+        initialPromptSurface={devRoute?.surface}
         onWorldsRestored={refreshWorlds}
       />
       <AiSetupGate
@@ -1548,154 +1716,152 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         className="hidden"
       />
 
-      {/* Worlds, Entities, Dictionaries, and Models are card grids. */}
+      {/* Worlds, Entities, Dictionaries, and Models are card grids of sizable, groupable tiles. */}
       {cardType === 'models' ? (
-        <ScrollArea className="flex-1 min-h-0 container mx-auto px-4">
-          {!isLoadingModels && models.length === 0 ? (
+        <LibraryTileGrid
+          items={models}
+          idOf={(model) => model.id}
+          tiles={modelTiles}
+          layout="grid"
+          aspect="portrait"
+          minMediumWidth={ENTITY_MIN_TILE}
+          detailedColumnsClass={DETAILED_GRID_CLASS}
+          thumbnailOf={(model) => model.thumbnail}
+          emptyState={!isLoadingModels ? (
             <div className="flex items-center justify-center py-16 px-4 select-none">
               <p className="max-w-md text-center text-helper text-muted-foreground">
                 No player avatars yet — use <span className="font-semibold">Import Avatar</span> to add a .vrm.
               </p>
             </div>
-          ) : (
-            <div className={`grid ${ENTITY_GRID_CLASS} gap-4`}>
-              <DndContext
-                sensors={worldSensors}
-                collisionDetection={closestCenter}
-                onDragEnd={handleModelDragEnd}
-                modifiers={[restrictToFirstScrollableAncestor]}
-                autoScroll={CONTAINED_AUTO_SCROLL}
-              >
-                <SortableContext items={models.map((m) => m.id)} strategy={rectSortingStrategy}>
-                  {models.map((model) => (
-                    <SortableWorldCard
-                      key={model.id}
-                      world={{ id: model.id, name: model.name, thumbnail: model.thumbnail }}
-                      layout="grid"
-                      aspect="portrait"
-                      // A plain .glb carries no VRM metadata, so it has no license and its morph targets
-                      // aren't guaranteed — say so on the card rather than letting it pass as a full VRM.
-                      badge={model.license?.metaVersion === null ? (
-                        <span
-                          className="rounded bg-overlay/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-                          title="Plain glTF: no license information, and morph targets aren't guaranteed."
-                        >
-                          GLB
-                        </span>
-                      ) : undefined}
-                      onSelect={setPreviewModelId}
-                      onDelete={setModelToDelete}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-            </div>
+          ) : undefined}
+          renderCard={(model, { fill, compact }) => (
+            <SortableWorldCard
+              world={{ id: model.id, name: model.name, thumbnail: model.thumbnail }}
+              layout="grid"
+              aspect="portrait"
+              fill={fill}
+              compact={compact}
+              // A plain .glb carries no VRM metadata, so it has no license and its morph targets
+              // aren't guaranteed — say so on the card rather than letting it pass as a full VRM.
+              badge={model.license?.metaVersion === null ? (
+                <Tip tip="Plain glTF: no license information, and morph targets aren't guaranteed.">
+                  <span
+                    tabIndex={0}
+                    className="rounded bg-overlay/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                  >
+                    GLB
+                  </span>
+                </Tip>
+              ) : undefined}
+              onSelect={setPreviewModelId}
+            />
           )}
-        </ScrollArea>
+          onDelete={setModelToDelete}
+        />
       ) : cardType === 'entities' ? (
-        <ScrollArea className="flex-1 min-h-0 container mx-auto px-4">
-          {!isLoadingEntities && entities.length === 0 ? (
+        <LibraryTileGrid
+          items={entities}
+          idOf={(entity) => entity.id}
+          tiles={entityTiles}
+          layout={layoutMode}
+          aspect="portrait"
+          minMediumWidth={ENTITY_MIN_TILE}
+          detailedColumnsClass={DETAILED_GRID_CLASS}
+          thumbnailOf={(entity) => entity.image}
+          emptyState={!isLoadingEntities ? (
             <div className="flex items-center justify-center py-16 px-4 select-none">
               <p className="max-w-md text-center text-helper text-muted-foreground">
                 No characters yet — use <span className="font-semibold">New Entity</span> or <span className="font-semibold">Import Entity</span> to add one.
               </p>
             </div>
-          ) : (
-            <div className={`grid ${layoutMode === 'detailed' ? DETAILED_GRID_CLASS : ENTITY_GRID_CLASS} gap-4`}>
-              <DndContext
-                sensors={worldSensors}
-                collisionDetection={closestCenter}
-                onDragEnd={handleEntityDragEnd}
-                modifiers={[restrictToFirstScrollableAncestor]}
-                autoScroll={CONTAINED_AUTO_SCROLL}
-              >
-                <SortableContext items={entities.map((e) => e.id)} strategy={rectSortingStrategy}>
-                  {entities.map((entity) => (
-                    <SortableWorldCard
-                      key={entity.id}
-                      world={{ id: entity.id, name: entity.name, description: entity.description, thumbnail: entity.image, tags: entity.tags }}
-                      layout={layoutMode}
-                      aspect="portrait"
-                      onSelect={setEditingEntityId}
-                      onDelete={setEntityToDelete}
-                    />
-                  ))}
-                </SortableContext>
-              </DndContext>
-            </div>
+          ) : undefined}
+          renderCard={(entity, { layout, fill, compact }) => (
+            <SortableWorldCard
+              world={{ id: entity.id, name: entity.name, description: entity.description, thumbnail: entity.image, tags: entity.tags }}
+              layout={layout}
+              aspect="portrait"
+              fill={fill}
+              compact={compact}
+              onSelect={setEditingEntityId}
+            />
           )}
-        </ScrollArea>
+          onDelete={setEntityToDelete}
+        />
       ) : cardType === 'dictionaries' ? (
-        <ScrollArea className="flex-1 min-h-0 container mx-auto px-4">
-          {!isLoadingDictionaries && dictionaries.length === 0 ? (
+        <LibraryTileGrid
+          items={dictionaries}
+          idOf={(dictionary) => dictionary.id}
+          tiles={dictionaryTiles}
+          layout={layoutMode}
+          aspect="landscape"
+          minMediumWidth={WORLD_MIN_TILE}
+          detailedColumnsClass={DETAILED_GRID_CLASS}
+          thumbnailOf={(dictionary) => dictionary.thumbnail}
+          emptyState={!isLoadingDictionaries ? (
             <div className="flex items-center justify-center py-16 px-4 select-none">
               <p className="max-w-md text-center text-helper text-muted-foreground">
                 No dictionaries yet — use <span className="font-semibold">New Dictionary</span> or <span className="font-semibold">Import Dictionary</span> to add one.
               </p>
             </div>
-          ) : (
-            <div className={`grid ${layoutMode === 'detailed' ? DETAILED_GRID_CLASS : gridColsClass(WORLD_GRID_COLS.base, WORLD_GRID_COLS.sm, WORLD_GRID_COLS.lg)} gap-4`}>
-              <DndContext
-                sensors={worldSensors}
-                collisionDetection={closestCenter}
-                onDragEnd={handleDictionaryDragEnd}
-                modifiers={[restrictToFirstScrollableAncestor]}
-                autoScroll={CONTAINED_AUTO_SCROLL}
+          ) : undefined}
+          renderCard={(dictionary, { layout, fill, compact }) => (
+            <SortableWorldCard
+              world={dictionary}
+              layout={layout}
+              fill={fill}
+              compact={compact}
+              onSelect={setEditingDictionaryId}
+            />
+          )}
+          onDelete={setDictionaryToDelete}
+        />
+      ) : (
+        // One grid for both stages. A separate loading grid had to guess a layout, and guessed a fixed
+        // count at a fixed size — so it drifted the moment tiles could be resized or foldered. This one
+        // reads the same arrangement the loaded grid does, so there is nothing left to keep in step.
+        <LibraryTileGrid
+          items={shownWorlds}
+          idOf={(world) => world.id as string}
+          tiles={worldTiles}
+          layout={layoutMode}
+          aspect="landscape"
+          minMediumWidth={WORLD_MIN_TILE}
+          detailedColumnsClass={DETAILED_GRID_CLASS}
+          thumbnailOf={(world) => world.thumbnail}
+          groupPresetName={(groupId) => presetName(worldTiles.group(groupId)?.settings.promptPreset)}
+          groupSettings={(groupId) => (
+            <div className="flex items-center gap-2">
+              <label htmlFor="group-preset" className="text-helper text-muted-foreground">Prompts</label>
+              <Select
+                value={worldTiles.group(groupId)?.settings.promptPreset || GLOBAL_PRESET_VALUE}
+                onValueChange={(v) =>
+                  worldTiles.setPromptPreset(groupId, v === GLOBAL_PRESET_VALUE ? null : v)
+                }
               >
-                <SortableContext items={dictionaries.map((d) => d.id)} strategy={rectSortingStrategy}>
-                  {dictionaries.map((dictionary) => (
-                    <SortableWorldCard
-                      key={dictionary.id}
-                      world={dictionary}
-                      layout={layoutMode}
-                      onSelect={setEditingDictionaryId}
-                      onDelete={setDictionaryToDelete}
-                    />
+                <SelectTrigger id="group-preset" className="h-8 w-[210px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={GLOBAL_PRESET_VALUE}>No group preset</SelectItem>
+                  {[...builtinPresets, ...promptPresets].map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
-                </SortableContext>
-              </DndContext>
+                </SelectContent>
+              </Select>
             </div>
           )}
-        </ScrollArea>
-      ) : (
-      /* Bounded scroll viewport (Radix ScrollArea Root is overflow-hidden) so drag-reorder
-         auto-scroll stays inside this frame instead of growing the page in either axis. */
-      <ScrollArea className="flex-1 min-h-0 container mx-auto px-4">
-        <div className={`grid ${gridColsClass(WORLD_GRID_COLS.base, WORLD_GRID_COLS.sm, layoutMode === 'detailed' ? 4 : WORLD_GRID_COLS.lg)} gap-4`}>
-          {isLoadingWorlds ? (
-            Array(6).fill(0).map((_, index) => (
-              <div key={index} className="relative w-full h-48 rounded-lg overflow-hidden">
-                <Skeleton className="w-full h-full" />
-                <div className="absolute bottom-0 left-0 right-0 bg-overlay/50 p-2">
-                  <Skeleton className="h-6 w-24" />
-                </div>
-              </div>
-            ))
-          ) : (
-            <DndContext
-              sensors={worldSensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleWorldDragEnd}
-              // Clamp the drag to the ScrollArea viewport and never auto-scroll the page/window,
-              // so dragging a tile past an edge scrolls this finite frame rather than growing the page.
-              modifiers={[restrictToFirstScrollableAncestor]}
-              autoScroll={CONTAINED_AUTO_SCROLL}
-            >
-              <SortableContext items={worlds.map((w) => w.id)} strategy={rectSortingStrategy}>
-                {worlds.map((world) => (
-                  <SortableWorldCard
-                    key={world.id}
-                    world={world}
-                    layout={layoutMode}
-                    onSelect={handleWorldSelection}
-                    onDelete={setWorldToDelete}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
+          renderCard={(world, { layout, fill, compact }) => (
+            <LibraryWorldCard
+              world={world}
+              contests={contests}
+              layout={layout}
+              fill={fill}
+              compact={compact}
+              onSelect={handleWorldSelection}
+            />
           )}
-        </div>
-      </ScrollArea>
+          // Withheld while the tiles are blank: the menu entry is the one that can't be taken back, and
+          // it would be aimed at a card with no name on it. The rest of the menu writes ids, which are real.
+          onDelete={isLoadingWorlds ? undefined : setWorldToDelete}
+        />
       )}
 
       {/* Mobile card-type switch: an in-flow bottom tab bar (one-tap, always visible) that frees the cramped
@@ -1743,7 +1909,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               )}
               onClick={() => {
                 dismissMenuTutorial('main-menu-sign-in');
-                if (isAuthenticated) setShowProfileDialog(true); else setShowAuthDialog(true);
+                // An account is what unlocks profiles and comments, so signing up sits behind the same
+                // attestation the browser does. A player who already attested is not asked twice.
+                if (isAuthenticated) setShowProfileDialog(true);
+                else requireAttestation({ onAccept: () => setShowAuthDialog(true) });
               }}
               aria-label={
                 isAuthenticated
@@ -1778,29 +1947,41 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           {/* Reading the queue needs an account as much as filing does, so this only appears once signed
               in — the server refuses either way. */}
           {COMMUNITY_ENABLED && isAuthenticated && (
-            <TutorialPopover
-              entry={menuTutorial?.id === 'main-menu-feedback' ? menuTutorial : null}
-              nav={menuTutorialNav}
-              side="top"
-              align="start"
-            >
-            <button
-              className="relative p-3 bg-secondary text-secondary-foreground rounded-full shadow-lg hover:bg-secondary/80 transition-colors"
-              onClick={() => { dismissMenuTutorial('main-menu-feedback'); setShowFeedback(true); }}
-              title={unreadBugs > 0 ? `Feedback (${unreadBugs} unread)` : "Feedback"}
-              aria-label={unreadBugs > 0 ? `Feedback (${unreadBugs} unread)` : "Feedback"}
-            >
-              <MessageSquarePlus className="h-6 w-6" />
-              {unreadBugs > 0 && (
-                <span className={cn(
-                  'absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold',
-                  UNREAD_MARK_STYLES.feedback.badge
-                )}>
-                  {unreadBugs > 9 ? '9+' : unreadBugs}
-                </span>
-              )}
-            </button>
-            </TutorialPopover>
+            // The tutorial hands its child the anchor ref, so the tip is built from the parts here: the
+            // trigger has to be the element the popover anchors to, which `Tip` cannot be.
+            <Tooltip>
+              <TutorialPopover
+                entry={menuTutorial?.id === 'main-menu-feedback' ? menuTutorial : null}
+                nav={menuTutorialNav}
+                side="top"
+                align="start"
+              >
+                <TooltipTrigger
+                  aria-label={feedbackLabel}
+                  render={(
+                    <button
+                      className="relative p-3 bg-secondary text-secondary-foreground rounded-full shadow-lg hover:bg-secondary/80 transition-colors"
+                      onClick={() => { dismissMenuTutorial('main-menu-feedback'); setShowFeedback(true); }}
+                    >
+                      <MessageSquarePlus className="h-6 w-6" />
+                      {unreadBugs > 0 && (
+                        <span className={cn(
+                          'absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold',
+                          UNREAD_MARK_STYLES.feedback.badge
+                        )}>
+                          {unreadBugs > 9 ? '9+' : unreadBugs}
+                        </span>
+                      )}
+                    </button>
+                  )}
+                />
+              </TutorialPopover>
+              <TooltipPortal>
+                <TooltipPositioner side="top">
+                  <TooltipPopup>{feedbackLabel}</TooltipPopup>
+                </TooltipPositioner>
+              </TooltipPortal>
+            </Tooltip>
           )}
           {!isMobile && (isDesktop() ? <UpdateVersionControl /> : <WebVersionChangelog />)}
         </div>
@@ -1808,15 +1989,15 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         {/* Center: copyright + origin credit (original is MIT — see THIRD-PARTY-NOTICES / legal/). The
             "Based on…" line collapses into the ⋯ menu on mobile; the © stays (it replays the intro). */}
         <div className="text-center text-meta text-muted-foreground/60 whitespace-nowrap leading-tight">
-          <button
-            type="button"
-            onClick={() => onReplayIntro?.()}
-            className="cursor-pointer hover:text-muted-foreground transition-colors"
-            title="Replay intro"
-            aria-label="Replay intro"
-          >
-            © 2026 Jake James
-          </button>
+          <Tip tip="Replay intro">
+            <button
+              type="button"
+              onClick={() => onReplayIntro?.()}
+              className="cursor-pointer hover:text-muted-foreground transition-colors"
+            >
+              © 2026 Jake James
+            </button>
+          </Tip>
           {!isMobile && (
             <div>
               Based on{' '}
@@ -1904,17 +2085,19 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               {/* `truncate` clips to the line box, and DialogTitle's `leading-none` leaves it exactly one
                   em tall — descenders fall outside and crop. Fits within the row's existing height. */}
               <span className="truncate leading-normal">{selectedWorld?.name}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="ml-auto mr-8 h-8 w-8 shrink-0 hidden md:inline-flex"
-                onClick={toggleWorldModalCollapsed}
-                title={worldModalCollapsed ? "Expand to two columns" : "Collapse to single column"}
-                aria-label={worldModalCollapsed ? "Expand to two columns" : "Collapse to single column"}
-              >
-                {worldModalCollapsed ? <Columns2 className="h-4 w-4" /> : <RectangleVertical className="h-4 w-4" />}
-              </Button>
+              <Tip tip={worldModalCollapsed ? "Expand to two columns" : "Collapse to single column"}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto mr-8 h-8 w-8 shrink-0 hidden md:inline-flex"
+                  onClick={toggleWorldModalCollapsed}
+                >
+                  {worldModalCollapsed ? <Columns2 className="h-4 w-4" /> : <RectangleVertical className="h-4 w-4" />}
+                </Button>
+              </Tip>
             </DialogTitle>
+            {/* Under the title, as on the card it was opened from — the library agrees with itself. */}
+            {selectedWorld && <PlaceBadges placements={placementsBy(selectedWorld, contests)} className="mr-8" />}
           </DialogHeader>
 
           <div className="flex-1 min-h-0 flex flex-col">
@@ -1958,17 +2141,18 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 </div>
               }
               thumbnail={
-                <div
-                  className="hidden sm:block relative w-full pt-[56.25%] cursor-zoom-in"
-                  onClick={() => openImageViewer(selectedWorld?.thumbnail, selectedWorld?.name)}
-                  title="Click to enlarge"
-                >
-                  <img
-                    src={selectedWorld?.thumbnail}
-                    alt={selectedWorld?.name}
-                    className="absolute top-0 left-0 w-full h-full object-cover rounded-lg"
-                  />
-                </div>
+                <Tip tip="Click to enlarge" labelsChild={false}>
+                  <div
+                    className={cn('hidden sm:block relative w-full cursor-zoom-in', THUMB_FRAME.landscape)}
+                    onClick={() => openImageViewer(selectedWorld?.thumbnail, selectedWorld?.name)}
+                  >
+                    <img
+                      src={selectedWorld?.thumbnail}
+                      alt={selectedWorld?.name}
+                      className={cn('absolute top-0 left-0 w-full h-full rounded-lg', thumbFit('landscape'))}
+                    />
+                  </div>
+                </Tip>
               }
               actions={
                 <div className="space-y-2">
@@ -2058,7 +2242,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                   {isAuthenticated && (
                     <WorldActionButton
                       tone="redSoft"
-                      onClick={() => selectedWorld && openPublish(worldPublishPayload(selectedWorld.data))}
+                      onClick={() => selectedWorld && openPublish(worldPublishPayload(selectedWorld.data), selectedWorld.id)}
                     >
                       <ActionIcon.publish className="mr-2 h-4 w-4" /> Publish World
                     </WorldActionButton>
@@ -2113,12 +2297,19 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               >
                 <SelectTrigger id="world-preset" className="h-8 w-[210px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={GLOBAL_PRESET_VALUE}>Use global preset</SelectItem>
+                  <SelectItem value={GLOBAL_PRESET_VALUE}>
+                    {selectedGroupPreset ? 'Use group preset' : 'Use global preset'}
+                  </SelectItem>
                   {[...builtinPresets, ...promptPresets].map((p) => (
                     <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {/* Three levels can decide the preset, so the one that wins is named rather than left to
+                  be inferred from an unpinned dropdown. */}
+              {effectivePresetNote && (
+                <span className="text-meta text-muted-foreground">{effectivePresetNote}</span>
+              )}
             </div>
 
             {/* Entry options sit opposite the pin so the two kinds of control stay visually separate. */}
@@ -2271,20 +2462,30 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         </DialogContent>
       </Dialog>
 
-      {/* Read-only view of the world's authored prompts, one tab per pass it rewrites. Chips are shown as
-          their raw tokens: this is the text as authored, not a per-turn render, and the AI-context viewer
-          already shows the filled one. */}
+      {/* Read-only view of the world's authored prompts, one tab per pass it rewrites, opening on what the
+          author changed against the prompt Formamorph ships for that pass — the whole text says little about
+          which parts are this world's doing. Chips are shown as their raw tokens: this is the text as
+          authored, not a per-turn render, and the AI-context viewer already shows the filled one. */}
       <Dialog open={showWorldPrompts} onOpenChange={setShowWorldPrompts}>
         <DialogContent className="sm:max-w-[700px] h-[85dvh] flex flex-col">
           <DialogHeader className="shrink-0">
-            <DialogTitle className="leading-normal">Custom Prompts</DialogTitle>
+            {/* The mode switch shares the title row (pr-6 clears the dialog's X), and the description
+                doubles as the legend — its "added"/"removed" carry the diff's actual colors — so the
+                chrome costs no row of its own. */}
+            <div className="flex items-center justify-between gap-3 pr-6">
+              <DialogTitle className="leading-normal">Custom Prompts</DialogTitle>
+              <PromptDiffModeToggle mode={promptView} onModeChange={setPromptView} />
+            </div>
           </DialogHeader>
 
           <DialogDescription className="shrink-0">
-            This world runs the {customPromptKinds.length > 1 ? 'passes' : 'pass'} below on its own text in
-            place of yours. Uncheck &ldquo;Use this world&apos;s
-            {customPromptKinds.length > 1 ? ' prompts' : ' prompt'}&rdquo; in the world&apos;s window to use
-            your own instead.
+            This world rewrites the {customPromptKinds.length > 1 ? 'passes' : 'pass'} below — text
+            it <span className="bg-emerald-500/25 rounded-[2px] px-0.5 text-foreground">added</span> to the
+            default prompt is tinted, text it{' '}
+            <span className="bg-red-500/10 text-red-600 dark:text-red-400 line-through decoration-red-500/70 rounded-[2px] px-0.5">removed</span>{' '}
+            is struck through. Uncheck &ldquo;Use this
+            world&apos;s{customPromptKinds.length > 1 ? ' prompts' : ' prompt'}&rdquo; in the world&apos;s
+            window to use your own.
           </DialogDescription>
 
           <Tabs
@@ -2305,9 +2506,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 value={kind}
                 className="flex-1 min-h-0 mt-0 overflow-auto rounded-md bg-muted p-4"
               >
-                <pre className="text-label font-mono whitespace-pre-wrap">
-                  {worldPrompt(selectedWorld?.data?.worldOverview, kind) ?? ''}
-                </pre>
+                <PromptDiff kind={kind} text={worldPrompt(promptOverview, kind) ?? ''} mode={promptView} />
               </TabsContent>
             ))}
           </Tabs>
@@ -2446,24 +2645,30 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
             onOpenChange={setShowPublishModal}
             isAuthenticated={isAuthenticated}
             payload={publishPayload}
+            localId={publishLocalId}
+            onLinked={() => { void refreshWorlds(); }}
+            events={activeEvents}
           />
 
-          {/* Community Creations browser — see CommunityCreationsBrowser.tsx */}
-          <CommunityCreationsBrowser
-            open={showCommunityBrowser}
-            onOpenChange={setShowCommunityBrowser}
-            worlds={worlds}
-            setWorlds={setWorlds}
-            entities={entities}
-            dictionaries={dictionaries}
-            refreshEntities={refreshEntities}
-            refreshDictionaries={refreshDictionaries}
+          {/* One-time acknowledge poster for an event that has just started or just ended. It waits for
+              the welcome intro to finish, so a first-run player meets the menu before the poster. */}
+          <EventAckModal
+            events={announceable}
             isAuthenticated={isAuthenticated}
-            currentUser={currentUser}
-            openImageViewer={openImageViewer}
-            initialKind={devRoute?.modal === 'community' ? (devRoute.tab as CatalogKind | undefined) : undefined}
+            onOpenEvent={openEvent}
+            held={introActive || gateOpen}
+          />
+
+          {/* Community Creations. The host reads its own libraries, account and events from the services,
+              so all the menu hands it is where to open — see CommunityBrowserHost.tsx. */}
+          <CommunityBrowserHost
+            open={showCommunityBrowser}
+            onOpenChange={handleCommunityBrowserOpenChange}
+            presentation={devRoute?.modal === 'community' && devRoute.mode === 'page' ? 'page' : 'dialog'}
+            initialTab={communityTab ?? (devRoute?.modal === 'community' ? asBrowseTab(devRoute.tab) : undefined)}
             openListing={pendingListing}
             onListingOpened={handleListingOpened}
+            openLikersOnMount={devRoute?.modal === 'likers'}
           />
         </>
       )}
@@ -2515,6 +2720,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         initialTab={devRoute?.modal === 'adminPanel' ? (devRoute.tab as AdminPanelTab | undefined) : undefined}
         initialPoliciesTab={devRoute?.modal === 'adminPanel' ? (devRoute.subtab as PoliciesSubTab | undefined) : undefined}
         initialFeedbackTab={devRoute?.modal === 'adminPanel' ? (devRoute.subtab as FeedbackSubTab | undefined) : undefined}
+        onOpenListing={(listingId) => {
+          // The panel stays open behind the browser: judging a listing is a step inside working the
+          // queue, not a departure from it.
+          handleOpenListing({ id: listingId, kind: 'world' });
+        }}
+        onReportsChanged={() => setReportCountNonce((n) => n + 1)}
       />
     </div>
   );

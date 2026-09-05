@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useCallback, useRef, type Dispatch, type 
 import { sanitizeTag, collectSanitizedTags } from "@/lib/tagUtils";
 import { type DownloadState } from "@/lib/downloadState";
 import { toEpoch } from "@/lib/thumbnailCache";
-import { kindOf, CATALOG_KINDS, type CatalogKind } from "@/lib/catalogKinds";
+import { kindOf } from "@/lib/catalogKinds";
+import { BROWSE_TABS, catalogKindOfTab, type BrowseTab } from "@/lib/browseTabs";
 import { asStatusFacet, matchesStatusFacets, type StatusFacet } from "@/lib/communityStatusFacets";
 import { extractFilterPrefixes } from "@/lib/filterPrefixes";
 import { type WorldRecord } from "@/components/WorldDetails";
@@ -18,9 +19,11 @@ const FILTERS_KEY = 'FORMAMORPH_communityFilters';
 const gridColumns = (w: number): number =>
   w >= 1280 ? 5 : w >= 1024 ? 4 : w >= 768 ? 3 : w >= 640 ? 2 : 1;
 
-/** One kind tab's browse settings. Each tab keeps its own: a tag that exists on worlds usually doesn't on
- *  dictionaries, so carrying the filter across would silently empty the tab being switched to. */
-interface KindFilters {
+/** One tab's browse settings. Each tab keeps its own: a tag that exists on worlds usually doesn't on
+ *  dictionaries, so carrying the filter across would silently empty the tab being switched to. The
+ *  Contest tab has its own slot for the same reason — it shows worlds, but a filter set while browsing
+ *  the catalog has nothing to do with the handful of listings in a contest. */
+interface TabFilters {
   authorFilter: string[];
   tagFilter: string[];
   tagMode: 'any' | 'all';
@@ -30,7 +33,7 @@ interface KindFilters {
   sortUpdatesFirst: boolean; // float listings with an update to the front
 }
 
-const emptyFilters = (): KindFilters => ({
+const emptyFilters = (): TabFilters => ({
   authorFilter: [],
   tagFilter: [],
   tagMode: 'any',
@@ -40,24 +43,24 @@ const emptyFilters = (): KindFilters => ({
   sortUpdatesFirst: true,
 });
 
-const emptyByKind = (): Record<CatalogKind, KindFilters> =>
-  Object.fromEntries(CATALOG_KINDS.map((k) => [k, emptyFilters()])) as Record<CatalogKind, KindFilters>;
+const emptyByTab = (): Record<BrowseTab, TabFilters> =>
+  Object.fromEntries(BROWSE_TABS.map((t) => [t, emptyFilters()])) as Record<BrowseTab, TabFilters>;
 
 const stringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.map((v) => String(v)).filter(Boolean) : [];
 
 /** Rebuild the stored settings field by field, so a hand-edited or outdated key can only ever lose
  *  settings rather than seed the pipeline with a shape it doesn't understand. */
-function readStoredFilters(): Record<CatalogKind, KindFilters> {
-  const out = emptyByKind();
+function readStoredFilters(): Record<BrowseTab, TabFilters> {
+  const out = emptyByTab();
   try {
     const raw = JSON.parse(localStorage.getItem(FILTERS_KEY) || '{}');
     if (!raw || typeof raw !== 'object') return out;
-    for (const kind of CATALOG_KINDS) {
-      const saved = (raw as Record<string, unknown>)[kind];
+    for (const tab of BROWSE_TABS) {
+      const saved = (raw as Record<string, unknown>)[tab];
       if (!saved || typeof saved !== 'object') continue;
       const s = saved as Record<string, unknown>;
-      out[kind] = {
+      out[tab] = {
         authorFilter: stringList(s.authorFilter),
         tagFilter: stringList(s.tagFilter).map(sanitizeTag).filter(Boolean),
         tagMode: s.tagMode === 'all' ? 'all' : 'any',
@@ -78,9 +81,9 @@ function readStoredFilters(): Record<CatalogKind, KindFilters> {
  * preferences (persisted), and pagination sized to the responsive grid. Derives the filtered/sorted/paged
  * list from the catalog.
  *
- * `kind` scopes the whole pipeline: the catalog holds every kind in one list, so it's narrowed once here
+ * `tab` scopes the whole pipeline: the catalog holds every kind in one list, so it's narrowed once here
  * and everything downstream — authors, tags, search, sort, paging — follows without needing to know. The
- * filter settings are held per kind and restored between sessions; the search box deliberately isn't, since
+ * filter settings are held per tab and restored between sessions; the search box deliberately isn't, since
  * text left over from a previous session reads as an empty catalog rather than as a filter.
  *
  * `downloadStateOf` powers the "updates first" sort and the download-related status facets. It's a function
@@ -88,42 +91,48 @@ function readStoredFilters(): Record<CatalogKind, KindFilters> {
  * library's map would silently make the sort a no-op on the other tabs, which is exactly what it did.
  *
  * `viewerId` is the signed-in account, which the Liked and Mine facets need; without one they match nothing.
+ *
+ * `order` replaces the sort stage for a tab whose order is not the reader's to choose — the contest tab,
+ * whose entries are shuffled while it runs and stand by likes once it is judged. The filters still apply;
+ * only what happens after them changes.
  */
 export function useCommunityBrowserFilters(
   remoteWorlds: WorldRecord[],
   downloadStateOf: (record: WorldRecord) => DownloadState,
   open: boolean,
-  kind: CatalogKind = 'world',
+  tab: BrowseTab = 'world',
   viewerId?: string,
+  order?: (list: WorldRecord[]) => WorldRecord[],
 ) {
+  const kind = catalogKindOfTab(tab);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filtersByKind, setFiltersByKind] = useState<Record<CatalogKind, KindFilters>>(readStoredFilters);
+  const [filtersByTab, setFiltersByTab] = useState<Record<BrowseTab, TabFilters>>(readStoredFilters);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
   useEffect(() => {
-    localStorage.setItem(FILTERS_KEY, JSON.stringify(filtersByKind));
-  }, [filtersByKind]);
+    localStorage.setItem(FILTERS_KEY, JSON.stringify(filtersByTab));
+  }, [filtersByTab]);
 
-  const filters = filtersByKind[kind] ?? emptyFilters();
+  const filters = filtersByTab[tab] ?? emptyFilters();
 
-  // One setter per field, each writing through to the kind being browsed. `kind` is read from a ref so the
+  // One setter per field, each writing through to the tab being browsed. `tab` is read from a ref so the
   // setters keep a stable identity — they are dependencies of the memo below, which sorts the whole catalog.
-  const kindRef = useRef(kind);
-  kindRef.current = kind;
-  const patch = useCallback((change: Partial<KindFilters>) => {
-    const k = kindRef.current;
-    setFiltersByKind((prev) => ({ ...prev, [k]: { ...(prev[k] ?? emptyFilters()), ...change } }));
+  const tabRef = useRef<BrowseTab>(tab);
+  tabRef.current = tab;
+  const patch = useCallback((change: Partial<TabFilters>) => {
+    const t = tabRef.current;
+    setFiltersByTab((prev) => ({ ...prev, [t]: { ...(prev[t] ?? emptyFilters()), ...change } }));
   }, []);
-  const setterFor = useCallback(<K extends keyof KindFilters>(field: K): Dispatch<SetStateAction<KindFilters[K]>> =>
+  const setterFor = useCallback(<K extends keyof TabFilters>(field: K): Dispatch<SetStateAction<TabFilters[K]>> =>
     (value) => {
-      const k = kindRef.current;
-      setFiltersByKind((prev) => {
-        const current = prev[k] ?? emptyFilters();
+      const t = tabRef.current;
+      setFiltersByTab((prev) => {
+        const current = prev[t] ?? emptyFilters();
         const next = typeof value === 'function'
-          ? (value as (prev: KindFilters[K]) => KindFilters[K])(current[field])
+          ? (value as (prev: TabFilters[K]) => TabFilters[K])(current[field])
           : value;
-        return { ...prev, [k]: { ...current, [field]: next } };
+        return { ...prev, [t]: { ...current, [field]: next } };
       });
     }, []);
 
@@ -162,9 +171,9 @@ export function useCommunityBrowserFilters(
     const { prefixes, rest } = extractFilterPrefixes(raw, commit);
     setSearchQuery(rest);
     if (!prefixes.length) return;
-    const k = kindRef.current;
-    setFiltersByKind((prev) => {
-      const current = prev[k] ?? emptyFilters();
+    const t = tabRef.current;
+    setFiltersByTab((prev) => {
+      const current = prev[t] ?? emptyFilters();
       const next = { ...current };
       for (const prefix of prefixes) {
         if (prefix.kind === 'author') {
@@ -178,7 +187,7 @@ export function useCommunityBrowserFilters(
           next.statusFilter = [...next.statusFilter, prefix.value];
         }
       }
-      return { ...prev, [k]: next };
+      return { ...prev, [t]: next };
     });
   }, []);
 
@@ -299,6 +308,7 @@ export function useCommunityBrowserFilters(
       }
       return true;
     });
+    if (order) return order(list);
     const dir = sortOrder === 'asc' ? 1 : -1;
     return [...list].sort((a, b) => {
       if (sortUpdatesFirst) {
@@ -312,7 +322,7 @@ export function useCommunityBrowserFilters(
       const bv = sortField === 'downloads' ? (b.downloads || 0) : toEpoch(b[sortField]);
       return (av - bv) * dir;
     });
-  }, [kindWorlds, searchQuery, authorFilter, tagFilter, tagMode, statusFilter, viewerId, hiddenWorldIds, hiddenTags, hiddenAuthors, sortField, sortOrder, sortUpdatesFirst, downloadStateOf]);
+  }, [kindWorlds, searchQuery, authorFilter, tagFilter, tagMode, statusFilter, viewerId, hiddenWorldIds, hiddenTags, hiddenAuthors, sortField, sortOrder, sortUpdatesFirst, downloadStateOf, order]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRemoteWorlds.length / pageSize));
   const pagedRemoteWorlds = filteredRemoteWorlds.slice((currentPage - 1) * pageSize, currentPage * pageSize);

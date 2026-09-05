@@ -6,7 +6,8 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import tsdoc from 'eslint-plugin-tsdoc'
 import { TYPOGRAPHY_LEGACY } from './eslint.typography-legacy.js'
-import { asChildForwardRefRule } from './eslint.aschild-forwardref.js'
+import { composedForwardRefRule } from './eslint.composed-forwardref.js'
+import { noNativeTitleRule } from './eslint.no-native-title.js'
 
 // Raw Tailwind size utilities say how big text is, never what it is — so `text-xs` reads the same on a
 // hint and on a deliberately compact control, and the two can't be told apart or retuned separately.
@@ -28,7 +29,9 @@ const noRawTextSize = [
 ]
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'release', 'electron', 'docs-api'] },
+  // 'out' is the Cloudflare Pages upload root the deploy assembles: a copy of dist beside the site.
+  // '.scratch' is throwaway work, including vendored third-party source to test against.
+  { ignores: ['dist', 'out', 'coverage', 'release', 'electron', 'docs-api', '.scratch'] },
   {
     files: ['*.config.js'],
     languageOptions: {
@@ -88,8 +91,18 @@ export default tseslint.config(
   },
   {
     files: ['src/**/*.tsx'],
-    plugins: { formamorph: { rules: { 'aschild-forwardref': asChildForwardRefRule } } },
-    rules: { 'formamorph/aschild-forwardref': 'error' },
+    plugins: {
+      formamorph: {
+        rules: {
+          'composed-forwardref': composedForwardRefRule,
+          'no-native-title': noNativeTitleRule,
+        },
+      },
+    },
+    rules: {
+      'formamorph/composed-forwardref': 'error',
+      'formamorph/no-native-title': 'error',
+    },
   },
   {
     // Tests carry non-TSDoc block comments (e.g. the `@vitest-environment` pragma) — skip tsdoc there.

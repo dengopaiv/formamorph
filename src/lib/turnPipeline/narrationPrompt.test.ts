@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildNarrationPrompt, type NarrationPromptInput } from './narrationPrompt';
 import { defaultSystemPrompt } from '@/components/game/GamePrompts';
+import { runsTile } from '@/lib/requestAnatomy';
 import type { DictionaryEntry } from '@/types/world';
 import type { ChatMessage } from '@/types';
 
@@ -218,5 +219,60 @@ describe('buildNarrationPrompt', () => {
     expect(regions).toContain('action');
     expect(regions).not.toContain('<WORLD DESCRIPTION>');
     expect(dictionaryDebug.report.find((e) => e.entryId === 'a')?.activated).toBe(true);
+  });
+});
+
+describe('buildNarrationPrompt anatomy runs', () => {
+  it('tiles the prompt it rendered, with no gaps left by the trailing trim', () => {
+    const { prompt, runs } = buildNarrationPrompt(base({
+      template: '## Game World\n<WORLD DESCRIPTION>\n\n## Notes\n<NOTES>\n\n<LANGUAGE>',
+    }));
+    expect(runsTile(prompt, runs)).toBe(true);
+  });
+
+  it('points each run at the text it claims: template prose authored, chip values named by their chip', () => {
+    const { prompt, runs } = buildNarrationPrompt(base({
+      template: '## Game World\n<WORLD DESCRIPTION>\n\n## Current Location\n<LOCATION>',
+    }));
+    const at = (i: number) => prompt.slice(runs[i].start, runs[i].end);
+    expect(at(0)).toBe('## Game World\n');
+    expect(runs[0].source).toBe('system-template');
+    expect(runs[0].chip).toBeUndefined();
+    expect(at(1)).toBe(CTX['<WORLD DESCRIPTION>']);
+    expect(runs[1].chip).toBe('<WORLD DESCRIPTION>');
+    expect(at(2)).toBe('\n\n## Current Location\n');
+    expect(at(3)).toBe(CTX['<LOCATION>']);
+    expect(runs[3].chip).toBe('<LOCATION>');
+  });
+
+  it('marks the injected lore block as the dictionary chip, not as the author words', () => {
+    const { prompt, runs } = buildNarrationPrompt(base({
+      template: '## Lore\n<DICTIONARY>',
+      dictionary: [entry({ id: 'a', name: 'Ferryman', key: ['ferryman'], value: 'He poles the flat boat.' })],
+      action: 'ask the ferryman',
+    }));
+    const lore = runs.find((r) => r.chip === '<DICTIONARY>');
+    expect(lore).toBeDefined();
+    expect(prompt.slice(lore!.start, lore!.end)).toBe('Ferryman: He poles the flat boat.');
+  });
+
+  it('identifies the length guidance by its own chip, never as world data from the world', () => {
+    // Guards against a catch-all label over every chip, which presents the reply-length instruction to
+    // the player as part of their world.
+    const { prompt, runs } = buildNarrationPrompt(base({
+      template: '## Game World\n<WORLD DESCRIPTION>\n\n<LENGTH GUIDANCE>',
+      paragraphLimit: 'auto',
+    }));
+    const guidance = runs.find((r) => r.chip === '<LENGTH GUIDANCE>');
+    expect(guidance).toBeDefined();
+    expect(prompt.slice(guidance!.start, guidance!.end)).toContain('paragraph');
+    // The world's own chip is a run of its own, under its own name — the two are never one block.
+    expect(runs.find((r) => r.chip === '<WORLD DESCRIPTION>')).toBeDefined();
+  });
+
+  it('runs tile the shipped default prompt too, chips and all', () => {
+    const { prompt, runs } = buildNarrationPrompt(base({ template: defaultSystemPrompt }));
+    expect(runsTile(prompt, runs)).toBe(true);
+    expect(runs.some((r) => r.source === 'system-template')).toBe(true);
   });
 });

@@ -1,8 +1,9 @@
 import {
   createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  type RefObject,
 } from 'react';
 import {
-  Background, ControlButton, Controls, Handle, MiniMap, Panel,
+  Background, Handle, MiniMap, Panel,
   Position, ReactFlow, ReactFlowProvider, useConnection, useNodesState, useReactFlow, useStoreApi,
   type Edge, type Node, type NodeProps,
 } from '@xyflow/react';
@@ -28,13 +29,13 @@ import {
   ContextMenuRadioItem, ContextMenuSeparator, ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { describePlaceholders } from '@/lib/placeholders';
+import { labelPlaceholders } from '@/lib/placementLetters';
 import type { ConnectionDirection } from '@/lib/connectionEditing';
 import {
-  applyCanvasDrops, applyCanvasIntent, buildLocationCanvas, CANVAS_GRID, connectIntent, connectionEnds,
-  deleteIntent, directionIntent, directionOf, hintIntent, isStationaryClick, leafTarget, LONG_PRESS_MS,
-  multiDropIntents, TOUCH_SLOP, UNNAMED_LOCATION,
-  type CanvasIntent, type CanvasNodeData,
+  applyCanvasDrops, applyCanvasIntent, beginCanvasDrag, buildLocationCanvas, CANVAS_GRID, connectIntent,
+  connectionEnds, deleteIntent, directionIntent, directionOf, hintIntent, isStationaryClick, leafTarget,
+  LONG_PRESS_MS, multiDropIntents, TOUCH_SLOP, UNNAMED_LOCATION,
+  type CanvasDragSession, type CanvasIntent, type CanvasNodeData,
 } from '@/lib/locationCanvas';
 import {
   canvasMenuSections, type CanvasMenuItem, type CanvasMenuSection,
@@ -52,6 +53,8 @@ import { searchLocations, type LocationMatch } from '@/lib/locationSearch';
 import { usePrefersReducedMotion } from '@/lib/usePrefersReducedMotion';
 import { cn } from '@/lib/utils';
 import type { Connection, GameLocation } from '@/types';
+import { CanvasControlButton, CanvasControls } from '@/components/CanvasControls';
+import { Tip } from '@/components/ui/tooltip';
 
 /**
  * The Locations canvas: the world's navigable shape as a map, and the primary place to draw on it. What a
@@ -130,12 +133,13 @@ const EdgeAnchors = ({ dropHeight }: { dropHeight: string }) => {
   const drawing = useConnection((c) => c.inProgress);
   return (
     <>
-      <Handle
-        type="source"
-        position={Position.Right}
-        title="Drag To Connect"
-        className="!h-3 !w-3 !border-2 !border-background !bg-primary opacity-0 transition-opacity group-hover/node:opacity-100"
-      />
+      <Tip tip="Drag To Connect">
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!h-3 !w-3 !border-2 !border-background !bg-primary opacity-0 transition-opacity group-hover/node:opacity-100"
+        />
+      </Tip>
       <Handle
         type="target"
         position={Position.Left}
@@ -160,21 +164,23 @@ const LocationNode = ({ id, data, selected }: NodeProps<LocationNodeType>) => {
   // so before the release is what lets the author bail by moving away.
   const armed = useContext(ArmedLeafContext) === id;
   return (
-    <div
-      title={data.unreachable ? UNREACHABLE_TITLE : undefined}
-      data-drop-target={armed || undefined}
-      data-flash={flashing || undefined}
-      className={cn(
-        'group/node flex h-full w-full items-center justify-center gap-1.5 rounded-md border bg-card px-3 text-label text-card-foreground',
-        data.unreachable && 'border-destructive',
-        flashing ? flashRing : selected && 'ring-2 ring-ring',
-        armed && 'bg-primary/10 ring-2 ring-primary',
-      )}
-    >
-      <EdgeAnchors dropHeight="!h-full" />
-      <NodeBadges data={data} />
-      <span className="truncate">{data.label}</span>
-    </div>
+    // The box already carries its own name; the tip only says it cannot be reached.
+    <Tip tip={data.unreachable ? UNREACHABLE_TITLE : undefined} labelsChild={false}>
+      <div
+        data-drop-target={armed || undefined}
+        data-flash={flashing || undefined}
+        className={cn(
+          'group/node flex h-full w-full items-center justify-center gap-1.5 rounded-md border bg-card px-3 text-label text-card-foreground',
+          data.unreachable && 'border-destructive',
+          flashing ? flashRing : selected && 'ring-2 ring-ring',
+          armed && 'bg-primary/10 ring-2 ring-primary',
+        )}
+      >
+        <EdgeAnchors dropHeight="!h-full" />
+        <NodeBadges data={data} />
+        <span className="truncate">{data.label}</span>
+      </div>
+    </Tip>
   );
 };
 
@@ -185,23 +191,24 @@ const LocationGroupNode = ({ id, data, selected }: NodeProps<LocationNodeType>) 
   const willTakeTheDrop = useContext(DropTargetContext).into.includes(id);
   const flashing = useContext(FlashContext) === id;
   return (
-    <div
-      title={data.unreachable ? UNREACHABLE_TITLE : undefined}
-      data-drop-target={willTakeTheDrop || undefined}
-      data-flash={flashing || undefined}
-      className={cn(
-        'group/node h-full w-full rounded-md border bg-muted/40',
-        data.unreachable && 'border-destructive',
-        flashing ? flashRing : selected && 'ring-2 ring-ring',
-        willTakeTheDrop && 'bg-primary/10 ring-2 ring-primary',
-      )}
-    >
-      <EdgeAnchors dropHeight="!h-9" />
-      <div className="flex items-center gap-1.5 rounded-t-md border-b bg-card px-3 py-1.5 text-label text-card-foreground">
-        <NodeBadges data={data} />
-        <span className="truncate">{data.label}</span>
+    <Tip tip={data.unreachable ? UNREACHABLE_TITLE : undefined} labelsChild={false}>
+      <div
+        data-drop-target={willTakeTheDrop || undefined}
+        data-flash={flashing || undefined}
+        className={cn(
+          'group/node h-full w-full rounded-md border bg-muted/40',
+          data.unreachable && 'border-destructive',
+          flashing ? flashRing : selected && 'ring-2 ring-ring',
+          willTakeTheDrop && 'bg-primary/10 ring-2 ring-primary',
+        )}
+      >
+        <EdgeAnchors dropHeight="!h-9" />
+        <div className="flex items-center gap-1.5 rounded-t-md border-b bg-card px-3 py-1.5 text-label text-card-foreground">
+          <NodeBadges data={data} />
+          <span className="truncate">{data.label}</span>
+        </div>
       </div>
-    </div>
+    </Tip>
   );
 };
 
@@ -258,16 +265,22 @@ const ConnectionInspector = ({ connection, nameOf, onIntent, onClose }: {
   return (
     <Panel position="top-right" className="!m-2 w-72 space-y-2 rounded-md border bg-card p-3 shadow-md">
       <div className="flex items-center gap-1">
-        <span className="min-w-0 flex-grow truncate text-label" title={`${names[0]} — ${names[1]}`}>
-          {names[0]} — {names[1]}
-        </span>
-        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="Delete Connection"
-          onClick={() => onIntent(deleteIntent(connection))}>
-          <Trash2 className="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="Close" onClick={onClose}>
-          <X className="h-4 w-4" />
-        </Button>
+        <Tip tip={`${names[0]} — ${names[1]}`} labelsChild={false}>
+          <span className="min-w-0 flex-grow truncate text-label">
+            {names[0]} — {names[1]}
+          </span>
+        </Tip>
+        <Tip tip="Delete Connection">
+          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+            onClick={() => onIntent(deleteIntent(connection))}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </Tip>
+        <Tip tip="Close">
+          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </Tip>
       </div>
       <ToggleGroup
         type="single"
@@ -279,9 +292,11 @@ const ConnectionInspector = ({ connection, nameOf, onIntent, onClose }: {
         onValueChange={(v) => { if (v) onIntent(directionIntent(connection, v as ConnectionDirection)); }}
       >
         {DIRECTIONS.map(({ value, Icon, label }) => (
-          <ToggleGroupItem key={value} value={value} className="flex-1" aria-label={label(...names)} title={label(...names)}>
-            <Icon className="h-4 w-4" />
-          </ToggleGroupItem>
+          <Tip key={value} tip={label(...names)}>
+            <ToggleGroupItem value={value} className="flex-1">
+              <Icon className="h-4 w-4" />
+            </ToggleGroupItem>
+          </Tip>
         ))}
       </ToggleGroup>
       <Input
@@ -316,8 +331,12 @@ type MenuTarget =
  * Radix owns the placement: portaled above the panels the canvas sits inside, flipped back into view at a
  * viewport edge, and dismissed, focused and walked by the arrows the way every other menu in the app is.
  */
-const CanvasMenu = ({ sections }: { sections: CanvasMenuSection[] }) => (
-  <ContextMenuContent aria-label="Canvas Options" className="min-w-44">
+const CanvasMenu = ({ sections, menuRef }: {
+  sections: CanvasMenuSection[];
+  /** Lets the keydown scope count the portaled menu as the canvas (see `trackPointer`). */
+  menuRef: RefObject<HTMLDivElement>;
+}) => (
+  <ContextMenuContent ref={menuRef} aria-label="Canvas Options" className="min-w-44">
     {sections.map((section, index) => (
       <Fragment key={section.map((item) => item.label).join('|')}>
         {index > 0 && <ContextMenuSeparator />}
@@ -540,26 +559,32 @@ const CanvasToolbar = ({
       aria-label="Canvas Tools"
       className="flex w-max items-center gap-1 rounded-md border bg-card p-1 shadow-md"
     >
-      <Button variant="ghost" size="sm" onClick={onArrange} title={arrangeLabel} aria-label={arrangeLabel}>
-        <LayoutGrid className="mr-1.5 h-4 w-4" />
-        {arrangeLabel}
-      </Button>
+      <Tip tip={arrangeLabel} labelsChild={false}>
+        <Button variant="ghost" size="sm" onClick={onArrange}>
+          <LayoutGrid className="mr-1.5 h-4 w-4" />
+          {arrangeLabel}
+        </Button>
+      </Tip>
       <Separator orientation="vertical" className="mx-0.5 h-6" />
       {ALIGN_TOOLS.map(({ label, Icon, edge }) => (
-        <Button
-          key={edge} variant="ghost" size="icon" className="h-8 w-8" title={label} aria-label={label}
-          disabled={!alignable} onClick={() => onAlign(edge)}
-        >
-          <Icon className="h-4 w-4" />
-        </Button>
+        <Tip key={edge} tip={label}>
+          <Button
+            variant="ghost" size="icon" className="h-8 w-8"
+            disabled={!alignable} onClick={() => onAlign(edge)}
+          >
+            <Icon className="h-4 w-4" />
+          </Button>
+        </Tip>
       ))}
       {DISTRIBUTE_TOOLS.map(({ label, Icon, axis }) => (
-        <Button
-          key={axis} variant="ghost" size="icon" className="h-8 w-8" title={label} aria-label={label}
-          disabled={!distributable} onClick={() => onDistribute(axis)}
-        >
-          <Icon className="h-4 w-4" />
-        </Button>
+        <Tip key={axis} tip={label}>
+          <Button
+            variant="ghost" size="icon" className="h-8 w-8"
+            disabled={!distributable} onClick={() => onDistribute(axis)}
+          >
+            <Icon className="h-4 w-4" />
+          </Button>
+        </Tip>
       ))}
       <Separator orientation="vertical" className="mx-0.5 h-6" />
       {/* Two switches rather than a choice between them: either can be had without the other. Plain pressed
@@ -568,12 +593,14 @@ const CanvasToolbar = ({
         { label: 'Snap To Grid', Icon: Magnet, on: snap, set: setSnap },
         { label: 'Show Grid', Icon: Grid2x2, on: gridVisible, set: setGridVisible },
       ] as const).map(({ label, Icon, on, set }) => (
-        <Button
-          key={label} variant={on ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8"
-          aria-pressed={on} title={label} aria-label={label} onClick={() => set(!on)}
-        >
-          <Icon className="h-4 w-4" />
-        </Button>
+        <Tip key={label} tip={label}>
+          <Button
+            variant={on ? 'secondary' : 'ghost'} size="icon" className="h-8 w-8"
+            aria-pressed={on} onClick={() => set(!on)}
+          >
+            <Icon className="h-4 w-4" />
+          </Button>
+        </Tip>
       ))}
       <Separator orientation="vertical" className="mx-0.5 h-6" />
       <ToggleGroup
@@ -588,9 +615,11 @@ const CanvasToolbar = ({
         {CONNECTION_STYLES.map(({ value, label }) => {
           const Icon = STYLE_ICONS[value];
           return (
-            <ToggleGroupItem key={value} value={value} className="h-7 px-2" title={label} aria-label={label}>
-              <Icon className="h-4 w-4" />
-            </ToggleGroupItem>
+            <Tip key={value} tip={label}>
+              <ToggleGroupItem value={value} className="h-7 px-2">
+                <Icon className="h-4 w-4" />
+              </ToggleGroupItem>
+            </Tip>
           );
         })}
       </ToggleGroup>
@@ -601,12 +630,14 @@ const CanvasToolbar = ({
         { label: 'Undo', Icon: Undo2, can: canUndo, act: onUndo },
         { label: 'Redo', Icon: Redo2, can: canRedo, act: onRedo },
       ] as const).map(({ label, Icon, can, act }) => (
-        <Button
-          key={label} variant="ghost" size="icon" className="h-8 w-8"
-          title={label} aria-label={label} disabled={!can} onClick={act}
-        >
-          <Icon className="h-4 w-4" />
-        </Button>
+        <Tip key={label} tip={label}>
+          <Button
+            variant="ghost" size="icon" className="h-8 w-8"
+            disabled={!can} onClick={act}
+          >
+            <Icon className="h-4 w-4" />
+          </Button>
+        </Tip>
       ))}
     </div>
   </Panel>
@@ -643,7 +674,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   fullscreen: boolean;
   onToggleFullscreen: () => void;
 }) => {
-  const { locations, setLocations, connections, setConnections, placeholders } = useGameData();
+  const { locations, setLocations, connections, setConnections, placeholders, placementLetters, placeholderOwners } = useGameData();
   const {
     selectedIdsRef, lastSyncedRef, reportSelection, wake, historyRef, selectedConnectionId,
     setSelectedConnectionId,
@@ -661,6 +692,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<number | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   // Where the pointer last went down, which is what says whether the press that opened a menu had traveled.
   const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   // Set while a hold's own release is still to come: the click it raises belongs to the hold, not to the
@@ -712,8 +744,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   // One reading of a location's name, for the map, the inspector's header and the search box alike: what the
   // author sees written on a box is what they search for and what an arrow's panel calls it.
   const resolveName = useCallback(
-    (location: GameLocation) => describePlaceholders(location.name, placeholders) || UNNAMED_LOCATION,
-    [placeholders],
+    (location: GameLocation) => labelPlaceholders(location.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || UNNAMED_LOCATION,
+    [placeholders, placementLetters, placeholderOwners],
   );
 
   const nameOf = useCallback(
@@ -874,34 +906,48 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   // the boxes the drop then commits to, from the one answer rather than from two that agree by inspection.
   // A selection is judged a location at a time here exactly as it is on release, so a gesture carrying one
   // location into a box and another out of one says both things at once.
+  /** The map measured once at drag start; every frame and the release judge against it. The ref outlives the
+   *  frames without re-rendering, and `sessionFor` covers a frame arriving with no start seen. */
+  const dragSessionRef = useRef<CanvasDragSession | null>(null);
+  const sessionFor = useCallback(
+    () => dragSessionRef.current ?? beginCanvasDrag(locations),
+    [locations],
+  );
+  const handleDragStart = useCallback(() => {
+    dragSessionRef.current = beginCanvasDrag(locations);
+  }, [locations]);
+
   /** What the nodes a drag is carrying are asking the world to become — the one answer the highlight is drawn
    *  from and the drop is committed from, so the boxes an author watched light up are the boxes they get. */
-  const dropsFor = useCallback((moved: Node[]) => multiDropIntents(
-    locations, moved.map((n) => ({ id: n.id, position: n.position })), armedLeaf,
-  ), [locations, armedLeaf]);
+  const dropsFor = useCallback((session: CanvasDragSession, moved: Node[]) => multiDropIntents(
+    session, moved.map((n) => ({ id: n.id, position: n.position })), armedLeaf,
+  ), [armedLeaf]);
 
   const handleDrag = useCallback((_: unknown, node: Node, dragged: Node[]) => {
+    const session = sessionFor();
     const moved = dragged.length ? dragged : [node];
     // The leaf under the node the author is actually holding, never one traveling with it.
-    dwellOn(leafTarget(locations, node.id, node.position, moved.map((n) => n.id)));
-    const drops = dropsFor(moved);
+    dwellOn(leafTarget(session, node.id, node.position, moved.map((n) => n.id)));
+    const drops = dropsFor(session, moved);
     setDropInto({
       active: true,
       into: drops.map((drop) => drop.parentId).filter((id): id is string => id !== null),
       toTopLevel: drops.some((drop) => drop.kind === 'reparent' && drop.parentId === null),
     });
-  }, [locations, dropsFor, dwellOn]);
+  }, [sessionFor, dropsFor, dwellOn]);
 
   // A drag either moves a location or changes what holds it, and where it came to rest decides which — so
   // there is one gesture to learn, and the map edits the world's shape rather than only its arrangement.
   // A whole selection dragged at once is that one gesture, made of every node it carried.
   const handleDragStop = useCallback((_: unknown, node: Node, dragged: Node[]) => {
     setDropInto(IDLE);
-    const drops = dropsFor(dragged.length ? dragged : [node]);
+    const session = sessionFor();
+    dragSessionRef.current = null;
+    const drops = dropsFor(session, dragged.length ? dragged : [node]);
     dwellOn(null);
     // One edit however many locations the armed leaf just came to hold, so one press puts them all back.
     if (drops.length) commitLocations(applyCanvasDrops(locations, drops));
-  }, [locations, commitLocations, dropsFor, dwellOn]);
+  }, [locations, sessionFor, commitLocations, dropsFor, dwellOn]);
 
   // Reported by xyflow rather than tracked by us: the marquee and Shift-click both land here, so one reading
   // covers every way a selection can be composed.
@@ -995,7 +1041,10 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     const inChrome = (target: EventTarget | null) =>
       !!(target as HTMLElement | null)?.closest?.('[role="toolbar"]');
     const trackPointer = (event: PointerEvent) => {
-      activeRef.current = !!frameRef.current?.contains(event.target as globalThis.Node);
+      // The context menu portals out of the frame, but pressing its items is working on the map — without
+      // this, picking Auto Arrange deadens the very next Ctrl+Z.
+      const target = event.target as globalThis.Node;
+      activeRef.current = !!frameRef.current?.contains(target) || !!menuRef.current?.contains(target);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (!activeRef.current || focusing(event.target)) return;
@@ -1157,6 +1206,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
+        onNodeDragStart={handleDragStart}
         onNodeDrag={handleDrag}
         onNodeDragStop={handleDragStop}
         onNodeClick={(_, node) => {
@@ -1198,15 +1248,14 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
         <Background className="!bg-background" color={gridVisible ? 'hsl(var(--border))' : 'transparent'} gap={CANVAS_GRID} />
         {/* The embedded canvas's whole chrome: the zoom controls, and the way to the big one. Everything
             heavier belongs to full screen, so the quick view stays a view. */}
-        <Controls showInteractive={false}>
-          <ControlButton
+        <CanvasControls>
+          <CanvasControlButton
+            tip={fullscreen ? 'Exit Full Screen' : 'Edit Full Screen'}
             onClick={onToggleFullscreen}
-            title={fullscreen ? 'Exit full screen' : 'Edit full screen'}
-            aria-label={fullscreen ? 'Exit full screen' : 'Edit full screen'}
           >
             {fullscreen ? <Minimize2 /> : <Maximize2 />}
-          </ControlButton>
-        </Controls>
+          </CanvasControlButton>
+        </CanvasControls>
         <TopLevelDrop />
         {/* The window's own orientation aids and power tools. The pane is a view of a map the author can
             already take in; these are for the map that has grown past it. */}
@@ -1251,6 +1300,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     </div>
     </ContextMenuTrigger>
     <CanvasMenu
+      menuRef={menuRef}
       sections={canvasMenuSections(
         { ...history, snap, gridVisible, connectionStyle },
         {
@@ -1325,7 +1375,7 @@ const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: strin
       <CanvasInner
         {...props}
         session={session}
-        fullscreen={morph.mounted}
+        fullscreen={morph.contentInOverlay}
         onToggleFullscreen={toggleFullscreen}
       />
     </ReactFlowProvider>
@@ -1335,7 +1385,7 @@ const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: strin
     // The pane's own box stays laid out at its real size while the window is up: it is what the window grows
     // out of and shrinks back into, and a collapsed source has nothing to travel between.
     <div ref={hostRef} className="relative h-full w-full">
-      {!morph.mounted && canvas}
+      {!morph.contentInOverlay && canvas}
       {morph.mounted && (
         <FullscreenShell
           morph={windowMorph}
@@ -1343,7 +1393,9 @@ const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: strin
           // The control that opened the window went with the canvas, so closing has to be told where to land.
           returnFocus={() => hostRef.current?.querySelector<HTMLElement>('.react-flow__controls button:last-child')}
         >
-          <div className="min-h-0 flex-1">{canvas}</div>
+          {/* Handed back to the pane the moment closing starts: the window is a fading panel by then, and
+              the docked canvas has to be under it from the first frame. */}
+          <div className="min-h-0 flex-1">{morph.contentInOverlay ? canvas : null}</div>
         </FullscreenShell>
       )}
     </div>

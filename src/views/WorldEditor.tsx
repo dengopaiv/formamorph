@@ -28,7 +28,7 @@ import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer';
 import type { FindingSection } from '@/lib/testBench/rules';
 import { useTestBench } from '@/lib/testBench/useTestBench';
 import { collectSearchTargets, type SearchMatch } from '@/lib/worldSearch';
-import { revealEditorMatch, clearEditorMatch, revealSelectedRow } from '@/lib/editorFieldFocus';
+import { revealEditorMatch, revealEditorChip, clearEditorMatch, revealSelectedRow } from '@/lib/editorFieldFocus';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ListDetail } from "@/components/ui/list-detail";
@@ -42,6 +42,7 @@ import LocationManager from '../managers/LocationManager';
 import TraitManager from '../managers/TraitManager';
 import GroupManager from '../managers/GroupManager';
 import EntityGroupManager from '../managers/EntityGroupManager';
+import PlaceholderGroupManager from '../managers/PlaceholderGroupManager';
 import TraitTree from '../managers/TraitTree';
 import LocationTree from '../managers/LocationTree';
 import LocationCanvas from '../managers/LocationCanvas';
@@ -55,6 +56,7 @@ import WorldDetailsManager from '../managers/WorldDetailsManager';
 import DictionaryManager from '../managers/DictionaryManager';
 import PlaceholderPaletteBar from '@/components/prompt/PlaceholderPaletteBar';
 import { ChipInsertTargetProvider } from '@/components/prompt/ChipInsertTarget';
+import { EditorPreviewRollsProvider } from '@/contexts/EditorPreviewRollsContext';
 import PlaceholderManager from '../managers/PlaceholderManager';
 import PlaceholderList from '../managers/PlaceholderList';
 import DictionaryTree from '../managers/DictionaryTree';
@@ -66,27 +68,15 @@ import { parseJsonText, terminateWorker as terminateJsonWorker } from '@/lib/jso
 import AddDictionaryModal from '@/components/modals/AddDictionaryModal';
 import AddEntityModal from '@/components/modals/AddEntityModal';
 import { exportEntityCard } from '@/lib/entityFile';
-import { absorbPlaceholders, remapPlaceholderIds, describePlaceholders } from '@/lib/placeholders';
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  KeyboardSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  verticalListSortingStrategy,
-  sortableKeyboardCoordinates,
-} from '@dnd-kit/sortable';
-import {
-  restrictToVerticalAxis,
-  restrictToFirstScrollableAncestor,
-} from '@dnd-kit/modifiers';
-import { CONTAINED_AUTO_SCROLL } from '@/lib/dndAutoScroll';
+import { describePlaceholders, newPlaceholder } from '@/lib/placeholders';
+import { adoptBookPlaceholders, adoptEntityPlaceholders, placeholderOwnerRef } from '@/lib/placeholderHomes';
+import { ownerIdOfNode } from '@/lib/placeholderScopes';
+import { chipPlaceholderNames, labelPlaceholders } from '@/lib/placementLetters';
+import { placeholderSelection } from '@/lib/placeholderTree';
+import PlaceholderOwnerPanel from '../managers/PlaceholderOwnerPanel';
+import { type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { UnsavedChangesDialog } from "@/components/UnsavedChangesDialog";
 import { APP_VERSION } from '@/lib/version';
 import type { Stat, Entity, GameLocation, StatUpdate, Dictionary, World } from '@/types';
@@ -94,6 +84,7 @@ import { useDownscalePrompt } from '@/lib/useDownscalePrompt';
 import { SortableRow, type SortableListItem } from '@/components/SortableList';
 import { EditorRowList } from '@/components/EditorRow';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
+import { Tip } from '@/components/ui/tooltip';
 
 /** The fields a reorderable list row needs (every editor item has these). */
 type ListItem = SortableListItem;
@@ -109,11 +100,12 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   const {
     updateWorldOverview, worldId, worldOverview,
     loadWorldData, getWorldData,
-    stats, locations, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders,
+    stats, locations, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders, placementLetters,
+    worldPlaceholders, placeholderOwners, placeholderGroups,
     addStat, addLocation, addEntity, addTrait, addStatUpdate, addDictionary,
-    addTraitGroup, addEntityGroup, addPlaceholder,
+    addTraitGroup, addEntityGroup, addPlaceholder, addPlaceholderGroup,
     updateStat, updateEntity, updateEntityGroup, updateLocation, updateTrait, updateTraitGroup,
-    updateDictionary, updateDictionaryEntry, updatePlaceholder,
+    updateDictionary, updateDictionaryEntry, updatePlaceholder, updatePlaceholderGroup,
     removeStat, removeEntity, removeTrait, removeStatUpdate,
     setStats, setLocations, setEntities, setTraits, setTraitGroups, setStatUpdates,
     isWorldDirty, saveWorld: saveWorldCtx, discardChanges
@@ -215,13 +207,14 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
     if (!findOpen) return [];
     const reachable = new Set<string>(visibleTabs.map((t) => t.value));
     return collectSearchTargets({
-      worldOverview, stats, entities, entityGroups, locations, traits, traitGroups, dictionaries, placeholders,
+      worldOverview, stats, entities, entityGroups, locations, traits, traitGroups, dictionaries, placeholders, placeholderGroups,
       updateWorldOverview, updateStat, updateEntity, updateEntityGroup, updateLocation, updateTrait,
-      updateTraitGroup, updateDictionary, updateDictionaryEntry, updatePlaceholder,
+      updateTraitGroup, updateDictionary, updateDictionaryEntry, updatePlaceholder, updatePlaceholderGroup,
     }).filter((t) => reachable.has(t.tab));
   }, [findOpen, visibleTabs, worldOverview, stats, entities, entityGroups, locations, traits, traitGroups,
-      dictionaries, placeholders, updateWorldOverview, updateStat, updateEntity, updateEntityGroup,
-      updateLocation, updateTrait, updateTraitGroup, updateDictionary, updateDictionaryEntry, updatePlaceholder]);
+      dictionaries, placeholders, placeholderGroups, updateWorldOverview, updateStat, updateEntity, updateEntityGroup,
+      updateLocation, updateTrait, updateTraitGroup, updateDictionary, updateDictionaryEntry, updatePlaceholder,
+      updatePlaceholderGroup]);
   // A fresh object per navigation, not the bare key: a panel with its own tabs has to re-open the right one
   // even when two consecutive hits sit in the same field and the author flipped tabs between them.
   const [findField, setFindField] = useState<{ fieldKey: string } | null>(null);
@@ -242,7 +235,14 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       inChipList: match.target.inChipList,
     };
     setTimeout(() => {
-      revealEditorMatch(editorRootRef.current, hit);
+      // A chip hit rings the chip itself; a text hit marks the field holding it. The field marker is
+      // dropped first either way, so a chip hit never leaves the previous field's ring behind.
+      if (match.chip) {
+        clearEditorMatch();
+        revealEditorChip(match.chip);
+      } else {
+        revealEditorMatch(editorRootRef.current, hit);
+      }
       // The list is the other half of "go to this hit": without it the detail pane jumps and the tree
       // stays wherever it was, with the selected row off screen.
       revealSelectedRow(editorRootRef.current);
@@ -278,53 +278,34 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
 
   // Export one book to its own standalone `.json` (no image downscale — dictionaries are text only).
   const exportDictionary = (book: Dictionary) => {
-    // Bundle the world placeholders this book's entries use, so its chips resolve after import elsewhere.
+    // The book's own placeholders go as they are; the shared ones its entries use ride along so its chips
+    // resolve after import elsewhere.
     const jsonData = JSON.stringify(buildDictionaryFile(book, placeholders), null, 2);
-    downloadBlob(new Blob([jsonData], { type: 'application/json' }), `${book.name || 'Dictionary'}.json`);
+    // A chip in the name would otherwise put a raw placement id in the filename.
+    downloadBlob(new Blob([jsonData], { type: 'application/json' }), `${labelPlaceholders(book.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || 'Dictionary'}.json`);
   };
 
   // Export one entity as a shareable WebP character card (its portrait carrying the text fields).
   const exportEntity = async (entity: Entity) => {
     try {
       // The card's own data keeps the chips; only the filename is flattened, since a placement id is not a name.
-      downloadBlob(await exportEntityCard(entity, placeholders), `${describePlaceholders(entity.name, placeholders) || 'Character'}.webp`);
+      downloadBlob(await exportEntityCard(entity, placeholders), `${labelPlaceholders(entity.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || 'Character'}.webp`);
     } catch (error) {
       toast.error((error as Error).message);
     }
   };
 
-  // Absorb an imported item's carried placeholders into the world: add any that aren't a perfect (name+values)
-  // match, remap the item's chip tokens to the resolved world ids, and drop the item's own section (now global).
-  const absorbEntityPlaceholders = (entity: Entity): Entity => {
-    if (!entity.placeholders?.length) return entity;
-    const { toAdd, idMap } = absorbPlaceholders(entity.placeholders, placeholders);
-    toAdd.forEach(addPlaceholder);
-    const remap = (t?: string) => (t ? remapPlaceholderIds(t, idMap) : t);
-    return {
-      ...entity,
-      name: remap(entity.name) ?? entity.name,
-      aliases: entity.aliases?.map((a) => remapPlaceholderIds(a, idMap)),
-      playerDescription: remap(entity.playerDescription),
-      aiDescription: remap(entity.aiDescription),
-      aiSummary: remap(entity.aiSummary),
-      placeholders: undefined,
-    };
+  // Bring an imported item's placeholders into the world: its own stay its own under fresh ids, and the
+  // shared ones it carries merge with the world's shared list by name and values or join it.
+  const adoptEntity = (entity: Entity): Entity => {
+    const { entity: adopted, toAdd } = adoptEntityPlaceholders(entity, worldPlaceholders);
+    toAdd.forEach((p) => addPlaceholder(p));
+    return adopted;
   };
-  const absorbDictionaryPlaceholders = (book: Dictionary): Dictionary => {
-    if (!book.placeholders?.length) return book;
-    const { toAdd, idMap } = absorbPlaceholders(book.placeholders, placeholders);
-    toAdd.forEach(addPlaceholder);
-    return {
-      ...book,
-      entries: book.entries.map((e) => ({
-        ...e,
-        name: e.name ? remapPlaceholderIds(e.name, idMap) : e.name,
-        key: e.key?.map((k) => remapPlaceholderIds(k, idMap)) ?? e.key,
-        secondaryKeys: e.secondaryKeys?.map((k) => remapPlaceholderIds(k, idMap)),
-        value: e.value ? remapPlaceholderIds(e.value, idMap) : e.value,
-      })),
-      placeholders: undefined,
-    };
+  const adoptBook = (book: Dictionary): Dictionary => {
+    const { book: adopted, toAdd } = adoptBookPlaceholders(book, worldPlaceholders);
+    toAdd.forEach((p) => addPlaceholder(p));
+    return adopted;
   };
 
   const saveWorld = async () => {
@@ -411,8 +392,16 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   };
 
   const handleAddPlaceholder = () => {
+    const p = newPlaceholder(searchTerm.trim() || 'New Placeholder');
+    addPlaceholder(p);
+    setSearchTerm('');
+    setSelectedItemId(p.id);
+  };
+
+  // New placeholder folders append at the root; the author drags shared placeholders into them.
+  const handleAddPlaceholderGroup = () => {
     const id = randomUUID();
-    addPlaceholder({ id, name: searchTerm.trim() || 'New Placeholder', values: [] });
+    addPlaceholderGroup({ id, name: searchTerm.trim() || 'New Group', parentId: null, order: placeholderGroups.filter(g => g.parentId === null).length });
     setSearchTerm('');
     setSelectedItemId(id);
   };
@@ -472,12 +461,15 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       activeTab === "traits" ? traits :
       activeTab === "statUpdates" ? statUpdates : [];
 
-    // Search what the author reads. A name holding a chip is stored as a token, so matching the raw value
-    // would mean typing a UUID to find it.
-    return itemsToFilter.filter(item =>
-      describePlaceholders(item.name, placeholders).toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [activeTab, stats, entities, locations, traits, statUpdates, searchTerm, placeholders]);
+    // Search what the author reads: the row's label, the placeholders behind its chips, and their values.
+    // A name holding a chip is stored as a token, so matching the raw value would mean typing a UUID.
+    const needle = searchTerm.toLowerCase();
+    const hit = (text: string) => text.toLowerCase().includes(needle);
+    return itemsToFilter.filter((item) =>
+      hit(labelPlaceholders(item.name, placeholders, { letters: placementLetters, owners: placeholderOwners }))
+      || chipPlaceholderNames(item.name, placeholders, { owners: placeholderOwners }).some(hit)
+      || hit(describePlaceholders(item.name, placeholders)));
+  }, [activeTab, stats, entities, locations, traits, statUpdates, searchTerm, placeholders, placementLetters, placeholderOwners]);
 
   const selectedItem = filteredItems.find(item => item.id === selectedItemId);
   // Traits tab can select either a trait or a group (the right panel branches on which).
@@ -488,15 +480,35 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   // Dictionary tab: selection is either a book or one of its entries (the right panel branches on which).
   const selectedBook = dictionaries.find(b => b.id === selectedItemId);
   const selectedEntry = dictionaries.flatMap(b => b.entries).find(e => e.id === selectedItemId);
-  const selectedPlaceholder = placeholders.find(p => p.id === selectedItemId);
+  const selectedEntryBook = selectedEntry && dictionaries.find(b => b.entries.some(e => e.id === selectedEntry.id));
+  // Placeholders tab: selection is a *row*, since one shared placeholder draws a row under every holder and
+  // each of those weights it differently. Memoized because resolving one walks the whole tree, and this
+  // component re-renders on every keystroke in any panel.
+  // An owner node on that tab is derived from an entity or book: selecting it opens a header naming it.
+  const selectedPlaceholderOwner = useMemo(() => {
+    const ownerId = selectedItemId ? ownerIdOfNode(selectedItemId) : null;
+    return ownerId ? placeholderOwnerRef({ entities, dictionaries }, ownerId) ?? null : null;
+  }, [selectedItemId, entities, dictionaries]);
+  const selectedPlaceholderGroup = placeholderGroups.find(g => g.id === selectedItemId);
+  const selectedPlaceholder = useMemo(
+    () => placeholderSelection(placeholders, selectedItemId), [placeholders, selectedItemId],
+  );
+  // Whose panel the palette sits over: the entity, the book (selected itself or through an entry), or the
+  // owner of what is open on the Placeholders tab.
+  const paletteScopeId =
+    activeTab === 'entities' ? selectedEntity?.id
+    : activeTab === 'dictionary' ? (selectedBook ?? selectedEntryBook)?.id
+    : activeTab === 'placeholders'
+      ? selectedPlaceholderOwner?.id ?? (selectedPlaceholder ? placeholderOwners.get(selectedPlaceholder.row.placeholder.id)?.id : undefined)
+    : undefined;
 
   // Contextual footer actions. Simple authoring is bringing a character or lorebook in from your library;
   // handing one out is an Advanced move, so Entities/Dictionary offer Add in both modes, Export in Advanced.
   const exportContext =
     activeTab === 'overview' ? { label: 'Export World', disabled: false, onClick: () => { exportCurrentWorld(); } }
-    : activeTab === 'entities' && advanced ? { label: `Export ${selectedItem ? describePlaceholders(selectedItem.name, placeholders) : 'Entity'}`, disabled: !selectedItem, onClick: () => { if (selectedItem) exportEntity(selectedItem as Entity); } }
+    : activeTab === 'entities' && advanced ? { label: `Export ${selectedItem ? labelPlaceholders(selectedItem.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) : 'Entity'}`, disabled: !selectedItem, onClick: () => { if (selectedItem) exportEntity(selectedItem as Entity); } }
     : activeTab === 'dictionary' && advanced
-      ? { label: `Export ${selectedBook?.name ?? 'Dictionary'}`, disabled: !selectedBook, onClick: () => { if (selectedBook) exportDictionary(selectedBook); } }
+      ? { label: `Export ${(selectedBook && labelPlaceholders(selectedBook.name, placeholders, { letters: placementLetters, owners: placeholderOwners })) || 'Dictionary'}`, disabled: !selectedBook, onClick: () => { if (selectedBook) exportDictionary(selectedBook); } }
     : null;
   // "Add" opens the add-from-library picker (characters on Entities, books on Dictionary).
   const showImport = activeTab === 'entities' || activeTab === 'dictionary';
@@ -511,11 +523,6 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
     traits: { items: traits, setItems: setTraits },
     statUpdates: { items: statUpdates, setItems: setStatUpdates },
   };
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
 
   // Reorder the active tab's full array (filter-safe: located by id).
   const handleRowDragEnd = (event: DragEndEvent) => {
@@ -579,19 +586,8 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         : <EmptyListHint noun={activeTab} />;
     }
     return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleRowDragEnd}
-      // Vertical-only movement, clamped to the scroll viewport's bounds so dragging can't
-      // extend the scrollable area infinitely.
-      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-      autoScroll={CONTAINED_AUTO_SCROLL}
-    >
-      <SortableContext
-        items={items.map((i) => i.id)}
-        strategy={verticalListSortingStrategy}
-      >
+    <EditorDndContext onDragEnd={handleRowDragEnd}>
+      <StableSortableContext items={items} strategy={verticalListSortingStrategy}>
         <EditorRowList>
           {items.map((item) => (
             <SortableRow
@@ -605,8 +601,8 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
             />
           ))}
         </EditorRowList>
-      </SortableContext>
-    </DndContext>
+      </StableSortableContext>
+    </EditorDndContext>
     );
   };
 
@@ -634,10 +630,11 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   const detailContent = (
     <ChipInsertTargetProvider>
     <div className="p-3">
-      {/* One palette for the whole panel. Not on the Placeholders tab itself: a placeholder's own values
-          are plain text, since a chip inside one would never be expanded (resolution is single-pass). */}
-      {advanced && activeTab !== "placeholders" && (
-        <PlaceholderPaletteBar placeholders={placeholders} className="-mx-3 -mt-3 mb-3 px-3" />
+      {/* One palette for the whole panel, the Placeholders tab included: a value is a chip field like any
+          other, and the palette leaves out whatever would loop back into the value being edited. Over an
+          entity's or book's panel its own scoped placeholders come first and read bare. */}
+      {advanced && (
+        <PlaceholderPaletteBar placeholders={placeholders} scopeId={paletteScopeId} className="-mx-3 -mt-3 mb-3 px-3" />
       )}
       {activeTab === "overview" && (
         <WorldDetailsManager focusField={findField} />
@@ -669,13 +666,28 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         <DictionaryBookManager key={selectedBook.id} book={selectedBook} />
       )}
       {activeTab === "dictionary" && !selectedBook && selectedEntry && (
-        <DictionaryManager key={selectedEntry.id} entry={selectedEntry} placeholders={placeholders} />
+        <DictionaryManager key={selectedEntry.id} entry={selectedEntry} placeholders={placeholders} ownerId={selectedEntryBook?.id} />
       )}
       {activeTab === "statUpdates" && selectedItem && (
         <StatUpdatesManager key={selectedItem.id} statUpdate={selectedItem as StatUpdate} />
       )}
-      {activeTab === "placeholders" && selectedPlaceholder && (
-        <PlaceholderManager key={selectedPlaceholder.id} placeholder={selectedPlaceholder} />
+      {activeTab === "placeholders" && selectedPlaceholderGroup && (
+        <PlaceholderGroupManager key={selectedPlaceholderGroup.id} group={selectedPlaceholderGroup} />
+      )}
+      {activeTab === "placeholders" && selectedPlaceholderOwner && (
+        <PlaceholderOwnerPanel
+          owner={selectedPlaceholderOwner}
+          placeholders={placeholders}
+          onOpen={() => navigateToBenchItem(selectedPlaceholderOwner.kind === 'entity' ? 'entities' : 'dictionary', selectedPlaceholderOwner.id)}
+        />
+      )}
+      {activeTab === "placeholders" && !selectedPlaceholderGroup && selectedPlaceholder && (
+        <PlaceholderManager
+          key={selectedPlaceholder.row.id}
+          placeholder={selectedPlaceholder.row.placeholder}
+          rowId={selectedPlaceholder.row.id}
+          share={selectedPlaceholder.share}
+        />
       )}
     </div>
     </ChipInsertTargetProvider>
@@ -696,16 +708,17 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       {/* On mobile you have just come from tapping this world open, and the row needs every pixel for the controls
           that do something — so the heading is read out but not drawn there. */}
       <CardTitle className={isMobile ? 'sr-only' : undefined}>World Editor</CardTitle>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="ml-auto"
-        onClick={() => openFind(false)}
-        aria-label="Find and replace"
-        title="Find and replace (Ctrl+F)"
-      >
-        <Search className="h-4 w-4" />
-      </Button>
+      <Tip tip="Find and replace (Ctrl+F)" labelsChild={false}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ml-auto"
+          onClick={() => openFind(false)}
+          aria-label="Find and replace"
+        >
+          <Search className="h-4 w-4" />
+        </Button>
+      </Tip>
       {/* The flask's first stop is quick triage; the full panel is one button inside it. */}
       <BenchPopover {...bench.popoverProps}>
         <TestBenchButton
@@ -725,22 +738,26 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
           className={isMobile ? "h-8" : undefined}
         >
           <ToggleGroupItem value="simple" className={isMobile ? "px-2 py-1" : undefined}>Simple</ToggleGroupItem>
-          <ToggleGroupItem
-            value="advanced"
-            className={cn('relative', isMobile && 'px-2 py-1')}
-            // The marker rides the switch that acts on it rather than sitting beside it as its own icon:
-            // it says "there is more through here", which is exactly what this control does, and a row on a
-            // mobile has no room for a second thing saying so.
-            title={hasHiddenData ? 'This world uses advanced features. Switch to Advanced to see them.' : undefined}
+          {/* The marker rides the switch that acts on it rather than sitting beside it as its own icon:
+              it says "there is more through here", which is exactly what this control does, and a row on a
+              mobile has no room for a second thing saying so. */}
+          <Tip
+            tip={hasHiddenData ? 'This world uses advanced features. Switch to Advanced to see them.' : undefined}
+            labelsChild={false}
           >
-            Advanced
-            {hasHiddenData && (
-              <span
-                aria-label="This world uses advanced features"
-                className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
-              />
-            )}
-          </ToggleGroupItem>
+            <ToggleGroupItem
+              value="advanced"
+              className={cn('relative', isMobile && 'px-2 py-1')}
+            >
+              Advanced
+              {hasHiddenData && (
+                <span
+                  aria-label="This world uses advanced features"
+                  className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
+                />
+              )}
+            </ToggleGroupItem>
+          </Tip>
         </ToggleGroup>
       </TutorialPopover>
     </div>
@@ -765,9 +782,14 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   ));
   // The active tab's help topic, when it has copy yet — drives the `?` beside the search box.
   const helpTopicId = worldEditorTopicId(activeTab);
+  // The tabs whose list is a folder tree offer Add Group beside Add <item> in Advanced mode.
+  const grouped = activeTab === "traits" || activeTab === "entities" || activeTab === "placeholders";
+  const addGroupHere = activeTab === "entities" ? handleAddEntityGroup : activeTab === "placeholders" ? handleAddPlaceholderGroup : handleAddGroup;
+  const addItemHere = activeTab === "entities" ? addItem : activeTab === "placeholders" ? handleAddPlaceholder : handleAddTrait;
+  const addItemLabel = activeTab === "entities" ? "Add Entity" : activeTab === "placeholders" ? "Add Placeholder" : "Add Trait";
   const addSearchBar = activeTab !== "overview" && (
     <div className="flex items-center space-x-2 flex-shrink-0 mt-4">
-      {advanced && (activeTab === "traits" || activeTab === "entities") ? (
+      {advanced && grouped ? (
         <Popover open={addMenuOpen} onOpenChange={setAddMenuOpen}>
           <PopoverTrigger asChild>
             <Button size="icon" className="h-9 w-9 shrink-0">
@@ -778,16 +800,16 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-label hover:bg-accent"
-              onClick={() => { (activeTab === "entities" ? handleAddEntityGroup : handleAddGroup)(); setAddMenuOpen(false); }}
+              onClick={() => { addGroupHere(); setAddMenuOpen(false); }}
             >
               <FolderPlus className="h-4 w-4" /> Add Group
             </button>
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-label hover:bg-accent"
-              onClick={() => { (activeTab === "entities" ? addItem : handleAddTrait)(); setAddMenuOpen(false); }}
+              onClick={() => { addItemHere(); setAddMenuOpen(false); }}
             >
-              <FilePlus className="h-4 w-4" /> {activeTab === "entities" ? "Add Entity" : "Add Trait"}
+              <FilePlus className="h-4 w-4" /> {addItemLabel}
             </button>
           </PopoverContent>
         </Popover>
@@ -807,9 +829,11 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
           {LOCATION_VIEWS.map((v) => (
             isMobile
               ? (
-                <ToggleGroupItem key={v.value} value={v.value} aria-label={v.label} title={v.label} className="px-2">
-                  {v.value === 'canvas' ? <Map className="h-4 w-4" /> : <List className="h-4 w-4" />}
-                </ToggleGroupItem>
+                <Tip key={v.value} tip={v.label}>
+                  <ToggleGroupItem value={v.value} className="px-2">
+                    {v.value === 'canvas' ? <Map className="h-4 w-4" /> : <List className="h-4 w-4" />}
+                  </ToggleGroupItem>
+                </Tip>
               )
               : <ToggleGroupItem key={v.value} value={v.value}>{v.label}</ToggleGroupItem>
           ))}
@@ -848,19 +872,21 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         {/* Advanced-only: an oversized upload is already offered Optimize/Downscale as it lands, so what
             this adds is the bulk pass over a world that is already large. */}
         {advanced && (
-        <Button variant="outline" size="sm" onClick={optimizeImages} disabled={optimizeProgress !== null} title="Downscale oversized images to conserve file size">
-          {optimizeProgress !== null ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              {optimizeProgress === 'scanning' ? 'Scanning…' : `Optimizing ${optimizeProgress.done}/${optimizeProgress.total}…`}
-            </>
-          ) : (
-            <>
-              <ImageDown className="h-4 w-4 mr-2" />
-              Optimize Images
-            </>
-          )}
-        </Button>
+          <Tip tip="Downscale oversized images to conserve file size" labelsChild={false}>
+            <Button variant="outline" size="sm" onClick={optimizeImages} disabled={optimizeProgress !== null}>
+              {optimizeProgress !== null ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {optimizeProgress === 'scanning' ? 'Scanning…' : `Optimizing ${optimizeProgress.done}/${optimizeProgress.total}…`}
+                </>
+              ) : (
+                <>
+                  <ImageDown className="h-4 w-4 mr-2" />
+                  Optimize Images
+                </>
+              )}
+            </Button>
+          </Tip>
         )}
         <Button size="sm" onClick={saveWorld} disabled={!isWorldDirty}>
           <Save className="h-4 w-4 mr-2" />
@@ -891,6 +917,9 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
           <EditorFindBar
             targets={searchTargets}
             placeholders={placeholders}
+            placementLetters={placementLetters}
+            placeholderOwners={placeholderOwners}
+            placeholderGroups={placeholderGroups}
             // Follows the Placeholders tab, which Simple mode hides.
             allowPlaceholderReplace={advanced}
             startWithReplace={findWithReplace}
@@ -1005,7 +1034,7 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       <AddDictionaryModal
         open={showAddDictionary}
         onOpenChange={setShowAddDictionary}
-        onAdd={(book) => { const b = absorbDictionaryPlaceholders(book); addDictionary(b); setSelectedItemId(b.id); }}
+        onAdd={(book) => { const b = adoptBook(book); addDictionary(b); setSelectedItemId(b.id); }}
       />
       <AddEntityModal
         open={showAddEntity}
@@ -1014,7 +1043,7 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         // world they were exported from name a folder and places that don't exist here.
         onAdd={(entity) => {
           const placed = {
-            ...withEntityLocations(absorbEntityPlaceholders(entity), []),
+            ...withEntityLocations(adoptEntity(entity), []),
             groupId: null,
             order: entityRootSiblingCount(),
           };
@@ -1043,7 +1072,11 @@ const WorldEditor = (props: Parameters<typeof WorldEditorInner>[0]) => {
   }
   return (
     <EditorModeProvider forcedMode={forcedMode} forcedNonce={nonce.current}>
-      <WorldEditorInner {...props} />
+      {/* One set of preview rolls for the whole editor, so every field's Preview shows one value per
+          placeholder until a Reroll draws again. Editor state only — a save never sees it. */}
+      <EditorPreviewRollsProvider>
+        <WorldEditorInner {...props} />
+      </EditorPreviewRollsProvider>
     </EditorModeProvider>
   );
 };

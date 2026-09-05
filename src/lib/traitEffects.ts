@@ -1,15 +1,16 @@
-// What an active trait does beyond its stat changes: switching stats on or off, and pinning placeholders to
-// a fixed value. Both are overlays computed fresh from the active set every render — nothing is baked into
-// the world or the save, so switching a trait off simply removes its contribution.
+// What an active trait does beyond its stat changes: switching stats on or off, and which traits are active
+// in which order. Overlays computed fresh from the active set every render — nothing is baked into the
+// world or the save, so switching a trait off simply removes its contribution. The pins a trait lays are
+// collected in lib/placeholderPins, beside the other pin sources.
 //
 // Two traits may target the same stat or placeholder. The later one in the authored trait tree wins, so an
 // author sets precedence by dragging rows in the editor rather than by learning a rule.
 
 import { buildTraitTree, flattenTraitTree } from './traitTree';
-import type { Stat, Trait, TraitGroup } from '@/types';
+import type { PlaceholderValue, Stat, Trait, TraitGroup } from '@/types';
 
 /** Trait id → its position in the authored tree, depth-first. Ids missing from the world sort last. */
-export function traitOrderIndex(traits: Trait[], groups: TraitGroup[]): Map<string, number> {
+export function traitOrderIndex(traits: readonly Trait[], groups: readonly TraitGroup[]): Map<string, number> {
   const map = new Map<string, number>();
   flattenTraitTree(buildTraitTree(groups, traits)).forEach((node, i) => {
     if (node.leaf) map.set(node.leaf.id, i);
@@ -18,7 +19,7 @@ export function traitOrderIndex(traits: Trait[], groups: TraitGroup[]): Map<stri
 }
 
 /** Sort a set of active traits into authored order, so "last wins" means the same thing everywhere. */
-export function inAuthoredOrder(active: Trait[], order: Map<string, number>): Trait[] {
+export function inAuthoredOrder(active: readonly Trait[], order: ReadonlyMap<string, number>): Trait[] {
   return [...active].sort(
     (a, b) => (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER),
   );
@@ -47,8 +48,8 @@ export function refreshChosenTraits(chosen: Trait[], authored: Trait[]): Trait[]
  * `enabled: false`; each active trait's `statToggles` then override that, later traits winning.
  */
 export function activeStatEnabled(
-  stats: Array<Pick<Stat, 'id' | 'enabled'>>,
-  activeInOrder: Trait[],
+  stats: ReadonlyArray<Pick<Stat, 'id' | 'enabled'>>,
+  activeInOrder: readonly Trait[],
 ): Record<string, boolean> {
   const out: Record<string, boolean> = {};
   for (const s of stats) out[s.id] = s.enabled !== false;
@@ -65,34 +66,12 @@ export function enabledStats<T extends { id: string }>(stats: T[], enabled: Reco
   return stats.filter((s) => enabled[s.id] !== false);
 }
 
-/** Placeholder id → the value the active traits force it to, later traits winning. Empty pins are ignored,
- *  so a half-filled editor row never blanks a placeholder. */
-export function activePlaceholderPins(activeInOrder: Trait[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const t of activeInOrder) {
-    for (const pin of t.placeholderPins ?? []) {
-      if (pin.placeholderId && pin.value) out[pin.placeholderId] = pin.value;
-    }
-  }
-  return out;
-}
-
-/** The pins for a trait's OWN text: its pins over the active ones. A pinning trait's card always reads its
- *  own value — "Sworn to Marrow" stays "Sworn to Marrow" whatever else is ticked — because the card
- *  advertises what picking the trait does, not what the current selection happens to have made true.
- *  Everything outside the card (stat bars, locations, narration) keeps the active pins. Returns `activePins`
- *  itself when the trait pins nothing, so pin-less traits keep resolver identity. */
-export function traitScopedPins(trait: Trait, activePins: Record<string, string>): Record<string, string> {
-  const own = activePlaceholderPins([trait]);
-  return Object.keys(own).length ? { ...activePins, ...own } : activePins;
-}
-
 /**
  * The traits a player toggle switches off alongside the one being switched on: an exclusive group holds at
  * most one active trait, so enabling a member retires its active siblings. Nesting doesn't cascade — only
  * traits sitting directly in the same group compete.
  */
-export function exclusiveSiblings(trait: Trait, traits: Trait[], groups: TraitGroup[]): string[] {
+export function exclusiveSiblings(trait: Trait, traits: readonly Trait[], groups: readonly TraitGroup[]): string[] {
   const groupId = trait.groupId ?? null;
   if (groupId === null) return [];
   if (!groups.find((g) => g.id === groupId)?.exclusive) return [];
@@ -133,45 +112,88 @@ export interface TraitConflict {
 }
 
 /**
- * For one trait, the targets another trait also claims — what the editor shows as a precedence note.
+ * For one trait, the stats another trait also switches — what the editor shows as a precedence note.
+ * Placeholder pins have their own note, read across every source by `pinConflict`.
  *
  * Traits that can never be active together are not a conflict, so exclusive siblings are excluded: a group
- * of mutually exclusive hair traits all pinning Hair Color is the intended shape, not a mistake.
+ * of mutually exclusive traits all switching one stat is the intended shape, not a mistake.
  */
 export function traitConflicts(
   trait: Trait,
   traits: Trait[],
   groups: TraitGroup[],
-): { stats: Record<string, TraitConflict>; placeholders: Record<string, TraitConflict> } {
+): { stats: Record<string, TraitConflict> } {
   const order = traitOrderIndex(traits, groups);
   const impossible = new Set(exclusiveSiblings(trait, traits, groups));
   const rivals = traits.filter((t) => t.id !== trait.id && !impossible.has(t.id));
   const rank = (t: Trait) => order.get(t.id) ?? Number.MAX_SAFE_INTEGER;
+  const claims = (t: Trait) => (t.statToggles ?? []).map((s) => s.statId);
 
-  const collect = (
-    mine: string[],
-    claims: (t: Trait) => string[],
-  ): Record<string, TraitConflict> => {
-    const out: Record<string, TraitConflict> = {};
-    for (const id of mine) {
-      const others = inAuthoredOrder(rivals.filter((t) => claims(t).includes(id)), order);
-      if (!others.length) continue;
-      out[id] = {
-        others: others.map((t) => ({ id: t.id, name: t.name })),
-        winsHere: others.every((t) => rank(t) < rank(trait)),
-      };
-    }
-    return out;
-  };
+  const stats: Record<string, TraitConflict> = {};
+  for (const id of claims(trait).filter(Boolean)) {
+    const others = inAuthoredOrder(rivals.filter((t) => claims(t).includes(id)), order);
+    if (!others.length) continue;
+    stats[id] = {
+      others: others.map((t) => ({ id: t.id, name: t.name })),
+      winsHere: others.every((t) => rank(t) < rank(trait)),
+    };
+  }
+  return { stats };
+}
 
-  return {
-    stats: collect(
-      (trait.statToggles ?? []).map((s) => s.statId).filter(Boolean),
-      (t) => (t.statToggles ?? []).map((s) => s.statId),
-    ),
-    placeholders: collect(
-      (trait.placeholderPins ?? []).map((p) => p.placeholderId).filter(Boolean),
-      (t) => (t.placeholderPins ?? []).map((p) => p.placeholderId),
-    ),
-  };
+/** One value-list edit that reads as a rename: the text a value held, and what replaced it. */
+export interface PlaceholderValueRename {
+  from: string;
+  to: string;
+}
+
+/**
+ * The renames in an edit to a placeholder's value list — a value whose id stayed and whose text changed.
+ * Nothing here is positional: a value's id is its identity, so a reorder renames nothing and a delete plus
+ * an add is two edits rather than one rename.
+ */
+export function renamedPlaceholderValues(
+  prev: readonly PlaceholderValue[],
+  next: readonly PlaceholderValue[],
+): PlaceholderValueRename[] {
+  const before = new Map(prev.map((v) => [v.id, v.text]));
+  const out: PlaceholderValueRename[] = [];
+  for (const v of next) {
+    const from = before.get(v.id);
+    if (from && v.text && from !== v.text) out.push({ from, to: v.text });
+  }
+  return out;
+}
+
+/**
+ * Carry every *text-keyed* trait pin on one placeholder across that placeholder's renames, so a pin
+ * written before value ids existed stays on its value instead of orphaning on a string the placeholder no
+ * longer offers. A pin naming its value by id needs nothing — it already follows the rename — and any
+ * other pin, including a custom string the author typed off the list, is left exactly as written. Returns
+ * `traits` itself when nothing matched.
+ */
+export function repinRenamedValues(
+  traits: Trait[],
+  placeholderId: string,
+  renames: PlaceholderValueRename[],
+): Trait[] {
+  if (!renames.length) return traits;
+  const byOldValue = new Map(renames.map((r) => [r.from, r.to]));
+  let touched = false;
+  const out = traits.map((trait) => {
+    const pins = trait.placeholderPins;
+    if (!pins?.length) return trait;
+    let changed = false;
+    const next = pins.map((pin) => {
+      if (pin.placeholderId !== placeholderId || pin.valueId) return pin;
+      const value = byOldValue.get(pin.value);
+      if (value === undefined) return pin;
+      changed = true;
+      return { ...pin, value };
+    });
+    if (!changed) return trait;
+    touched = true;
+    return { ...trait, placeholderPins: next };
+  });
+  return touched ? out : traits;
 }

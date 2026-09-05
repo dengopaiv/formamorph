@@ -15,9 +15,29 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      itch_web:
+        description: 'Push the web build to itch.io (manual failsafe, e.g. for a pre-release)'
+        type: boolean
+        default: false
+      itch_desktop:
+        description: 'Push desktop builds to itch.io'
+        type: boolean
+        default: false
+      cloudflare_web:
+        description: 'Push the web build to formamorph.ai (manual failsafe, e.g. for a pre-release)'
+        type: boolean
+        default: false
+      site_only:
+        description: 'Redeploy formamorph.ai from hosting/ alone, keeping the latest RELEASED app build'
+        type: boolean
+        default: false
 
 jobs:
   build:
+    # A site-only redeploy ships no app code, so nothing is built and nothing is published. `publish`
+    # needs this job, so skipping here skips that too.
+    if: ${{ !inputs.site_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +61,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -55,6 +75,10 @@ jobs:
             exit 1
           fi
       - run: npm ci
+      # Releases ship the alternate avatar. The tracked default stays on the Pages dev build and local dev.
+      - name: Swap in the release avatar
+        shell: bash
+        run: cp build-assets/alternate-avatar.vrm public/default-avatar.vrm
       - run: npm run ${{ matrix.script }}
         env:
           FORMAMORPH_BUILD: ${{ matrix.build }}
@@ -64,7 +88,7 @@ jobs:
       # electron `dir` payload under app/. Produces the full-root zip (first-time download) plus the app
       # payload zip + its sha512 (the update unit the running app downloads and the launcher swaps in).
       - if: matrix.os == 'windows-latest'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: 'stable'
       - if: matrix.os == 'windows-latest'
@@ -77,9 +101,10 @@ jobs:
           # Embed the shared app icon (public/icon.png) into the stub as a Windows resource so it shows the same
           # icon as the app in Explorer/taskbar. go-winres generates the *.syso that `go build` links in.
           # -H=windowsgui puts the stub on the GUI subsystem so Windows never flashes a console window on launch.
+          # No -s -w: symbol-stripped Go binaries trip Defender's Wacatac ML detection (A/B verified on VirusTotal).
           (cd launcher \
             && go run github.com/tc-hib/go-winres@v0.3.3 simply --icon ../public/icon.png \
-            && go build -trimpath -ldflags "-s -w -H=windowsgui" -o "../release/root/Formamorph.exe" . \
+            && go build -trimpath -ldflags "-H=windowsgui" -o "../release/root/Formamorph.exe" . \
             && rm -f rsrc_windows_*.syso)
           cp -r release/win-unpacked/* release/root/app/
           (cd release/root && 7z a -tzip "../Formamorph-${VER}-win.zip" . >/dev/null)
@@ -96,14 +121,19 @@ jobs:
           if-no-files-found: error
 
   web:
+    # Skipped on a site-only redeploy, which serves the already-released build instead.
+    if: ${{ !inputs.site_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
+      # Releases ship the alternate avatar. The tracked default stays on the Pages dev build and local dev.
+      - name: Swap in the release avatar
+        run: cp build-assets/alternate-avatar.vrm public/default-avatar.vrm
       # No env overrides → full build (community on, full tag data), unlike the Pages demo build.
       # FORMAMORPH_BUILD=web keeps the footer bare (no build tag) for the browser build.
       - run: npm run build
@@ -145,9 +175,122 @@ jobs:
       # AppImage is intentionally omitted — electron-builder already uploaded it (and its update metadata).
       - uses: softprops/action-gh-release@v3
         with:
+          # Any suffixed tag (v2.16.0-beta etc.) publishes as a pre-release; itch jobs below skip those.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: notes.md
           files: |
             artifacts/*.dmg
             artifacts/*-win.zip
             artifacts/*-win.zip.sha512
             artifacts/formamorph-web-*.zip
+
+  # itch.io deployment via butler. Butler updates by CHANNEL, not filename: every push to a visible
+  # channel replaces the live build immediately. Full-release tags (no suffix) deploy automatically;
+  # pre-release tags (-beta) never do — push those by hand via workflow_dispatch on the tag's ref.
+  # Needs the BUTLER_API_KEY secret (itch.io → Settings → API keys, from an account with access to
+  # fierylion/formamorph). Versions are parsed from artifact filenames so they always match the build.
+  itch-web:
+    needs: web
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'push' && !contains(github.ref_name, '-'))
+      || (github.event_name == 'workflow_dispatch' && inputs.itch_web)
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: web
+      - uses: remarkablegames/setup-butler@v3
+      - name: Push web build to itch.io
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          set -euo pipefail
+          ZIP=$(ls formamorph-web-*.zip)
+          VER=${ZIP#formamorph-web-}; VER=${VER%.zip}
+          unzip -q "$ZIP" -d web
+          butler push web fierylion/formamorph:html5 --userversion "$VER"
+
+  # Desktop goes to itch only on major/minor releases (tag ends in .0), never on patches.
+  itch-desktop:
+    needs: build
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'push' && !contains(github.ref_name, '-') && endsWith(github.ref_name, '.0'))
+      || (github.event_name == 'workflow_dispatch' && inputs.itch_desktop)
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+      - uses: remarkablegames/setup-butler@v3
+      - name: Push desktop builds to itch.io
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          set -euo pipefail
+          WINZIP=$(ls Formamorph-*-win.zip)
+          VER=${WINZIP#Formamorph-}; VER=${VER%-win.zip}
+          # Windows ships unzipped (launcher at root) so butler can diff files between pushes.
+          unzip -q "$WINZIP" -d win
+          butler push win fierylion/formamorph:windows --userversion "$VER"
+          butler push "$(ls *.AppImage)" fierylion/formamorph:linux --userversion "$VER"
+          butler push "$(ls *.dmg)" fierylion/formamorph:mac --userversion "$VER"
+
+  # Cloudflare Pages deploy → https://formamorph.ai. The upload root is `out/`: the app build unpacked
+  # into out/play/, plus everything tracked in hosting/ at the root — the landing page, its images, and
+  # the Pages config. Both deploy paths below hand that same assemble-guard-deploy-check sequence a
+  # different app build. Needs the CLOUDFLARE_API_TOKEN (Pages Edit scope) and CLOUDFLARE_ACCOUNT_ID
+  # secrets.
+  #
+  # Release path: same gate as itch-web — full-release tags deploy automatically, suffixed tags never do
+  # (push one by hand via workflow_dispatch on the tag's ref). Ships the build this run just made.
+  cloudflare-web:
+    needs: web
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'push' && !contains(github.ref_name, '-'))
+      || (github.event_name == 'workflow_dispatch' && inputs.cloudflare_web)
+    steps:
+      # Checked out for hosting/ and the shared action — every /play/ byte comes from the web artifact.
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web
+          path: web-zip
+      - id: zip
+        run: echo "path=$(ls web-zip/formamorph-web-*.zip)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/deploy-site
+        with:
+          web-zip: ${{ steps.zip.outputs.path }}
+          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          run-checks: ${{ vars.CLOUDFLARE_CHECKS }}
+
+  # Site path: redeploy hosting/ against the app build from the latest RELEASE, so a landing-page edit
+  # reaches formamorph.ai without cutting a release and without shipping unreleased app code. The
+  # `formamorph-web-<version>.zip` asset it downloads exists on every release, and the tag-version guard
+  # in the build job is what keeps that name predictable.
+  cloudflare-site:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.site_only }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch the latest released web build
+        id: zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `releases/latest` skips drafts and pre-releases, so a beta never becomes what /play/ serves.
+          TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "Pairing the site with the app from $TAG"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'formamorph-web-*.zip' --dir web-zip
+          echo "path=$(ls web-zip/formamorph-web-*.zip)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/deploy-site
+        with:
+          web-zip: ${{ steps.zip.outputs.path }}
+          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          run-checks: ${{ vars.CLOUDFLARE_CHECKS }}

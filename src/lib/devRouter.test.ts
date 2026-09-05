@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { DEV_MODAL_TABS, DEV_MODALS } from './devRoutes';
-import { CATALOG_KINDS } from './catalogKinds';
+import { BROWSE_TABS } from './browseTabs';
 import { DEV_FIXTURES } from './devFixtures';
 import { SETTINGS_TABS } from '@/components/modals/settingsTabs';
+import { PROMPT_SURFACE_ROUTES } from './promptGroups';
 import { WORLD_EDITOR_TABS } from '@/views/worldEditorTabs';
 import { BUILT_BENCH_TABS } from '@/lib/testBench/benchTabs';
 import { LOCATION_VIEWS } from '@/views/locationViews';
@@ -13,13 +14,15 @@ import { ADMIN_PANEL_TABS } from '@/components/menu/adminPanelTabs';
 import { POLICIES_TABS } from '@/components/menu/policiesTabs';
 import { FEEDBACK_TABS } from '@/components/menu/feedbackTabs';
 import { MY_FEEDBACK_TABS } from '@/components/menu/myFeedbackTabs';
+import { EVENT_ACK_PHASES } from '@/components/events/eventAckPhases';
+import { EVENTS_TAB_ROLE_VIEWS } from '@/lib/adminEvents';
 import { isSaveEnvelope } from './version';
 import whiteRoomWorld from './devFixtures/whiteRoomWorld.json';
 import whiteRoomSave from './devFixtures/whiteRoomSave.json';
 
 // The parser is module-private; re-derive it here against the documented hash grammar so the encode
 // (window.__fmDev.goto) and decode stay pinned to the same shape.
-interface ParsedRoute { view?: string; modal?: string; tab?: string; subtab?: string; bench?: string }
+interface ParsedRoute { view?: string; modal?: string; tab?: string; subtab?: string; surface?: string; bench?: string }
 function parseHash(hash: string): ParsedRoute | null {
   if (!hash.startsWith('#dev')) return null;
   const params = new URLSearchParams(hash.slice('#dev'.length).replace(/^\?/, ''));
@@ -28,11 +31,13 @@ function parseHash(hash: string): ParsedRoute | null {
   const modal = params.get('modal');
   const tab = params.get('tab');
   const subtab = params.get('subtab');
+  const surface = params.get('surface');
   const bench = params.get('bench');
   if (view) route.view = view;
   if (modal) route.modal = modal;
   if (tab) route.tab = tab;
   if (subtab) route.subtab = subtab;
+  if (surface) route.surface = surface;
   if (bench) route.bench = bench;
   return route;
 }
@@ -64,6 +69,15 @@ describe('dev-router hash parsing', () => {
     });
   });
 
+  it('decodes a prompt surface alongside its prompt (surface)', () => {
+    expect(parseHash('#dev?modal=settings&tab=prompts&subtab=narration&surface=anatomy')).toEqual({
+      modal: 'settings',
+      tab: 'prompts',
+      subtab: 'narration',
+      surface: 'anatomy',
+    });
+  });
+
   it('decodes a prompt sub-tab (subtab)', () => {
     expect(parseHash('#dev?modal=settings&tab=prompts&subtab=thinking')).toEqual({
       modal: 'settings',
@@ -80,6 +94,11 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.settings]).toEqual(SETTINGS_TABS.map((t) => t.value));
   });
 
+  // Drift guard for the third level: a new prompt surface must be consciously made routable.
+  it('ledger lists exactly the prompt surfaces the Prompts panel can show', () => {
+    expect([...DEV_MODAL_TABS.settingsPromptSurfaces]).toEqual(PROMPT_SURFACE_ROUTES);
+  });
+
   it('ledger lists exactly the World Editor tabs the surface renders', () => {
     expect([...DEV_MODAL_TABS.worldEditor]).toEqual(WORLD_EDITOR_TABS.map((t) => t.value));
   });
@@ -93,9 +112,10 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.worldEditorLocations]).toEqual(LOCATION_VIEWS.map((v) => v.value));
   });
 
-  it('ledger lists exactly the kinds the Community browser tabs between', () => {
-    // The browser renders one tab per catalog kind, so a new kind must be consciously covered here too.
-    expect([...DEV_MODAL_TABS.community]).toEqual([...CATALOG_KINDS]);
+  it('ledger lists exactly the tabs the Community browser switches between', () => {
+    // The browser renders one tab per catalog kind plus Contest, so a new one must be consciously
+    // covered here too.
+    expect([...DEV_MODAL_TABS.community]).toEqual([...BROWSE_TABS]);
   });
 
   it('ledger lists exactly the library card tabs MainMenu renders', () => {
@@ -110,12 +130,20 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.adminPanelPolicies]).toEqual([...POLICIES_TABS]);
   });
 
+  it('ledger lists exactly the Events role views the tab renders', () => {
+    expect([...DEV_MODAL_TABS.adminPanelEvents]).toEqual([...EVENTS_TAB_ROLE_VIEWS]);
+  });
+
   it('ledger lists exactly the Feedback sub-tabs the surface renders', () => {
     expect([...DEV_MODAL_TABS.adminPanelFeedback]).toEqual([...FEEDBACK_TABS]);
   });
 
   it('ledger lists exactly the Feedback dialog tabs the surface renders', () => {
     expect([...DEV_MODAL_TABS.feedbackHub]).toEqual([...MY_FEEDBACK_TABS]);
+  });
+
+  it('ledger lists exactly the event acknowledge phases the poster renders', () => {
+    expect([...DEV_MODAL_TABS.eventAck]).toEqual([...EVENT_ACK_PHASES]);
   });
 
   it('ledger lists exactly the profile dialog tabs', () => {
@@ -130,7 +158,7 @@ describe('dev-router coverage guard', () => {
     // localModel is deliberately excluded (it lives inside Settings, not as a standalone modal). worldEditor
     // is an in-place MainMenu modal (no longer a top-level view).
     expect(DEV_MODALS).toEqual([
-      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog',
+      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled',
     ]);
   });
 });

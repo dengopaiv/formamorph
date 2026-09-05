@@ -37,6 +37,7 @@ export function FullscreenShell({ morph, title, showTitle = false, returnFocus, 
         ref={morph.boxRef}
         unanimated
         hideClose
+        overlayClassName={morph.overlayClassName}
         aria-describedby={undefined}
         // Focus is moved by hand, without scrolling. Left to the dialog primitive it lands on the first
         // control inside the window — and since the window opens sitting on top of the field it came from,
@@ -65,12 +66,11 @@ export function FullscreenShell({ morph, title, showTitle = false, returnFocus, 
           'flex flex-col gap-4 overflow-hidden border-0 p-4',
           dialogFullHeight,
           'w-screen max-w-none left-0 translate-x-0 rounded-none sm:rounded-none',
+          morph.boxClassName,
           className,
         )}
       >
-        {/* Fades in over the growing box rather than being scaled with it, which would read as the
-            contents stretching back to size. */}
-        <div className={cn('flex flex-col flex-1 min-h-0 gap-4', morph.contentClassName)}>
+        <div className="flex flex-col flex-1 min-h-0 gap-4">
           {/* The title is always here, only sometimes seen: a dialog without one is unnamed to a screen
               reader, and `sr-only` keeps that promise without spending the row. At the size of a field
               caption when shown, not a dialog heading — it names a box inside the app. */}
@@ -79,6 +79,10 @@ export function FullscreenShell({ morph, title, showTitle = false, returnFocus, 
           </DialogHeader>
           {children}
         </div>
+        {/* The solid sheet over the contents. The widget beneath it is laid out at full size and never
+            animates; the traveling box shows only this panel, and the reveal is the sheet fading away
+            once the box has landed. `inset-0` deliberately covers the box's padding too. */}
+        <div aria-hidden className={cn('pointer-events-none absolute inset-0 z-10 bg-background', morph.veilClassName)} />
       </DialogContent>
     </Dialog>
   );

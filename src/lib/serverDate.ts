@@ -1,3 +1,6 @@
+/** A day in milliseconds — the unit event windows, contest deadlines and quarantine clocks are counted in. */
+export const DAY_MS = 86_400_000;
+
 /**
  * Parse a timestamp that came from the community server.
  *
@@ -23,5 +26,12 @@ export function formatServerDateTime(timestamp: string): string {
   return parseServerDate(timestamp)?.toLocaleString(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',
+  }) ?? '';
+}
+
+/** A server timestamp as a readable local date, without the time; empty when it cannot be parsed. */
+export function formatServerDate(timestamp: string): string {
+  return parseServerDate(timestamp)?.toLocaleDateString(undefined, {
+    dateStyle: 'medium',
   }) ?? '';
 }

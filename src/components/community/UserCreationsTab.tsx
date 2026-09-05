@@ -9,6 +9,9 @@ import { CATALOG_KINDS, KIND_LABELS, type CatalogKind } from "@/lib/catalogKinds
 import UserService from "@/services/UserService";
 import WorldStorageService from "@/services/WorldStorageService";
 import type { ProfileCreation } from "@/types";
+import { Tip } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { thumbFit } from "@/lib/thumbAspect";
 
 /** The icon each kind wears, matching the Community Creations header so the three read the same way. */
 const KIND_ICONS: Record<CatalogKind, typeof Earth> = {
@@ -109,19 +112,20 @@ export function UserCreationsTab({ userId, username, onOpenListing }: UserCreati
             const Icon = KIND_ICONS[k];
 
             return (
-              <ToggleGroupItem
-                key={k}
-                value={k}
-                // Kept in place rather than dropped when empty: a filter row that changes shape per person
-                // moves the kind you wanted under the cursor of the one you didn't.
-                disabled={counts[k] === 0}
-                className="gap-1.5"
-                aria-label={`${KIND_LABELS[k].many} (${counts[k]})`}
-                title={KIND_LABELS[k].many}
-              >
-                <Icon className="h-4 w-4" />
-                <span className="text-meta tabular-nums">{counts[k]}</span>
-              </ToggleGroupItem>
+              // The count is the visible content, so the aria-label keeps it and the tip only names the kind.
+              <Tip key={k} tip={KIND_LABELS[k].many} labelsChild={false}>
+                <ToggleGroupItem
+                  value={k}
+                  // Kept in place rather than dropped when empty: a filter row that changes shape per person
+                  // moves the kind you wanted under the cursor of the one you didn't.
+                  disabled={counts[k] === 0}
+                  className="gap-1.5"
+                  aria-label={`${KIND_LABELS[k].many} (${counts[k]})`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="text-meta tabular-nums">{counts[k]}</span>
+                </ToggleGroupItem>
+              </Tip>
             );
           })}
         </ToggleGroup>
@@ -144,7 +148,8 @@ export function UserCreationsTab({ userId, username, onOpenListing }: UserCreati
                     url={`${WorldStorageService.API_URL}/thumbnails/${item.thumbnailFile}`}
                     updatedAt={item.updatedAt}
                     alt={item.name}
-                    className="h-full w-full object-cover"
+                    className={cn('h-full w-full', thumbFit(item.kind === 'entity' ? 'portrait' : 'landscape'))}
+                    aspect={item.kind === 'entity' ? 'portrait' : 'landscape'}
                   />
                 )}
               </div>

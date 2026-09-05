@@ -52,6 +52,8 @@ const materialFor = (index: number, over: Partial<TurnMaterial> = {}): TurnMater
     sceneEntityTokens: {},
     destinations: [],
     narrationSystemPrompt: narrationOf(turn).systemPrompt,
+    narrationSystemPromptRuns: [],
+    historyRuns: [],
     trimmedHistory: [],
     narration: narrationOf(turn).response ?? '',
     lastStory: previous,
@@ -62,6 +64,7 @@ const materialFor = (index: number, over: Partial<TurnMaterial> = {}): TurnMater
     npcCastSize: 0,
     intents: [],
     overflow: [],
+    sceneCast: [],
     ...over,
   };
 };

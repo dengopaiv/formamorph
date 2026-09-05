@@ -1,13 +1,23 @@
 import { randomUUID } from "@/lib/uuid";
-import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, type ReactNode, type SetStateAction } from 'react';
 import WorldStorageService from '../services/WorldStorageService';
 import { canonicalStringify } from '@/lib/canonicalStringify';
 import { migrateWorld, APP_VERSION } from '@/lib/version';
 import { dropLocationFromEntities } from '@/lib/entityPresence';
 import { dropLocationFromConnections } from '@/lib/locationGraph';
 import { newLocationPosition } from '@/lib/locationCanvas';
+import { renamedPlaceholderValues, repinRenamedValues } from '@/lib/traitEffects';
+import { directChipTargets } from '@/lib/placeholders';
+import {
+  allPlaceholders, mapListHolding, placeholderHomeFor, placeholderOwners, sameElements, sameOwners, scatterPlaceholders,
+  type PlaceholderHome, type PlaceholderSlices,
+} from '@/lib/placeholderHomes';
+import { releasePlaceholderOwners, removePlaceholderCascade } from '@/lib/placeholderTree';
+import { chipBearingTexts } from '@/lib/testBench/rules';
 import { useDictionaryStoreState, DictionaryStoreProvider } from '@/contexts/DictionaryStoreContext';
-import { placeholderStore, PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
+import { PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
+import { PlacementLettersProvider, useStablePlacementLetters } from '@/contexts/PlacementLettersContext';
+import { worldPlacementLetters } from '@/lib/placementLetters';
 import type {
   WorldMetadata,
   WorldOverview,
@@ -21,6 +31,7 @@ import type {
   Connection,
   Dictionary,
   Placeholder,
+  PlaceholderGroup,
   World,
 } from '@/types';
 
@@ -41,8 +52,9 @@ function buildWorldData(
   statUpdates: StatUpdate[],
   dictionaries: Dictionary[],
   placeholders: Placeholder[],
+  placeholderGroups: PlaceholderGroup[],
 ): Omit<World, 'id' | 'version'> {
-  return { worldOverview: overview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders };
+  return { worldOverview: overview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders, placeholderGroups };
 }
 
 function useProvideGameData() {
@@ -63,10 +75,14 @@ function useProvideGameData() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [entityGroups, setEntityGroups] = useState<EntityGroup[]>([]);
+  // Editor folders over the world's shared placeholders. Read by the Placeholders tab and the chip menus.
+  const [placeholderGroups, setPlaceholderGroups] = useState<PlaceholderGroup[]>([]);
   const [traits, setTraits] = useState<Trait[]>([]);
   const [traitGroups, setTraitGroups] = useState<TraitGroup[]>([]);
   const [statUpdates, setStatUpdates] = useState<StatUpdate[]>([]);
-  const [placeholders, setPlaceholders] = useState<Placeholder[]>([]);
+  // The world's own shared placeholders. Entities and books carry lists of their own; `placeholders` below
+  // is the combined view every reader takes.
+  const [worldPlaceholders, setWorldPlaceholders] = useState<Placeholder[]>([]);
   // The world's books live in a scoped dictionary store (shared, unchanged CRUD) so the same editing
   // widgets can be reused elsewhere against an isolated store.
   const dictStore = useDictionaryStoreState([]);
@@ -179,22 +195,6 @@ function useProvideGameData() {
       return prev.map(e => (e.groupId === groupId ? { ...e, groupId: parentId } : e));
     });
   }, [entityGroups]);
-
-  const addPlaceholder = useCallback((newPlaceholder: Placeholder) => {
-    setPlaceholders(prev => [...prev, newPlaceholder]);
-  }, []);
-
-  const updatePlaceholder = useCallback((updated: Placeholder) => {
-    setPlaceholders(prev => prev.map(p => (p.id === updated.id ? updated : p)));
-  }, []);
-
-  const removePlaceholder = useCallback((id: string) => {
-    setPlaceholders(prev => prev.filter(p => p.id !== id));
-  }, []);
-
-  // The world's placeholders as a scoped store, so the same editing widgets can be reused elsewhere
-  // (the library editors) against an isolated store.
-  const phStore = useMemo(() => placeholderStore(placeholders, setPlaceholders), [placeholders]);
 
   const addTrait = useCallback((newTrait: Trait) => {
     setTraits(prevTraits => [...prevTraits, newTrait]);
@@ -328,6 +328,7 @@ function useProvideGameData() {
     const nextDictionaries = Array.isArray(worldData.dictionaries) && worldData.dictionaries.length
       ? worldData.dictionaries : [makeDefaultBook()];
     const nextPlaceholders = Array.isArray(worldData.placeholders) ? worldData.placeholders : [];
+    const nextPlaceholderGroups = Array.isArray(worldData.placeholderGroups) ? worldData.placeholderGroups : [];
     setWorldId(worldData.id);
     setStats(nextStats);
     setLocations(nextLocations);
@@ -338,11 +339,12 @@ function useProvideGameData() {
     setTraitGroups(nextTraitGroups);
     setStatUpdates(nextStatUpdates);
     setDictionaries(nextDictionaries);
-    setPlaceholders(nextPlaceholders);
+    setWorldPlaceholders(nextPlaceholders);
+    setPlaceholderGroups(nextPlaceholderGroups);
 
     // Baseline for dirty detection: a freshly loaded world has no pending changes.
     setSavedSnapshot(JSON.stringify(buildWorldData(
-      normalizedOverview, nextStats, nextLocations, nextConnections, nextEntities, nextEntityGroups, nextTraits, nextTraitGroups, nextStatUpdates, nextDictionaries, nextPlaceholders,
+      normalizedOverview, nextStats, nextLocations, nextConnections, nextEntities, nextEntityGroups, nextTraits, nextTraitGroups, nextStatUpdates, nextDictionaries, nextPlaceholders, nextPlaceholderGroups,
     )));
 
     return { world: worldData, isDefault };
@@ -350,9 +352,117 @@ function useProvideGameData() {
 
   // The current editor state as a canonical world payload; the one source consumers serialize/save/export from.
   const getWorldData = useCallback(
-    () => buildWorldData(worldOverview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders),
-    [worldOverview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders],
+    () => buildWorldData(worldOverview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups),
+    [worldOverview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups],
   );
+
+  // Every reader takes one list: the world's shared placeholders, then each entity's own in tree order,
+  // then each book's. Kept by identity while no placeholder object changed, so a keystroke in an entity's
+  // description does not rebuild every chip field's vocabulary.
+  const lists = useMemo(
+    () => ({ placeholders: worldPlaceholders, entities, entityGroups, dictionaries, placeholderGroups }),
+    [worldPlaceholders, entities, entityGroups, dictionaries, placeholderGroups],
+  );
+  const combined = useMemo(() => allPlaceholders(lists), [lists]);
+  const combinedRef = useRef(combined);
+  if (!sameElements(combinedRef.current, combined)) combinedRef.current = combined;
+  const placeholders = combinedRef.current;
+  // Who owns each scoped placeholder, kept by identity while no owner or name changed, for the same reason.
+  const owners = useMemo(() => placeholderOwners(lists), [lists]);
+  const ownersRef = useRef(owners);
+  if (!sameOwners(ownersRef.current, owners)) ownersRef.current = owners;
+  const placeholderOwnerIndex = ownersRef.current;
+
+  // The current world through a ref, so a write can route by the lists as they stand without the
+  // callbacks below rebuilding on every edit and, with them, every chip field's vocabulary.
+  const worldRef = useRef(getWorldData);
+  worldRef.current = getWorldData;
+
+  // The home is decided once, purely; the append itself is a functional update on that one slice, so a
+  // burst of creates (an import absorbing several placeholders) never reads a stale world.
+  const addPlaceholder = useCallback((newPlaceholder: Placeholder, home?: PlaceholderHome) => {
+    const target = placeholderHomeFor(worldRef.current(), newPlaceholder, home);
+    if (target.kind === 'world') {
+      setWorldPlaceholders(prev => [...prev, newPlaceholder]);
+      return;
+    }
+    const append = <T extends { id: string; placeholders?: Placeholder[] }>(prev: T[]) =>
+      prev.map(o => (o.id === target.ownerId ? { ...o, placeholders: [...(o.placeholders ?? []), newPlaceholder] } : o));
+    if (target.kind === 'entity') setEntities(append); else setDictionaries(append);
+  }, [setDictionaries]);
+
+  // A write to one placeholder goes to the list holding its id: every setter bails out when its list does not.
+  const writeListHolding = useCallback((id: string, change: (list: Placeholder[]) => Placeholder[]) => {
+    setWorldPlaceholders(prev => (prev.some(p => p.id === id) ? change(prev) : prev));
+    setEntities(prev => mapListHolding(prev, id, change));
+    setDictionaries(prev => mapListHolding(prev, id, change));
+  }, [setDictionaries]);
+
+  // Renaming a value carries the trait pins written before value ids existed, so vocabulary cleanup is one
+  // field edit rather than a hunt through every trait. A pin naming its value by id needs nothing.
+  const updatePlaceholder = useCallback((updated: Placeholder) => {
+    const before = placeholders.find(p => p.id === updated.id);
+    // An edit that drops a chip value releases what it pointed at — see the scoped store, whose generic
+    // update path this replaces so the world's own pin sweep runs beside it.
+    writeListHolding(updated.id, list => releasePlaceholderOwners(list.map(p => (p.id === updated.id ? updated : p))));
+    if (!before) return;
+    const renames = renamedPlaceholderValues(before.values ?? [], updated.values ?? []);
+    if (renames.length) setTraits(prev => repinRenamedValues(prev, updated.id, renames));
+  }, [placeholders, writeListHolding]);
+
+  const removePlaceholder = useCallback((id: string) => {
+    writeListHolding(id, list => removePlaceholderCascade(list, id));
+  }, [writeListHolding]);
+
+  // Every list at once — a drop on the Placeholders tab that moves a record between owners. Only the
+  // slices that changed are written.
+  const setPlaceholderLists = useCallback((next: PlaceholderSlices) => {
+    const world = worldRef.current();
+    if (next.placeholders !== world.placeholders) setWorldPlaceholders(next.placeholders);
+    if (next.entities !== world.entities) setEntities(next.entities);
+    if (next.dictionaries !== world.dictionaries) setDictionaries(next.dictionaries);
+    if (next.placeholderGroups && next.placeholderGroups !== world.placeholderGroups) setPlaceholderGroups(next.placeholderGroups);
+  }, [setDictionaries]);
+
+  const addPlaceholderGroup = useCallback((group: PlaceholderGroup) => {
+    setPlaceholderGroups(prev => [...prev, group]);
+  }, []);
+
+  // A folder's delete goes through the placeholder store (`setLists`), beside the drops that move folders,
+  // so there is no separate context path for it.
+  const updatePlaceholderGroup = useCallback((updated: PlaceholderGroup) => {
+    setPlaceholderGroups(prev => prev.map(group => (group.id === updated.id ? updated : group)));
+  }, []);
+
+  // A whole-list write (a drag, a promote) is scattered back to the lists that hold each id.
+  const setPlaceholders = useCallback((action: SetStateAction<Placeholder[]>) => {
+    const world = worldRef.current();
+    const current = allPlaceholders(world);
+    const next = typeof action === 'function' ? action(current) : action;
+    if (next === current) return;
+    setPlaceholderLists(scatterPlaceholders(world, next));
+  }, [setPlaceholderLists]);
+
+  // The world's placeholders as a scoped store, so the same editing widgets can be reused elsewhere
+  // (the library editors) against an isolated store. The world's own update path replaces the generic
+  // one so the editing widgets get the pin sweep too; a library item has no traits and needs none.
+  // `placedIds` walks every chip-bearing field, so it is a thunk the placeholder tree calls on a drop
+  // rather than a memo the whole world recomputes on every keystroke.
+  const phStore = useMemo(
+    () => ({
+      placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder,
+      placedIds: () => directChipTargets(chipBearingTexts(worldRef.current())),
+      owners: placeholderOwnerIndex, lists, setLists: setPlaceholderLists,
+    }),
+    [placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder, placeholderOwnerIndex, lists, setPlaceholderLists],
+  );
+
+  // The document's placement letters, rewalked on every edit and kept by identity while nothing changed,
+  // so a keystroke that adds no chip leaves every chip field's vocabulary alone.
+  const placementLetters = useStablePlacementLetters(useMemo(
+    () => worldPlacementLetters({ entities, entityGroups, locations, traits, traitGroups, stats, dictionaries, worldOverview, placeholders: worldPlaceholders }),
+    [entities, entityGroups, locations, traits, traitGroups, stats, dictionaries, worldOverview, worldPlaceholders],
+  ));
 
   // Per-keystroke dirty check over image-heavy world data: canonicalStringify caches by identity, so an
   // edit re-serializes only that record and its ancestors and the base64 elsewhere is left alone.
@@ -428,7 +538,9 @@ function useProvideGameData() {
     traitGroups,
     statUpdates,
     dictionaries,
+    // The combined view: shared placeholders, then every entity's and book's own.
     placeholders,
+    worldPlaceholders,
     getWorldData,
     addStat,
     updateStat,
@@ -463,6 +575,10 @@ function useProvideGameData() {
     addPlaceholder,
     updatePlaceholder,
     removePlaceholder,
+    placeholderGroups,
+    addPlaceholderGroup,
+    updatePlaceholderGroup,
+    setPlaceholderGroups,
     setStats,
     setLocations,
     setConnections,
@@ -472,7 +588,7 @@ function useProvideGameData() {
     setTraitGroups,
     setStatUpdates,
     setDictionaries,
-    setPlaceholders,
+    setWorldPlaceholders,
     loadWorldData,
     worldId, setWorldId,
     isWorldDirty,
@@ -482,6 +598,10 @@ function useProvideGameData() {
     dictStore,
     // Likewise for placeholders, so the same editing widgets bind to the world's placeholders.
     phStore,
+    // Placement id → letter for every Unique chip in the world, for the surfaces that print a name as text.
+    placementLetters,
+    // Placeholder id → the entity or book that owns it, for the surfaces that read a chip as `Molly › Eyes`.
+    placeholderOwners: placeholderOwnerIndex,
   };
 
   return value;
@@ -503,6 +623,11 @@ export const useGameData = () => {
   return context;
 };
 
+/** The same store, or null outside a `GameDataProvider` — for a widget the library's editors mount with
+ *  no world behind it. */
+// eslint-disable-next-line react-refresh/only-export-components
+export const useGameDataOptional = () => useContext(GameDataContext);
+
 /** Provides the world-editor data store (see `useGameData`); on mount it initializes storage and loads
  *  the world-metadata list. */
 export const GameDataProvider = ({ children }: { children: ReactNode }) => {
@@ -512,7 +637,9 @@ export const GameDataProvider = ({ children }: { children: ReactNode }) => {
     <GameDataContext.Provider value={value}>
       <DictionaryStoreProvider value={value.dictStore}>
         <PlaceholderStoreProvider value={value.phStore}>
-          {children}
+          <PlacementLettersProvider letters={value.placementLetters}>
+            {children}
+          </PlacementLettersProvider>
         </PlaceholderStoreProvider>
       </DictionaryStoreProvider>
     </GameDataContext.Provider>

@@ -1,21 +1,22 @@
 // The shared drag-tree scaffold behind LocationTree, EntityTree and TraitTree: a flat sortable list where
 // vertical drag reorders and horizontal drag changes nesting depth. Each tree supplies an adapter (visible
-// rows, depth projection, drop commit, per-row presentation); everything else — sensors, drag state, the row
-// chrome (grip / chevron / duplicate / delete) — lives here once.
+// rows, depth projection, drop commit, per-row presentation); everything else — drag state and the row
+// chrome (grip / chevron / duplicate / delete) — lives here once, over the shared `EditorDndContext`.
 //
 // IMPORTANT: never clamp the drag's X. A full-axis bounding modifier (restrictToParentElement /
 // restrictToFirstScrollableAncestor / restrictToVerticalAxis) clamps the horizontal delta and breaks
-// depth-based nesting (see TraitTree history). Clamping only Y is fine and is exactly what
-// `restrictYToScrollAncestor` below does — it's why these trees can live in a ScrollArea without the
-// auto-scroll running away, while other lists (which don't need free X) use the stock both-axis modifiers.
+// depth-based nesting (see TraitTree history), which is why this passes `restrictYToScrollAncestor` rather
+// than taking the shared layer's vertical-list default.
 import { useState, type ReactNode } from 'react';
-import { EditorRow, EditorRowList } from '@/components/EditorRow';
+import { EditorRow, EditorRowList, type EditorRowAction } from '@/components/EditorRow';
 import { X, Copy } from 'lucide-react';
 import {
-  DndContext, pointerWithin, closestCenter, PointerSensor, KeyboardSensor, useSensor, useSensors,
-  type CollisionDetection, type Modifier,
+  pointerWithin, closestCenter,
+  type CollisionDetection,
   type DragStartEvent, type DragMoveEvent, type DragOverEvent, type DragEndEvent,
 } from '@dnd-kit/core';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
+import { restrictYToScrollAncestor } from '@/components/dnd/dragInvariants';
 
 // Pointer-precise collisions, but never empty: at the very bottom the pointer sits past the last row, so
 // `pointerWithin` alone returns nothing → dnd-kit drops the sort gap → the list shrinks → the pointer is
@@ -27,23 +28,10 @@ const collisionWithFallback: CollisionDetection = (args) => {
   return within.length > 0 ? within : closestCenter(args);
 };
 
-// Clamp ONLY the dragged row's vertical position to the scroll viewport — never its x. Without this, dragging
-// to the bottom pulls the in-flow row below the last one, which grows the ScrollArea's scrollHeight, so
-// auto-scroll chases it downward forever (runaway scroll into empty space). Bounding y keeps the row at the
-// edge while the list scrolls under it, so scrollHeight stays fixed and auto-scroll stops at the real end.
-// x is left untouched, so horizontal-drag depth nesting still works (the forbidden thing is clamping x).
-const restrictYToScrollAncestor: Modifier = ({ transform, draggingNodeRect, scrollableAncestorRects }) => {
-  const rect = scrollableAncestorRects[0];
-  if (!draggingNodeRect || !rect) return transform;
-  let y = transform.y;
-  if (draggingNodeRect.top + y < rect.top) y = rect.top - draggingNodeRect.top;
-  else if (draggingNodeRect.bottom + y > rect.bottom) y = rect.bottom - draggingNodeRect.bottom;
-  return { ...transform, y };
-};
-import {
-  SortableContext, useSortable, sortableKeyboardCoordinates, verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+import { useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+
+const TREE_MODIFIERS = [restrictYToScrollAncestor];
 
 
 /** Presentation + actions for one row, produced by the tree's adapter. */
@@ -57,8 +45,21 @@ export interface TreeRowSpec {
   label: ReactNode;
   /** Extra classes on the label span (e.g. 'font-medium' for group headers). */
   labelClass?: string;
-  remove: () => void;
-  duplicate: () => void;
+  /** Secondary text before the actions, such as a holder count. */
+  meta?: ReactNode;
+  /** Tooltip for {@link TreeRowSpec.meta}, which is usually too terse to read on its own. */
+  metaTitle?: string;
+  /** Actions ahead of duplicate and delete, for anything only this tree offers. */
+  actions?: EditorRowAction[];
+  /** What the delete action is called, where "Delete" is not what the row's own X does. */
+  removeTitle?: string;
+  /** Absent on a fixed row, which offers no delete. */
+  remove?: () => void;
+  /** Absent on a fixed row, which offers no duplicate. */
+  duplicate?: () => void;
+  /** The row is derived from something else (an owner node read off an entity): it cannot be dragged, and
+   *  rows may still be dropped beside or under it. */
+  fixed?: boolean;
 }
 
 /** What a specific tree plugs into the shared scaffold. */
@@ -69,11 +70,17 @@ export interface SortableTreeAdapter<N extends { id: string; depth: number }> {
   projectDepth: (visible: N[], activeId: string, overId: string, offsetLeft: number) => number | null;
   /** Commit a drop. */
   onDrop: (activeId: string, overId: string, offsetLeft: number, collapsed: Set<string>) => void;
+  /** What `selectedId` and `onSelect` speak in, where a row is not itself the thing being selected — a
+   *  placeholder draws a row under every holder that shares it, and all of them are that one placeholder.
+   *  Defaults to the row's own id. */
+  selectionId?: (node: N) => string;
   rowSpec: (node: N) => TreeRowSpec;
 }
 
 interface RowProps {
   id: string;
+  /** What selecting this row reports — see `selectionId` on the adapter. */
+  selectId: string;
   depth: number;
   spec: TreeRowSpec;
   selected: boolean;
@@ -83,8 +90,8 @@ interface RowProps {
 }
 
 /** One flat row with a depth-based left indent. */
-function TreeRow({ id, depth, spec, selected, onSelect, isCollapsed, toggleCollapse }: RowProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+function TreeRow({ id, selectId, depth, spec, selected, onSelect, isCollapsed, toggleCollapse }: RowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: spec.fixed });
   // The dragged row's indent is shown via paddingLeft (projected depth), so pin its x-translate to 0 — it
   // slides vertically only while the pointer's horizontal delta drives depth. Sibling rows keep their full
   // transform (the reorder shift animation).
@@ -100,10 +107,11 @@ function TreeRow({ id, depth, spec, selected, onSelect, isCollapsed, toggleColla
       setNodeRef={setNodeRef}
       style={style}
       depth={depth}
-      gripProps={{ ...attributes, ...listeners }}
+      gripProps={spec.fixed ? undefined : { ...attributes, ...listeners }}
+      grip={!spec.fixed}
       gripTitle="Drag to reorder or nest"
       selected={selected}
-      onSelect={() => onSelect(id)}
+      onSelect={() => onSelect(selectId)}
       lead={spec.lead === 'none' ? undefined : spec.lead}
       collapsed={isCollapsed}
       onToggleCollapse={() => toggleCollapse(id)}
@@ -111,9 +119,12 @@ function TreeRow({ id, depth, spec, selected, onSelect, isCollapsed, toggleColla
       icon={spec.icon}
       label={spec.label}
       labelClass={spec.labelClass}
+      meta={spec.meta}
+      metaTitle={spec.metaTitle}
       actions={[
-        { icon: <Copy className="h-4 w-4" />, title: 'Duplicate', onClick: spec.duplicate },
-        { icon: <X className="h-4 w-4" />, title: 'Delete', onClick: spec.remove },
+        ...(spec.actions ?? []),
+        ...(spec.duplicate ? [{ icon: <Copy className="h-4 w-4" />, title: 'Duplicate', onClick: spec.duplicate }] : []),
+        ...(spec.remove ? [{ icon: <X className="h-4 w-4" />, title: spec.removeTitle ?? 'Delete', onClick: spec.remove }] : []),
       ]}
     />
   );
@@ -128,11 +139,6 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetLeft, setOffsetLeft] = useState(0);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
 
   // Visible rows: the tree minus collapsed nodes' children and (while dragging) the dragged subtree.
   const visible = adapter.getVisible(activeId ? new Set([...collapsed, activeId]) : collapsed);
@@ -160,32 +166,32 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   });
 
   return (
-    <DndContext
-      sensors={sensors}
+    <EditorDndContext
       collisionDetection={collisionWithFallback}
-      modifiers={[restrictYToScrollAncestor]}
+      modifiers={TREE_MODIFIERS}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={reset}
     >
-      <SortableContext items={visible.map((n) => n.id)} strategy={verticalListSortingStrategy}>
+      <StableSortableContext items={visible} strategy={verticalListSortingStrategy}>
         <EditorRowList>
         {visible.map((node) => (
           <TreeRow
             key={node.id}
             id={node.id}
+            selectId={adapter.selectionId?.(node) ?? node.id}
             depth={node.id === activeId && projectedDepth !== null ? projectedDepth : node.depth}
             spec={adapter.rowSpec(node)}
-            selected={selectedId === node.id}
+            selected={selectedId === (adapter.selectionId?.(node) ?? node.id)}
             onSelect={onSelect}
             isCollapsed={collapsed.has(node.id)}
             toggleCollapse={toggleCollapse}
           />
         ))}
         </EditorRowList>
-      </SortableContext>
-    </DndContext>
+      </StableSortableContext>
+    </EditorDndContext>
   );
 }

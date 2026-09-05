@@ -9,14 +9,19 @@
  * Pure and world-shaped: nothing here reads storage or React, and nothing writes the world.
  */
 import { describePlaceholders } from '@/lib/placeholders';
-import {
-  activePlaceholderPins, activeStatEnabled, exclusiveSiblings, inAuthoredOrder, traitOrderIndex,
-} from '@/lib/traitEffects';
+import { allPlaceholders, placeholderOwners } from '@/lib/placeholderHomes';
+import { labelPlaceholders, worldPlacementLetters } from '@/lib/placementLetters';
+import { allPinRows, collectPinLayers, samePin, sameSource, type PinLayer } from '@/lib/placeholderPins';
+import { activeStatEnabled, exclusiveSiblings, inAuthoredOrder, traitOrderIndex } from '@/lib/traitEffects';
+import { startingStatsWith } from '@/lib/traitRuntime';
 import type { GameLocation, Placeholder, Trait } from '@/types';
 import type { RuleWorld } from './rules';
 
-/** The slices of the authored world the lens reads. */
-export type LensWorld = Pick<RuleWorld, 'traits' | 'traitGroups' | 'locations' | 'placeholders' | 'stats'>;
+/** The slices of the authored world the lens reads. The rest of the document is optional and read only to
+ *  letter the pickers' chips the way the editor letters them — entities come first in that walk. */
+export type LensWorld =
+  Pick<RuleWorld, 'traits' | 'traitGroups' | 'locations' | 'placeholders' | 'stats'>
+  & Partial<Pick<RuleWorld, 'entities' | 'entityGroups' | 'dictionaries' | 'worldOverview'>>;
 
 /** What the author picked, as the two ids it comes down to. Both nullable: no PC is a real setting (the
  *  world as anyone would meet it), and a world with no locations has nowhere to stand. */
@@ -41,41 +46,64 @@ export interface LensOption {
  *  the field is for, and play applies it verbatim. */
 export interface BrokenPin {
   placeholderId: string;
+  /** What play applies, verbatim. */
   value: string;
+  /** The value as a sentence shows it — its own chips described, since a pin's text is chip-capable. */
+  shown: string;
+  /** The source as every pin surface names it: `Trait: Sworn`, `Location: Fen`, `Hunger ≤ 20`. */
+  source: string;
 }
+
+/** One pin an active source lays under this lens, labeled as the pin editors label its source. */
+export type LensPinLayer = PinLayer & { label: string };
 
 /** The lens resolved against a world: who and where, and everything that follows from the PC. */
 export interface BenchLens {
   state: LensState;
   pc: Trait | null;
   location: GameLocation | null;
-  /** Placeholder id → the value the PC forces, exactly as an active trait pins it in play. Broken pins are
-   *  in here too when play would apply them, so what the Bench shows is what a turn would show. */
+  /** Placeholder id → the value in force, from every source a fresh game as this PC standing here would
+   *  have: the active traits, the location, the band each starting stat lands in, and the value pins those
+   *  settle. Broken pins are in here too when play would apply them, so what the Bench shows is what a turn
+   *  would show. */
   pins: Record<string, string>;
+  /** Every pin behind `pins`, in the order play lays them, the one in force per placeholder marked. */
+  pinLayers: LensPinLayer[];
   brokenPins: BrokenPin[];
   /** Stat id → whether it is live under this PC — the world's defaults with the PC's toggles over them. */
   statEnabled: Record<string, boolean>;
 }
 
-/** The traits an author can test as: every member of an exclusive group, in authored order. A trait outside
- *  one isn't a character — it is an option a character may also have — so it never appears here. */
+/**
+ * The traits an author can test as: every member of an exclusive group, in authored order. A trait outside
+ * one isn't a character — it is an option a character may also have — so it never appears here. Names
+ * read as the editor's own trait list reads them: a chip by its placement label, never by a roll or a pin,
+ * so the picker and the list agree on what a character is called.
+ */
 export function lensPcOptions(world: LensWorld): LensOption[] {
+  const placeholders = allPlaceholders(world);
   const exclusive = new Map(
     (world.traitGroups ?? []).filter((g) => g.exclusive).map((g) => [g.id, g.name]),
   );
   if (exclusive.size === 0) return [];
   const order = traitOrderIndex(world.traits ?? [], world.traitGroups ?? []);
   const members = (world.traits ?? []).filter((t) => t.groupId != null && exclusive.has(t.groupId));
+  const letters = worldPlacementLetters(world);
   return inAuthoredOrder(members, order).map((t) => ({
     id: t.id,
-    name: t.name || 'Untitled trait',
-    groupName: exclusive.get(t.groupId as string) || 'Traits',
+    name: labelPlaceholders(t.name, placeholders, { letters }) || 'Untitled trait',
+    groupName: labelPlaceholders(exclusive.get(t.groupId as string) ?? '', placeholders, { letters }) || 'Traits',
   }));
 }
 
-/** Everywhere the author can stand, in authored order. */
+/** Everywhere the author can stand, in authored order, named as the editor's own list names it. */
 export function lensLocationOptions(world: LensWorld): LensOption[] {
-  return (world.locations ?? []).map((l) => ({ id: l.id, name: l.name || 'Untitled location' }));
+  const placeholders = allPlaceholders(world);
+  const letters = worldPlacementLetters(world);
+  return (world.locations ?? []).map((l) => ({
+    id: l.id,
+    name: labelPlaceholders(l.name, placeholders, { letters }) || 'Untitled location',
+  }));
 }
 
 /** Where a fresh lens points: the location the author already has open in the editor, else the one a
@@ -109,25 +137,56 @@ export function seedLens(
   };
 }
 
-/** Every pin of `trait` the world cannot honor, in the order the trait declares them. */
-function brokenPinsOf(trait: Trait, placeholders: Placeholder[]): BrokenPin[] {
+/** The layers the world cannot honor: each names a placeholder that is gone. */
+function brokenPinsOf(layers: LensPinLayer[], placeholders: Placeholder[]): BrokenPin[] {
   const known = new Set(placeholders.map((p) => p.id));
-  return (trait.placeholderPins ?? [])
-    .filter((pin) => pin.placeholderId && pin.value && !known.has(pin.placeholderId))
-    .map((pin) => ({ placeholderId: pin.placeholderId, value: pin.value }));
+  return layers
+    .filter((layer) => !known.has(layer.placeholderId))
+    .map((layer) => ({
+      placeholderId: layer.placeholderId,
+      value: layer.value,
+      shown: describePlaceholders(layer.value, placeholders),
+      source: layer.label,
+    }));
 }
 
-/** The lens as every instrument reads it. A PC the world no longer has resolves to none rather than to a
- *  stale trait, so an id outliving its trait costs the selection and nothing else. */
+/**
+ * The lens as every instrument reads it. A PC the world no longer has resolves to none rather than to a
+ * stale trait, so an id outliving its trait costs the selection and nothing else. Pins come from the game's
+ * own collector over what a fresh game as this PC would have in force: the active traits, the lens location,
+ * and each stat's band at the value the traits leave it starting on. No roll is drawn at design time, so a
+ * Wildcard's value pins wait for a source above them to fix its value.
+ */
 export function buildLens(world: LensWorld, state: LensState): BenchLens {
-  const pc = (world.traits ?? []).find((t) => t.id === state.pcTraitId) ?? null;
-  const active = pc ? [pc] : [];
+  const traits = world.traits ?? [];
+  const groups = world.traitGroups ?? [];
+  const placeholders = allPlaceholders(world);
+  const pc = traits.find((t) => t.id === state.pcTraitId) ?? null;
+  const location = (world.locations ?? []).find((l) => l.id === state.locationId) ?? null;
+  const active = activeTraitsFor(world, pc);
+  const { pins, layers } = collectPinLayers({
+    traits: active,
+    location,
+    stats: startingStatsWith(world.stats ?? [], active, { traits, groups }),
+    placeholders,
+  });
+  // The editors' labels for the same rows, matched by the stored pin: a layer carries the pin object its
+  // source holds, and so does every row.
+  const rows = allPinRows({
+    traits, traitGroups: groups, locations: world.locations ?? [], stats: world.stats ?? [], placeholders,
+    placeholderOwners: placeholderOwners(world), placementLetters: worldPlacementLetters(world),
+  });
+  const pinLayers = layers.map((layer): LensPinLayer => ({
+    ...layer,
+    label: rows.find((r) => sameSource(r.source, layer.source) && (r.pin === layer.pin || samePin(r.pin, layer.pin)))?.label ?? '',
+  }));
   return {
     state,
     pc,
-    location: (world.locations ?? []).find((l) => l.id === state.locationId) ?? null,
-    pins: activePlaceholderPins(active),
-    brokenPins: pc ? brokenPinsOf(pc, world.placeholders ?? []) : [],
+    location,
+    pins,
+    pinLayers,
+    brokenPins: brokenPinsOf(pinLayers, placeholders),
     statEnabled: activeStatEnabled(world.stats ?? [], active),
   };
 }
@@ -138,12 +197,15 @@ export function buildLens(world: LensWorld, state: LensState): BenchLens {
  * ordering that choosing the character at game start applies.
  */
 export function lensActiveTraits(world: LensWorld, lens: BenchLens): Trait[] {
+  return activeTraitsFor(world, lens.pc);
+}
+
+function activeTraitsFor(world: LensWorld, pc: Trait | null): Trait[] {
   const traits = world.traits ?? [];
   const groups = world.traitGroups ?? [];
   const order = traitOrderIndex(traits, groups);
   const defaults = traits.filter((t) => t.isDefault);
-  if (!lens.pc) return inAuthoredOrder(defaults, order);
-  const pc = lens.pc;
+  if (!pc) return inAuthoredOrder(defaults, order);
   const retired = new Set(exclusiveSiblings(pc, traits, groups));
   const kept = defaults.filter((t) => t.id !== pc.id && !retired.has(t.id));
   return inAuthoredOrder([...kept, pc], order);
@@ -169,7 +231,7 @@ const quote = (text: string) => `“${text}”`;
 /** A broken pin as the sentence under the selector reads. Names the value it claims to force, since
  *  "broken" alone sends the author looking for which end of the pin moved. */
 export function describeBrokenPin(pin: BrokenPin): string {
-  return `Pins a placeholder that doesn’t exist, so ${quote(pin.value)} is never applied.`;
+  return `${quote(pin.source)} pins a placeholder that doesn’t exist, so ${quote(pin.shown)} is never applied.`;
 }
 
 /**

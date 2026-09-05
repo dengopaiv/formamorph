@@ -1,9 +1,10 @@
 import type { Page } from '@playwright/test';
 import { TUTORIALS } from '../src/lib/tutorials';
+import { AGE_GATE_VERSION } from '../src/lib/ageGate';
 
 /** Dev-router surface installed by `src/lib/devRouter.ts` (DEV builds only). */
 interface DevRouter {
-  goto(view?: string, opts?: { modal?: string; tab?: string; subtab?: string; fixture?: string; fullscreen?: boolean }): void;
+  goto(view?: string, opts?: { modal?: string; tab?: string; subtab?: string; surface?: string; fixture?: string; mode?: string; fullscreen?: boolean }): void;
   listWorlds(): Promise<{ id: string; name: string }[]>;
   editWorld(id: string): Promise<void>;
 }
@@ -26,15 +27,30 @@ const BASE_SEED: Record<string, string> = {
   // Advanced, not the first-run Simple: Simple hides whole tabs and fields, and no spec here is
   // measuring what Simple hides. One that is should set it back.
   'formamorph.worldEditorMode': 'advanced',
+  // The age attestation pre-answered, read from the live version so a bumped one cannot quietly leave the
+  // gate standing in front of every community spec. It gates the catalog fetch itself rather than only the
+  // browser opening, so without this a spec reaches the browser and finds it empty. A spec measuring the
+  // gate clears this key through `openApp`'s `extra`.
+  FORMAMORPH_ageGate: JSON.stringify({
+    accepted: true, acceptanceVersion: AGE_GATE_VERSION, acceptedAt: '2026-01-01T00:00:00.000Z',
+  }),
 };
 
 /**
  * Load the app with a known localStorage baseline. `extra` overrides or adds keys — strings are stored
  * raw and everything else JSON-encoded, matching the app's own persistence codecs.
  */
-export async function openApp(page: Page, extra: Record<string, unknown> = {}): Promise<void> {
+export async function openApp(
+  page: Page,
+  extra: Record<string, unknown> = {},
+  opts: { liveEvents?: boolean } = {},
+): Promise<void> {
   const seed = { ...BASE_SEED } as Record<string, string>;
   for (const [k, v] of Object.entries(extra)) seed[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  // A live event's poster is modal over the Main Menu and its id isn't known statically, so it can't be
+  // pre-dismissed through the seed like the intro and tutorials — answer the fetch with no events instead.
+  // Contest specs, which are about events, opt back in with `liveEvents`.
+  if (!opts.liveEvents) await page.route('**/events/active*', (route) => route.fulfill({ json: [] }));
   await page.addInitScript((s: Record<string, string>) => {
     for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v);
   }, seed);
@@ -46,7 +62,7 @@ export async function openApp(page: Page, extra: Record<string, unknown> = {}): 
 export async function gotoDev(
   page: Page,
   view: string,
-  opts?: { modal?: string; tab?: string; subtab?: string; fixture?: string; fullscreen?: boolean },
+  opts?: { modal?: string; tab?: string; subtab?: string; surface?: string; fixture?: string; mode?: string; fullscreen?: boolean },
 ): Promise<void> {
   await page.evaluate(
     ([v, o]) => (window as unknown as { __fmDev: DevRouter }).__fmDev.goto(v as string, o as Parameters<DevRouter['goto']>[1]),
@@ -62,7 +78,9 @@ export async function gotoDev(
  * an author would be editing.
  */
 export async function openPromptEditor(page: Page, prompt = 'narration'): Promise<void> {
-  await gotoDev(page, 'mainMenu', { modal: 'settings', tab: 'prompts', subtab: prompt });
+  // Selecting a prompt lands on its Anatomy hub; these specs exercise the editor, so route past the hub
+  // to the System Prompt surface directly.
+  await gotoDev(page, 'mainMenu', { modal: 'settings', tab: 'prompts', subtab: prompt, surface: 'system' });
   await page.getByRole('combobox', { name: 'Preset' }).waitFor();
   await ensureEditablePreset(page);
 }
@@ -88,13 +106,15 @@ export const chrome = {
 };
 
 /**
- * Open the World Editor on a stored world with its Custom Narration Prompt switched on — the editor's
- * only prompt field, and the one whose parent writes each keystroke through to GameDataContext.
+ * Open the World Editor on a stored world with its custom narration prompt switched on and its panel
+ * open — the prompt field whose parent writes each keystroke through to GameDataContext.
  */
 export async function openWorldNarrationPrompt(page: Page): Promise<void> {
   await openWorldEditor(page);
-  const toggle = page.getByRole('checkbox', { name: 'Custom Narration Prompt' });
+  const toggle = page.getByRole('checkbox', { name: "Use this world's narration prompt" });
+  // Switching the checkbox on opens the panel itself; only an already-armed prompt needs picking open.
   if ((await toggle.getAttribute('data-state')) !== 'checked') await toggle.click();
+  else await page.getByRole('radio', { name: 'Narration' }).click();
   await page.getByLabel('World narration prompt').waitFor();
 }
 
@@ -108,5 +128,20 @@ export async function openWorldEditor(page: Page): Promise<void> {
     const worlds = await dev.listWorlds();
     await dev.editWorld(worlds[0].id);
   });
-  await page.getByRole('checkbox', { name: 'Custom Narration Prompt' }).waitFor();
+  await page.getByRole('checkbox', { name: "Use this world's narration prompt" }).waitFor();
+}
+
+/**
+ * Sign in through the footer's account button, the way a player does.
+ *
+ * The token could be seeded into `localStorage` instead, but a session made that way never proves the
+ * login round-trip works — and every flow that needs an account needs the server to have answered.
+ */
+export async function signIn(page: Page, username: string, password: string): Promise<void> {
+  await page.getByRole('button', { name: 'Login' }).click();
+  const dialog = page.getByRole('dialog').filter({ has: page.getByText('Enter your credentials') });
+  await dialog.getByLabel('Username').fill(username);
+  await dialog.getByLabel('Password', { exact: true }).fill(password);
+  await dialog.getByRole('button', { name: 'Login', exact: true }).click();
+  await page.getByRole('button', { name: /^User Profile/ }).waitFor();
 }

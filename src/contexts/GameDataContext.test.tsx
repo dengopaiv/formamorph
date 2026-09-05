@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { GameDataProvider, useGameData } from './GameDataContext';
 import type { World } from '@/types';
 
+import { phValueId, phValues } from '@/test/placeholderValues';
 // The provider initializes IndexedDB storage on mount; stub it out so these tests exercise only
 // loadWorldData's normalization.
 vi.mock('../services/WorldStorageService', () => ({
@@ -390,5 +391,131 @@ describe('loadWorldData', () => {
     act(() => { result.current.loadWorldData(world('b', {})); });
     expect(result.current.worldOverview.openingCue).toBeUndefined();
     expect(result.current.worldOverview.openingCueEnabled).toBeUndefined();
+  });
+});
+
+describe('renaming a placeholder value', () => {
+  // A pin written before value ids existed holds a plain string, so only the update path can connect a
+  // rename to the traits.
+  const worldWithPins = () => ({
+    ...world('w', {}),
+    placeholders: [
+      { id: 'hair', name: 'Hair Color', values: phValues(['Red', 'Blue']) },
+      { id: 'eyes', name: 'Eye Color', values: phValues(['Red']) },
+    ],
+    traits: [
+      { id: 't1', name: 'Ember', statChanges: [], placeholderPins: [{ placeholderId: 'hair', value: 'Red' }] },
+      { id: 't2', name: 'Glass', statChanges: [], placeholderPins: [{ placeholderId: 'eyes', value: 'Red' }] },
+    ],
+  } as unknown as World);
+
+  it('carries the trait pins that targeted it, and leaves another placeholder holding the same string alone', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(worldWithPins()); });
+
+    act(() => {
+      // What the editor writes: the value keeps its id and only its text changes.
+      result.current.updatePlaceholder({
+        id: 'hair',
+        name: 'Hair Color',
+        values: [{ id: phValueId('Red'), text: 'Crimson' }, ...phValues(['Blue'])],
+      });
+    });
+
+    expect(result.current.traits[0].placeholderPins).toEqual([{ placeholderId: 'hair', value: 'Crimson' }]);
+    expect(result.current.traits[1].placeholderPins).toEqual([{ placeholderId: 'eyes', value: 'Red' }]);
+  });
+
+  it('routes the editing widgets through the same sweep, so the placeholder editor propagates too', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(worldWithPins()); });
+
+    act(() => {
+      result.current.phStore.updatePlaceholder({
+        id: 'hair',
+        name: 'Hair Color',
+        values: [{ id: phValueId('Red'), text: 'Crimson' }, ...phValues(['Blue'])],
+      });
+    });
+
+    expect(result.current.traits[0].placeholderPins).toEqual([{ placeholderId: 'hair', value: 'Crimson' }]);
+  });
+});
+
+describe('placeholders an entity or a book carries', () => {
+  const EYES = { id: 'eyes', name: 'Eyes', values: phValues(['amber']) };
+  const scopedWorld = () => ({
+    ...world('w', {}),
+    placeholders: [{ id: 'shared', name: 'Weather', values: phValues(['rain']) }],
+    entities: [{ id: 'molly', name: 'Molly', placeholders: [EYES] }],
+    dictionaries: [{ id: 'book', name: 'Fen', entries: [], placeholders: [{ id: 'lore', name: 'Lore', values: phValues(['the Fen']) }] }],
+  } as unknown as World);
+  const load = () => {
+    const hook = renderHook(() => useGameData(), { wrapper });
+    act(() => { hook.result.current.loadWorldData(scopedWorld()); });
+    return hook.result;
+  };
+
+  it("reads one combined list: the world's, then each entity's, then each book's", () => {
+    const result = load();
+    expect(result.current.placeholders.map((p) => p.id)).toEqual(['shared', 'eyes', 'lore']);
+    expect(result.current.worldPlaceholders.map((p) => p.id)).toEqual(['shared']);
+  });
+
+  it('lands a write to a scoped placeholder on the entity, not the world list', () => {
+    const result = load();
+    act(() => { result.current.phStore.updatePlaceholder({ ...EYES, name: 'Eye Color' }); });
+    expect(result.current.entities[0].placeholders?.[0].name).toBe('Eye Color');
+    expect(result.current.worldPlaceholders.map((p) => p.id)).toEqual(['shared']);
+    expect(result.current.placeholders.find((p) => p.id === 'eyes')?.name).toBe('Eye Color');
+  });
+
+  it('adds to the home a create names, and to the world list when none is named', () => {
+    const result = load();
+    const tale = { id: 'tale', name: 'Tale', values: phValues(['x']) };
+    const mood = { id: 'mood', name: 'Mood', values: phValues(['y']) };
+    act(() => { result.current.phStore.addPlaceholder(tale, { kind: 'dictionary', ownerId: 'book' }); });
+    act(() => { result.current.phStore.addPlaceholder(mood); });
+    expect(result.current.dictionaries[0].placeholders?.map((p) => p.id)).toEqual(['lore', 'tale']);
+    expect(result.current.worldPlaceholders.map((p) => p.id)).toEqual(['shared', 'mood']);
+  });
+
+  it('puts a part created from inside a scoped holder beside that holder, not on the world list', () => {
+    // What the typeahead's inline create writes: a placeholder born with its holder as owner.
+    const result = load();
+    act(() => { result.current.phStore.addPlaceholder({ id: 'iris', name: 'Iris', values: phValues(['gold']), ownerId: 'eyes' }); });
+    expect(result.current.entities[0].placeholders?.map((p) => p.id)).toEqual(['eyes', 'iris']);
+    expect(result.current.worldPlaceholders.map((p) => p.id)).toEqual(['shared']);
+  });
+
+  it('removes a scoped placeholder from its entity and leaves the world list alone', () => {
+    const result = load();
+    act(() => { result.current.phStore.removePlaceholder('eyes'); });
+    expect('placeholders' in result.current.entities[0]).toBe(false);
+    expect(result.current.worldPlaceholders).toHaveLength(1);
+    expect(result.current.placeholders.map((p) => p.id)).toEqual(['shared', 'lore']);
+  });
+
+  it('routes a whole-list write back to the list that holds each id', () => {
+    const result = load();
+    act(() => {
+      result.current.phStore.setPlaceholders((prev) => prev.map((p) => (p.id === 'lore' ? { ...p, name: 'Tale' } : p)));
+    });
+    expect(result.current.dictionaries[0].placeholders?.[0].name).toBe('Tale');
+    expect(result.current.worldPlaceholders.map((p) => p.name)).toEqual(['Weather']);
+  });
+
+  it('keeps the combined list by identity across an edit that touches no placeholder', () => {
+    const result = load();
+    const before = result.current.placeholders;
+    act(() => { result.current.updateEntity({ ...result.current.entities[0], playerDescription: 'A fen girl.' }); });
+    expect(result.current.entities[0].playerDescription).toBe('A fen girl.');
+    expect(result.current.placeholders).toBe(before);
+  });
+
+  it("takes an entity's placeholders with it when the entity goes", () => {
+    const result = load();
+    act(() => { result.current.removeEntity('molly'); });
+    expect(result.current.placeholders.map((p) => p.id)).toEqual(['shared', 'lore']);
   });
 });

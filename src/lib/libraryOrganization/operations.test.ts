@@ -1,0 +1,402 @@
+import { describe, it, expect } from 'vitest';
+import {
+  addToGroup,
+  commitPlacements,
+  createGroupFromItem,
+  disbandGroup,
+  groupItems,
+  groupOf,
+  pruneOrganization,
+  setDrawnOrder,
+  removeFromGroup,
+  renameGroup,
+  setGroupPromptPreset,
+  setTileSize,
+  tileSize,
+  topLevelIds,
+} from './operations';
+import { emptyTabOrganization, NEW_GROUP_NAME, type LibraryTabOrganization } from './types';
+
+/** A tab holding `ids` at the top level and nothing else. */
+const withItems = (...ids: string[]): LibraryTabOrganization => ({ ...emptyTabOrganization(), order: ids });
+
+/** `a` and `b` grouped as `g1`, with `c` still loose beside the folder. */
+const withGroup = (): LibraryTabOrganization =>
+  addToGroup(createGroupFromItem(withItems('a', 'b', 'c'), { groupId: 'g1', itemId: 'a' }), 'b', 'g1');
+
+/** Two folders in one tab: `g1` holds a and b, `g2` holds c and d. */
+const withTwoGroups = (): LibraryTabOrganization =>
+  addToGroup(
+    createGroupFromItem(withGroup(), { groupId: 'g2', itemId: 'c' }),
+    'd',
+    'g2',
+  );
+
+describe('createGroupFromItem', () => {
+  it('puts a lone tile in a folder standing where the tile stood', () => {
+    const org = createGroupFromItem(withItems('a', 'b', 'c'), { groupId: 'g1', itemId: 'b' });
+
+    expect(org.order).toEqual(['a', 'g1', 'c']);
+    expect(org.groups.g1.members).toEqual(['b']);
+    expect(org.groups.g1.name).toBe(NEW_GROUP_NAME);
+  });
+
+  it('gives the new folder the size of the tile it grew from', () => {
+    const org = setTileSize(withItems('a', 'b'), 'a', 'large');
+
+    expect(tileSize(createGroupFromItem(org, { groupId: 'g1', itemId: 'a' }), 'g1')).toBe('large');
+  });
+
+  it('lists the folder even when the tile was never in the saved order', () => {
+    const org = createGroupFromItem(emptyTabOrganization(), { groupId: 'g1', itemId: 'b' });
+
+    expect(topLevelIds(org, ['a', 'b'])).toEqual(['g1', 'a']);
+  });
+
+  it('takes an already-grouped tile out of its old folder', () => {
+    const org = createGroupFromItem(withGroup(), { groupId: 'g2', itemId: 'b' });
+
+    expect(org.groups.g1.members).toEqual(['a']);
+    expect(org.groups.g2.members).toEqual(['b']);
+    expect(org.order).toEqual(['g1', 'c', 'g2']);
+  });
+
+  it('refuses to wrap a folder in another folder', () => {
+    const org = withGroup();
+
+    expect(createGroupFromItem(org, { groupId: 'g2', itemId: 'g1' })).toBe(org);
+  });
+});
+
+describe('addToGroup', () => {
+  it('moves a loose tile into the folder and off the top level', () => {
+    const org = addToGroup(withGroup(), 'c', 'g1');
+
+    expect(org.groups.g1.members).toEqual(['a', 'b', 'c']);
+    expect(org.order).toEqual(['g1']);
+  });
+
+  it('moves a tile between folders without leaving a copy behind', () => {
+    const org = addToGroup(withTwoGroups(), 'b', 'g2');
+
+    expect(org.groups.g1.members).toEqual(['a']);
+    expect(org.groups.g2.members).toEqual(['c', 'd', 'b']);
+  });
+
+  it('refuses to put a group inside another group', () => {
+    const org = withTwoGroups();
+
+    expect(addToGroup(org, 'g1', 'g2')).toBe(org);
+  });
+
+  it('ignores a group that does not exist', () => {
+    const org = withGroup();
+
+    expect(addToGroup(org, 'c', 'missing')).toBe(org);
+  });
+
+  it('ignores an item already in that folder', () => {
+    const org = withGroup();
+
+    expect(addToGroup(org, 'a', 'g1')).toBe(org);
+  });
+});
+
+describe('groupItems', () => {
+  it('folds both tiles into one new folder standing where the target stood', () => {
+    const org = groupItems(withItems('a', 'b', 'c'), { groupId: 'g1', itemId: 'a', targetId: 'b' });
+
+    expect(org.groups.g1.members).toEqual(['b', 'a']);
+    expect(org.order).toEqual(['g1', 'c']);
+  });
+
+  it('hands the target cell to the folder and frees the carried tile cell', () => {
+    const arranged: LibraryTabOrganization = {
+      ...withItems('a', 'b'),
+      placements: { 6: { a: { row: 0, col: 0 }, b: { row: 0, col: 2 } } },
+    };
+
+    const org = groupItems(arranged, { groupId: 'g1', itemId: 'a', targetId: 'b' });
+
+    expect(org.placements[6].g1).toEqual({ row: 0, col: 2 });
+    expect(org.placements[6].a).toBeUndefined();
+    expect(org.placements[6].b).toBeUndefined();
+  });
+
+  it('refuses a folder on either side, and a tile dropped on itself', () => {
+    const org = withGroup();
+
+    expect(groupItems(org, { groupId: 'g2', itemId: 'g1', targetId: 'c' })).toBe(org);
+    expect(groupItems(org, { groupId: 'g2', itemId: 'c', targetId: 'g1' })).toBe(org);
+    expect(groupItems(org, { groupId: 'g2', itemId: 'c', targetId: 'c' })).toBe(org);
+  });
+});
+
+describe('removeFromGroup', () => {
+  it('returns the item to the main grid', () => {
+    const org = removeFromGroup(addToGroup(withGroup(), 'c', 'g1'), 'b');
+
+    expect(org.groups.g1.members).toEqual(['a', 'c']);
+    expect(org.order).toEqual(['g1', 'b']);
+  });
+
+  it('disbands a folder emptied by its last removal', () => {
+    const org = removeFromGroup(removeFromGroup(withGroup(), 'a'), 'b');
+
+    expect(org.groups).toEqual({});
+    expect(org.order).toEqual(['c', 'a', 'b']);
+  });
+
+  it('ignores an item that is in no folder', () => {
+    const org = withGroup();
+
+    expect(removeFromGroup(org, 'c')).toBe(org);
+  });
+});
+
+describe('disbandGroup', () => {
+  it('puts the members back where the folder stood, so deleting a group loses nothing', () => {
+    const org = disbandGroup(withGroup(), 'g1');
+
+    expect(org.order).toEqual(['a', 'b', 'c']);
+    expect(org.groups).toEqual({});
+  });
+
+  it('forgets the folder tile own size', () => {
+    const org = disbandGroup(setTileSize(withGroup(), 'g1', 'large'), 'g1');
+
+    expect(org.sizes.g1).toBeUndefined();
+  });
+
+  it('ignores a group that does not exist', () => {
+    const org = withGroup();
+
+    expect(disbandGroup(org, 'missing')).toBe(org);
+  });
+});
+
+describe('renameGroup', () => {
+  it('takes the new name, trimmed', () => {
+    expect(renameGroup(withGroup(), 'g1', '  Favorites  ').groups.g1.name).toBe('Favorites');
+  });
+
+  it('keeps the old name when the field is emptied, so a folder is never nameless', () => {
+    expect(renameGroup(withGroup(), 'g1', '   ').groups.g1.name).toBe(NEW_GROUP_NAME);
+  });
+});
+
+describe('setTileSize', () => {
+  it('sizes items and folders alike', () => {
+    const org = setTileSize(setTileSize(withGroup(), 'c', 'small'), 'g1', 'large');
+
+    expect(tileSize(org, 'c')).toBe('small');
+    expect(tileSize(org, 'g1')).toBe('large');
+  });
+
+  it('reads an unsized tile as medium and stores no entry for medium', () => {
+    const org = setTileSize(setTileSize(withItems('a'), 'a', 'large'), 'a', 'medium');
+
+    expect(tileSize(org, 'a')).toBe('medium');
+    expect(org.sizes).toEqual({});
+  });
+});
+
+describe('group settings', () => {
+  it('carries a prompt preset on the folder', () => {
+    expect(setGroupPromptPreset(withGroup(), 'g1', 'noir').groups.g1.settings.promptPreset).toBe('noir');
+  });
+
+  it('clears the preset back to no group setting at all', () => {
+    const set = setGroupPromptPreset(withGroup(), 'g1', 'noir');
+
+    expect(setGroupPromptPreset(set, 'g1', null).groups.g1.settings).toEqual({});
+  });
+
+  it('keeps settings this version does not know about, so a later key survives an edit here', () => {
+    const org = withGroup();
+    const seeded: LibraryTabOrganization = {
+      ...org,
+      groups: { g1: { ...org.groups.g1, settings: { promptPreset: 'noir', later: 'kept' } } },
+    };
+
+    expect(setGroupPromptPreset(seeded, 'g1', null).groups.g1.settings).toEqual({ later: 'kept' });
+  });
+});
+
+describe('groupOf', () => {
+  it('names the folder an item sits in, and nothing for a loose item', () => {
+    const org = withGroup();
+
+    expect(groupOf(org, 'b')?.id).toBe('g1');
+    expect(groupOf(org, 'c')).toBeUndefined();
+  });
+});
+
+describe('topLevelIds', () => {
+  it('shows folders and loose items in the saved order, and hides grouped items', () => {
+    expect(topLevelIds(withGroup(), ['a', 'b', 'c'])).toEqual(['g1', 'c']);
+  });
+
+  it('sorts an id the order has never seen to the end, as the flat grid always did', () => {
+    expect(topLevelIds(withItems('b', 'a'), ['a', 'b', 'fresh'])).toEqual(['b', 'a', 'fresh']);
+  });
+
+  it('drops an item that is no longer in the library, and the folder left empty by it', () => {
+    expect(topLevelIds(withGroup(), ['c'])).toEqual(['c']);
+  });
+});
+
+describe('pruneOrganization', () => {
+  it('forgets items the library no longer holds', () => {
+    const org = pruneOrganization(addToGroup(withGroup(), 'c', 'g1'), ['a', 'c']);
+
+    expect(org.groups.g1.members).toEqual(['a', 'c']);
+    expect(org.order).toEqual(['g1']);
+  });
+
+  it('disbands a folder whose members were all deleted', () => {
+    const org = pruneOrganization(withGroup(), ['c']);
+
+    expect(org.groups).toEqual({});
+    expect(org.order).toEqual(['c']);
+  });
+
+  it('drops the sizes of tiles that are gone', () => {
+    const org = pruneOrganization(setTileSize(withItems('a', 'b'), 'b', 'small'), ['a']);
+
+    expect(org.sizes).toEqual({});
+  });
+
+  it('changes nothing when every id is still there', () => {
+    const org = withGroup();
+
+    expect(pruneOrganization(org, ['a', 'b', 'c'])).toBe(org);
+  });
+});
+
+describe('setDrawnOrder', () => {
+  it('writes the drawn list as the top-level order, wholesale', () => {
+    const org = setDrawnOrder(withItems('a', 'b', 'c'), ['c', 'a', 'b']);
+
+    expect(org.order).toEqual(['c', 'a', 'b']);
+  });
+
+  it('adopts the drawn list on a library that stored no order at all', () => {
+    // A never-arranged library draws by the sort-to-end rule; the first drag hands the whole drawn
+    // list over, so it must land even though the stored order was empty.
+    const org = setDrawnOrder(emptyTabOrganization(), ['b', 'a']);
+
+    expect(org.order).toEqual(['b', 'a']);
+  });
+
+  it('rearranges a folder\'s members in place', () => {
+    const org = setDrawnOrder(withGroup(), ['b', 'a'], 'g1');
+
+    expect(org.groups.g1.members).toEqual(['b', 'a']);
+  });
+
+  it('refuses a folder list that adds, drops, or repeats members', () => {
+    const org = withGroup();
+
+    expect(setDrawnOrder(org, ['a'], 'g1')).toBe(org);
+    expect(setDrawnOrder(org, ['a', 'b', 'c'], 'g1')).toBe(org);
+    expect(setDrawnOrder(org, ['a', 'a'], 'g1')).toBe(org);
+    expect(setDrawnOrder(org, ['b', 'a'], 'missing')).toBe(org);
+  });
+});
+
+describe('commitPlacements', () => {
+  /** A tab with two tiles arranged at one width, plus a folder member sharing that width map. */
+  const arranged = (): LibraryTabOrganization => ({
+    ...withItems('a', 'b'),
+    placements: { 6: { a: { row: 0, col: 0 }, b: { row: 0, col: 2 }, member: { row: 4, col: 0 } } },
+  });
+
+  it('writes the board the drag finished with, at the width it was arranged at', () => {
+    const next = commitPlacements(arranged(), {
+      columns: 6,
+      places: { a: { row: 0, col: 2 }, b: { row: 0, col: 0 } },
+      ids: ['a', 'b'],
+    });
+
+    expect(next.placements[6].a).toEqual({ row: 0, col: 2 });
+    expect(next.placements[6].b).toEqual({ row: 0, col: 0 });
+  });
+
+  it('leaves the homes of tiles from another grid alone', () => {
+    // One map covers the width, folders included. A drag in the main grid must not evict a member.
+    const next = commitPlacements(arranged(), {
+      columns: 6,
+      places: { a: { row: 2, col: 0 }, b: { row: 2, col: 2 } },
+      ids: ['a', 'b'],
+    });
+
+    expect(next.placements[6].member).toEqual({ row: 4, col: 0 });
+  });
+
+  it('writes the order the board now reads as, so the flat list follows the cells', () => {
+    const next = commitPlacements(arranged(), {
+      columns: 6,
+      places: { a: { row: 2, col: 0 }, b: { row: 0, col: 0 } },
+      ids: ['a', 'b'],
+    });
+
+    expect(next.order).toEqual(['b', 'a']);
+  });
+
+  it('writes the member order of a folder rather than the top-level one', () => {
+    const org = { ...withGroup(), placements: {} };
+
+    const next = commitPlacements(org, {
+      columns: 6,
+      places: { a: { row: 0, col: 2 }, b: { row: 0, col: 0 } },
+      ids: ['a', 'b'],
+      container: 'g1',
+    });
+
+    expect(next.groups.g1.members).toEqual(['b', 'a']);
+    expect(next.order).toEqual(org.order);
+  });
+});
+
+describe('a tile that changes grid gives up its cell', () => {
+  /** Three loose tiles, each with a home at one width. */
+  const arranged = (): LibraryTabOrganization => ({
+    ...withItems('a', 'b', 'c'),
+    placements: { 6: { a: { row: 0, col: 0 }, b: { row: 0, col: 2 }, c: { row: 2, col: 0 } } },
+  });
+
+  it('hands the cell to the folder a tile is folded into, so the board does not jump', () => {
+    const next = createGroupFromItem(arranged(), { groupId: 'g1', itemId: 'a' });
+
+    expect(next.placements[6].g1).toEqual({ row: 0, col: 0 });
+    expect(next.placements[6].a).toBeUndefined();
+  });
+
+  it('gives the cell up when a tile joins a folder', () => {
+    const grouped = createGroupFromItem(arranged(), { groupId: 'g1', itemId: 'a' });
+
+    const next = addToGroup(grouped, 'b', 'g1');
+
+    // Its old cell belongs to the main grid; claiming it inside the folder would evict a member.
+    expect(next.placements[6].b).toBeUndefined();
+    expect(next.placements[6].c).toEqual({ row: 2, col: 0 });
+  });
+
+  it('gives the cell up again when a tile leaves a folder', () => {
+    const grouped = addToGroup(createGroupFromItem(arranged(), { groupId: 'g1', itemId: 'a' }), 'b', 'g1');
+
+    const next = removeFromGroup(grouped, 'b');
+
+    expect(next.placements[6].b).toBeUndefined();
+  });
+
+  it('frees a disbanded folder’s own cell', () => {
+    const grouped = addToGroup(createGroupFromItem(arranged(), { groupId: 'g1', itemId: 'a' }), 'b', 'g1');
+
+    const next = disbandGroup(grouped, 'g1');
+
+    expect(next.placements[6].g1).toBeUndefined();
+    expect(next.placements[6].c).toEqual({ row: 2, col: 0 });
+  });
+});

@@ -89,6 +89,24 @@ describe('duplicateEntityNode', () => {
     expect(res.groups).toBe(groups);
     expect(res.entities).toBe(entities);
   });
+
+  it('re-mints placeholder chip placements in the copy, keeping intra-copy sharing', () => {
+    const src: Entity = {
+      ...entity('a', 'races', 0),
+      name: 'Guard {{ph:name:unique:p1}}',
+      aiDescription: 'Known as {{ph:name:unique:p1}}, eyes {{ph:eye:unique:p2}}.',
+    };
+    const { entities: e2, newId } = duplicateEntityNode([group('races', null, 0)], [src], 'a');
+    const copy = e2.find((x) => x.id === newId)!;
+    const pids = (t: string) => [...t.matchAll(/:unique:([^:}]+)\}\}/g)].map((m) => m[1]);
+    const [nameP] = pids(copy.name);
+    const [descNameP, descEyeP] = pids(copy.aiDescription ?? '');
+    expect(nameP).not.toBe('p1'); // cut loose from the original's roll
+    expect(nameP).toBe(descNameP); // one placement shared inside the source stays one inside the copy
+    expect(descEyeP).not.toBe('p2');
+    expect(descEyeP).not.toBe(nameP);
+    expect(src.name).toContain(':p1}}'); // the original is untouched
+  });
 });
 
 describe('flattenEntityTree / removeChildrenOf', () => {
@@ -139,5 +157,25 @@ describe('entitiesInTreeOrder', () => {
   it('keeps every entity when groups are missing', () => {
     const entities = [entity('b', 'gone', 1), entity('a', null, 0)];
     expect(entitiesInTreeOrder([], entities).map((e) => e.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('duplicating an entity with placeholders of its own', () => {
+  it('gives the copy fresh placeholders and points its chips at them, leaving the original alone', () => {
+    const token = (placementId: string) => `{{ph:eyes:world:${placementId}}}`;
+    const src: Entity = {
+      id: 'molly', name: `Molly ${token('p1')}`, playerDescription: `Eyes of ${token('p2')}.`, order: 0,
+      placeholders: [{ id: 'eyes', name: 'Eyes', values: [{ id: 'v1', text: 'amber' }] }],
+    };
+    const { entities: e2, newId } = duplicateEntityNode([], [src], 'molly');
+    const copy = e2.find((e) => e.id === newId)!;
+    const fresh = copy.placeholders![0].id;
+    expect(fresh).not.toBe('eyes');
+    expect(copy.name).toContain(`{{ph:${fresh}:world:`);
+    expect(copy.playerDescription).toContain(`{{ph:${fresh}:world:`);
+    expect(copy.name).not.toContain('{{ph:eyes:');
+    const original = e2.find((e) => e.id === 'molly')!;
+    expect(original.placeholders![0].id).toBe('eyes');
+    expect(original.name).toContain('{{ph:eyes:');
   });
 });

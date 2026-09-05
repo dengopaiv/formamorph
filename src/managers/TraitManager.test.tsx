@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Trait } from '@/types';
+import { encodePlaceholderToken } from '@/lib/placeholders';
+import type { GameLocation, Placeholder, Trait } from '@/types';
 import { EditorModeContext } from '@/lib/editorMode';
 import TraitManager from './TraitManager';
 
+import { phValueId, phValues } from '@/test/placeholderValues';
 // A trait pinning a hair color — the row the pin editor exists for.
 const sedgeBorn = {
   id: 't1', name: 'Sedge-Born', statChanges: [],
@@ -18,15 +20,30 @@ const marshWed = {
   placeholderPins: [{ placeholderId: 'p1', value: 'sable' }],
 } as unknown as Trait;
 
-const store: { trait: Trait; writes: Trait[]; rerender: () => void } =
-  { trait: sedgeBorn, writes: [], rerender: () => {} };
+// Through the real codec, never a hand-written token: a test that spells the wire format itself keeps
+// passing after that format moves.
+const chip = (id: string) => encodePlaceholderToken({ id, mode: 'world', placementId: `v-${id}` });
+
+// Hair Color is the flat placeholder the pin row was built for; Molly is the structured one — a Wildcard
+// whose two values are each a whole other placeholder, which is what a pin has to be able to name. The
+// variants are Objects, so what each one joins to is a soup and its name is the thing an author picks by.
+const WORLD: Placeholder[] = [
+  { id: 'p1', name: 'Hair Color', values: phValues(['ash', 'copper']) },
+  { id: 'molly', name: 'Molly', values: phValues([chip('iswhite'), chip('isasian'), `freckled ${chip('isasian')}`]) },
+  { id: 'iswhite', name: 'isWhite', roll: false, values: phValues(['fair skin', 'ash hair']) },
+  { id: 'isasian', name: 'isAsian', roll: false, values: phValues(['tan skin', 'black hair']) },
+];
+
+const store: { trait: Trait; rival: Trait; locations: GameLocation[]; writes: Trait[]; rerender: () => void } =
+  { trait: sedgeBorn, rival: marshWed, locations: [], writes: [], rerender: () => {} };
 
 vi.mock('@/contexts/GameDataContext', () => ({
   useGameData: () => ({
     stats: [],
-    traits: [store.trait, marshWed],
+    traits: [store.trait, store.rival],
     traitGroups: [],
-    placeholders: [{ id: 'p1', name: 'Hair Color', values: ['ash', 'copper'] }],
+    locations: store.locations,
+    placeholders: WORLD,
     updateTrait: (next: Trait) => {
       store.writes.push(next);
       store.trait = next;
@@ -55,11 +72,13 @@ const renderManager = () => render(
   </EditorModeContext.Provider>,
 );
 
-const pinField = () => screen.getByRole('textbox', { name: 'Pinned value' }) as HTMLInputElement;
+const pinField = () => screen.getByRole('textbox', { name: 'Pinned Value' }) as HTMLInputElement;
 const lastPins = () => store.writes[store.writes.length - 1].placeholderPins;
 
 beforeEach(() => {
   store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'p1', value: 'copper' }] };
+  store.rival = marshWed;
+  store.locations = [];
   store.writes = [];
   onOpenTrait.mockClear();
 });
@@ -85,6 +104,24 @@ describe('the conflict note', () => {
     await userEvent.click(links[0]);
     expect(onOpenTrait).toHaveBeenCalledWith('t2');
   });
+
+  it('names a location pinning the same placeholder ahead of the rival trait, and says it outranks both', () => {
+    store.locations = [{ id: 'fen', name: 'The Fen', placeholderPins: [{ placeholderId: 'p1', value: 'ash' }] } as GameLocation];
+    renderManager();
+    const note = screen.getByText(/Also pinned by/);
+    expect(note.textContent).toBe(
+      'Also pinned by the location The Fen, the trait Marsh-Wed. A stat band outranks a location, a location a trait, and a trait a value pin: the location The Fen.',
+    );
+  });
+
+  it('shows a rival’s name by its chip, never as the token behind it', () => {
+    store.rival = { ...marshWed, name: `${chip('p1')} Kin` };
+    renderManager();
+    const note = screen.getByText(/The lowest in the trait list wins/);
+    expect(note.textContent).not.toContain('{{ph:');
+    // The pill reads as the placement's name, the way every read-only row does.
+    expect(note.textContent).toContain('Hair Color Kin');
+  });
 });
 
 describe('the placeholder pin row', () => {
@@ -97,11 +134,12 @@ describe('the placeholder pin row', () => {
     expect(screen.getByRole('button', { name: 'copper' })).toBeInTheDocument();
   });
 
-  it('writes a picked suggestion straight through to the trait', async () => {
+  it('writes a picked suggestion through, naming the value it picked by id', async () => {
     renderManager();
     await userEvent.click(pinField());
     await userEvent.click(screen.getByRole('button', { name: 'ash' }));
-    expect(lastPins()).toEqual([{ placeholderId: 'p1', value: 'ash' }]);
+    // The id is what the pin follows, so re-spelling “ash” later moves the pin with it.
+    expect(lastPins()).toEqual([{ placeholderId: 'p1', value: 'ash', valueId: phValueId('ash') }]);
   });
 
   it('writes free text through unchanged, since a pin may name a value the list doesn’t carry', async () => {
@@ -109,6 +147,7 @@ describe('the placeholder pin row', () => {
     await userEvent.clear(pinField());
     await userEvent.type(pinField(), 'teal');
     expect(pinField().value).toBe('teal');
+    // No value spells it, so the pin stays the free text it is — no id to follow.
     expect(lastPins()).toEqual([{ placeholderId: 'p1', value: 'teal' }]);
   });
 
@@ -117,7 +156,62 @@ describe('the placeholder pin row', () => {
     await userEvent.clear(pinField());
     await userEvent.type(pinField(), 'as');
     await userEvent.tab();
-    expect(lastPins()).toEqual([{ placeholderId: 'p1', value: 'ash' }]);
+    expect(lastPins()).toEqual([{ placeholderId: 'p1', value: 'ash', valueId: phValueId('ash') }]);
+  });
+
+  it('offers a value that is one whole chip by the part it names, never as the token behind it', async () => {
+    store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'molly', value: '' }] };
+    renderManager();
+    await userEvent.click(pinField());
+    expect(screen.getByRole('button', { name: 'isWhite' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'isAsian' })).toBeInTheDocument();
+    // What the variant joins to is a soup of its parts; its name is what an author pins by.
+    expect(screen.queryByRole('button', { name: 'tan skin, black hair' })).toBeNull();
+  });
+
+  it('offers a chip inside longer text as what it will read as, since that value is prose', async () => {
+    store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'molly', value: '' }] };
+    renderManager();
+    await userEvent.click(pinField());
+    expect(screen.getByRole('button', { name: 'freckled tan skin, black hair' })).toBeInTheDocument();
+  });
+
+  it('pins the variant itself when one is picked, not the name it reads as', async () => {
+    store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'molly', value: '' }] };
+    renderManager();
+    await userEvent.click(pinField());
+    await userEvent.click(screen.getByRole('button', { name: 'isAsian' }));
+    // The stored value is the chip — which is what resolution follows into isAsian.
+    expect(lastPins()).toEqual([{
+      placeholderId: 'molly', value: chip('isasian'), valueId: phValueId(chip('isasian')),
+    }]);
+  });
+
+  it('shows a pinned variant as a pill, leaving the field empty rather than full of token', async () => {
+    store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'molly', value: chip('isasian') }] };
+    renderManager();
+    expect(pinField().value).toBe('');
+    expect(screen.getByText('isAsian')).toBeInTheDocument();
+    // Clearing the pill empties the pin without dropping its row, so a different value is one pick away.
+    await userEvent.click(screen.getByRole('button', { name: 'Remove isAsian' }));
+    expect(lastPins()).toEqual([{ placeholderId: 'molly', value: '' }]);
+  });
+
+  it('leaves a pinned variant alone when Tab moves on, since nothing was typed', async () => {
+    store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'molly', value: chip('isasian') }] };
+    renderManager();
+    // Focus opens the whole list with its first row highlighted; Tab past it must deposit nothing.
+    await userEvent.click(pinField());
+    await userEvent.tab();
+    expect(store.writes).toEqual([]);
+  });
+
+  it('replaces a pinned variant with free text on the first keystroke', async () => {
+    store.trait = { ...sedgeBorn, placeholderPins: [{ placeholderId: 'molly', value: chip('isasian') }] };
+    renderManager();
+    await userEvent.type(pinField(), 'teal');
+    expect(lastPins()).toEqual([{ placeholderId: 'molly', value: 'teal' }]);
+    expect(screen.queryByText('isAsian')).toBeNull();
   });
 
   it('offers nothing where the pin names no placeholder yet, and still takes text', async () => {

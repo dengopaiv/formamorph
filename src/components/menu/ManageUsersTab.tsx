@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { toast } from "react-toastify";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, History, ImageOff, Mail, RotateCcw, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, History, ImageOff, Link2, Mail, RotateCcw, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,16 +9,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { UserAvatar } from "@/components/UserAvatar";
 import { RoleBadge } from "@/components/RoleBadge";
-import { ASSIGNABLE_ROLES, ROLE_LABELS, canModerate, isAdmin, roleOf, type Role } from "@/lib/roles";
+import { StatusPill } from "@/components/StatusPill";
+import { ASSIGNABLE_ROLES, ROLE_LABELS, canModerate, isAdmin, isStaff, roleOf, type Role } from "@/lib/roles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { LinkedAccountsPanel } from "@/components/menu/LinkedAccountsPanel";
 import { MessageComposerDialog, type ComposerTarget } from "@/components/menu/MessageComposerDialog";
 import { SentMessagesDialog } from "@/components/menu/SentMessagesDialog";
 import PolicyService from "@/services/PolicyService";
 import WorldStorageService from "@/services/WorldStorageService";
 import AuthService from "@/services/AuthService";
 import MessageService from "@/services/MessageService";
+import UserService from "@/services/UserService";
+import { useUserProfile } from "@/contexts/userProfileStore";
 import { type WorldRecord } from "@/components/WorldDetails";
-import type { SentMessage } from "@/types";
+import type { LinkedAccount, SentMessage } from "@/types";
+import { Tip } from "@/components/ui/tooltip";
 
 /** Prefill offered after a suspension, so the user learns why without the admin retyping it. */
 const SUSPENSION_TEMPLATE = {
@@ -100,11 +105,24 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
   const [sentNonce, setSentNonce] = useState(0);
   // Set to the user whose upload-terms acceptance is about to be cleared.
   const [pendingTermsReset, setPendingTermsReset] = useState<WorldRecord | null>(null);
+  // Linked accounts, one row at a time and only when asked for: the server writes an audit row per
+  // read, so a count fetched for the whole page would file a look at everybody on it. The open row
+  // carries its own loading flag, so a spinner can never point at a different row than the open one.
+  const [openLinked, setOpenLinked] = useState<{ id: string; loading: boolean } | null>(null);
+  // The last answer per row, so a count survives collapsing. Every open still asks the server again —
+  // the log is meant to hold one entry per look, not one per account.
+  const [linkedFor, setLinkedFor] = useState<Map<string, LinkedAccount[]>>(new Map());
+
+  // The app's one profile dialog, so a staff member sees an account exactly as the room does.
+  const { openProfile } = useUserProfile();
 
   const adminUsername = String(AuthService.getCurrentUser()?.username || 'Admin');
   // Changing what somebody *is* belongs to an administrator; the rest of this table is any staff's.
   const viewer = AuthService.getCurrentUser();
   const viewerIsAdmin = isAdmin(viewer);
+  // The tab is already behind a staff gate; the linked-accounts control checks again so the one control
+  // that reads where somebody was cannot be reached by an account the gate ever lets through.
+  const viewerIsStaff = isStaff(viewer);
   /** Whether the signed-in account may act on this row at all — staff moderate the room, not each other. */
   const mayModerate = (user: WorldRecord) => canModerate(viewer, user);
 
@@ -337,6 +355,42 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
     setSearchNonce((n) => n + 1);
   };
 
+  /**
+   * Open or close one row's linked accounts, asking the server each time it opens.
+   *
+   * An account nobody shares an address with has nothing to expand into, so the panel closes itself
+   * again and the row is left showing the zero.
+   */
+  const toggleLinked = async (user: WorldRecord) => {
+    const userId = userIdOf(user);
+    if (openLinked?.id === userId) {
+      setOpenLinked(null);
+      return;
+    }
+
+    // Guarded on the id throughout: a second row opened mid-flight owns the panel, and this answer
+    // belongs to the row nobody is looking at any more.
+    const forThisRow = (next: { id: string; loading: boolean } | null) =>
+      setOpenLinked((open) => (open?.id === userId ? next : open));
+
+    setOpenLinked({ id: userId, loading: true });
+    try {
+      const accounts = await UserService.fetchLinkedAccounts(userId);
+      setLinkedFor((prev) => new Map(prev).set(userId, accounts));
+      forThisRow(accounts.length > 0 ? { id: userId, loading: false } : null);
+    } catch (error) {
+      forThisRow(null);
+      toast.error((error as Error).message || 'Failed to load their linked accounts');
+    }
+  };
+
+  /** Bring one linked account up in the table, which is where the moderation controls are. */
+  const findAccount = (username: string) => {
+    setOpenLinked(null);
+    setUserSearchQuery(username);
+    runSearch();
+  };
+
   return (
     <>
       <div className="py-4 w-full min-w-0">
@@ -474,16 +528,14 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
                     // Get the user ID (server uses _id)
                     const userId = user._id || user.id;
 
-                    // Determine status badge color
-                    let statusBadgeClass = "bg-success/10 text-success";
-                    if (user.status === "suspended") {
-                      statusBadgeClass = "bg-destructive/10 text-destructive";
-                    } else if (user.status === "pending") {
-                      statusBadgeClass = "bg-warning/10 text-warning";
-                    }
+                    const linked = linkedFor.get(userId);
+                    // The open state when it belongs to this row, so the panel reads its loading flag
+                    // from something already narrowed rather than re-testing the id.
+                    const expanded = openLinked?.id === userId ? openLinked : null;
 
                     return (
-                      <tr key={userId}>
+                      <Fragment key={userId}>
+                        <tr>
                         <td className="px-4 py-4">
                           <Checkbox
                             checked={selected.has(userId)}
@@ -498,7 +550,15 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
                               avatarUrl={user.avatarUrl as string | null | undefined}
                               size="sm"
                             />
-                            <span className="truncate">{user.username}</span>
+                            {/* The name opens the profile: moderating an account without being able to
+                                see it is guesswork, and the image is half of what gets reported. */}
+                            <button
+                              type="button"
+                              className="truncate hover:underline"
+                              onClick={() => openProfile(userId, usernameOf(user))}
+                            >
+                              {user.username}
+                            </button>
                             <RoleBadge role={user.accountType as string | null | undefined} />
                           </div>
                         </td>
@@ -526,9 +586,7 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
                           )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 inline-flex text-meta leading-5 font-semibold rounded-full ${statusBadgeClass}`}>
-                            {user.status || "active"}
-                          </span>
+                          <StatusPill status={user.status as string | null | undefined} />
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           {/* Only an answer given against the current wording counts, so someone whose
@@ -538,17 +596,18 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
                             <span className={`text-label ${TERMS_LABELS[termsResponseOf(user)].className}`}>
                               {TERMS_LABELS[termsResponseOf(user)].label}
                             </span>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              title="Reset terms"
-                              aria-label={`Reset terms for ${usernameOf(user)}`}
-                              disabled={termsResponseOf(user) === 'unanswered' || !mayModerate(user)}
-                              onClick={() => setPendingTermsReset(user)}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </Button>
+                            <Tip tip="Reset terms" labelsChild={false}>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                aria-label={`Reset terms for ${usernameOf(user)}`}
+                                disabled={termsResponseOf(user) === 'unanswered' || !mayModerate(user)}
+                                onClick={() => setPendingTermsReset(user)}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              </Button>
+                            </Tip>
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-label font-medium">
@@ -639,9 +698,39 @@ export function ManageUsersTab({ active }: ManageUsersTabProps) {
                                 Suspend
                               </Button>
                             )}
+
+                            {/* The count appears once it has been asked for; see `openLinked` for why
+                                it is never asked for the whole page. */}
+                            {viewerIsStaff && (
+                              <Tip tip="Accounts that share a network address with this one" labelsChild={false}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  aria-expanded={expanded !== null}
+                                  aria-label={`Linked accounts for ${usernameOf(user)}`}
+                                  onClick={() => toggleLinked(user)}
+                                >
+                                  <Link2 className="mr-1 h-3 w-3" />
+                                  Linked{linked ? ` (${linked.length})` : ''}
+                                </Button>
+                              </Tip>
+                            )}
                           </div>
                         </td>
-                      </tr>
+                        </tr>
+
+                        {expanded && (
+                          <tr>
+                            <td colSpan={6} className="bg-muted/40 px-6 py-4">
+                              <LinkedAccountsPanel
+                                accounts={linked}
+                                loading={expanded.loading}
+                                onFind={findAccount}
+                              />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })
                 )}

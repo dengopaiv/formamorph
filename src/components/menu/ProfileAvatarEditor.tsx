@@ -4,8 +4,9 @@ import { Camera, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
 import { AvatarCropDialog } from "@/components/menu/AvatarCropDialog";
-import { AVATAR_ACCEPT, MAX_AVATAR_UPLOAD_BYTES } from "@/lib/avatar";
+import { IMAGE_UPLOAD_ACCEPT, MAX_AVATAR_UPLOAD_BYTES } from "@/lib/avatar";
 import AuthService from "@/services/AuthService";
+import { Tip } from "@/components/ui/tooltip";
 
 interface ProfileAvatarEditorProps {
   username: string | null | undefined;
@@ -92,7 +93,7 @@ export function ProfileAvatarEditor({ username, avatarUrl, onChanged, disabled =
         <input
           ref={input}
           type="file"
-          accept={AVATAR_ACCEPT}
+          accept={IMAGE_UPLOAD_ACCEPT}
           className="hidden"
           aria-label="Profile image file"
           onChange={(event) => pick(event.target.files?.[0])}
@@ -100,17 +101,17 @@ export function ProfileAvatarEditor({ username, avatarUrl, onChanged, disabled =
       </div>
 
       {avatarUrl && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 self-end"
-          onClick={remove}
-          disabled={disabled || busy}
-          aria-label="Remove your profile image"
-          title="Remove your profile image"
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        <Tip tip="Remove your profile image">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 self-end"
+            onClick={remove}
+            disabled={disabled || busy}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </Tip>
       )}
 
       <AvatarCropDialog

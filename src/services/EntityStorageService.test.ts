@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import EntityStorageService, { type StoredEntityRecord } from './EntityStorageService';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 
+import { phValues } from '@/test/placeholderValues';
 const record = (id: string, name = 'Mara'): StoredEntityRecord => ({ id, name, data: { id, name } });
 
 /** The shape the character editor saves with — id, name, data, and nothing else. */
@@ -119,7 +120,7 @@ describe('EntityStorageService', () => {
         id: 'e1',
         name: 'Mara',
         playerDescription: `Her ${token} eyes.`,
-        placeholders: [{ id: 'eye', name: 'eye', values: ['amber'] }],
+        placeholders: [{ id: 'eye', name: 'eye', values: phValues(['amber']) }],
       },
     });
 
@@ -137,13 +138,13 @@ describe('EntityStorageService', () => {
       data: {
         id: 'e2',
         name: `Keeper of ${token}`,
-        placeholders: [{ id: 'town', name: 'Town', values: ['Sedge', 'Marrow'] }],
+        placeholders: [{ id: 'town', name: 'Town', values: phValues(['Sedge', 'Marrow']) }],
       },
     });
 
     const meta = (await EntityStorageService.getEntityMetadata()).find((m) => m.id === 'e2');
-    // A Wildcard has no roll off-world, so it reads as its options — the same treatment the blurb gets.
-    expect(meta?.name).toBe('Keeper of {Sedge|Marrow}');
+    // A name reads by its chip, braced inside prose, the way every editor surface prints a name.
+    expect(meta?.name).toBe('Keeper of {Town}');
     // The stored record keeps the real token; only the display metadata is flattened.
     expect((await readRaw('e2'))?.name).toContain('{{ph:town:');
   });

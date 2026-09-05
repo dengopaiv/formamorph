@@ -3,7 +3,9 @@ import { OPENING_SCENE_CUE } from '@/components/game/GamePrompts';
 import { estimateTokens } from '@/lib/memoryUtils';
 import { activeDescriptor } from '@/lib/statContext';
 import type { Entity, GameLocation, Stat, Trait, TraitGroup, WorldOverview } from '@/types';
+import type { PlaceholderPick } from '@/lib/placeholders';
 import { buildLens, type LensState } from './lens';
+import { phValueId, phValues } from '@/test/placeholderValues';
 import {
   buildOpening, EMPTY_OPENING, primeOpeningRolls, rerollOpeningRolls, type OpeningWorld,
 } from './opening';
@@ -80,9 +82,9 @@ const world = (over: Partial<OpeningWorld> = {}): OpeningWorld => ({
     ],
   }],
   placeholders: [
-    { id: 'ph-hair', name: 'Hair Color', values: ['ash', 'copper', 'jet'] },
-    { id: 'ph-coin', name: 'Coin Bird', values: ['gull', 'wren'], weights: { gull: 3, wren: 1 } },
-    { id: 'ph-gift', name: 'Gift', values: ['knife', 'ribbon', 'shell'] },
+    { id: 'ph-hair', name: 'Hair Color', values: phValues(['ash', 'copper', 'jet']) },
+    { id: 'ph-coin', name: 'Coin Bird', values: phValues(['gull', 'wren']), weights: { [phValueId('gull')]: 3, [phValueId('wren')]: 1 } },
+    { id: 'ph-gift', name: 'Gift', values: phValues(['knife', 'ribbon', 'shell']) },
   ],
   ...over,
 });
@@ -92,8 +94,8 @@ const lensAt = (w: OpeningWorld, state: Partial<LensState> = {}) =>
 
 // A deterministic chooser: always the first value, so a re-mint is observable against a `pick` that
 // chose the last.
-const pickFirst = (values: string[]) => values[0];
-const pickLast = (values: string[]) => values[values.length - 1];
+const pickFirst: PlaceholderPick = (values) => values[0].text;
+const pickLast: PlaceholderPick = (values) => values[values.length - 1].text;
 
 const openingFor = (w: OpeningWorld, pcTraitId: string | null = null) => {
   const rolls = primeOpeningRolls(w, {}, pickFirst);
@@ -215,6 +217,57 @@ describe('opening rolls', () => {
     expect(openingFor(world()).rolls.find((r) => r.placeholderId === 'ph-coin')?.pinnedValue).toBe('wren');
   });
 
+  // The fresh game opens at the starting location with its stats settled, so those two sources pin too.
+  const pinnedStart = (): OpeningWorld => world({
+    locations: [{ ...locations[0], placeholderPins: [{ placeholderId: 'ph-hair', value: 'jet' }] }, locations[1]],
+    stats: [
+      { ...stats[0], descriptors: [
+        { id: 'd1', threshold: 25, description: 'Shaky' },
+        { id: 'd2', threshold: 50, description: 'Steady', placeholderPins: [{ placeholderId: 'ph-coin', value: 'gull' }] },
+        { id: 'd3', threshold: 100, description: 'Iron' },
+      ] },
+      ...stats.slice(1),
+    ],
+  });
+
+  it('pins through the starting location, over the PC’s own pin', () => {
+    const hair = (pc: string | null) => openingFor(pinnedStart(), pc).rolls.find((r) => r.placeholderId === 'ph-hair');
+    expect(hair(null)?.pinnedValue).toBe('jet');
+    expect(hair('t-reach')?.pinnedValue).toBe('jet');
+  });
+
+  it('pins through the band the settled starting value lands in, over the default trait’s pin', () => {
+    // Nerve starts at 40, inside Steady (≤ 50), whose pin outranks Fen Blood's.
+    expect(openingFor(pinnedStart()).rolls.find((r) => r.placeholderId === 'ph-coin')?.pinnedValue).toBe('gull');
+    // Reach-Born raises Nerve's max, not its start, so the band holds; Sedge-Born's world is unchanged too.
+    expect(openingFor(pinnedStart(), 't-reach').rolls.find((r) => r.placeholderId === 'ph-coin')?.pinnedValue).toBe('gull');
+  });
+
+  it('keeps the roll under a location pin on reroll, like the roll under a trait pin', () => {
+    const w = pinnedStart();
+    const before = primeOpeningRolls(w, {}, pickFirst);
+    const after = rerollOpeningRolls(w, lensAt(w), before, pickLast);
+    expect(after.world?.['ph-hair']).toBe('ash');
+    expect(after.unique).toEqual({ 'pl-g1': 'shell', 'pl-g2': 'shell' });
+  });
+
+  it('draws a fresh value for a placeholder a value pin held, once the reroll moves the pinner off that value', () => {
+    const w = world({
+      worldOverview: { name: 'Sedge Landing', description: '', systemPrompt: `Town: ${chip('ph-town', 'world', 'pl-t')}.` } as WorldOverview,
+      placeholders: [
+        { id: 'ph-town', name: 'Town', values: phValues(['Sedge', 'Marrow']) },
+        { id: 'ph-region', name: 'Region', values: [
+          { id: 'v:North', text: 'North', pins: [{ placeholderId: 'ph-town', value: 'Marrow' }] }, { id: 'v:South', text: 'South' },
+        ] },
+      ],
+    });
+    const before = primeOpeningRolls(w, {}, pickFirst);
+    expect(buildOpening(w, lensAt(w), before).rolls.find((r) => r.placeholderId === 'ph-town')?.pinnedValue).toBe('Marrow');
+    // Region rerolls to South, which pins nothing, so Town's roll is drawn fresh rather than kept from under a pin that is gone.
+    const after = rerollOpeningRolls(w, lensAt(w), before, pickLast);
+    expect(after.world).toEqual({ 'ph-town': 'Marrow', 'ph-region': 'South' });
+  });
+
   it('rerolls only the unpinned placeholders', () => {
     const w = world();
     const before = primeOpeningRolls(w, {}, pickFirst);
@@ -313,5 +366,86 @@ describe('safety', () => {
   it('has an empty shape for the closed tab', () => {
     expect(EMPTY_OPENING.stats).toEqual([]);
     expect(EMPTY_OPENING.totalTokens).toBe(0);
+  });
+});
+
+describe('opening display of nested chips', () => {
+  // A wildcard whose first value is a chip of Hair Color: the roll that lands on it draws the hair beneath.
+  const nested = (): OpeningWorld => world({
+    worldOverview: {
+      name: 'Sedge Landing', description: '',
+      systemPrompt: `Look: ${chip('ph-look', 'world', 'pl-l1')}. Hair: ${chip('ph-hair', 'world', 'pl-h1')}.`,
+    } as WorldOverview,
+    placeholders: [
+      { id: 'ph-hair', name: 'Hair Color', values: phValues(['ash', 'copper', 'jet']) },
+      { id: 'ph-look', name: 'Look', values: phValues([chip('ph-hair', 'world', 'v-1'), 'bald', `bald as ${chip('ph-hair', 'world', 'v-2')}`]) },
+    ],
+    entities: [],
+  });
+
+  it('shows a drawn value resolved, never as the token it stores', () => {
+    const look = openingFor(nested()).rolls.find((r) => r.placeholderId === 'ph-look');
+    expect(look?.worldValue).toBe('ash');
+  });
+
+  it('labels an un-drawn reference option by the placeholder it names, marked as a reference', () => {
+    const look = openingFor(nested()).rolls.find((r) => r.placeholderId === 'ph-look');
+    expect(look?.chances.map((c) => ({ ...c, chance: Math.round(c.chance) }))).toEqual([
+      { value: 'Hair Color', chance: 33, reference: 'ph-hair' },
+      { value: 'bald', chance: 33 },
+      { value: 'bald as {ash|copper|jet}', chance: 33 },
+    ]);
+  });
+
+  it('resolves a pinned value and a trait’s pin line through the same rolls', () => {
+    const w = nested();
+    w.traits = [{
+      id: 't-look', name: 'Looker', isDefault: true, statChanges: [],
+      placeholderPins: [{ placeholderId: 'ph-look', value: `${chip('ph-hair', 'world', 'v-3')} tresses` }],
+    }];
+    const opening = openingFor(w);
+    expect(opening.rolls.find((r) => r.placeholderId === 'ph-look')?.pinnedValue).toBe('ash tresses');
+    expect(opening.traits[0].pins).toEqual([{ placeholder: 'Look', value: 'ash tresses' }]);
+  });
+});
+
+describe('a pin carrying a Unique chip', () => {
+  // ph-coin is placed in the system prompt; the default trait pins it to text carrying a Unique chip of
+  // ph-gift, a placement no world text holds. That chip is read on every render the pin shows.
+  const pinned = (): OpeningWorld => world({
+    entities: [entities[0]],
+    traits: [{
+      id: 't-charm', name: 'Charmed', isDefault: true, statChanges: [],
+      placeholderPins: [{ placeholderId: 'ph-coin', value: `${chip('ph-gift', 'unique', 'pin-u1')} charm` }],
+    }],
+  });
+
+  it('primes the chip, so every read of the instrument shows the same pinned text', () => {
+    const w = pinned();
+    const rolls = primeOpeningRolls(w, {}, pickFirst);
+    expect(rolls.unique?.['pin-u1']).toBe('knife');
+    for (let i = 0; i < 20; i++) {
+      expect(buildOpening(w, lensAt(w), rolls).traits[0].pins)
+        .toEqual([{ placeholder: 'Coin Bird', value: 'knife charm' }]);
+    }
+  });
+
+  it('rerolls the chip with the other unpinned wildcards', () => {
+    const w = pinned();
+    const after = rerollOpeningRolls(w, lensAt(w), primeOpeningRolls(w, {}, pickFirst), pickLast);
+    expect(after.unique?.['pin-u1']).toBe('shell');
+    expect(buildOpening(w, lensAt(w), after).traits[0].pins).toEqual([{ placeholder: 'Coin Bird', value: 'shell charm' }]);
+  });
+
+  it('keeps the chip’s frozen roll across a reroll while a second trait pins its placeholder', () => {
+    const w = pinned();
+    w.traits = [...w.traits!, {
+      id: 't-gift', name: 'Gifted', isDefault: true, statChanges: [],
+      placeholderPins: [{ placeholderId: 'ph-gift', value: 'coin' }],
+    }];
+    const before = primeOpeningRolls(w, {}, pickFirst);
+    expect(before.unique?.['pin-u1']).toBe('knife');
+    // Masked by the Gifted pin, so the reroll leaves it alone — the value the pin hides is not lost.
+    expect(rerollOpeningRolls(w, lensAt(w), before, pickLast).unique?.['pin-u1']).toBe('knife');
   });
 });

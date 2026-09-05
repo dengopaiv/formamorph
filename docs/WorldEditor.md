@@ -64,7 +64,7 @@ With no piece selected, the line is just the stat's name.
 |---|---|
 | **Name** | Also how the AI refers to the stat, and how stat changes are matched back to it. |
 | **Type** | **Number** (a range you set) or **Percentage** (pinned 0–100, shown everywhere as `N%`). Everything below works the same for both. (List exists in the data format but isn't currently offered.) |
-| **Description** | What the stat represents. Sent to the AI when the chip's **Meaning** piece is on. |
+| **Description** | What the stat represents. Sent to the AI when the chip's **Meaning** piece is on. Takes placeholder chips. |
 | **Min** / **Max** | The range. Values are always clamped to it. A percentage stat locks these at 0 / 100 and hides Max — you set only its **Initial Value (%)**. |
 | **Initial Value** | Where the stat starts. Ignored when the stat has code. |
 | **Regen** | Added to the value once per turn, then clamped. Positive heals over time; negative bleeds. |
@@ -72,7 +72,7 @@ With no piece selected, the line is just the stat's name.
 
 ### Stat Descriptors
 
-Descriptors turn a number into a word — `Winded`, `Exhausted` — which is what the AI receives when the chip's **Status** piece is on.
+Descriptors turn a number into a word — `Winded`, `Exhausted` — which is what the AI receives when the chip's **Status** piece is on. A descriptor takes placeholder chips too, so a band can name the rolled town or the rolled rival.
 
 Each has a **threshold** and a **Description**. A coverage bar above the rows draws every band's real extent across Min→Max, marks where the stat starts, and shows the range above your top band in red — the range where the AI is told no status at all. Each row says what it covers underneath it.
 
@@ -462,6 +462,16 @@ A **Wildcard** chip chooses how its roll is shared, per placement:
 
 A **Variable** ignores this — it's the same single value no matter what.
 
+### How a placed chip reads
+
+| Chip | Reads as | Example |
+|---|---|---|
+| **World** | The placeholder's name | `Town Name` |
+| **Unique** | The name plus a letter, one sequence per placeholder | `Town Name (A)`, `Town Name (B)` … `Town Name (AA)` |
+| **Labeled** | The label typed in the chip's pop-out | `Hometown` |
+
+The letters follow the order things sit in the world: entities first, as the Entities tree lists them, then locations, traits, stats, dictionaries, the world's own prompt fields, and the placeholders' own values. Remove the first placement and the next one becomes **(A)** — nothing is stored, so a letter tells two placements apart but never names one for good. Give a placement a **Label** in its pop-out when you want a name that stays. Hover any chip or pill to see the placeholder's name, its mode and its values. A chip inside longer text keeps its braces everywhere the name is printed as plain text: `The {Tavern Name (A)} Inn`.
+
 ### The roll is frozen for the playthrough
 
 > 💡 A Wildcard rolls **once, when a game begins**, and the result is stored in that save. The stranger with gray eyes on turn one still has them on turn ninety, and reloading the save changes nothing. A new game rolls fresh.
@@ -471,10 +481,15 @@ A **Variable** ignores this — it's the same single value no matter what.
 Placeholders resolve **both** in what the AI reads and in what the player sees, in any field with the chip picker:
 
 - entity, location and dictionary descriptions
+- stat descriptions and descriptors
 - the readme
 - the system prompt addition
 
 > ⚠️ **The World Description is the exception.** It's shown in the library *before* a playthrough exists, so there are no rolls to resolve yet — that field takes no chips at all.
+
+### Groups
+
+Folders for the shared list, like the ones on the Entities tab. In Advanced mode the **+** offers **Add Group**; drag a placeholder under a folder to file it, and drag a folder under another to nest it. The palette strip and the `{` menu list the loose placeholders first, then each folder under its name. Groups are editor-only: they **never reach the AI**, a character card or dictionary file leaves them behind, and a placeholder that belongs to an entity or dictionary stays under its owner rather than in a folder.
 
 ### Getting started
 

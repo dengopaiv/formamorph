@@ -41,6 +41,8 @@ const material = (over: Partial<TurnMaterial> = {}): TurnMaterial => ({
   sceneEntityTokens: {},
   destinations: ['The Long Pier'],
   narrationSystemPrompt: 'NARRATION SYSTEM',
+  narrationSystemPromptRuns: [],
+  historyRuns: [],
   trimmedHistory: [{ role: 'assistant', content: 'Previously…' }],
   narration: '',
   lastStory: 'Previously…',
@@ -51,6 +53,7 @@ const material = (over: Partial<TurnMaterial> = {}): TurnMaterial => ({
   npcCastSize: 0,
   intents: [],
   overflow: [],
+  sceneCast: [],
   ...over,
 });
 

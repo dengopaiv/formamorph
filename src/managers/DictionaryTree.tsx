@@ -1,19 +1,18 @@
 import { randomUUID } from "@/lib/uuid";
-import { useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer, defaultRangeExtractor, type Range } from '@tanstack/react-virtual';
 import { useDictionaryStore } from '@/contexts/DictionaryStoreContext';
 import { usePlaceholderStore } from '@/contexts/PlaceholderStoreContext';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EditorRow, EditorRowList } from '@/components/EditorRow';
 import { X, ChevronRight, ChevronDown, Copy, FilePlus } from 'lucide-react';
 import {
-  DndContext, closestCorners, PointerSensor, KeyboardSensor, useSensor, useSensors, useDroppable,
-  MeasuringStrategy, type DragEndEvent, type DragStartEvent,
+  closestCorners, useDroppable, MeasuringStrategy, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core';
-import {
-  SortableContext, useSortable, sortableKeyboardCoordinates, verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+import { useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { restrictToVerticalAxis, restrictToFirstScrollableAncestor } from '@dnd-kit/modifiers';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
+import { useEditorDragActive } from '@/components/dnd/dragInvariants';
 import { reorderBooks, moveEntryInBooks, duplicateEntryInBooks } from '@/lib/dictionaryTree';
 import { EmptyListHint } from '@/components/EmptyListHint';
 import type { Dictionary, DictionaryEntry } from '@/types';
@@ -58,6 +57,109 @@ function EntryRow({ entry, selected, onSelect, onToggleEnabled, onDuplicate, onR
   );
 }
 
+/** Entry count above which a zone renders through the virtualizer instead of mounting every row. Big
+ *  imported books (tens of thousands of entries) crash the renderer if all rows mount at once. */
+const VIRTUALIZE_AT = 200;
+
+/** Estimated row height: EditorRow's `min-h-14` (56px); real heights are measured per row. */
+const ROW_ESTIMATE = 56;
+/** EditorRowList's `gap-1`, in px. */
+const ROW_GAP = 4;
+
+/**
+ * Virtualized entry rows for a large zone: only the visible window mounts, absolutely positioned inside a
+ * spacer sized to the whole list. Scrolling is owned by the nearest ScrollArea viewport. The dragged row is
+ * pinned into the window (rangeExtractor) so a drag survives auto-scrolling it out of view.
+ */
+function VirtualEntryRows({ entries, listClassName, setDropRef, selectedId, onSelectEntry, onToggleEntryEnabled, onDuplicateEntry, onRemoveEntry }: {
+  entries: DictionaryEntry[];
+  listClassName?: string;
+  /** The zone's droppable ref; goes on the list element, same as the non-virtual path. */
+  setDropRef: (el: HTMLElement | null) => void;
+  selectedId: string | null;
+  onSelectEntry: (id: string) => void;
+  onToggleEntryEnabled: (entry: DictionaryEntry, enabled: boolean) => void;
+  onDuplicateEntry: (id: string) => void;
+  onRemoveEntry: (id: string) => void;
+}) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useLayoutEffect(() => {
+    setScrollEl((listRef.current?.closest('[data-radix-scroll-area-viewport]') as HTMLElement | null) ?? null);
+  }, []);
+  // Anchor the window math to the list's offset in the viewport; re-anchor whenever the scroll content
+  // resizes (book headers and the other zone collapse/expand above this list). Guarded set, so the
+  // virtualizer's own height changes don't loop.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || !scrollEl) return;
+    const measure = () => {
+      const margin = list.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop;
+      setScrollMargin((prev) => (Math.abs(prev - margin) > 1 ? margin : prev));
+    };
+    measure();
+    const content = scrollEl.firstElementChild;
+    if (typeof ResizeObserver === 'undefined' || !content) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scrollEl]);
+
+  // The dragged row stays mounted however far auto-scroll moves the window past it. A book drag matches
+  // no entry, so the pin is simply off then.
+  const draggingId = useEditorDragActive();
+  const activeIndex = draggingId ? entries.findIndex((e) => e.id === draggingId) : -1;
+  const rangeExtractor = useCallback((range: Range) => {
+    const indexes = defaultRangeExtractor(range);
+    if (activeIndex >= 0 && !indexes.includes(activeIndex)) indexes.push(activeIndex);
+    return indexes;
+  }, [activeIndex]);
+
+  const virtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => ROW_ESTIMATE,
+    gap: ROW_GAP,
+    overscan: 8,
+    scrollMargin,
+    rangeExtractor,
+    // A sane window before the first real measurement, so rows paint immediately (and in jsdom, where
+    // ResizeObserver never fires and this stays the measurement).
+    initialRect: { width: 600, height: 600 },
+  });
+
+  return (
+    <EditorRowList
+      ref={(el) => { listRef.current = el; setDropRef(el); }}
+      className={listClassName}
+      style={{ position: 'relative', height: virtualizer.getTotalSize() }}
+    >
+      {virtualizer.getVirtualItems().map((row) => {
+        const entry = entries[row.index];
+        return (
+          <div
+            key={entry.id}
+            ref={virtualizer.measureElement}
+            data-index={row.index}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${row.start - scrollMargin}px)` }}
+          >
+            <EntryRow
+              entry={entry}
+              selected={selectedId === entry.id}
+              onSelect={onSelectEntry}
+              onToggleEnabled={onToggleEntryEnabled}
+              onDuplicate={onDuplicateEntry}
+              onRemove={onRemoveEntry}
+            />
+          </div>
+        );
+      })}
+    </EditorRowList>
+  );
+}
+
 /** One droppable, collapsible zone (Background/Foreground) within a book; empty zones still accept a drop.
  *  `flat` (Simple mode) drops the heading and the dashed frame so a book's two zones read as one list —
  *  each zone still owns its own drops, so an entry never silently changes where it sits in the prompt. */
@@ -76,8 +178,14 @@ function DictZone({ bookId, position, entries, collapsed, onToggleCollapse, flat
   onRemoveEntry: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `zone:${bookId}:${position}` });
+
   // An empty zone is a drop target only; with no heading to explain it there is nothing to show.
   if (flat && entries.length === 0) return null;
+  const listClassName = flat
+    ? undefined
+    : `rounded-md border border-dashed p-1 min-h-[2.5rem] transition-colors ${
+        isOver ? 'border-primary bg-secondary/40' : 'border-border/50'
+      }`;
   return (
     <div>
       {!flat && (
@@ -94,15 +202,20 @@ function DictZone({ bookId, position, entries, collapsed, onToggleCollapse, flat
       </button>
       )}
       {(flat || !collapsed) && (
-        <SortableContext items={entries.map((e) => e.id)} strategy={verticalListSortingStrategy}>
-          <EditorRowList
-            ref={setNodeRef}
-            className={flat
-              ? undefined
-              : `rounded-md border border-dashed p-1 min-h-[2.5rem] transition-colors ${
-                  isOver ? 'border-primary bg-secondary/40' : 'border-border/50'
-                }`}
-          >
+        <StableSortableContext items={entries} strategy={verticalListSortingStrategy}>
+          {entries.length > VIRTUALIZE_AT ? (
+            <VirtualEntryRows
+              entries={entries}
+              listClassName={listClassName}
+              setDropRef={setNodeRef}
+              selectedId={selectedId}
+              onSelectEntry={onSelectEntry}
+              onToggleEntryEnabled={onToggleEntryEnabled}
+              onDuplicateEntry={onDuplicateEntry}
+              onRemoveEntry={onRemoveEntry}
+            />
+          ) : (
+          <EditorRowList ref={setNodeRef} className={listClassName}>
             {entries.map((entry) => (
               <EntryRow
                 key={entry.id}
@@ -116,7 +229,8 @@ function DictZone({ bookId, position, entries, collapsed, onToggleCollapse, flat
             ))}
             {!flat && entries.length === 0 && <p className="px-2 py-1 text-meta text-muted-foreground">Drag entries here.</p>}
           </EditorRowList>
-        </SortableContext>
+          )}
+        </StableSortableContext>
       )}
     </div>
   );
@@ -142,13 +256,16 @@ function BookRow({ book, collapsed, collapsedZones, selectedId, onToggleCollapse
   };
 }) {
   const { advanced } = useEditorMode();
+  const { placeholders } = usePlaceholderStore();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: book.id });
   // Translate (not Transform): Transform bakes in a scale that resizes the dragged row to the target slot.
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 1 : undefined };
   const selected = selectedId === book.id;
   const faded = book.enabled === false;
-  const before = book.entries.filter((e) => e.position === 'before');
-  const after = book.entries.filter((e) => e.position !== 'before');
+  // Memoized so a book's two zones keep one array each across a re-render, rather than re-filtering into
+  // fresh ones every frame of a drag.
+  const before = useMemo(() => book.entries.filter((e) => e.position === 'before'), [book.entries]);
+  const after = useMemo(() => book.entries.filter((e) => e.position !== 'before'), [book.entries]);
   const enabledCount = book.entries.filter((e) => e.enabled !== false).length;
 
   return (
@@ -165,7 +282,7 @@ function BookRow({ book, collapsed, collapsedZones, selectedId, onToggleCollapse
         onToggleCollapse={() => onToggleCollapse(book.id)}
         collapseLabels={['Expand dictionary', 'Collapse dictionary']}
         checkbox={advanced ? { checked: book.enabled !== false, onChange: (v) => onToggleEnabled(book, v) } : undefined}
-        label={book.name}
+        label={<PlaceholderText text={book.name} placeholders={placeholders} />}
         labelClass="font-medium"
         meta={advanced ? `${enabledCount}/${book.entries.length}` : book.entries.length}
         metaTitle={advanced ? 'Enabled entries / total entries' : 'Entries'}
@@ -203,11 +320,6 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
   // list reorders cleanly. This is transient (doesn't touch the persistent `collapsed` set).
   const [draggingBook, setDraggingBook] = useState(false);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   const isBook = (id: string) => dictionaries.some((b) => b.id === id);
   // Locate an entry by id across all books; returns its owning book id and position.
   const findEntry = (id: string): { bookId: string; position: 'before' | 'after' } | null => {
@@ -236,7 +348,8 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
   });
 
   const handleDragStart = ({ active }: DragStartEvent) => {
-    if (isBook(String(active.id))) setDraggingBook(true);
+    const id = String(active.id);
+    if (isBook(id)) setDraggingBook(true);
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
@@ -304,21 +417,15 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
 
   return (
     <>
-      <DndContext
-        sensors={sensors}
+      <EditorDndContext
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingBook(false)}
-        modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
         // Re-measure continuously so the drag tracks the layout as books collapse/expand mid-drag.
         measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
-        autoScroll={{
-          canScroll: (el) =>
-            el !== document.scrollingElement && el !== document.body && el !== document.documentElement,
-        }}
       >
-        <SortableContext items={dictionaries.map((b) => b.id)} strategy={verticalListSortingStrategy}>
+        <StableSortableContext items={dictionaries} strategy={verticalListSortingStrategy}>
           <div className="flex flex-col gap-3">
             {dictionaries.map((book) => (
               <BookRow
@@ -337,8 +444,8 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
               />
             ))}
           </div>
-        </SortableContext>
-      </DndContext>
+        </StableSortableContext>
+      </EditorDndContext>
       <ConfirmDialog
         open={!!bookToDelete}
         onOpenChange={(open) => !open && setBookToDelete(null)}

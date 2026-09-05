@@ -73,40 +73,28 @@ describe('useMorphFullscreen', () => {
     expect(boxEl.style.transition).toBe('');
   });
 
-  it('keeps the overlay mounted until it has shrunk back into the field', () => {
+  it('closes by shrinking the veiled panel back onto the slot the content already reoccupies', () => {
     const { sourceEl, boxEl, writes } = makeElements();
     const { result } = renderHook(() => useMorphFullscreen({ current: sourceEl }));
     act(() => result.current.open());
     act(() => result.current.boxRef(boxEl));
     act(() => vi.advanceTimersByTime(400));
+    expect(result.current.contentInOverlay).toBe(true);
 
     act(() => result.current.close());
+    // The content belongs to the docked slot from the first frame of the close; the box that stays
+    // behind is a veiled solid panel wearing its travel edge, shrinking onto that very slot.
     expect(result.current.mounted).toBe(true);
     expect(result.current.phase).toBe('leaving');
+    expect(result.current.contentInOverlay).toBe(false);
+    expect(result.current.veilClassName).toContain('opacity-100');
+    expect(result.current.boxClassName).toContain('border');
     act(() => vi.advanceTimersByTime(50));
     expect(writes[writes.length - 1]).toBe('translate(20px, 40px) scale(0.2, 0.075)');
-
-    act(() => vi.advanceTimersByTime(400));
+    // The box then fades over the widget after landing, so the settle waits out shrink plus reveal.
+    act(() => vi.advanceTimersByTime(600));
     expect(result.current.mounted).toBe(false);
     expect(result.current.phase).toBe('closed');
-  });
-
-  it('shrinks back to where the editor came from even after handing it to the overlay', () => {
-    // Some callers move their editor into the window rather than leaving a copy behind, so on the way out
-    // the source element is a child of the very box being animated. Measuring it then reports the overlay's
-    // own rect, the trip inverts onto where the box already is, and the close collapses to a plain fade.
-    const { sourceEl, boxEl, writes } = makeElements();
-    const { result } = renderHook(() => useMorphFullscreen({ current: sourceEl }));
-    act(() => result.current.open());
-    act(() => result.current.boxRef(boxEl));
-    act(() => vi.advanceTimersByTime(400));
-
-    boxEl.appendChild(sourceEl);
-    sourceEl.getBoundingClientRect = () => rect(0, 0, 1000, 800);
-
-    act(() => result.current.close());
-    act(() => vi.advanceTimersByTime(50));
-    expect(writes[writes.length - 1]).toBe('translate(20px, 40px) scale(0.2, 0.075)');
   });
 
   it('puts the panels behind it back where they were reading, however they got moved', () => {
@@ -172,6 +160,8 @@ describe('useMorphFullscreen', () => {
     expect(writes.filter(Boolean)).toEqual([]);
 
     act(() => result.current.close());
+    // The close fade still runs — an opacity-only exit is reduced-motion safe, like the app's other fades.
+    act(() => vi.advanceTimersByTime(400));
     expect(result.current.mounted).toBe(false);
   });
 
@@ -206,18 +196,50 @@ describe('useMorphFullscreen', () => {
     vi.unstubAllGlobals();
   });
 
-  it('fades its contents in behind the growing box, and out ahead of the shrinking one', () => {
+  it('keeps the widget covered while the box travels, and reveals it only once landed', () => {
     const { sourceEl, boxEl } = makeElements();
     const { result } = renderHook(() => useMorphFullscreen({ current: sourceEl }));
 
     act(() => result.current.open());
     act(() => result.current.boxRef(boxEl));
-    expect(result.current.contentClassName).toContain('fade-in-0');
-    act(() => vi.advanceTimersByTime(400));
-    expect(result.current.contentClassName).toBe('');
+    // Covered through the whole trip: the widget underneath never animates, so revealing it mid-travel
+    // would show it scaled with the box.
+    expect(result.current.veilClassName).not.toContain('opacity-0');
+    act(() => vi.advanceTimersByTime(200));
+    expect(result.current.veilClassName).not.toContain('opacity-0');
+    // The reveal starts on the landing clock (ENTER_MS), while the phase is still settling — waiting
+    // for the settle's safety buffer left the landed box sitting veiled for an extra beat.
+    act(() => vi.advanceTimersByTime(100));
+    expect(result.current.phase).toBe('entering');
+    expect(result.current.veilClassName).toContain('opacity-0');
+    act(() => vi.advanceTimersByTime(100));
+    expect(result.current.phase).toBe('open');
+    expect(result.current.veilClassName).toContain('opacity-0');
 
+    // And covered again before the box moves, so the shrinking box is a clean panel.
     act(() => result.current.close());
-    expect(result.current.contentClassName).toContain('fade-out-0');
+    expect(result.current.veilClassName).not.toContain('opacity-0');
+  });
+
+  it('carries the dim sheet out with the shrinking box instead of holding it dark until unmount', () => {
+    const { sourceEl, boxEl } = makeElements();
+    const { result } = renderHook(() => useMorphFullscreen({ current: sourceEl }));
+
+    act(() => result.current.open());
+    act(() => result.current.boxRef(boxEl));
+    act(() => vi.advanceTimersByTime(400));
+    expect(result.current.overlayClassName).not.toContain('opacity-0');
+
+    // The fade starts with the shrink, not after it — the sheet held at full dark through the whole
+    // trip and released only at unmount is the flash this class exists to remove.
+    act(() => result.current.close());
+    expect(result.current.overlayClassName).toContain('opacity-0');
+
+    // And it stays held at 0 through `closed`: the dialog primitive keeps the overlay in the tree for
+    // its own exit animation, and a class that reverted here would flash the sheet back mid-teardown.
+    act(() => vi.advanceTimersByTime(600));
+    expect(result.current.phase).toBe('closed');
+    expect(result.current.overlayClassName).toContain('opacity-0');
   });
 });
 
@@ -250,5 +272,28 @@ describe('useMorphResize', () => {
 
     act(() => vi.advanceTimersByTime(400));
     expect(boxEl.style.animation).toBe('');
+  });
+
+  it('hands the animation back already finished, so the open zoom-and-fade does not replay', () => {
+    // Restoring `animation: ''` flips animation-name from `none` back to the class's, which starts it
+    // over from frame one — the window blinked out and zoomed back in at the end of every trip.
+    const { boxEl } = makeElements();
+    let measured = 0;
+    boxEl.getBoundingClientRect = () => (measured++ === 0 ? rect(0, 0, 400, 300) : rect(0, 0, 1000, 800));
+    const finish = vi.fn();
+    (boxEl as HTMLElement & { getAnimations(): Animation[] }).getAnimations =
+      () => [{ finish } as unknown as Animation];
+
+    const { result, rerender } = renderHook(({ key }: { key: string }) => useMorphResize(key), {
+      initialProps: { key: 'window' },
+    });
+    act(() => result.current(boxEl));
+    rerender({ key: 'full' });
+    // Not before the trip lands: the box is still travelling on its inline transform.
+    expect(finish).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(400));
+    expect(boxEl.style.animation).toBe('');
+    expect(finish).toHaveBeenCalled();
   });
 });

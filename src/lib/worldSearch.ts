@@ -1,10 +1,14 @@
 import { OPENING_CUE_FIELD_KEY, setOpeningCue, storedOpeningCue } from '@/lib/openingCue';
-import { parsePlaceholderText } from '@/lib/placeholders';
+import { decodePlaceholderToken, describePlaceholders, parsePlaceholderText } from '@/lib/placeholders';
+import { qualifiedPlaceholderName } from '@/lib/placeholderTree';
+import { foldSeparators, labelPlaceholders, worldPlacementLetters, type PlacementLetters } from '@/lib/placementLetters';
+import { placeholderOwners, type PlaceholderOwners } from '@/lib/placeholderHomes';
+import { withPinnedValue } from '@/lib/placeholderPins';
 import {
   setWorldPromptOverride, storedWorldPrompt, worldPromptFieldKey, WORLD_PROMPT_KINDS, WORLD_PROMPT_KIND_LABELS,
 } from '@/lib/worldPrompt';
 import type {
-  Dictionary, Entity, EntityGroup, GameLocation, Placeholder, Stat, Trait, TraitGroup, WorldOverview,
+  Dictionary, Entity, EntityGroup, GameLocation, Placeholder, PlaceholderGroup, Stat, Trait, TraitGroup, WorldOverview,
 } from '@/types';
 
 /**
@@ -15,9 +19,11 @@ import type {
  * writer that pushes an edited value back through that collection's normal updater, so a replace is
  * indistinguishable from the author typing.
  *
- * Matching runs only over the literal runs of `parsePlaceholderText`, never the raw stored string. Chip
- * tokens are opaque `{{ph:…}}` text, so scanning them would let a query hit a UUID and a replace corrupt
- * a chip; splitting first makes both impossible.
+ * Matching runs over the literal runs of `parsePlaceholderText`, never the raw stored string. Chip tokens
+ * are opaque `{{ph:…}}` text, so scanning them would let a query hit a UUID and a replace corrupt a chip;
+ * splitting first makes both impossible. A chip instead answers a search by what it reads as — its
+ * placement label, its placeholder's name and its values — and a hit on one is the whole chip, which no
+ * replace touches.
  */
 
 /** The record a target belongs to — an entity, a stat, one dictionary entry. Opaque outside its writer. */
@@ -64,6 +70,17 @@ export interface SearchMatch {
   target: SearchTarget;
   start: number;
   end: number;
+  /** The chip this hit is, where the query matched what a chip reads as rather than a run of text. The
+   *  range then spans the whole token, and a replace leaves it alone. */
+  chip?: string;
+}
+
+/** What lets a search read chips: the placeholders behind them and the document's placement letters. */
+export interface ChipSearch {
+  placeholders: Placeholder[];
+  letters: PlacementLetters;
+  /** Who owns each scoped placeholder, so a chip answers to `Molly › Eyes` as the lists print it. */
+  owners?: PlaceholderOwners;
 }
 
 /** The collections and updaters a scan needs — GameDataContext's shape, narrowed to what search touches. */
@@ -87,6 +104,9 @@ export interface SearchSources {
   updateDictionary: (book: Dictionary) => void;
   updateDictionaryEntry: (entry: DictionaryEntryWithBook) => void;
   updatePlaceholder: (placeholder: Placeholder) => void;
+  /** The folders on the Placeholders tab, when the host has them. */
+  placeholderGroups?: PlaceholderGroup[];
+  updatePlaceholderGroup?: (group: PlaceholderGroup) => void;
 }
 
 /** `updateDictionaryEntry` matches by entry id across books, so the entry alone is the whole argument. */
@@ -105,6 +125,11 @@ const untitled = (name: string | undefined, fallback: string) => name?.trim() ||
  */
 export function collectSearchTargets(src: SearchSources): SearchTarget[] {
   const targets: SearchTarget[] = [];
+  // An item is named in the results line the way its tree row names it: a chip by its placement label.
+  const letters = worldPlacementLetters(src);
+  const owners = placeholderOwners(src);
+  const labeled = (name: string | undefined, fallback: string) =>
+    untitled(labelPlaceholders(name ?? '', src.placeholders ?? [], { letters, owners }), fallback);
 
   type Where = Pick<SearchTarget, 'tab' | 'itemId' | 'itemLabel' | 'chipCapable'>;
 
@@ -180,19 +205,19 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   (src.stats ?? []).forEach((stat) => {
-    const where = { tab: 'stats', itemId: stat.id, itemLabel: untitled(stat.name, 'Stat') };
+    const where = { tab: 'stats', itemId: stat.id, itemLabel: labeled(stat.name, 'Stat') };
     const { add } = bind(`stat:${stat.id}`, stat, src.updateStat);
     add({ ...where, chipCapable: true }, 'name', 'Name', stat.name, (r, v) => ({ ...r, name: v }));
-    add({ ...where, chipCapable: false }, 'description', 'Description', stat.description, (r, v) => ({ ...r, description: v }));
+    add({ ...where, chipCapable: true }, 'description', 'Description', stat.description, (r, v) => ({ ...r, description: v }));
     stat.descriptors?.forEach((d, i) => {
-      add({ ...where, chipCapable: false }, `descriptors[${i}].description`, 'Descriptor', d.description,
+      add({ ...where, chipCapable: true }, `descriptors[${i}].description`, 'Descriptor', d.description,
         (r, v) => ({ ...r, descriptors: (r.descriptors ?? []).map((x, j) => (j === i ? { ...x, description: v } : x)) }));
     });
   });
 
   // ── Entities ──────────────────────────────────────────────────────────────
   (src.entities ?? []).forEach((entity) => {
-    const where = { tab: 'entities', itemId: entity.id, itemLabel: untitled(entity.name, 'Entity') };
+    const where = { tab: 'entities', itemId: entity.id, itemLabel: labeled(entity.name, 'Entity') };
     const { add, addEach } = bind(`entity:${entity.id}`, entity, src.updateEntity);
     add({ ...where, chipCapable: true }, 'name', 'Name', entity.name, (r, v) => ({ ...r, name: v }));
     addEach({ ...where, chipCapable: true }, 'aliases', 'Aliases', entity.aliases, (r, v) => ({ ...r, aliases: v }), (r) => r.aliases ?? []);
@@ -203,14 +228,14 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...where, chipCapable: false }, 'imageTags', 'Image Tags', entity.imageTags, (r, v) => ({ ...r, imageTags: v }));
   });
   (src.entityGroups ?? []).forEach((group) => {
-    const where = { tab: 'entities', itemId: group.id, itemLabel: untitled(group.name, 'Group') };
+    const where = { tab: 'entities', itemId: group.id, itemLabel: labeled(group.name, 'Group') };
     const { add } = bind(`entityGroup:${group.id}`, group, src.updateEntityGroup);
     add({ ...where, chipCapable: false }, 'name', 'Group Name', group.name, (r, v) => ({ ...r, name: v }));
   });
 
   // ── Locations ─────────────────────────────────────────────────────────────
   (src.locations ?? []).forEach((location) => {
-    const where = { tab: 'locations', itemId: location.id, itemLabel: untitled(location.name, 'Location') };
+    const where = { tab: 'locations', itemId: location.id, itemLabel: labeled(location.name, 'Location') };
     const { add } = bind(`location:${location.id}`, location, src.updateLocation);
     add({ ...where, chipCapable: true }, 'name', 'Name', location.name, (r, v) => ({ ...r, name: v }));
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', location.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
@@ -221,18 +246,22 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
 
   // ── Traits ────────────────────────────────────────────────────────────────
   (src.traits ?? []).forEach((trait) => {
-    const where = { tab: 'traits', itemId: trait.id, itemLabel: untitled(trait.name, 'Trait') };
+    const where = { tab: 'traits', itemId: trait.id, itemLabel: labeled(trait.name, 'Trait') };
     const { add } = bind(`trait:${trait.id}`, trait, src.updateTrait);
     add({ ...where, chipCapable: true }, 'name', 'Name', trait.name, (r, v) => ({ ...r, name: v }));
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', trait.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', trait.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     trait.placeholderPins?.forEach((pin, i) => {
       add({ ...where, chipCapable: false }, `placeholderPins[${i}].value`, 'Pinned Value', pin.value,
-        (r, v) => ({ ...r, placeholderPins: r.placeholderPins?.map((x, j) => (j === i ? { ...x, value: v } : x)) }));
+        (r, v) => ({
+          ...r,
+          placeholderPins: r.placeholderPins?.map((x, j) =>
+            (j === i ? withPinnedValue(x, v, src.placeholders ?? []) : x)),
+        }));
     });
   });
   (src.traitGroups ?? []).forEach((group) => {
-    const where = { tab: 'traits', itemId: group.id, itemLabel: untitled(group.name, 'Group') };
+    const where = { tab: 'traits', itemId: group.id, itemLabel: labeled(group.name, 'Group') };
     const { add } = bind(`traitGroup:${group.id}`, group, src.updateTraitGroup);
     add({ ...where, chipCapable: true }, 'name', 'Group Name', group.name, (r, v) => ({ ...r, name: v }));
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', group.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
@@ -241,14 +270,14 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
 
   // ── Dictionaries ──────────────────────────────────────────────────────────
   (src.dictionaries ?? []).forEach((book) => {
-    const bookWhere = { tab: 'dictionary', itemId: book.id, itemLabel: untitled(book.name, 'Dictionary') };
+    const bookWhere = { tab: 'dictionary', itemId: book.id, itemLabel: labeled(book.name, 'Dictionary') };
     const { add: addBook } = bind(`book:${book.id}`, book, src.updateDictionary);
     addBook({ ...bookWhere, chipCapable: false }, 'name', 'Dictionary Name', book.name, (r, v) => ({ ...r, name: v }));
     addBook({ ...bookWhere, chipCapable: false }, 'description', 'Description', book.description, (r, v) => ({ ...r, description: v }));
     (book.entries ?? []).forEach((entry) => {
       // A regex entry drops the chip vocabulary, so its keys and value can't take a chip replacement.
       const chip = !entry.useRegex;
-      const where = { tab: 'dictionary', itemId: entry.id, itemLabel: untitled(entry.name, 'Entry') };
+      const where = { tab: 'dictionary', itemId: entry.id, itemLabel: labeled(entry.name, 'Entry') };
       const { add, addEach } = bind(`entry:${entry.id}`, entry, src.updateDictionaryEntry);
       add({ ...where, chipCapable: chip }, 'name', 'Name', entry.name, (r, v) => ({ ...r, name: v }));
       addEach({ ...where, chipCapable: chip }, 'key', 'Trigger Keywords', entry.key, (r, v) => ({ ...r, key: v }), (r) => r.key ?? []);
@@ -260,58 +289,88 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
 
   // ── Placeholders ──────────────────────────────────────────────────────────
   (src.placeholders ?? []).forEach((ph) => {
-    const where = { tab: 'placeholders', itemId: ph.id, itemLabel: untitled(ph.name, 'Placeholder'), chipCapable: false };
+    const where = { tab: 'placeholders', itemId: ph.id, itemLabel: labeled(ph.name, 'Placeholder'), chipCapable: false };
     const { add, addEach } = bind(`placeholder:${ph.id}`, ph, src.updatePlaceholder);
     add(where, 'name', 'Name', ph.name, (r, v) => ({ ...r, name: v }));
-    // `weights` is keyed by the value string, so an edited value carries its weight across or loses it.
-    addEach(where, 'values', 'Values', ph.values, (r, next) => {
-      if (!r.weights) return { ...r, values: next };
-      const carried: Record<string, number> = {};
-      next.forEach((value, i) => {
-        const weight = r.weights?.[r.values[i]];
-        if (weight !== undefined) carried[value] = weight;
-      });
-      return { ...r, values: next, weights: carried };
-    }, (r) => r.values);
+    // Each value edits its own text; the record's id stays, so its weight and its trait pins follow it and
+    // there is nothing to carry across.
+    // `?? []` throughout: hand-edited world JSON can omit the field the type calls required, and the scan
+    // runs in the editor's render, so a missing list has to be nothing to search rather than a blank editor.
+    addEach(where, 'values', 'Values', (ph.values ?? []).map((v) => v.text),
+      (r, next) => ({ ...r, values: (r.values ?? []).map((v, i) => ({ ...v, text: next[i] ?? v.text })) }),
+      (r) => (r.values ?? []).map((v) => v.text));
   });
+  const updatePlaceholderGroup = src.updatePlaceholderGroup;
+  if (updatePlaceholderGroup) {
+    (src.placeholderGroups ?? []).forEach((group) => {
+      const where = { tab: 'placeholders', itemId: group.id, itemLabel: labeled(group.name, 'Group') };
+      const { add } = bind(`placeholderGroup:${group.id}`, group, updatePlaceholderGroup);
+      add({ ...where, chipCapable: false }, 'name', 'Group Name', group.name, (r, v) => ({ ...r, name: v }));
+    });
+  }
 
   return targets;
 }
 
 const WORD = /[\p{L}\p{N}_]/u;
 
-/** Flat `[start, end)` spans of `text` that lie outside placeholder chip tokens. */
-function literalSpans(text: string): Array<[number, number]> {
-  const spans: Array<[number, number]> = [];
-  let offset = 0;
-  for (const segment of parsePlaceholderText(text)) {
-    const length = segment.type === 'text' ? segment.value.length : segment.token.length;
-    if (segment.type === 'text') spans.push([offset, offset + length]);
-    offset += length;
+/** Every offset in `text` where the folded `needle` starts, honoring the whole-word option. */
+function hitsIn(text: string, needle: string, opts: SearchOptions): number[] {
+  const haystack = opts.matchCase ? text : text.toLowerCase();
+  const hits: number[] = [];
+  for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
+    if (opts.wholeWord) {
+      const before = at > 0 ? haystack[at - 1] : '';
+      const after = haystack[at + needle.length] ?? '';
+      if (WORD.test(before) || WORD.test(after)) continue;
+    }
+    hits.push(at);
   }
-  return spans;
+  return hits;
 }
 
-/** Every hit of `query` across `targets`, in target order — the ordered list Next/Previous steps through. */
-export function findMatches(targets: SearchTarget[], query: string, opts: SearchOptions): SearchMatch[] {
+/** What a chip answers a search with: what it reads as, its placeholder's name, and its values. A chip
+ *  whose placeholder is gone still answers to its label — the one thing left that says what it was for. */
+function chipReadings(token: string, chips: ChipSearch, byId: Map<string, Placeholder>): string[] {
+  const decoded = decodePlaceholderToken(token);
+  if (!decoded) return [];
+  const ph = byId.get(decoded.id);
+  if (!ph) return decoded.label ? [decoded.label] : [];
+  return [
+    labelPlaceholders(token, chips.placeholders, { letters: chips.letters, owners: chips.owners }),
+    qualifiedPlaceholderName(chips.placeholders, decoded.id) ?? ph.name,
+    ...(ph.values ?? []).map((v) => describePlaceholders(v.text, chips.placeholders)),
+  ];
+}
+
+/**
+ * Every hit of `query` across `targets`, in target order and then in field order — the ordered list
+ * Next/Previous steps through. With `chips`, a chip is a hit when any of its readings holds the query; its
+ * hit spans the whole token so it interleaves with text hits by position.
+ */
+export function findMatches(targets: SearchTarget[], query: string, opts: SearchOptions, chips?: ChipSearch): SearchMatch[] {
   if (!query) return [];
   const needle = opts.matchCase ? query : query.toLowerCase();
+  const byId = new Map((chips?.placeholders ?? []).map((p) => [p.id, p]));
   const matches: SearchMatch[] = [];
   for (const target of targets) {
-    const haystack = opts.matchCase ? target.value : target.value.toLowerCase();
-    for (const [spanStart, spanEnd] of literalSpans(target.value)) {
-      let from = spanStart;
-      for (;;) {
-        const at = haystack.indexOf(needle, from);
-        if (at < 0 || at + needle.length > spanEnd) break;
-        from = at + 1;
-        if (opts.wholeWord) {
-          const before = at > 0 ? haystack[at - 1] : '';
-          const after = haystack[at + needle.length] ?? '';
-          if (WORD.test(before) || WORD.test(after)) continue;
+    let offset = 0;
+    for (const segment of parsePlaceholderText(target.value)) {
+      if (segment.type === 'text') {
+        for (const at of hitsIn(segment.value, needle, opts)) {
+          matches.push({ target, start: offset + at, end: offset + at + needle.length });
         }
-        matches.push({ target, start: at, end: at + needle.length });
+        offset += segment.value.length;
+        continue;
       }
+      // A chip is matched on its reading, not on its text, so the query may spell the separator any way
+      // a keyboard allows. Folding both sides changes their length, which is why only the boolean is
+      // taken from it — the hit spans the whole token either way.
+      if (chips && chipReadings(segment.token, chips, byId)
+        .some((reading) => hitsIn(foldSeparators(reading), foldSeparators(needle), opts).length > 0)) {
+        matches.push({ target, start: offset, end: offset + segment.token.length, chip: segment.token });
+      }
+      offset += segment.token.length;
     }
   }
   return matches;
@@ -336,6 +395,8 @@ export interface ReplaceSummary {
   fields: number;
   skipped: number;
   skippedFields: string[];
+  /** Hits that were chips. A chip is changed from its own pop-out, never by a text replace. */
+  chips: number;
 }
 
 /**
@@ -353,13 +414,17 @@ export function replaceAll(
   insertFor: (target: SearchTarget) => string | null,
 ): ReplaceSummary {
   const byTarget = new Map<SearchTarget, SearchMatch[]>();
+  const summary: ReplaceSummary = { replaced: 0, fields: 0, skipped: 0, skippedFields: [], chips: 0 };
   for (const match of matches) {
+    if (match.chip) {
+      summary.chips += 1;
+      continue;
+    }
     const list = byTarget.get(match.target);
     if (list) list.push(match);
     else byTarget.set(match.target, [match]);
   }
 
-  const summary: ReplaceSummary = { replaced: 0, fields: 0, skipped: 0, skippedFields: [] };
   const drafts = new Map<string, { record: SearchRecord; commit: (record: SearchRecord) => void }>();
   for (const [target, hits] of byTarget) {
     if (insertFor(target) === null) {

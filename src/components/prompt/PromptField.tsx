@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   $getRoot, $getSelection, $isRangeSelection, $createParagraphNode,
   $isElementNode,
@@ -13,12 +13,13 @@ import { HistoryPlugin, createEmptyHistoryState } from '@lexical/react/LexicalHi
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import {
-  Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Heading4,
+  Bold, Italic, Strikethrough, Highlighter, Heading1, Heading2, Heading3, Heading4,
   List, ListOrdered, ListChecks, Link2, Image, Table, SquareCode, Minus, Subscript, Superscript,
-  Quote, Code, Undo2, Redo2, ChevronDown,
+  Quote, Code, Undo2, Redo2, ChevronDown, Dices,
   Maximize2, Minimize2, Columns2, Square,
 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tip } from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FullscreenShell } from '@/components/FullscreenShell';
@@ -26,7 +27,7 @@ import { useMorphFullscreen } from '@/lib/useMorphFullscreen';
 import { ReadOnlyNotice } from './ReadOnlyNotice';
 import { CHIP_BASE } from '@/components/Chip';
 import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
-import { type MarkdownAction } from '@/lib/markdownToolbar';
+import { type MarkdownAction, HIGHLIGHT_COLORS } from '@/lib/markdownToolbar';
 import { type PromptVariable } from '@/lib/promptVariables';
 import { resolveToken } from '@/lib/promptTemplate';
 import {
@@ -36,15 +37,22 @@ import {
 import { ChipVocabularyContext, promptVocabulary, type ChipVocabulary } from '@/lib/chipVocabulary';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/useIsMobile';
-import { resolveLayout, usePromptSplitMode, useContainerWidth, MIN_PANE_WIDTH } from '@/lib/promptLayout';
+import { resolveLayout, splitAvailable, usePromptSplitMode, useContainerWidth } from '@/lib/promptLayout';
 import { VariableNode, $createVariableNode, PromptDragContext } from './VariableNode';
 import { buildEditorState, serializeRoot, $applyMarkdownAction } from './promptFieldState';
 import { ChipTypeaheadPlugin } from './ChipTypeahead';
 import { ChipInsertTargetPlugin } from './ChipInsertTarget';
 import { ChipDragPlugin } from './ChipDrag';
 import { TOOLBAR_BTN } from './toolbarStyles';
+import { anchorAt, applyAnchor, captureAnchor, caretOffset, PROMPT_ANCHORS, type ScrollAnchor } from './previewScrollSync';
 
-interface ToolbarItem { action: MarkdownAction; Icon: typeof Bold; title: string }
+interface ToolbarItem {
+  action: MarkdownAction;
+  Icon: typeof Bold;
+  title: string;
+  /** A `flexible-marker-*` class, on the items whose icon alone can't say them apart. */
+  swatch?: string;
+}
 
 // Always visible: the formatting an author reaches for mid-sentence.
 const MARKDOWN_TOOLBAR: ToolbarItem[] = [
@@ -54,6 +62,21 @@ const MARKDOWN_TOOLBAR: ToolbarItem[] = [
   { action: 'code', Icon: Code, title: 'Inline code' },
   { action: 'quote', Icon: Quote, title: 'Blockquote' },
 ];
+
+// Ten highlighters sharing one icon, told apart by the color they paint. The class each carries is the one
+// the renderer puts on the mark, so a swatch is drawn by the same rule as the highlight it stands for.
+const HIGHLIGHT_ITEMS: ToolbarItem[] = [
+  { action: 'highlight', Icon: Highlighter, title: 'Highlight', swatch: 'flexible-marker-default' },
+  ...HIGHLIGHT_COLORS.map(({ key, label }) => ({
+    action: `highlight:${key}` as MarkdownAction,
+    Icon: Highlighter,
+    title: `${label} Highlight`,
+    swatch: `flexible-marker-${label.toLowerCase()}`,
+  })),
+];
+
+/** Swatches show the color itself, not the wash it reads as behind text, so both alphas go to 1 locally. */
+const OPAQUE_SWATCH = { '--md-hl-alpha': 1, '--md-hl-alpha-base': 1 } as CSSProperties;
 
 // Everything else groups behind a split button: its face applies the last action picked from the group,
 // its chevron opens the rest. Nine buttons of markdown on one row read as a wall; three do not.
@@ -104,21 +127,43 @@ function HistoryButtons({ disabled }: { disabled: boolean }) {
 
   return (
     <>
-      <button
-        type="button" title="Undo" aria-label="Undo" className={TOOLBAR_BTN}
-        disabled={disabled || !canUndo}
-        onMouseDown={run(UNDO_COMMAND)}
-      >
-        <Undo2 className="h-4 w-4" />
-      </button>
-      <button
-        type="button" title="Redo" aria-label="Redo" className={TOOLBAR_BTN}
-        disabled={disabled || !canRedo}
-        onMouseDown={run(REDO_COMMAND)}
-      >
-        <Redo2 className="h-4 w-4" />
-      </button>
+      <Tip tip="Undo">
+        <button
+          type="button" className={TOOLBAR_BTN}
+          disabled={disabled || !canUndo}
+          onMouseDown={run(UNDO_COMMAND)}
+        >
+          <Undo2 className="h-4 w-4" />
+        </button>
+      </Tip>
+      <Tip tip="Redo">
+        <button
+          type="button" className={TOOLBAR_BTN}
+          disabled={disabled || !canRedo}
+          onMouseDown={run(REDO_COMMAND)}
+        >
+          <Redo2 className="h-4 w-4" />
+        </button>
+      </Tip>
     </>
+  );
+}
+
+/**
+ * One item's glyph. A swatch rides at the foot of the icon rather than beside it, so a colored item is the
+ * same 16px box as an uncolored one and the toolbar row keeps one height.
+ */
+function ItemGlyph({ item }: { item: ToolbarItem }) {
+  if (!item.swatch) return <item.Icon className="h-4 w-4" />;
+  return (
+    <span className="relative block h-4 w-4">
+      <item.Icon className="h-4 w-4" />
+      <span
+        aria-hidden
+        style={OPAQUE_SWATCH}
+        className={cn('absolute inset-x-0 bottom-0 h-[3px] flexible-marker', item.swatch)}
+      />
+    </span>
   );
 }
 
@@ -137,7 +182,7 @@ function SplitButton({ items, label, disabled, apply }: {
 }) {
   const [current, setCurrent] = useState(items[0]);
   const [open, setOpen] = useState(false);
-  const { Icon, title } = current;
+  const { title } = current;
 
   const press = (item: ToolbarItem) => (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -148,24 +193,30 @@ function SplitButton({ items, label, disabled, apply }: {
 
   return (
     <span className="flex items-center">
-      <button
-        type="button" title={title} aria-label={title} disabled={disabled}
-        onMouseDown={press(current)}
-        className={cn(TOOLBAR_BTN, 'rounded-r-none pr-1')}
-      >
-        <Icon className="h-4 w-4" />
-      </button>
+      <Tip tip={title}>
+        <button
+          type="button" disabled={disabled}
+          onMouseDown={press(current)}
+          className={cn(TOOLBAR_BTN, 'rounded-r-none pr-1')}
+        >
+          <ItemGlyph item={current} />
+        </button>
+      </Tip>
       <span className="h-4 w-hairline bg-border" aria-hidden />
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button" title={label} aria-label={label} disabled={disabled}
-            onMouseDown={(event) => event.preventDefault()}
-            className={cn(TOOLBAR_BTN, 'rounded-l-none px-1 py-2 data-[state=open]:bg-accent data-[state=open]:text-foreground')}
-          >
-            <ChevronDown className="h-3 w-3" />
-          </button>
-        </PopoverTrigger>
+        {/* Two triggers on one button: the tip wraps the popover's trigger, which passes both sets of
+            props down through its own `asChild`. */}
+        <Tip tip={label}>
+          <PopoverTrigger asChild>
+            <button
+              type="button" disabled={disabled}
+              onMouseDown={(event) => event.preventDefault()}
+              className={cn(TOOLBAR_BTN, 'rounded-l-none px-1 py-2 data-[state=open]:bg-accent data-[state=open]:text-foreground')}
+            >
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          </PopoverTrigger>
+        </Tip>
         <PopoverContent
           align="start" className="w-auto p-1"
           onOpenAutoFocus={(event) => event.preventDefault()}
@@ -176,7 +227,7 @@ function SplitButton({ items, label, disabled, apply }: {
                 key={item.action} type="button" onMouseDown={press(item)}
                 className="flex items-center gap-2 rounded px-2 py-1.5 text-helper text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                <item.Icon className="h-4 w-4" />
+                <ItemGlyph item={item} />
                 {item.title}
               </button>
             ))}
@@ -201,14 +252,17 @@ function MarkdownToolbar({ parse, disabled }: { parse: ChipVocabulary['parse']; 
   return (
     <div className="flex flex-wrap items-center gap-1">
       {MARKDOWN_TOOLBAR.map(({ action, Icon, title }) => (
-        <button
-          key={action} type="button" title={title} aria-label={title} disabled={disabled}
-          onMouseDown={(event) => { event.preventDefault(); apply(action); }}
-          className={TOOLBAR_BTN}
-        >
-          <Icon className="h-4 w-4" />
-        </button>
+        <Tip key={action} tip={title}>
+          <button
+            type="button" disabled={disabled}
+            onMouseDown={(event) => { event.preventDefault(); apply(action); }}
+            className={TOOLBAR_BTN}
+          >
+            <Icon className="h-4 w-4" />
+          </button>
+        </Tip>
       ))}
+      <SplitButton items={HIGHLIGHT_ITEMS} label="Highlight color" disabled={disabled} apply={apply} />
       <SplitButton items={HEADING_ITEMS} label="Heading level" disabled={disabled} apply={apply} />
       <SplitButton items={LIST_ITEMS} label="List type" disabled={disabled} apply={apply} />
       <SplitButton items={INSERT_ITEMS} label="Insert" disabled={disabled} apply={apply} />
@@ -366,17 +420,18 @@ function VariableToolbar({ vocab, interactive }: {
     <div data-editor-find-skip className="flex items-center gap-1 min-w-0 overflow-x-auto sm:flex-wrap sm:overflow-visible [scrollbar-width:none] [&::-webkit-scrollbar]{display:none}">
       <span className="text-meta text-muted-foreground mr-1 flex-shrink-0">Insert:</span>
       {items.map((v) => (
-        <button
-          key={v.token}
-          type="button"
-          disabled={!interactive}
-          onClick={interactive ? () => insert(v.token) : undefined}
-          title={interactive ? `Insert ${v.label}` : v.label}
-          className={cn(CHIP_BASE, 'border flex-shrink-0', interactive ? 'cursor-pointer hover:brightness-95' : 'cursor-default')}
-          style={{ backgroundColor: v.color, color: '#000' }}
-        >
-          {v.label}
-        </button>
+        // Nothing to add while inert: the tip said the label the chip is already showing.
+        <Tip key={v.token} tip={interactive ? `Insert ${v.label}` : undefined} labelsChild={false}>
+          <button
+            type="button"
+            disabled={!interactive}
+            onClick={interactive ? () => insert(v.token) : undefined}
+            className={cn(CHIP_BASE, 'border flex-shrink-0', interactive ? 'cursor-pointer hover:brightness-95' : 'cursor-default')}
+            style={{ backgroundColor: v.color, color: '#000' }}
+          >
+            {v.label}
+          </button>
+        </Tip>
       ))}
     </div>
   );
@@ -387,105 +442,6 @@ function VariableToolbar({ vocab, interactive }: {
 const EDITOR_CLASS =
   'h-full min-h-[160px] w-full overflow-auto rounded-md border border-input bg-background px-3 py-2 ' +
   'text-label outline-none whitespace-pre-wrap';
-
-// --- edit <-> preview scroll sync ---
-// The two panes have very different heights (a chip is one short token; its expanded value can be many
-// lines), so a whole-document fraction maps poorly. Instead we anchor on the variable elements both panes
-// share in the same order — Lexical chips (`data-lexical-decorator`) in Edit, expanded `<mark>`s in
-// Preview — and record the viewport center as a position *between two chips*, which we then reproduce in
-// the other pane. Non-uniform expansion above/below the reading spot no longer skews the result.
-
-/** A captured scroll position: interpolated between shared anchors `seg`..`seg+1`, or a whole-document
- *  fraction when the pane has no chips to align on. */
-type ScrollAnchor = { seg: number; t: number } | { frac: number };
-
-const anchorSelector = (tab: string) => (tab === 'edit' ? '[data-lexical-decorator]' : 'mark');
-
-/** Anchor element tops (px from content top), bracketed by the content's own top (0) and bottom
- *  (scrollHeight) — giving `chips + 1` gaps to interpolate within. */
-function anchorPositions(el: HTMLElement, tab: string): number[] {
-  const contentTop = el.getBoundingClientRect().top - el.scrollTop;
-  const tops = Array.from(el.querySelectorAll<HTMLElement>(anchorSelector(tab)))
-    .map((a) => a.getBoundingClientRect().top - contentTop);
-  return [0, ...tops, el.scrollHeight];
-}
-
-/**
- * The anchor for one position in the pane's content, measured in px from the content's top. Scrolling
- * passes the viewport centre; the caret passes its own offset, which is what makes the preview follow the
- * line being written rather than the middle of the view.
- */
-function anchorAt(el: HTMLElement, tab: string, offset: number): ScrollAnchor {
-  const pos = anchorPositions(el, tab);
-  if (pos.length <= 2) return { frac: offset / el.scrollHeight }; // no chips → whole-document fraction
-  let seg = 0;
-  while (seg < pos.length - 2 && offset >= pos[seg + 1]) seg++;
-  return { seg, t: (offset - pos[seg]) / (pos[seg + 1] - pos[seg] || 1) };
-}
-
-function captureAnchor(el: HTMLElement | null, tab: string): ScrollAnchor | null {
-  if (!el || el.scrollHeight <= el.clientHeight) return null;
-  return anchorAt(el, tab, el.scrollTop + el.clientHeight / 2);
-}
-
-/** The top of one node's box, measuring a text node through a range since only elements have rects. */
-function nodeTop(node: Node): number | null {
-  if (node.nodeType === Node.ELEMENT_NODE) {
-    const r = (node as Element).getBoundingClientRect();
-    return r.height ? r.top : null;
-  }
-  const r = document.createRange();
-  r.selectNodeContents(node);
-  const box = r.getBoundingClientRect();
-  return box.height ? box.top : null;
-}
-
-/** Viewport y of the caret, or null when nothing measurable can be found. */
-function caretTop(range: Range): number | null {
-  // A collapsed range inside text has zero width but a real line height — that is the good case.
-  const rect = range.getBoundingClientRect();
-  if (rect.height) return rect.top;
-
-  // Beside a chip there is no text box to measure: the chip is a Lexical decorator (an element), so a
-  // caret placed against it collapses to an empty rect. Measure the node the caret sits against instead —
-  // without this the caret reads as position zero and the preview jumps to the top instead of following.
-  const { startContainer, startOffset } = range;
-  if (startContainer.nodeType === Node.ELEMENT_NODE) {
-    const kids = (startContainer as Element).childNodes;
-    for (const neighbor of [kids[startOffset], kids[startOffset - 1]]) {
-      const top = neighbor ? nodeTop(neighbor) : null;
-      if (top !== null) return top;
-    }
-  }
-
-  // Last resort: the element the caret is in. Coarse, but never wrong by more than its own height.
-  const host = startContainer.nodeType === Node.ELEMENT_NODE
-    ? (startContainer as Element)
-    : startContainer.parentElement;
-  return host ? nodeTop(host) : null;
-}
-
-function caretOffset(el: HTMLElement): number | null {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return null;
-  const range = sel.getRangeAt(0);
-  if (!el.contains(range.startContainer)) return null;
-  const top = caretTop(range);
-  if (top === null) return null;
-  return top - (el.getBoundingClientRect().top - el.scrollTop);
-}
-
-function applyAnchor(el: HTMLElement | null, tab: string, anchor: ScrollAnchor): void {
-  if (!el) return;
-  let center: number;
-  if ('frac' in anchor) center = anchor.frac * el.scrollHeight;
-  else {
-    const pos = anchorPositions(el, tab);
-    const seg = Math.min(anchor.seg, pos.length - 2); // guard against a differing anchor count
-    center = pos[seg] + anchor.t * (pos[seg + 1] - pos[seg]);
-  }
-  el.scrollTop = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, center - el.clientHeight / 2));
-}
 
 /** The substituted prompt, with each variable's value lightly tinted its accent color (matching the
  *  chip and the Insert key) so it's obvious which text came from which variable. */
@@ -516,11 +472,12 @@ function PreviewPane({ value, previewValues, vocab, scrollRef, onScroll }: {
               aria-label={EMPTY_MARK_LABEL}
               className={EMPTY_MARK_CLASS}
               style={emptyMarkStyle(color)}
+              data-tint=""
             />
           );
         }
         return (
-          <mark key={i} className={TINT_MARK_CLASS} style={tintMarkStyle(color)}>
+          <mark key={i} className={TINT_MARK_CLASS} style={tintMarkStyle(color)} data-tint="">
             {rendered}
           </mark>
         );
@@ -565,7 +522,7 @@ function MarkdownPreviewPane({ value, previewValues, vocab, scrollRef, onScroll 
  * With `markdown`, it also gains a formatting toolbar and its Preview renders markdown instead of tinting
  * chips — for author-facing prose fields (world description, readme) that the player reads as markdown.
  */
-const PromptField = ({ value, onChange, variables = [], vocabulary, previewValues, onPreviewOpen, markdown = false, resizable = false, placeholder, className, readOnly = false, ariaLabel, sampleData = false, onRequestEdit, readOnlyReason, onRequestFullscreen, fullscreen: fullscreenProp, insertTrigger, label, labelAside }: {
+const PromptField = ({ value, onChange, variables = [], vocabulary, previewValues, onReroll, insertOwnerId, markdown = false, resizable = false, placeholder, className, readOnly = false, ariaLabel, sampleData = false, onRequestEdit, readOnlyReason, onRequestFullscreen, fullscreen: fullscreenProp, insertTrigger, label, labelAside }: {
   value: string;
   onChange: (v: string) => void;
   /** Prompt-variable palette (used when no explicit `vocabulary` is given — the default prompt family). */
@@ -573,8 +530,12 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   /** Override the token family (e.g. world placeholders). Defaults to the prompt vocabulary from `variables`. */
   vocabulary?: ChipVocabulary;
   previewValues?: Record<string, string>;
-  /** Fired when the Preview tab is opened — lets a caller re-derive `previewValues` (e.g. re-roll Wildcards). */
-  onPreviewOpen?: () => void;
+  /** Draw the chips in this field again. Given one, the chrome offers a Reroll button while the text holds
+   *  a chip — placeholder fields pass it, prompt fields have nothing to redraw. */
+  onReroll?: () => void;
+  /** The placeholder whose own values this field edits, told to the shared palette so it can leave out
+   *  anything that would loop back here. */
+  insertOwnerId?: string;
   /** The field's caption. Given one, the field owns it: a plain field puts it on the button row, and a
    *  markdown field keeps it on its own line and puts the formatting buttons on the button row instead —
    *  either way one row shorter than a caption stacked above the chrome. */
@@ -643,9 +604,9 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   // wrapper on the way in and remembers it for the way back.
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const morph = useMorphFullscreen(bodyRef);
-  // `mounted` and not `phase === 'open'`: the body has to stay inside the overlay while it shrinks, or
-  // there would be nothing travelling.
-  const fullscreen = hostedFullscreen ? !!fullscreenProp : morph.mounted;
+  // `contentInOverlay`, not `mounted`: closing is the overlay fading out in place, so the body has to be
+  // back in its docked slot — under the fading panel — from the first frame of the close.
+  const fullscreen = hostedFullscreen ? !!fullscreenProp : morph.contentInOverlay;
   // The field's height, held open while its body is away in the overlay. Without it the panel this sits in
   // gets shorter by exactly one editor, and the browser clamps its scroll to the new bottom — so opening
   // full screen jumped the page behind it, and closing jumped it back.
@@ -684,10 +645,10 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
     if (!split || !edit || !target) return;
     const offset = caretOffset(edit);
     if (offset === null) return;
-    const anchor = anchorAt(edit, 'edit', offset);
+    const anchor = anchorAt(edit, PROMPT_ANCHORS.edit, offset);
     proxyAnchor.current = anchor;
     applying.current = true;
-    applyAnchor(target, 'preview', anchor);
+    applyAnchor(target, PROMPT_ANCHORS.preview, anchor);
     releaseApplying();
   }, [split]);
 
@@ -708,13 +669,13 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     if (applying.current) return;
     const from = e.currentTarget === editScrollRef.current ? 'edit' : 'preview';
-    const anchor = captureAnchor(e.currentTarget, from);
+    const anchor = captureAnchor(e.currentTarget, PROMPT_ANCHORS[from]);
     proxyAnchor.current = anchor;
     if (!split || !anchor) return;
     const target = from === 'edit' ? previewScrollRef.current : editScrollRef.current;
     if (!target) return;
     applying.current = true;
-    applyAnchor(target, from === 'edit' ? 'preview' : 'edit', anchor);
+    applyAnchor(target, from === 'edit' ? PROMPT_ANCHORS.preview : PROMPT_ANCHORS.edit, anchor);
     releaseApplying();
   };
 
@@ -744,7 +705,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
     const run = () => {
       const el = tab === 'edit' ? editScrollRef.current : previewScrollRef.current;
       if (!el) { applying.current = false; return; }
-      applyAnchor(el, tab, anchor);
+      applyAnchor(el, tab === 'edit' ? PROMPT_ANCHORS.edit : PROMPT_ANCHORS.preview, anchor);
       if (el.scrollHeight !== prevHeight && tries < 10) {
         prevHeight = el.scrollHeight;
         tries++;
@@ -835,7 +796,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
       touchX.current = null;
       if (Math.abs(dx) < 60) return;
       const next = dx < 0 ? 'preview' : 'edit';
-      if (next !== tab) { setTab(next); if (next === 'preview') onPreviewOpen?.(); }
+      if (next !== tab) setTab(next);
     },
   } : {};
 
@@ -862,29 +823,43 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
             <span className="mx-0.5 w-hairline self-stretch bg-border" />
           </>
         )}
+        {/* Redrawing is its own group, left of history: it changes what the Preview shows, never the text,
+            so it has no place among the edits undo walks back through. Only offered while there is a chip
+            to redraw. */}
+        {onReroll && hasChips && (
+          <>
+            <Tip tip="Reroll placeholders">
+              <button type="button" className={TOOLBAR_BTN} onClick={onReroll}>
+                <Dices className="h-4 w-4" />
+              </button>
+            </Tip>
+            <span className="mx-0.5 w-hairline self-stretch bg-border" />
+          </>
+        )}
         <HistoryButtons disabled={editingDisabled} />
         <span className="mx-0.5 w-hairline self-stretch bg-border" />
-        {showTabs && fullscreen && effectiveWidth - 12 >= MIN_PANE_WIDTH * 2 && (
+        {showTabs && splitAvailable(effectiveWidth, fullscreen) && (
+          <Tip tip={split ? 'Show one pane at a time' : 'Show edit and preview side by side'}>
+            <button
+              type="button"
+              disabled={!previewEnabled}
+              onClick={() => setSplitMode(split ? 'tabs' : 'split')}
+              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              {split ? <Square className="h-4 w-4" /> : <Columns2 className="h-4 w-4" />}
+            </button>
+          </Tip>
+        )}
+        {/* The tip is also the name the fullscreen shell hands focus back by, so the two cannot drift. */}
+        <Tip tip={fullscreen ? 'Exit full screen' : 'Edit full screen'}>
           <button
             type="button"
-            disabled={!previewEnabled}
-            onClick={() => setSplitMode(split ? 'tabs' : 'split')}
-            title={split ? 'Show one pane at a time' : 'Show edit and preview side by side'}
-            aria-label={split ? 'Show one pane at a time' : 'Show edit and preview side by side'}
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            onClick={toggleFullscreen}
+            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            {split ? <Square className="h-4 w-4" /> : <Columns2 className="h-4 w-4" />}
+            {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
-        )}
-        <button
-          type="button"
-          onClick={toggleFullscreen}
-          title={fullscreen ? 'Exit full screen' : 'Edit full screen'}
-          aria-label={fullscreen ? 'Exit full screen' : 'Edit full screen'}
-          className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
+        </Tip>
       </div>
     </div>
   );
@@ -895,7 +870,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
       <div className="flex-1 min-w-0 flex flex-col">{previewSurface}</div>
     </div>
   ) : showTabs ? (
-    <Tabs value={tab} onValueChange={(v) => { setTab(v); if (v === 'preview') onPreviewOpen?.(); }} className={cn('flex flex-col flex-1 min-h-0', resizeClass)}>
+    <Tabs value={tab} onValueChange={setTab} className={cn('flex flex-col flex-1 min-h-0', resizeClass)}>
       {swipeable ? (
         // Dots, not tab buttons: the gesture is the control, and a full-width tab bar on mobile spends
         // height the editor just got back.
@@ -963,15 +938,19 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
             Settings dialog, and Radix parks `pointer-events: none` on the body while one is open — a
             plain portaled div inherits that and renders dead, under Radix's own overlay. Letting Radix
             own the stack also gives the fullscreen its focus trap and Escape for free. */}
-        {fullscreen && !hostedFullscreen ? (
+        {!hostedFullscreen && morph.mounted ? (
           <>
-            <div aria-hidden className="flex-shrink-0" style={{ height: heldHeight ?? undefined }} />
+            {/* While closing, the body is back here and the still-mounted shell above it is just the
+                fading panel — so the spacer that held the body's slot open gives way to the body itself. */}
+            {fullscreen
+              ? <div aria-hidden className="flex-shrink-0" style={{ height: heldHeight ?? undefined }} />
+              : body}
             <FullscreenShell
               morph={morph}
               title={ariaLabel ?? 'Prompt editor'}
               returnFocus={() => bodyRef.current?.querySelector<HTMLElement>('button[aria-label="Edit full screen"]')}
             >
-              {body}
+              {fullscreen ? body : null}
             </FullscreenShell>
           </>
         ) : (
@@ -985,7 +964,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
         {insertTrigger && !readOnly && (
           <>
             <ChipTypeaheadPlugin trigger={insertTrigger} vocab={vocab} />
-            <ChipInsertTargetPlugin vocab={vocab} />
+            <ChipInsertTargetPlugin vocab={vocab} ownerId={insertOwnerId} />
           </>
         )}
       </PromptDragContext.Provider>
