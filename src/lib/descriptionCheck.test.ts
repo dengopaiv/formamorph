@@ -85,6 +85,57 @@ describe('parseFindings', () => {
     expect(parseFindings('   ')).toEqual([]);
   });
 
+  it('collapses a checklist answer to the items that actually failed', () => {
+    // The format that made a 24B finetune do the work at all (§14). Line by line this is nine findings, six
+    // of which say nothing is wrong — measured at eight times as many dialog lines as the model reported.
+    const raw = [
+      '1. runs the harbor office at the river mouth',
+      'The description accounts for this.',
+      '',
+      '2. pronounced limp, winch accident on the dock years ago',
+      'The description accounts for this.',
+      '',
+      '3. SECRET: takes bribes from the night barges',
+      'The description does not account for this.',
+      '',
+      '4. SECRET: his younger brother drowned at this landing',
+      'The description does not account for this.',
+    ].join('\n');
+    const findings = parseFindings(raw);
+    expect(findings).toHaveLength(2);
+    expect(findings[0]).toContain('takes bribes');
+    expect(findings[0]).toContain('does not account');
+    expect(findings[1]).toContain('brother drowned');
+  });
+
+  it('is not fooled by "does not account for this" containing "account for this"', () => {
+    // The one subtle thing in the whole parser: the pass pattern is a substring of the failure phrasing, so
+    // order of testing decides whether every real finding is silently dropped.
+    const raw = '1. a fact\nThe description does not account for this.\n2. another fact\nThe description accounts for this.';
+    expect(parseFindings(raw)).toEqual(['a fact — The description does not account for this.']);
+  });
+
+  it('keeps a verdict it cannot classify, rather than assuming the item passed', () => {
+    // A parser that guesses wrong here hides a real fault, so anything unreadable survives as a finding.
+    const raw = '1. a fact\nThe description handles this oddly.\n2. another fact\nThe description accounts for this.';
+    expect(parseFindings(raw)).toEqual(['a fact — The description handles this oddly.']);
+  });
+
+  it('leaves a numbered list of findings alone when it is not a checklist', () => {
+    // Two numbered items whose second line is the same finding wrapped. No verdict anywhere, so the checklist
+    // path must not claim it — the old behaviour has to survive the new one.
+    const raw = '1. The brief says he limps\n2. The brief says the market opens at dusk';
+    expect(parseFindings(raw)).toEqual([
+      'The brief says he limps',
+      'The brief says the market opens at dusk',
+    ]);
+  });
+
+  it('still reads a wrapped free-text finding as one finding per line', () => {
+    const raw = '- The brief states a one-eyed dog; the note never mentions an animal.';
+    expect(parseFindings(raw)).toEqual(['The brief states a one-eyed dog; the note never mentions an animal.']);
+  });
+
   it('strips bullets and numbering a model adds to its list', () => {
     expect(parseFindings('- first thing\n* second thing\n1. third\n2) fourth')).toEqual([
       'first thing', 'second thing', 'third', 'fourth',

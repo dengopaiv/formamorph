@@ -361,62 +361,11 @@ function isEcho(finding, arm) {
   return false;
 }
 
-/**
- * A per-line verdict report, which is what `--numbered` actually produces and what the shipped parser cannot
- * represent.
- *
- * Asked to work through a numbered brief, cydonia-24b answers in pairs: the brief line, then the verdict on
- * the line below it.
- *
- *     7. SECRET: takes bribes from the night barges to keep their cargo out of the ledger
- *     The description does not account for this.
- *
- * `parseFindings` keeps both of those as separate findings, because it splits on newlines and drops nothing
- * that is not literally NONE. So the fact line reads as a paste and the verdict line carries no fact for a
- * pattern to match — and a **completely correct** answer, three missing secrets named and six present facts
- * passed, scored 0. That is a scorer failure and it flattered nobody: it lost the best result measured on any
- * model in this whole investigation.
- *
- * The pairing is reconstructed here, the verdict decides whether the pair is a finding, and the brief line
- * supplies the fact text the patterns need. `null` when the output is not this shape, so free-text answers
- * keep going through `parseFindings` unchanged.
- *
- * **This is also a finding about the app, not only about the probe.** Shown this output, the 🔍 dialog would
- * list nine findings on a subject with three problems, six of them saying "The description accounts for
- * this." Any per-line format needs a parser that reads verdicts; the lenient one-per-line parser cannot.
- */
-const PASS_VERDICT = /\b(?:accounts?|accounted)\s+for\s+(?:this|it)\b|\bis accounted for\b/i;
-const NEG_ACCOUNT = /\b(?:not|never|fails? to|doesn'?t|does not)\s+(?:\w+\s+){0,2}account/i;
-const NOT_A_PROBLEM = /\bnot (?:a )?(?:contradict\w*|conflict\w*|disagree\w*|issue|problem|finding)/i;
-const FAIL_VERDICT = /\b(does not|doesn'?t|never|fails? to|no mention|missing|absent|omit\w*|contradict\w*|conflict\w*|not)\b/i;
-
-function parseLineVerdicts(raw, brief) {
-  const briefLines = brief.split("\n").map((l) => l.replace(/^\s*[-*•]\s*/, "").trim());
-  const items = [];
-  let cur = null;
-  for (const line of raw.split("\n").map((l) => l.trim())) {
-    const m = line.match(/^(\d{1,2})[.)]\s*(.*)$/);
-    if (m) {
-      if (cur) items.push(cur);
-      cur = { n: Number(m[1]), head: m[2], verdict: [] };
-    } else if (cur && line) cur.verdict.push(line);
-  }
-  if (cur) items.push(cur);
-  // Two numbered items each carrying a verdict is the shape; anything less is a normal list of findings.
-  if (items.filter((i) => i.verdict.length).length < 2) return null;
-
-  const findings = [];
-  let unknown = 0;
-  for (const it of items) {
-    const v = it.verdict.join(" ");
-    const fact = it.head || briefLines[it.n - 1] || "";
-    if ((PASS_VERDICT.test(v) && !NEG_ACCOUNT.test(v)) || NOT_A_PROBLEM.test(v)) continue;
-    if (FAIL_VERDICT.test(v)) { findings.push(`${fact} — ${v}`); continue; }
-    unknown++;
-    findings.push(`${fact} — ${v}`);
-  }
-  return { findings, unknown, items: items.length };
-}
+// The verdict parse now lives in the shipped module, so the probe measures the app's own reading of a
+// checklist answer rather than its own idea of one. It was written here first and ported once it had earned
+// its place: the same rule, run over the same dumps, reproduces §14's table exactly, which is the check that
+// the port did not quietly change what is being measured. `parseFindings` applies it internally, so what the
+// probe scores and what the dialog would list are once again the same list.
 
 async function call(model, sys, user, seed) {
   const headers = { "Content-Type": "application/json" };
@@ -447,7 +396,7 @@ const blank = () => ({
   tokSum: 0, tokMax: 0, tokRuns: 0,
   byClass: Object.fromEntries(CLASSES.map((k) => [k, {
     runs: 0, hits: 0, findSum: 0, agreeWorded: 0, saidNone: 0, echoed: 0, echoOnly: 0,
-    secretsFound: 0, secretsTotal: 0, structured: 0, shownSum: 0, unknownVerdicts: 0,
+    secretsFound: 0, secretsTotal: 0, structured: 0, shownSum: 0,
   }])),
 });
 
@@ -470,10 +419,14 @@ function scoreRow(T, arm, out, label) {
   // Two parses, and which one ran is printed, because they answer different questions. `parseFindings` is
   // what the app would show the author. The verdict parse is what the model actually said. When they differ
   // the gap is a shipping requirement, not a probe detail.
-  const shown = parseFindings(out.raw);
-  const structured = parseLineVerdicts(out.raw, arm.brief);
-  const findings = structured ? structured.findings : shown;
-  if (structured) { C.structured++; C.shownSum += shown.length; C.unknownVerdicts += structured.unknown; }
+  const findings = parseFindings(out.raw);
+  // What a line-by-line reading would have shown, for the same output. The gap is the whole point of §14:
+  // this format is a finding per item whether or not the item is at fault, and the shipped parser now
+  // collapses it. Counted only when the two differ, so the number is the inflation that was removed.
+  const naive = out.raw.split(String.fromCharCode(10))
+    .map((l) => l.trim().replace(/^(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .filter((l) => l && !SAID_NONE.test(l));
+  if (naive.length !== findings.length) { C.structured++; C.shownSum += naive.length; }
   C.findSum += findings.length;
 
   // The laundered arm asks a different question than the planted ones: not "was the plant named" but "how
@@ -609,9 +562,8 @@ for (const model of modelList) {
   if (st) {
     const shown = activeClasses.reduce((a, k) => a + T.byClass[k].shownSum, 0);
     const scored = activeClasses.reduce((a, k) => a + (T.byClass[k].structured ? T.byClass[k].findSum : 0), 0);
-    const unk = activeClasses.reduce((a, k) => a + T.byClass[k].unknownVerdicts, 0);
-    console.log(`  ${"verdict-parse".padEnd(15)}${st} run(s) answered per line · the app's parser would show `
-      + `${shown} findings where the model reported ${scored}${unk ? ` · ${unk} verdict(s) unreadable` : ""}`);
+    console.log(`  ${"verdict-parse".padEnd(15)}${st} run(s) answered as a checklist · a line-by-line read `
+      + `would show ${shown} findings where the shipped parser reports ${scored}`);
   }
   console.log(`  ${"format".padEnd(15)}rewrites ${T.rewrote} · preamble ${T.preamble} · single-blob ${T.blob}`);
   const avgTok = T.tokRuns ? (T.tokSum / T.tokRuns).toFixed(0) : "—";
