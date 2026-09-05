@@ -9,7 +9,7 @@ Nothing here is upstream's, and nothing here ships. Anything meant for upstream 
 
 | | |
 |---|---|
-| `TODO.md` | Where every branch stands and what is owed on it, with one status word each. Start here after a gap. |
+| `TODO.md` | The working file: what is in flight, what state each thing is in, and the channel for saying so between sessions. Write in its Inbox; lines starting `@me` are yours and are never edited. Start here after a gap. |
 | `runpod-exl3.md` | From an empty RunPod account to a working Formamorph preset, running an EXL3 quant on two rented GPUs under TabbyAPI or text-generation-webui. The procedure; `FORMAMORPH-ENDPOINT-NOTES.md` is the argument behind it. |
 | `description-consistency-design.md` | The ✨ drafting buttons: the round-trip that launders authored facts out of a description, and checking a draft against the world's names, lore and locations. Version zero built; the probe results are in §11. |
 | `FORMAMORPH-ENDPOINT-NOTES.md` | Pointing the app at a text endpoint, from reading the packaged build: URL normalization, preset fields, where presets live on disk, koboldcpp and OpenRouter setup, RunPod, throughput math, and a two-GPU quickstart for vLLM and TabbyAPI/EXL3. Predates the code work. |
