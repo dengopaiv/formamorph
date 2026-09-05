@@ -2,15 +2,25 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventAckModal } from './EventAckModal';
 import MessageService from '@/services/MessageService';
+import EventService from '@/services/EventService';
 import { isEventAcknowledged, markEventAcknowledged } from '@/lib/eventSeenStore';
-import { daysFrom, serverEvent } from '@/test/serverEvents';
+import { daysFrom, serverEvent, withoutProse } from '@/test/serverEvents';
 import type { ServerEvent } from '@/types';
+
+const server = vi.hoisted(() => ({ detail: {} as Record<string, unknown> }));
+
+vi.mock('@/services/EventService', () => ({
+  default: { fetchOne: vi.fn(async (id: string) => server.detail[id]) },
+}));
 
 const event = (over: Partial<ServerEvent> = {}): ServerEvent =>
   serverEvent({ body: 'Enter by publishing a world with the contest switch on.', ...over });
 
+
 beforeEach(() => {
   localStorage.clear();
+  server.detail = {};
+  vi.mocked(EventService.fetchOne).mockClear();
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -28,6 +38,50 @@ describe('EventAckModal', () => {
     expect(screen.getByText('A Contest Has Started')).toBeInTheDocument();
     expect(screen.getByText('Winter World-Building Contest')).toBeInTheDocument();
     expect(screen.getByText(/Enter by publishing a world/)).toBeInTheDocument();
+  });
+
+  it('reads the body back out of the server when the row came without one', async () => {
+    // A contest waiting on results comes from the archive feed, which is served without its prose — the
+    // poster is one of only two surfaces that show any, so it fetches the one event it is about.
+    const full = event({ body: 'The contest is closed. Judging has begun.' });
+    server.detail = { e1: full };
+
+    render(<EventAckModal events={[withoutProse(full)]} isAuthenticated={false} />);
+
+    expect(await screen.findByText(/Judging has begun/)).toBeInTheDocument();
+    expect(EventService.fetchOne).toHaveBeenCalledWith('e1');
+  });
+
+  it('asks for nothing further when the row already carries its body', () => {
+    render(<EventAckModal events={[event()]} isAuthenticated={false} />);
+
+    expect(screen.getByText(/Enter by publishing a world/)).toBeInTheDocument();
+    expect(EventService.fetchOne).not.toHaveBeenCalled();
+  });
+
+  it('waits for the body rather than offering a Got It that would bury it', async () => {
+    // Acknowledging is once and for good, so a poster answered in the moment before its body arrived is
+    // a body nobody ever sees. Nothing is shown until the read settles.
+    let arrive: (full: ServerEvent) => void = () => {};
+    vi.mocked(EventService.fetchOne).mockReturnValueOnce(new Promise((resolve) => { arrive = resolve; }));
+    const full = event({ body: 'The contest is closed. Judging has begun.' });
+
+    render(<EventAckModal events={[withoutProse(full)]} isAuthenticated={false} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    arrive(full);
+
+    expect(await screen.findByText(/Judging has begun/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Got It' })).toBeInTheDocument();
+  });
+
+  it('posts it anyway when the body cannot be read, so the poster is never one nobody can dismiss', async () => {
+    vi.mocked(EventService.fetchOne).mockRejectedValueOnce(new Error('offline'));
+
+    render(<EventAckModal events={[withoutProse(event())]} isAuthenticated={false} />);
+
+    expect(await screen.findByText('Winter World-Building Contest')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Got It' })).toBeInTheDocument();
   });
 
   it('closes only by being acknowledged — no Escape, no X to scroll past it with', () => {
@@ -88,21 +142,23 @@ describe('EventAckModal', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('posts the ending separately, naming the winner and marking that broadcast read', async () => {
+  it('posts the ending separately, naming first place and marking that broadcast read', async () => {
     const markRead = vi.spyOn(MessageService, 'markRead').mockResolvedValue();
     markEventAcknowledged('e1', 'start');
-    const ended = event({ winnerName: 'The Long Thaw', winnerAuthorName: 'sedgewright', winnerMessageId: 'm-win' });
+    const ended = event({
+      resultsAnnouncedAt: daysFrom(-1), placements: [{ place: 1, worldId: 'w1', worldName: 'The Long Thaw', authorName: 'sedgewright' }], resultsMessageId: 'm-results',
+    });
 
     render(<EventAckModal events={[ended]} isAuthenticated />);
 
-    expect(screen.getByText('Winner Announced')).toBeInTheDocument();
+    expect(screen.getByText('Results Announced')).toBeInTheDocument();
     expect(screen.getByText(/The Long Thaw/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Got It' }));
-    await waitFor(() => expect(markRead).toHaveBeenCalledWith('m-win'));
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith('m-results'));
   });
 
-  it('posts that judging has begun for a contest closed with no winner yet', async () => {
+  it('posts that judging has begun for a contest closed with its results still to come', async () => {
     const markRead = vi.spyOn(MessageService, 'markRead').mockResolvedValue();
     // The one a player who launched the app after the deadline gets: closed, undecided, unacknowledged.
     const closed = event({ startsAt: daysFrom(-20), endsAt: daysFrom(-1), endMessageId: 'm-end' });
@@ -110,7 +166,7 @@ describe('EventAckModal', () => {
     render(<EventAckModal events={[closed]} isAuthenticated onOpenEvent={vi.fn()} />);
 
     expect(screen.getByText('This Event Has Ended')).toBeInTheDocument();
-    // Not "See The Winner": there isn't one yet, and the entries are what there is to look at.
+    // Not "See The Results": there are none yet, and the entries are what there is to look at.
     expect(screen.getByRole('button', { name: 'View Entries' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Got It' }));
@@ -151,5 +207,94 @@ describe('EventAckModal', () => {
 
     expect(screen.getByText('An Announcement')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View Entries' })).not.toBeInTheDocument();
+  });
+});
+
+describe('the poster waiting its turn', () => {
+  it('holds while the intro animation still has the screen', () => {
+    render(<EventAckModal events={[event()]} isAuthenticated held />);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('posts as soon as the hold lifts, with nothing acknowledged in the meantime', () => {
+    const { rerender } = render(<EventAckModal events={[event()]} isAuthenticated held />);
+    expect(isEventAcknowledged('e1', 'start')).toBe(false);
+
+    rerender(<EventAckModal events={[event()]} isAuthenticated />);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('posts immediately when there is no intro to wait for', () => {
+    render(<EventAckModal events={[event()]} isAuthenticated />);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+});
+
+describe('what the organizer styled', () => {
+  const band = () => screen.getByRole('dialog').querySelector('.text-display')?.parentElement as HTMLElement;
+
+  it('keeps the app default when the event carries no styling', () => {
+    render(<EventAckModal events={[event()]} isAuthenticated />);
+
+    expect(band().className).toContain('bg-info');
+    expect(band().style.backgroundColor).toBe('');
+  });
+
+  it('keeps the app default on a server that has never heard of the styling fields', () => {
+    // The whole point of tolerating their absence: a client update must not break against a lagging deploy.
+    const legacy = event();
+    delete (legacy as Partial<ServerEvent>).posterColor;
+    delete (legacy as Partial<ServerEvent>).posterImageUrl;
+
+    render(<EventAckModal events={[legacy]} isAuthenticated />);
+
+    expect(band().className).toContain('bg-info');
+  });
+
+  it('paints the band in the organizer color, with text that holds against it', () => {
+    render(<EventAckModal events={[event({ posterColor: '#fef08a' })]} isAuthenticated />);
+
+    expect(band().style.backgroundColor).toBe('rgb(254, 240, 138)');
+    // Pale yellow: the fixed white would have been white-on-white.
+    expect(band().style.color).toBe('rgb(28, 25, 23)');
+    expect(band().className).not.toContain('bg-info');
+  });
+
+  it('leads with the organizer artwork under a wash', () => {
+    render(<EventAckModal events={[event({ posterImageUrl: '/api/event-posters/a.webp' })]} isAuthenticated />);
+
+    const art = screen.getByTestId('poster-band-image');
+    expect(art.style.backgroundImage).toContain('/api/event-posters/a.webp');
+  });
+
+  it('keeps the text light over artwork chosen without a color', () => {
+    // Nothing paints the band, so without this the title inherits the panel's own dark text and lands
+    // on a dark wash.
+    render(<EventAckModal events={[event({ posterImageUrl: '/api/event-posters/a.webp' })]} isAuthenticated />);
+
+    expect(band().style.color).toBe('rgb(255, 255, 255)');
+    expect(band().className).not.toContain('bg-info');
+  });
+
+  it('styles the ending the same way it styled the opening', () => {
+    markEventAcknowledged('e1', 'start');
+    const ended = event({
+      posterColor: '#1e3a8a', resultsAnnouncedAt: daysFrom(-1), placements: [{ place: 1, worldId: 'w1', worldName: 'The Long Thaw', authorName: 'sedgewright' }],
+    });
+
+    render(<EventAckModal events={[ended]} isAuthenticated />);
+
+    expect(screen.getByText('Results Announced')).toBeInTheDocument();
+    expect(band().style.backgroundColor).toBe('rgb(30, 58, 138)');
+  });
+
+  it('reads the body as markdown rather than as the symbols it was typed with', () => {
+    render(<EventAckModal events={[event({ body: 'Build **something strange**.' })]} isAuthenticated />);
+
+    // Streamdown renders emphasis as a tagged span rather than a `<strong>`.
+    expect(screen.getByText('something strange')).toHaveAttribute('data-streamdown', 'strong');
   });
 });

@@ -1,5 +1,6 @@
 import { TOKEN_PATTERN, splitToken } from './promptVariables';
 import { NONE_PLACEHOLDER } from './promptFallbacks';
+import { tilePieces, type AnatomyPiece, type AnatomySource, type ContextLabel, type TiledRuns } from './requestAnatomy';
 
 /** A prompt template parsed into an ordered run of literal text and variable tokens. */
 export type PromptSegment =
@@ -48,6 +49,51 @@ function isBlankValue(value: string): boolean {
  */
 export function renderPromptTemplate(template: string, values: Record<string, string>): string {
   return template.replace(TOKEN_RE, (match) => resolveToken(match, values) ?? match);
+}
+
+/**
+ * The same render as {@link renderPromptTemplate}, plus the run boundaries between what the author typed
+ * and what a chip injected — the Request Anatomy sidecar's first source. `content` is byte-identical to
+ * `renderPromptTemplate`'s output on the same inputs, which is what lets a labeled request be the request.
+ *
+ * A token with no value stays as the raw token, so it is counted as authored: an unresolved `<...>` is text
+ * the author typed and the model reads verbatim.
+ */
+export function renderPromptTemplateRuns(
+  template: string,
+  values: Record<string, string>,
+  labels: TemplateLabels,
+): TiledRuns {
+  return tilePieces(promptTemplatePieces(template, values, labels));
+}
+
+/** How a template's two kinds of text are labeled. `source` is the editor the template lives in, carried by
+ *  the author's prose and by its chips alike. A chip's run is identified by its own affix-free token;
+ *  `tokens` adds a context label to the few whose value another prompt wrote. */
+export interface TemplateLabels {
+  source: AnatomySource;
+  tokens?: Record<string, ContextLabel>;
+}
+
+/** The same split as {@link renderPromptTemplateRuns}, left as pieces so a caller can append its own
+ *  (the narration's OOC rider, a mode directive) before tiling the message as a whole. */
+export function promptTemplatePieces(
+  template: string,
+  values: Record<string, string>,
+  labels: TemplateLabels,
+): AnatomyPiece[] {
+  return parsePromptTemplate(template).map((segment) => {
+    if (segment.type === 'text') return { text: segment.value, source: labels.source };
+    const resolved = resolveToken(segment.token, values);
+    if (resolved === undefined) return { text: segment.token, source: labels.source };
+    const key = splitToken(segment.token)?.key ?? segment.token;
+    return {
+      text: resolved,
+      source: labels.source,
+      chip: key,
+      ...(labels.tokens?.[key] ? { contextLabel: labels.tokens[key] } : {}),
+    };
+  });
 }
 
 /**

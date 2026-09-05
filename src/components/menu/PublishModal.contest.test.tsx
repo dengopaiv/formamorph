@@ -3,7 +3,7 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'react-toastify';
 import { PublishModal } from './PublishModal';
-import WorldStorageService, { CONTEST_ALREADY_ENTERED, CONTEST_NOT_ACTIVE, CONTEST_WINNER } from '@/services/WorldStorageService';
+import WorldStorageService, { CONTEST_ALREADY_ENTERED, CONTEST_NOT_ACTIVE, CONTEST_PLACED } from '@/services/WorldStorageService';
 import PolicyService, { TERMS_REQUIRED } from '@/services/PolicyService';
 import { daysFrom, serverEvent } from '@/test/serverEvents';
 import type { PublishPayload } from '@/lib/publishPayload';
@@ -23,9 +23,14 @@ const contest = (over: Partial<ServerEvent> = {}): ServerEvent =>
 const listing = (id: string, name: string, over: Partial<WorldRecord> = {}): WorldRecord =>
   ({ _id: id, name, downloads: 0, ...over });
 
-const NO_POLICIES: PolicyState = { uploadGate: null, tagNotice: null };
+const NO_POLICIES: PolicyState = { uploadGate: null, tagNotice: null, privacyPolicy: null };
 
-const view = (props: { payload?: PublishPayload | null; events?: ServerEvent[]; open?: boolean } = {}) =>
+const view = (
+  props: {
+    payload?: PublishPayload | null; events?: ServerEvent[]; open?: boolean;
+    localId?: string; onLinked?: () => void;
+  } = {},
+) =>
   render(
     <PublishModal
       open={props.open ?? true}
@@ -33,6 +38,8 @@ const view = (props: { payload?: PublishPayload | null; events?: ServerEvent[]; 
       isAuthenticated
       payload={props.payload === undefined ? worldPayload : props.payload}
       events={props.events ?? [contest()]}
+      localId={props.localId}
+      onLinked={props.onLinked}
     />,
   );
 
@@ -44,6 +51,7 @@ beforeEach(() => {
   vi.spyOn(PolicyService, 'fetchPolicies').mockResolvedValue(NO_POLICIES);
   vi.spyOn(WorldStorageService, 'getUserWorlds').mockResolvedValue([]);
   vi.spyOn(WorldStorageService, 'publishItem').mockResolvedValue({});
+  vi.spyOn(WorldStorageService, 'linkWorldToListing').mockResolvedValue();
 });
 
 afterEach(() => {
@@ -171,6 +179,7 @@ describe('what the switch sends', () => {
     vi.mocked(PolicyService.fetchPolicies).mockResolvedValue({
       uploadGate: { title: 'Contributor terms', body: 'Be excellent.', tags: [], accepted: true },
       tagNotice: null,
+      privacyPolicy: null,
     });
 
     view();
@@ -244,10 +253,10 @@ describe('an author who already has an entry', () => {
     expect(screen.queryByText(/You already entered/)).toBeNull();
   });
 
-  it('explains the refusal when the entry turns out to be the winner', async () => {
+  it('explains the refusal when the entry turns out to have placed', async () => {
     vi.spyOn(WorldStorageService, 'withdrawFromContest').mockRejectedValue(
-      Object.assign(new Error('A contest winner cannot be withdrawn. Delete the listing if you want it gone.'), {
-        code: CONTEST_WINNER,
+      Object.assign(new Error('A world that placed cannot be withdrawn. Delete the listing if you want it gone.'), {
+        code: CONTEST_PLACED,
       }),
     );
     vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([
@@ -259,7 +268,7 @@ describe('an author who already has an entry', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Withdraw It' }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
-      'A contest winner cannot be withdrawn. Delete the listing if you want it gone.',
+      'A world that placed cannot be withdrawn. Delete the listing if you want it gone.',
     ));
     // Still theirs, still entered: nothing moved on a refusal.
     expect(screen.getByText(/You already entered Salt-Bright Reaches/)).toBeTruthy();
@@ -313,5 +322,183 @@ describe('the rules behind the switch', () => {
     await userEvent.click(await screen.findByRole('switch'));
     await userEvent.click(screen.getByRole('button', { name: 'Publish & Enter' }));
     expect(WorldStorageService.publishItem).toHaveBeenCalledWith(worldPayload, null, 'e1');
+  });
+});
+
+describe('updating the listing that holds the entry', () => {
+  const entered = () => {
+    vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([
+      listing('w1', 'Salt-Bright Reaches', { contest_event_id: 'e1' }),
+      listing('w2', 'Nine Quiet Doors'),
+    ]);
+  };
+
+  it('says which listing carries the entry, on the row where it is picked', async () => {
+    entered();
+    view();
+
+    expect(await screen.findByText('In Summer Isles Contest')).toBeTruthy();
+  });
+
+  it('badges only the entered listing, not every listing the author has', async () => {
+    entered();
+    view();
+
+    await screen.findByText('In Summer Isles Contest');
+    expect(screen.getAllByText(/^In Summer Isles Contest$/)).toHaveLength(1);
+  });
+
+  it('keeps the contest card up while that listing is the target, as context rather than a control', async () => {
+    entered();
+    view();
+
+    await userEvent.click(await screen.findByLabelText('Salt-Bright Reaches (w1, 0 downloads)'));
+
+    expect(screen.getByText('Summer Isles Contest')).toBeTruthy();
+    expect(screen.getByText(/This listing is your entry/)).toBeTruthy();
+    // No switch and no withdraw: the entry rides along either way, so neither is a choice about this upload.
+    expect(theSwitch()).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Withdraw Entry' })).toBeNull();
+  });
+
+  it('still hides the card when some other listing is the target', async () => {
+    entered();
+    view();
+
+    await userEvent.click(await screen.findByLabelText('Nine Quiet Doors (w2, 0 downloads)'));
+
+    expect(screen.queryByText('Summer Isles Contest')).toBeNull();
+  });
+
+  it('sends no contest flag when updating the entered listing', async () => {
+    entered();
+    view();
+
+    await userEvent.click(await screen.findByLabelText('Salt-Bright Reaches (w1, 0 downloads)'));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    expect(WorldStorageService.publishItem).toHaveBeenCalledWith(worldPayload, 'w1', null);
+  });
+});
+
+describe('when the entry publishes', () => {
+  it('closes the window, the way a plain publish does', async () => {
+    const onOpenChange = vi.fn();
+    render(
+      <PublishModal open onOpenChange={onOpenChange} isAuthenticated payload={worldPayload} events={[contest()]} />,
+    );
+
+    await userEvent.click(await screen.findByRole('switch'));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish & Enter' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves it open when the entry is refused, so the switch can be answered', async () => {
+    vi.mocked(WorldStorageService.publishItem).mockRejectedValue(
+      Object.assign(new Error('That contest is not taking entries.'), { code: CONTEST_NOT_ACTIVE }),
+    );
+    const onOpenChange = vi.fn();
+    render(
+      <PublishModal open onOpenChange={onOpenChange} isAuthenticated payload={worldPayload} events={[contest()]} />,
+    );
+
+    await userEvent.click(await screen.findByRole('switch'));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish & Enter' }));
+
+    await screen.findByText('That contest is not taking entries.');
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+});
+
+describe('linking the local world to what was published', () => {
+  const created = { id: 'srv-9', updated_at: '2026-01-02 03:04:05' };
+
+  it('points the published world at its new listing', async () => {
+    vi.mocked(WorldStorageService.publishItem).mockResolvedValue(created);
+    view({ localId: 'local-1' });
+
+    await screen.findByRole('switch');
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(WorldStorageService.linkWorldToListing).toHaveBeenCalledWith(
+      'local-1', 'srv-9', '2026-01-02 03:04:05',
+    ));
+  });
+
+  it('points it at the listing it overwrote, too', async () => {
+    vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([listing('w1', 'Salt-Bright Reaches')]);
+    vi.mocked(WorldStorageService.publishItem).mockResolvedValue({ id: 'w1', updated_at: '2026-02-03 04:05:06' });
+    view({ localId: 'local-1' });
+
+    await userEvent.click(await screen.findByLabelText('Salt-Bright Reaches (w1, 0 downloads)'));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(WorldStorageService.linkWorldToListing).toHaveBeenCalledWith(
+      'local-1', 'w1', '2026-02-03 04:05:06',
+    ));
+  });
+
+  it('links nothing when the server refused the upload', async () => {
+    vi.mocked(WorldStorageService.publishItem).mockRejectedValue(
+      Object.assign(new Error('That contest is not taking entries.'), { code: CONTEST_NOT_ACTIVE }),
+    );
+    view({ localId: 'local-1' });
+
+    await userEvent.click(await screen.findByRole('switch'));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish & Enter' }));
+
+    await screen.findByText('That contest is not taking entries.');
+    expect(WorldStorageService.linkWorldToListing).not.toHaveBeenCalled();
+  });
+
+  it('links nothing when the reply carries no listing id, rather than linking to nothing', async () => {
+    vi.mocked(WorldStorageService.publishItem).mockResolvedValue({});
+    view({ localId: 'local-1' });
+
+    await screen.findByRole('switch');
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(WorldStorageService.linkWorldToListing).not.toHaveBeenCalled();
+  });
+
+  it('tells the library its list is stale, so the browser knows the copy is a copy', async () => {
+    // The list the menu is holding was read before the link was written, and the community browser reads
+    // its download states out of it — an unrefreshed one offers the author their own listing to download.
+    vi.mocked(WorldStorageService.publishItem).mockResolvedValue(created);
+    const onLinked = vi.fn();
+    view({ localId: 'local-1', onLinked });
+
+    await screen.findByRole('switch');
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(onLinked).toHaveBeenCalled());
+  });
+
+  it('says nothing to the library when the link could not be written', async () => {
+    vi.mocked(WorldStorageService.publishItem).mockResolvedValue(created);
+    vi.mocked(WorldStorageService.linkWorldToListing).mockRejectedValue(new Error('store is gone'));
+    const onLinked = vi.fn();
+    view({ localId: 'local-1', onLinked });
+
+    await screen.findByRole('switch');
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    // The publish still succeeded: a link that could not be written costs the link, never the upload.
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(onLinked).not.toHaveBeenCalled();
+  });
+
+  it('links nothing for a kind with no local world behind it', async () => {
+    vi.mocked(WorldStorageService.publishItem).mockResolvedValue(created);
+    view({ payload: dictPayload });
+
+    await screen.findByText('Publish Dictionary');
+    await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(WorldStorageService.linkWorldToListing).not.toHaveBeenCalled();
   });
 });

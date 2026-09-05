@@ -11,7 +11,12 @@ import DictionaryManager from '@/managers/DictionaryManager';
 import PlaceholderEditor from '@/managers/PlaceholderEditor';
 import PlaceholderPaletteBar from '@/components/prompt/PlaceholderPaletteBar';
 import { ChipInsertTargetProvider } from '@/components/prompt/ChipInsertTarget';
+import { EditorPreviewRollsProvider } from '@/contexts/EditorPreviewRollsContext';
 import { placeholderStore, PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
+import { directChipTargets } from '@/lib/placeholders';
+import { carriedPlaceholders, splitCarriedPlaceholders } from '@/lib/placeholderHomes';
+import { dictionaryPlacementLetters, EMPTY_LETTERS, labelPlaceholders } from '@/lib/placementLetters';
+import { PlacementLettersProvider } from '@/contexts/PlacementLettersContext';
 import { buildDictionaryFile } from '@/lib/dictionaryFile';
 import { downloadBlob } from '@/lib/downloadBlob';
 import { canonicalStringify } from '@/lib/canonicalStringify';
@@ -71,16 +76,33 @@ const DictionaryEditorModal = ({ dictionaryId, draft, onClose, onPublish }: {
   const hasUnsavedChanges = book != null && canonicalStringify(dictionaries, stringifyCache.current) !== baselineRef.current;
   const selectedBook = dictionaries.find((b) => b.id === selectedId);
   const selectedEntry = dictionaries.flatMap((b) => b.entries).find((e) => e.id === selectedId);
-  // The book's carried placeholders live on the sole book (index 0); its entries' chips resolve against them.
-  const bookPlaceholders = useMemo(() => dictionaries[0]?.placeholders ?? [], [dictionaries]);
+  // The book's carried placeholders live on the sole book (index 0): its own plus the shared ones it
+  // carries from the world it was exported from. Its entries' chips resolve against both.
+  const bookPlaceholders = useMemo(() => (dictionaries[0] ? carriedPlaceholders(dictionaries[0]) : []), [dictionaries]);
   // Isolated placeholder store backed by the sole book's `placeholders` field (empty ⇒ undefined).
-  const phStore = useMemo(() => placeholderStore(bookPlaceholders, (action: SetStateAction<Placeholder[]>) =>
-    setDictionaries((prev) => prev.map((b, i) => {
-      if (i !== 0) return b;
-      const cur = b.placeholders ?? [];
-      const next = typeof action === 'function' ? action(cur) : action;
-      return { ...b, placeholders: next.length ? next : undefined };
-    }))), [bookPlaceholders, setDictionaries]);
+  // `placedIds` is the book's own chip-bearing fields, so a drag never takes a placeholder an entry names.
+  // It reads the entries through a ref rather than closing over them, so a keystroke in an entry does not
+  // rebuild the store and, with it, every chip field's vocabulary.
+  const dictionariesRef = useRef(dictionaries);
+  dictionariesRef.current = dictionaries;
+  const phStore = useMemo(() => ({
+    ...placeholderStore(bookPlaceholders, (action: SetStateAction<Placeholder[]>) =>
+      setDictionaries((prev) => prev.map((b, i) => {
+        if (i !== 0) return b;
+        const cur = carriedPlaceholders(b);
+        return splitCarriedPlaceholders(b, typeof action === 'function' ? action(cur) : action);
+      }))),
+    placedIds: () => directChipTargets(
+      dictionariesRef.current.flatMap((b) => b.entries).flatMap((e) =>
+        [e.name ?? '', ...(e.key ?? []), ...(e.secondaryKeys ?? []), e.value ?? '']),
+    ),
+  }), [bookPlaceholders, setDictionaries]);
+
+  // A library book is its own document: its Unique chips letter from a walk of its entries alone.
+  const letters = useMemo(
+    () => (dictionaries[0] ? dictionaryPlacementLetters(dictionaries[0]) : EMPTY_LETTERS),
+    [dictionaries],
+  );
 
   // Returns whether the save succeeded, so a save-and-exit caller only closes on success.
   const handleSave = async (): Promise<boolean> => {
@@ -109,63 +131,76 @@ const DictionaryEditorModal = ({ dictionaryId, draft, onClose, onPublish }: {
     const current = dictionaries[0];
     if (!current) return;
     const blob = new Blob([JSON.stringify(buildDictionaryFile(current), null, 2)], { type: 'application/json' });
-    downloadBlob(blob, `${current.name || 'Dictionary'}.json`);
+    // A chip in the name would otherwise put a raw placement id in the filename.
+    downloadBlob(blob, `${labelPlaceholders(current.name, bookPlaceholders, { letters }) || 'Dictionary'}.json`);
   };
 
   return (
-    <EditorModalShell
-      open={isOpen}
-      title={book?.name || 'Dictionary'}
-      contentClassName="max-w-[1100px] w-[95vw] h-[85dvh] flex flex-col p-0 gap-0 overflow-hidden"
-      loading={!book}
-      tabs={TABS}
-      tab={tab}
-      onTabChange={(v) => setTab(v as DictionaryTab)}
-      hasUnsavedChanges={hasUnsavedChanges}
-      onSave={handleSave}
-      onClose={onClose}
-      onExport={handleExport}
-      onPublish={onPublish ? () => { if (dictionaries[0]) onPublish(dictionaries[0]); } : undefined}
-    >
-      <DictionaryStoreProvider value={store}>
-        {tab === 'overview' ? (
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="p-4">
-              {dictionaries[0] && <DictionaryOverviewManager book={dictionaries[0]} />}
-            </div>
-          </ScrollArea>
-        ) : tab === 'placeholders' ? (
-          <PlaceholderStoreProvider value={phStore}>
-            <PlaceholderEditor />
-          </PlaceholderStoreProvider>
-        ) : (
-          <ListDetail
-            showDetail={!!(selectedBook || selectedEntry)}
-            onBack={() => setSelectedId(null)}
-            backLabel="Dictionary"
-            list={
-              <div className="p-2">
-                <DictionaryTree selectedId={selectedId} onSelect={setSelectedId} />
-              </div>
-            }
-            detail={
+    <EditorPreviewRollsProvider>
+    <PlacementLettersProvider letters={letters}>
+      <EditorModalShell
+        open={isOpen}
+        // A library book has no world behind it, so its own carried defs render the chips — the same
+        // treatment its card and its listing get.
+        title={labelPlaceholders(dictionaries[0]?.name ?? book?.name ?? '', bookPlaceholders, { letters }) || 'Dictionary'}
+        contentClassName="max-w-[1100px] w-[95vw] h-[85dvh] flex flex-col p-0 gap-0 overflow-hidden"
+        loading={!book}
+        tabs={TABS}
+        tab={tab}
+        onTabChange={(v) => setTab(v as DictionaryTab)}
+        hasUnsavedChanges={hasUnsavedChanges}
+        onSave={handleSave}
+        onClose={onClose}
+        onExport={handleExport}
+        onPublish={onPublish ? () => { if (dictionaries[0]) onPublish(dictionaries[0]); } : undefined}
+      >
+        <DictionaryStoreProvider value={store}>
+          {tab === 'overview' ? (
+            <ScrollArea className="flex-1 min-h-0">
               <div className="p-4">
-                {selectedBook ? (
-                  <DictionaryBookManager key={selectedBook.id} book={selectedBook} />
-                ) : selectedEntry ? (
-                  <ChipInsertTargetProvider>
-                    <PlaceholderPaletteBar placeholders={bookPlaceholders} />
-                    <DictionaryManager key={selectedEntry.id} entry={selectedEntry} placeholders={bookPlaceholders} />
-                  </ChipInsertTargetProvider>
-                ) : (
-                  <p className="text-helper text-muted-foreground">Select the dictionary or an entry to edit it.</p>
-                )}
+                {dictionaries[0] && <DictionaryOverviewManager book={dictionaries[0]} />}
               </div>
-            }
-          />
-        )}
-      </DictionaryStoreProvider>
-    </EditorModalShell>
+            </ScrollArea>
+          ) : tab === 'placeholders' ? (
+            <PlaceholderStoreProvider value={phStore}>
+              {/* The same palette an entry gets, over the value fields: a value is a chip field too. */}
+              <ChipInsertTargetProvider>
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <PlaceholderPaletteBar placeholders={bookPlaceholders} className="mx-0 mb-0 px-4" />
+                  <PlaceholderEditor />
+                </div>
+              </ChipInsertTargetProvider>
+            </PlaceholderStoreProvider>
+          ) : (
+            <ListDetail
+              showDetail={!!(selectedBook || selectedEntry)}
+              onBack={() => setSelectedId(null)}
+              backLabel="Dictionary"
+              list={
+                <div className="p-2">
+                  <DictionaryTree selectedId={selectedId} onSelect={setSelectedId} />
+                </div>
+              }
+              detail={
+                <div className="p-4">
+                  {selectedBook ? (
+                    <DictionaryBookManager key={selectedBook.id} book={selectedBook} />
+                  ) : selectedEntry ? (
+                    <ChipInsertTargetProvider>
+                      <PlaceholderPaletteBar placeholders={bookPlaceholders} />
+                      <DictionaryManager key={selectedEntry.id} entry={selectedEntry} placeholders={bookPlaceholders} />
+                    </ChipInsertTargetProvider>
+                  ) : (
+                    <p className="text-helper text-muted-foreground">Select the dictionary or an entry to edit it.</p>
+                  )}
+                </div>
+              }
+            />
+          )}
+        </DictionaryStoreProvider>
+      </EditorModalShell>
+    </PlacementLettersProvider>
+    </EditorPreviewRollsProvider>
   );
 };
 

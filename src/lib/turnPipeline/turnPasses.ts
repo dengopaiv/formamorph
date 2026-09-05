@@ -1,6 +1,10 @@
 import type { ChatMessage } from '@/types';
 import type { TurnPassRecord, TurnPassRequest, TurnPlanInput, TurnMaterial, TurnPassSubject } from './turnPlan';
-import { renderPromptTemplate } from '@/lib/promptTemplate';
+import { renderPromptTemplate, renderPromptTemplateRuns, promptTemplatePieces } from '@/lib/promptTemplate';
+import {
+  tilePieces, trimEndTiled,
+  type AnatomyPiece, type ContextLabel, type TiledRuns,
+} from '@/lib/requestAnatomy';
 import { NONE_PLACEHOLDER } from '@/lib/promptFallbacks';
 import {
   buildCharacterUserMessage,
@@ -47,7 +51,50 @@ export const TURN_PASS_CAPS = {
   diary: 80,
   /** ~2 short paragraphs, trimmed to the last full sentence — headroom against a mid-word cut. */
   discoverEntity: 200,
+  /** One line of tags: enough for a rich action line, not for prose. */
+  sceneTags: 120,
 } as const;
+
+/** What `<IN FRAME>` renders to when the turn put nobody in the picture. */
+export const SCENE_TAGS_EMPTY_CAST = 'nobody - an empty scene';
+
+/**
+ * The Request Anatomy sidecar (see lib/requestAnatomy). Every pass below assembles its request from
+ * labeled pieces rather than describing it afterward, so the content IS the pieces joined and the runs
+ * cannot drift from the text they index.
+ */
+
+/** A system prompt and the runs over it: what the author typed, against the values its chips inject. */
+const systemTiled = (template: string, values: Record<string, string>): TiledRuns =>
+  renderPromptTemplateRuns(template, values, { source: 'system-template' });
+
+/** A user-message template and the runs over it. A few of the chips a user message carries hold what an
+ *  earlier prompt wrote — the action, the narration, who is in frame — so those name what wrote them. */
+const userTiled = (
+  template: string,
+  values: Record<string, string>,
+  tokens?: Record<string, ContextLabel>,
+): TiledRuns =>
+  renderPromptTemplateRuns(template, values, {
+    source: 'user-template',
+    tokens: { '<PLAYER ACTION>': 'action', '<NARRATION>': 'narration', ...tokens },
+  });
+
+/** A user message the app assembles outright, with nothing authored in it to point at. */
+const assembledTiled = (text: string, contextLabel: ContextLabel): TiledRuns =>
+  tilePieces([{ text, contextLabel }]);
+
+/** One system prompt and one user message, joined to the sidecar that tiles them. */
+const labeledRequest = (
+  base: Omit<TurnPassRequest, 'systemPrompt' | 'messages' | 'anatomy'>,
+  system: TiledRuns,
+  message: TiledRuns,
+): TurnPassRequest => ({
+  ...base,
+  systemPrompt: system.content,
+  messages: [{ role: 'user', content: message.content }],
+  anatomy: { system: system.runs, messages: [message.runs] },
+});
 
 const isOpening = (input: TurnPlanInput): boolean => !input.isGameStarted;
 
@@ -70,12 +117,18 @@ const user = (content: string): ChatMessage[] => [{ role: 'user', content }];
  * the template's own `<LANGUAGE>` chip, so an author who moved or deleted it gets what they wrote; the
  * trailing trim is what lets that chip sit last and cost an English game nothing.
  */
+export const choicesSystemTiled = (
+  template: string,
+  language: string,
+  values: Record<string, string>,
+): TiledRuns =>
+  trimEndTiled(systemTiled(template, { ...values, '<LANGUAGE>': languageDirective('choices', language) }));
+
 export const choicesSystemPrompt = (
   template: string,
   language: string,
   values: Record<string, string>,
-): string =>
-  renderPromptTemplate(template, { ...values, '<LANGUAGE>': languageDirective('choices', language) }).trimEnd();
+): string => choicesSystemTiled(template, language, values).content;
 
 /**
  * The stat system prompt. Nothing is appended for any language: the parsing contract is that each line
@@ -87,8 +140,11 @@ export const statUpdatesSystemPrompt = (template: string, ctx: Record<string, st
   renderPromptTemplate(template, ctx);
 
 /** The digest's user message. A bracketed authorial direction never reaches it — it records story content. */
+export const summaryUserTiled = (template: string, action: string, narration: string): TiledRuns =>
+  userTiled(template, { '<PLAYER ACTION>': stripOocDirectives(action), '<NARRATION>': narration });
+
 export const summaryUserMessage = (template: string, action: string, narration: string): string =>
-  renderPromptTemplate(template, { '<PLAYER ACTION>': stripOocDirectives(action), '<NARRATION>': narration });
+  summaryUserTiled(template, action, narration).content;
 
 /** The discovery pass's user message: who to describe, and the passage they appeared in. */
 export const discoverUserMessage = (name: string, narration: string): string =>
@@ -134,14 +190,11 @@ const locationAutoPass: TurnPassRecord<string | null> = {
     input.hasCurrentLocation,
   // Rendered against the pre-move context: no narration exists yet, and the move it decides is what
   // scopes every later pass.
-  buildRequest: (input, material) => ({
-    type: 'locationChange',
-    systemPrompt: renderPromptTemplate(input.prompts.locationChange, material.baseCtx),
-    messages: user(renderPromptTemplate(input.prompts.locationChangeUser, { '<PLAYER ACTION>': material.action })),
-    maxTokens: null,
-    silent: false,
-    quiet: false,
-  }),
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'locationChange', maxTokens: null, silent: false, quiet: false },
+    systemTiled(input.prompts.locationChange, material.baseCtx),
+    userTiled(input.prompts.locationChangeUser, { '<PLAYER ACTION>': material.action }),
+  ),
   parseResponse: (raw, material) => matchLocationResponse(raw, material.destinations),
 };
 
@@ -158,19 +211,14 @@ const locationSuggestPass: TurnPassRecord<string | null> = {
     input.settings.locationChangeEnabled &&
     input.locationCount > 1 &&
     input.prompts.locationChange !== '',
-  buildRequest: (input, material) => ({
-    type: 'locationChange',
-    systemPrompt: renderPromptTemplate(input.prompts.locationChange, material.ctx),
-    messages: user(
-      renderPromptTemplate(input.prompts.locationChangeUser, {
-        '<PLAYER ACTION>': material.action,
-        '<NARRATION>': material.narration,
-      }),
-    ),
-    maxTokens: null,
-    silent: false,
-    quiet: quietInBatch(input),
-  }),
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'locationChange', maxTokens: null, silent: false, quiet: quietInBatch(input) },
+    systemTiled(input.prompts.locationChange, material.ctx),
+    userTiled(input.prompts.locationChangeUser, {
+      '<PLAYER ACTION>': material.action,
+      '<NARRATION>': material.narration,
+    }),
+  ),
   parseResponse: (raw, material) => matchLocationResponse(raw, material.destinations),
 };
 
@@ -183,16 +231,21 @@ const thinkingPass: TurnPassRecord<ParsedDirector> = {
   isDue: (input) => input.settings.thinkingMode === 'precall',
   // Framed as a single instruction: reusing the narration's message history primes the model to continue
   // the story instead of planning it.
-  buildRequest: (input, material) => ({
-    type: 'thinking',
-    systemPrompt: renderPromptTemplate(input.prompts.thinking, material.ctx),
-    messages: user(
-      `${material.plannerRecap ? `${material.plannerRecap}\n\n` : ''}${material.lastStory ? `What just happened:\n${material.lastStory}\n\n` : ''}The player's next action: ${material.effectiveAction}\n\nList the cast and lay out the beats now. Do not narrate.`,
-    ),
-    maxTokens: TURN_PASS_CAPS.thinking,
-    silent: false,
-    quiet: false,
-  }),
+  buildRequest: (input, material) => {
+    const pieces: AnatomyPiece[] = [];
+    if (material.plannerRecap) pieces.push({ text: material.plannerRecap, contextLabel: 'condensed' }, { text: '\n\n', glue: true });
+    if (material.lastStory) pieces.push({ text: `What just happened:\n${material.lastStory}`, contextLabel: 'past-narration' }, { text: '\n\n', glue: true });
+    pieces.push(
+      { text: `The player's next action: ${material.effectiveAction}`, contextLabel: 'action' },
+      { text: '\n\n', glue: true },
+      { text: 'List the cast and lay out the beats now. Do not narrate.', contextLabel: 'mode-directive' },
+    );
+    return labeledRequest(
+      { type: 'thinking', maxTokens: TURN_PASS_CAPS.thinking, silent: false, quiet: false },
+      systemTiled(input.prompts.thinking, material.ctx),
+      tilePieces(pieces),
+    );
+  },
   parseResponse: (raw) => parseDirectorCast(raw),
 };
 
@@ -203,19 +256,17 @@ const directorPass: TurnPassRecord<ParsedDirector> = {
   stage: 'planning',
   fanOut: false,
   isDue: (input) => input.settings.thinkingMode === 'staged',
-  buildRequest: (input, material) => ({
-    type: 'director',
-    systemPrompt: renderPromptTemplate(input.prompts.director, stageValues(material)),
-    messages: user(
-      renderPromptTemplate(input.prompts.directorUser, {
-        '<NARRATION>': material.lastStory || NONE_PLACEHOLDER,
-        '<PLAYER ACTION>': material.effectiveAction,
-      }),
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'director', maxTokens: TURN_PASS_CAPS.director, silent: false, quiet: false },
+    systemTiled(input.prompts.director, stageValues(material)),
+    // The narration the director reads is the previous turn's, so it is named as the past rather than as
+    // this turn's own — nothing has been written yet.
+    userTiled(
+      input.prompts.directorUser,
+      { '<NARRATION>': material.lastStory || NONE_PLACEHOLDER, '<PLAYER ACTION>': material.effectiveAction },
+      { '<NARRATION>': 'past-narration' },
     ),
-    maxTokens: TURN_PASS_CAPS.director,
-    silent: false,
-    quiet: false,
-  }),
+  ),
   parseResponse: (raw) => parseDirectorCast(raw),
 };
 
@@ -228,13 +279,10 @@ const characterPass: TurnPassRecord<string> = {
   isDue: (input) => input.settings.thinkingMode === 'staged',
   buildRequest: (input, material) => {
     const subject = subjectOf(material);
-    return {
-      type: 'character',
-      systemPrompt: renderPromptTemplate(input.prompts.character, {
-        ...stageValues(material),
-        '<CHARACTER NAME>': subject.name,
-      }),
-      messages: user(
+    return labeledRequest(
+      { type: 'character', maxTokens: TURN_PASS_CAPS.character, silent: false, quiet: false },
+      systemTiled(input.prompts.character, { ...stageValues(material), '<CHARACTER NAME>': subject.name }),
+      assembledTiled(
         buildCharacterUserMessage({
           character: { name: subject.name, stance: subject.stance, entity: subject.entity },
           scene: material.directorScene,
@@ -242,11 +290,9 @@ const characterPass: TurnPassRecord<string> = {
           diary: subject.diary,
           recap: material.lastStory,
         }),
+        'character-brief',
       ),
-      maxTokens: TURN_PASS_CAPS.character,
-      silent: false,
-      quiet: false,
-    };
+    );
   },
   parseResponse: (raw) => raw,
 };
@@ -260,10 +306,10 @@ const storyboardPass: TurnPassRecord<string> = {
   isDue: (input) => input.settings.thinkingMode === 'staged',
   // With nobody in the cast there is nothing to reconcile, and a storyboard would only invent filler.
   isReady: (material) => material.npcCastSize > 0,
-  buildRequest: (input, material) => ({
-    type: 'storyboard',
-    systemPrompt: renderPromptTemplate(input.prompts.storyboard, stageValues(material)),
-    messages: user(
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'storyboard', maxTokens: TURN_PASS_CAPS.storyboard, silent: false, quiet: false },
+    systemTiled(input.prompts.storyboard, stageValues(material)),
+    assembledTiled(
       buildStoryboardUserMessage({
         recap: material.lastStory,
         scene: material.directorScene,
@@ -271,11 +317,9 @@ const storyboardPass: TurnPassRecord<string> = {
         overflow: material.overflow,
         action: material.effectiveAction,
       }),
+      'intents',
     ),
-    maxTokens: TURN_PASS_CAPS.storyboard,
-    silent: false,
-    quiet: false,
-  }),
+  ),
   parseResponse: (raw) => raw,
 };
 
@@ -284,7 +328,7 @@ const storyboardPass: TurnPassRecord<string> = {
  * notes fallback); what the pass owns is the final user turn — the action as the model receives it, plus
  * whatever this turn's mode rides on it.
  */
-const narrationPass: TurnPassRecord<string> = {
+export const narrationPass: TurnPassRecord<string> = {
   id: 'narration',
   type: 'narration',
   stage: 'narration',
@@ -300,23 +344,41 @@ const narrationPass: TurnPassRecord<string> = {
       : material.action;
     // The user template and the OOC rider apply only with thinking off — plan and inline modes append
     // their own directives, which must never sandwich against custom text.
-    const oocRider =
-      hasOocDirective(actionText) && input.prompts.oocDirective.trim() ? `\n\n${input.prompts.oocDirective}` : '';
-    let content =
+    const ridden = hasOocDirective(actionText) && input.prompts.oocDirective.trim();
+    // The message is assembled as labeled pieces, so the Request Anatomy sidecar below cannot describe a
+    // message the model isn't sent: the content IS the pieces joined.
+    const pieces: AnatomyPiece[] =
       input.settings.thinkingMode === 'off'
-        ? renderPromptTemplate(input.prompts.narrationUser, { '<PLAYER ACTION>': actionText }) + oocRider
-        : actionText;
+        ? [
+            ...promptTemplatePieces(
+              input.prompts.narrationUser,
+              { '<PLAYER ACTION>': actionText },
+              { source: 'user-template', tokens: { '<PLAYER ACTION>': 'action' } },
+            ),
+            ...(ridden
+              ? [{ text: '\n\n', glue: true }, { text: input.prompts.oocDirective, source: 'direction' as const }]
+              : []),
+          ]
+        : [{ text: actionText, contextLabel: 'action' }];
     // Both directives ride the final user turn, adjacent to where the model writes — recency is what makes
     // small models actually honor them.
-    if (input.settings.thinkingMode === 'inline') content += INLINE_THINKING_DIRECTIVE;
-    if (material.turnPlan) content += planDirective(material.turnPlan);
+    if (input.settings.thinkingMode === 'inline') pieces.push({ text: INLINE_THINKING_DIRECTIVE, contextLabel: 'mode-directive' });
+    if (material.turnPlan) pieces.push({ text: planDirective(material.turnPlan), contextLabel: 'turn-plan' });
+    const finalTurn = tilePieces(pieces);
+    // A caller that assembled the history without a sidecar leaves those messages unlabeled rather than
+    // misaligning the ones this pass does own.
+    const historyRuns =
+      material.historyRuns.length === material.trimmedHistory.length
+        ? material.historyRuns
+        : material.trimmedHistory.map(() => []);
     return {
       type: 'narration',
       systemPrompt: material.narrationSystemPrompt,
-      messages: [...material.trimmedHistory, { role: 'user', content }],
+      messages: [...material.trimmedHistory, { role: 'user', content: finalTurn.content }],
       maxTokens: null,
       silent: false,
       quiet: false,
+      anatomy: { system: material.narrationSystemPromptRuns, messages: [...historyRuns, finalTurn.runs] },
     };
   },
   parseResponse: (raw) => raw,
@@ -329,24 +391,17 @@ const choicesPass: TurnPassRecord<string[]> = {
   stage: 'postNarration',
   fanOut: false,
   isDue: (input) => input.settings.choicesEnabled,
-  buildRequest: (input, material) => {
-    return {
-      type: 'choices',
-      systemPrompt: choicesSystemPrompt(input.prompts.choices, input.settings.language, {
-        ...material.ctx,
-        ...material.sceneEntityTokens,
-      }),
-      messages: user(
-        renderPromptTemplate(input.prompts.choicesUser, {
-          '<PLAYER ACTION>': material.effectiveAction,
-          '<NARRATION>': material.narration,
-        }),
-      ),
-      maxTokens: null,
-      silent: false,
-      quiet: quietInBatch(input),
-    };
-  },
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'choices', maxTokens: null, silent: false, quiet: quietInBatch(input) },
+    choicesSystemTiled(input.prompts.choices, input.settings.language, {
+      ...material.ctx,
+      ...material.sceneEntityTokens,
+    }),
+    userTiled(input.prompts.choicesUser, {
+      '<PLAYER ACTION>': material.effectiveAction,
+      '<NARRATION>': material.narration,
+    }),
+  ),
   parseResponse: (raw) => parseChoices(raw),
 };
 
@@ -358,21 +413,14 @@ const statUpdatesPass: TurnPassRecord<ReturnType<typeof parseStatUpdates>> = {
   fanOut: false,
   // A world with no live stats would only get hallucinated stat names that match nothing.
   isDue: (input) => input.settings.statUpdatesEnabled && input.settings.statCount > 0,
-  buildRequest: (input, material) => {
-    return {
-      type: 'statUpdates',
-      systemPrompt: statUpdatesSystemPrompt(input.prompts.statUpdates, material.ctx),
-      messages: user(
-        renderPromptTemplate(input.prompts.statUpdatesUser, {
-          '<PLAYER ACTION>': material.effectiveAction,
-          '<NARRATION>': material.narration,
-        }),
-      ),
-      maxTokens: null,
-      silent: false,
-      quiet: quietInBatch(input),
-    };
-  },
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'statUpdates', maxTokens: null, silent: false, quiet: quietInBatch(input) },
+    systemTiled(input.prompts.statUpdates, material.ctx),
+    userTiled(input.prompts.statUpdatesUser, {
+      '<PLAYER ACTION>': material.effectiveAction,
+      '<NARRATION>': material.narration,
+    }),
+  ),
   parseResponse: (raw) => parseStatUpdates(raw),
 };
 
@@ -385,13 +433,11 @@ const summaryPass: TurnPassRecord<string> = {
   stage: 'postNarration',
   fanOut: false,
   isDue: (input) => input.settings.memoryDigests && input.settings.concurrentTurnRequests,
-  buildRequest: (input, material) => ({
-    type: 'summary',
-    systemPrompt: renderPromptTemplate(input.prompts.summary, material.baseCtx),
-    messages: user(summaryUserMessage(input.prompts.summaryUser, material.effectiveAction, material.narration)),
-    maxTokens: TURN_PASS_CAPS.summary,
-    ...silentOn(material),
-  }),
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'summary', maxTokens: TURN_PASS_CAPS.summary, ...silentOn(material) },
+    systemTiled(input.prompts.summary, material.baseCtx),
+    summaryUserTiled(input.prompts.summaryUser, material.effectiveAction, material.narration),
+  ),
   parseResponse: (raw) => raw.trim(),
 };
 
@@ -402,18 +448,14 @@ const timePassedPass: TurnPassRecord<number | null> = {
   stage: 'postNarration',
   fanOut: false,
   isDue: (input) => input.settings.aiClock,
-  buildRequest: (input, material) => ({
-    type: 'timePassed',
-    systemPrompt: renderPromptTemplate(input.prompts.timePassed, material.ctx),
-    messages: user(
-      renderPromptTemplate(input.prompts.timePassedUser, {
-        '<PLAYER ACTION>': stripOocDirectives(material.effectiveAction),
-        '<NARRATION>': material.narration,
-      }),
-    ),
-    maxTokens: TURN_PASS_CAPS.timePassed,
-    ...silentOn(material),
-  }),
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'timePassed', maxTokens: TURN_PASS_CAPS.timePassed, ...silentOn(material) },
+    systemTiled(input.prompts.timePassed, material.ctx),
+    userTiled(input.prompts.timePassedUser, {
+      '<PLAYER ACTION>': stripOocDirectives(material.effectiveAction),
+      '<NARRATION>': material.narration,
+    }),
+  ),
   parseResponse: (raw) => parseTimeDelta(raw),
 };
 
@@ -427,13 +469,11 @@ const openingTimePass: TurnPassRecord<number | null> = {
   stage: 'postNarration',
   fanOut: false,
   isDue: (input) => input.settings.aiClock && isOpening(input),
-  buildRequest: (input, material) => ({
-    type: 'openingTime',
-    systemPrompt: renderPromptTemplate(input.prompts.openingTime, material.ctx),
-    messages: user(renderPromptTemplate(input.prompts.openingTimeUser, { '<NARRATION>': material.narration })),
-    maxTokens: TURN_PASS_CAPS.openingTime,
-    ...silentOn(material),
-  }),
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'openingTime', maxTokens: TURN_PASS_CAPS.openingTime, ...silentOn(material) },
+    systemTiled(input.prompts.openingTime, material.ctx),
+    userTiled(input.prompts.openingTimeUser, { '<NARRATION>': material.narration }),
+  ),
   parseResponse: (raw) => parseOpeningDaypart(raw),
 };
 
@@ -452,15 +492,14 @@ const diaryPass: TurnPassRecord<string> = {
     input.settings.concurrentTurnRequests,
   buildRequest: (input, material) => {
     const subject = subjectOf(material);
-    return {
-      type: 'diary',
-      systemPrompt: renderPromptTemplate(input.prompts.diary, material.baseCtx),
-      messages: user(
+    return labeledRequest(
+      { type: 'diary', maxTokens: TURN_PASS_CAPS.diary, ...silentOn(material) },
+      systemTiled(input.prompts.diary, material.baseCtx),
+      assembledTiled(
         buildDiaryUserMessage({ name: subject.name, entity: subject.entity, narration: material.narration }),
+        'diary-brief',
       ),
-      maxTokens: TURN_PASS_CAPS.diary,
-      ...silentOn(material),
-    };
+    );
   },
   parseResponse: (raw) => raw.trim(),
 };
@@ -486,6 +525,35 @@ const discoverEntityPass: TurnPassRecord<string> = {
     };
   },
   parseResponse: (raw, material) => cleanDiscoveredDescription(raw, subjectOf(material).name),
+};
+
+/**
+ * What is happening in a scene, for the image model to draw. Its subjects and its location bring their own
+ * tags; this pass writes only the action layer over them.
+ *
+ * A pass record for its request assembly, not for the turn runner: a picture is drawn when the player asks
+ * for one, so this one is dispatched by the scene-image flow and is deliberately absent from
+ * {@link TURN_PASSES}.
+ */
+export const sceneTagsPass: TurnPassRecord<string> = {
+  id: 'sceneTags',
+  type: 'sceneTags',
+  stage: 'postNarration',
+  fanOut: false,
+  isDue: () => true,
+  buildRequest: (input, material) => labeledRequest(
+    { type: 'sceneTags', maxTokens: TURN_PASS_CAPS.sceneTags, ...silentOn(material) },
+    systemTiled(input.prompts.sceneTags, material.ctx),
+    userTiled(
+      input.prompts.sceneTagsUser,
+      {
+        '<NARRATION>': material.narration,
+        '<IN FRAME>': material.sceneCast.length ? material.sceneCast.join(', ') : SCENE_TAGS_EMPTY_CAST,
+      },
+      { '<IN FRAME>': 'scene-cast' },
+    ),
+  ),
+  parseResponse: (raw) => raw,
 };
 
 /**

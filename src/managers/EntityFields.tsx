@@ -19,6 +19,9 @@ interface EntityFieldsProps {
   onChange: (field: string, value: unknown) => void;
   /** The world's placeholders (World Editor only — a library character has no world to draw them from). */
   placeholders?: Placeholder[];
+  /** The entity, as the owner of these fields: its own scoped placeholders read bare here and come first
+   *  in every insert menu (World Editor only — a library character owns everything it carries). */
+  ownerId?: string;
   /** When provided, renders the Locations picker (World Editor only — a library character has no world locations). */
   locationOptions?: { label: string; value: string; depth?: number }[];
   selectedLocationIds?: string[];
@@ -29,7 +32,7 @@ interface EntityFieldsProps {
  * The editable-field body for one entity, shared by the World Editor's `EntityManager` (locations picker on,
  * bound to the world store) and the library `EntityEditorModal` (locations hidden, bound to isolated state).
  */
-const EntityFields = ({ value, onChange, placeholders = [], locationOptions, selectedLocationIds, onLocationsChange }: EntityFieldsProps) => {
+const EntityFields = ({ value, onChange, placeholders = [], ownerId, locationOptions, selectedLocationIds, onLocationsChange }: EntityFieldsProps) => {
   const { advanced } = useEditorMode();
   return (
     <div className="space-y-4">
@@ -39,6 +42,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
           value={value.name || ''}
           onChange={(v) => onChange('name', v)}
           placeholders={placeholders}
+          ownerId={ownerId}
           ariaLabel="Name"
         />
       </div>
@@ -52,6 +56,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
           keywords={value.aliases ?? []}
           onChange={(aliases) => onChange('aliases', aliases)}
           placeholders={placeholders}
+          ownerId={ownerId}
           placeholder="press Enter after each · case-sensitive"
         />
       </div>
@@ -79,6 +84,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
         value={value.playerDescription || ''}
         onChange={(v) => onChange('playerDescription', v)}
         placeholders={placeholders}
+        ownerId={ownerId}
         resizable
       />
       <PlaceholderField
@@ -103,6 +109,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
         value={value.aiDescription || ''}
         onChange={(v) => onChange('aiDescription', v)}
         placeholders={placeholders}
+        ownerId={ownerId}
         resizable
       />
       {advanced && (
@@ -120,6 +127,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
           value={value.aiSummary || ''}
           onChange={(v) => onChange('aiSummary', v)}
           placeholders={placeholders}
+          ownerId={ownerId}
           resizable
         />
         <p className="text-helper text-muted-foreground">
@@ -163,6 +171,7 @@ const EntityFields = ({ value, onChange, placeholders = [], locationOptions, sel
         tags={value.imageTags}
         onTagsChange={(t) => onChange('imageTags', t)}
         placeholders={placeholders}
+        ownerId={ownerId}
       />
       {advanced && (
         <div className="space-y-2">

@@ -8,6 +8,7 @@ import { buildImagePrompt, type ImageSubjectKind } from '@/lib/imagePrompt';
 import { TOOLBAR_BTN } from '@/components/prompt/toolbarStyles';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { overwriteWarning } from '@/lib/descriptionOverwrite';
+import { Tip } from '@/components/ui/tooltip';
 
 type GenerateMode = 'summary' | 'tags' | 'playerDesc' | 'aiDesc';
 
@@ -101,16 +102,17 @@ const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
 
   return (
     <>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        onClick={() => (warning ? setConfirming(true) : generate())}
-        disabled={loading || !source?.trim()}
-        title={loading ? `Generating ${noun}…` : `Generate ${noun} from ${SOURCE_NOUN[mode]}`}
-        aria-label={`Generate ${noun}`}
-      >
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-      </button>
+      <Tip tip={loading ? `Generating ${noun}…` : `Generate ${noun} from ${SOURCE_NOUN[mode]}`}>
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          onClick={() => (warning ? setConfirming(true) : generate())}
+          disabled={loading || !source?.trim()}
+          aria-label={`Generate ${noun}`}
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+        </button>
+      </Tip>
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}

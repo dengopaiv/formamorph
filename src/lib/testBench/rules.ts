@@ -7,8 +7,21 @@
  * unambiguous it also carries a `fix`, which returns a new world rather than editing the one it was given.
  */
 import {
-  collectPlaceholderPlacements, describePlaceholders, hasPlaceholders, placeholderWeight,
+  collectPlaceholderPlacements, decodePlaceholderToken, describePlaceholders, encodePlaceholderToken,
+  hasPlaceholders, lonePlaceholderToken, parsePlaceholderText, placeholderChildren, placeholderIsChoice,
+  placeholderKindNoun, placeholderWeight, pinText, relinkedPin,
+  resolvePlaceholders, SHARED_PATH_SEP,
+  type PlaceholderFinding, type PlaceholderPick, type PlaceholderToken,
 } from '@/lib/placeholders';
+import { labelPlaceholders, worldPlacementLetters, type PlacementLetters } from '@/lib/placementLetters';
+import {
+  allPinRows, collectPins, hasDeadValueId, indexPlaceholders, pinConflict, pinSourceOwnerId, valuePinners,
+  type PinEditorWorld, type PinFinding, type PinRow, type PinSourceKind,
+} from '@/lib/placeholderPins';
+import { holdsAsChip, qualifiedPlaceholderName } from '@/lib/placeholderTree';
+import {
+  allPlaceholders, mapAllPlaceholders, placeholderOwners, withoutPlaceholders, type PlaceholderSlices,
+} from '@/lib/placeholderHomes';
 import { matchKey } from '@/lib/entityMatch';
 import { activeDescriptor } from '@/lib/statContext';
 import {
@@ -25,7 +38,7 @@ import {
 import { formatBytes, IMAGE_CAPS, type ImageCap } from '@/lib/imageOptim';
 import { clamp } from '@/lib/utils';
 import type {
-  DictionaryEntry, Entity, GameLocation, Placeholder, Stat, StatDescriptor, Trait, World,
+  DictionaryEntry, Entity, GameLocation, Placeholder, PlaceholderPin, PlaceholderValue, Stat, StatDescriptor, Trait, World,
 } from '@/types';
 
 /**
@@ -121,24 +134,50 @@ const withSlice = <K extends keyof RuleWorld>(world: RuleWorld, key: K, value: R
   value === world[key] || (world[key] === undefined && Array.isArray(value) && value.length === 0)
     ? world : { ...world, [key]: value };
 
+/** `world` carrying the three placeholder-bearing slices, each through `withSlice`. */
+const withPlaceholderSlices = (world: RuleWorld, next: PlaceholderSlices): RuleWorld =>
+  withSlice(withSlice(withSlice(world, 'placeholders', next.placeholders), 'entities', next.entities), 'dictionaries', next.dictionaries);
+
+/** The world with `fn` applied to every placeholder, whichever list holds it — the world's own, an
+ *  entity's or a book's — so a fix repairs exactly what its check reported. */
+const withMappedPlaceholders = (world: RuleWorld, fn: (ph: Placeholder) => Placeholder): RuleWorld =>
+  withPlaceholderSlices(world, mapAllPlaceholders(world, fn));
+
+/** The world with the given placeholders removed from whichever list holds them. */
+const withoutDeadPlaceholders = (world: RuleWorld, ids: ReadonlySet<string>): RuleWorld =>
+  withPlaceholderSlices(world, withoutPlaceholders(world, ids));
+
 /** "a, b and c" — how a finding names the handful of items it covers. */
 const listNames = (names: string[]): string =>
   names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
-/** An entity as a finding names it: chips resolved, so the row reads like the editor's own list. */
+/** The world's placement letters, walked once per world object: a pass names dozens of items, and every
+ *  one reads its chips through this. */
+const lettersByWorld = new WeakMap<RuleWorld, PlacementLetters>();
+const lettersOf = (world: RuleWorld): PlacementLetters => {
+  let letters = lettersByWorld.get(world);
+  if (!letters) {
+    letters = worldPlacementLetters(world);
+    lettersByWorld.set(world, letters);
+  }
+  return letters;
+};
+
+/** An entity as a finding names it: chips by their placement labels, so the row reads like the editor's
+ *  own list. */
 const asItem = (entity: Entity, world: RuleWorld): FindingItem => ({
   id: entity.id,
-  name: describePlaceholders(entity.name ?? '', world.placeholders) || 'Untitled',
+  name: labelPlaceholders(entity.name ?? '', allPlaceholders(world), { letters: lettersOf(world) }) || 'Untitled',
 });
 
 /** An entity's written forms — its name and aliases, chips resolved, blanks dropped. */
 const writtenForms = (entity: Entity, world: RuleWorld): string[] =>
   [entity.name, ...(entity.aliases ?? [])]
-    .map((text) => describePlaceholders(text ?? '', world.placeholders).trim())
+    .map((text) => describePlaceholders(text ?? '', allPlaceholders(world)).trim())
     .filter(Boolean);
 
 const aliasesOf = (entity: Entity, world: RuleWorld): string[] =>
-  (entity.aliases ?? []).map((a) => describePlaceholders(a ?? '', world.placeholders).trim()).filter(Boolean);
+  (entity.aliases ?? []).map((a) => describePlaceholders(a ?? '', allPlaceholders(world)).trim()).filter(Boolean);
 
 // An alias phrase led by an article. Alias matching is case-sensitive, so "the visitor" misses every
 // sentence-initial "The visitor" and vice versa — the article is the whole defect.
@@ -249,7 +288,7 @@ const aliasSelfDuplicate: Rule = {
   advanced: true,
   summary: (count) => `${count} aliases repeat their own entity’s name, which already matches on its own`,
   check: (world) => (world.entities ?? []).flatMap((entity) => {
-    const name = describePlaceholders(entity.name ?? '', world.placeholders);
+    const name = describePlaceholders(entity.name ?? '', allPlaceholders(world));
     return aliasesOf(entity, world)
       // An articled alias of an articled name is the article rule's: its fix strips to a bare form the
       // name can't match on its own, where deleting the alias would drop that coverage.
@@ -262,23 +301,31 @@ const aliasSelfDuplicate: Rule = {
       ));
   }),
   fix: (world) => withSlice(world, 'entities', mapChanged(world.entities ?? [], (entity) => {
-    const name = describePlaceholders(entity.name ?? '', world.placeholders);
+    const name = describePlaceholders(entity.name ?? '', allPlaceholders(world));
     const aliases = entity.aliases;
     if (!aliases?.length) return entity;
     const next = aliases.filter((alias) => {
-      const text = describePlaceholders(alias ?? '', world.placeholders).trim();
+      const text = describePlaceholders(alias ?? '', allPlaceholders(world)).trim();
       return LEADING_ARTICLE.test(text) || !nameCoversAlias(name, text);
     });
     return next.length === aliases.length ? entity : { ...entity, aliases: next };
   })),
 };
 
-/** A non-entity item, chips resolved like the editor's own lists resolve them. */
+/** A non-entity item, chips labeled like the editor's own lists label them. */
 const namedItem = (id: string, name: string | undefined, world: RuleWorld, section?: FindingSection): FindingItem => ({
   id,
-  name: describePlaceholders(name ?? '', world.placeholders).trim() || 'Untitled',
+  name: labelPlaceholders(name ?? '', allPlaceholders(world), { letters: lettersOf(world) }).trim() || 'Untitled',
   ...(section ? { section } : {}),
 });
+
+/**
+ * A placeholder as a finding names it: bare at the top level, and qualified with `›` under an owner, so a
+ * world carrying three rows called `Hair` says which Hair. The item keeps the placeholder's own id, so Open
+ * still lands on the row rather than on whatever owns it.
+ */
+const placeholderItem = (id: string, world: RuleWorld, section?: FindingSection): FindingItem =>
+  namedItem(id, qualifiedPlaceholderName(allPlaceholders(world), id) ?? undefined, world, section);
 
 /** An entry as its list labels it: the free name, else the first keyword. */
 const entryItem = (entry: DictionaryEntry, world: RuleWorld): FindingItem =>
@@ -338,25 +385,292 @@ const traitToggleMissingStat: Rule = {
   },
 };
 
-const traitPinInvalid: Rule = {
-  id: 'trait-pin-invalid',
+// ── Placeholder pins, from every source ────────────────────────────────────────────────────────────────────
+
+/** The world as the pin editors read it, so a finding labels a source exactly as its editor does. */
+const pinEditorWorld = (world: RuleWorld): PinEditorWorld => ({
+  traits: world.traits ?? [], traitGroups: world.traitGroups ?? [], locations: world.locations ?? [],
+  stats: world.stats ?? [], placeholders: allPlaceholders(world),
+  placeholderOwners: placeholderOwners(world), placementLetters: lettersOf(world),
+});
+
+/** Every pin in the world, walked once per world object — four rules read the same list. A fresh Add
+ *  Placeholder Pin row names no placeholder yet, so it is an edit in progress rather than a pin to check. */
+const pinRowsByWorld = new WeakMap<RuleWorld, PinRow[]>();
+const pinRowsOf = (world: RuleWorld): PinRow[] => {
+  let rows = pinRowsByWorld.get(world);
+  if (!rows) {
+    rows = allPinRows(pinEditorWorld(world)).filter((row) => row.pin.placeholderId);
+    pinRowsByWorld.set(world, rows);
+  }
+  return rows;
+};
+
+/** Which tab a pin source's finding item opens on, and whether the item reads by the source's own name or
+ *  by the label every pin surface gives the row. One row per kind, beside the source table's own. */
+const PIN_SOURCE_TABS: Record<PinSourceKind, { section: FindingSection; byLabel?: boolean }> = {
+  trait: { section: 'traits' },
+  location: { section: 'locations' },
+  descriptor: { section: 'stats', byLabel: true },
+  value: { section: 'placeholders', byLabel: true },
+};
+
+/** A pin's source as a finding item: the trait or location by its name, a band or a value by the label
+ *  every pin surface gives it, each opening on the tab that holds the source. */
+const pinSourceItem = (row: PinRow, world: RuleWorld): FindingItem => {
+  const { section, byLabel } = PIN_SOURCE_TABS[row.source.kind];
+  const id = pinSourceOwnerId(row.source);
+  return byLabel ? { id, name: row.label, section } : namedItem(id, row.name, world, section);
+};
+
+const placeholderPinBroken: Rule = {
+  id: 'placeholder-pin-broken',
   severity: 'error',
-  section: 'traits',
+  section: 'placeholders',
   advanced: true,
-  summary: (count) => `${count} trait placeholder pins name a placeholder that doesn’t exist`,
-  // Only the placeholder has to exist. Pinning a value its list doesn't carry is the feature — a trait
+  summary: (count) => `${count} placeholder pins name a placeholder that doesn’t exist`,
+  // Only the placeholder has to exist. Pinning a value its list doesn't carry is the feature — a source
   // forcing a shade nobody else rolls — and play applies it verbatim.
   check: (world) => {
-    const known = new Set((world.placeholders ?? []).map((p) => p.id));
-    return (world.traits ?? []).flatMap((trait) =>
-      (trait.placeholderPins ?? [])
-        .filter((pin) => !known.has(pin.placeholderId))
-        .map(() => {
-          const item = namedItem(trait.id, trait.name, world);
-          return finding(traitPinInvalid, `${quote(item.name)} pins a placeholder that doesn’t exist`, [item]);
-        }),
-    );
+    const known = new Set(allPlaceholders(world).map((p) => p.id));
+    return pinRowsOf(world)
+      .filter((row) => !known.has(row.pin.placeholderId))
+      .map((row) => finding(
+        placeholderPinBroken, `${quote(row.label)} pins a placeholder that doesn’t exist`, [pinSourceItem(row, world)],
+      ));
   },
+};
+
+/** A holder's pin list under `field` rewritten by `fn`; the holder itself when no pin changed. */
+const withMappedPinList = <T extends { [P in K]?: PlaceholderPin[] }, K extends 'placeholderPins' | 'pins'>(
+  holder: T, field: K, fn: (pin: PlaceholderPin) => PlaceholderPin,
+): T => {
+  const pins = holder[field];
+  if (!pins?.length) return holder;
+  const next = mapChanged(pins, fn);
+  return next === pins ? holder : { ...holder, [field]: next };
+};
+
+/** The world with `fn` applied to every pin on every source, only the records holding a changed pin
+ *  rebuilt — so a fix over pins repairs exactly the rows its check reported. */
+const withMappedPins = (world: RuleWorld, fn: (pin: PlaceholderPin) => PlaceholderPin): RuleWorld => {
+  const traits = mapChanged(world.traits ?? [], (t) => withMappedPinList(t, 'placeholderPins', fn));
+  const locations = mapChanged(world.locations ?? [], (l) => withMappedPinList(l, 'placeholderPins', fn));
+  const stats = mapChanged(world.stats ?? [], (s) => {
+    if (!s.descriptors?.length) return s;
+    const descriptors = mapChanged(s.descriptors, (d) => withMappedPinList(d, 'placeholderPins', fn));
+    return descriptors === s.descriptors ? s : { ...s, descriptors };
+  });
+  const withValues = withMappedPlaceholders(world, (ph) => {
+    if (!ph.values?.length) return ph;
+    const values = mapChanged(ph.values, (v) => withMappedPinList(v, 'pins', fn));
+    return values === ph.values ? ph : { ...ph, values };
+  });
+  return withSlice(withSlice(withSlice(withValues, 'traits', traits), 'locations', locations), 'stats', stats);
+};
+
+const placeholderPinUnknownValue: Rule = {
+  id: 'placeholder-pin-unknown-value',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholder pins name a value their placeholder no longer has`,
+  check: (world) => {
+    const placeholders = allPlaceholders(world);
+    const byId = indexPlaceholders(placeholders);
+    return pinRowsOf(world)
+      .filter((row) => hasDeadValueId(row.pin, byId.get(row.pin.placeholderId)))
+      .map((row) => {
+        const target = placeholderItem(row.pin.placeholderId, world);
+        const applies = row.pin.value
+          ? `${quote(describePlaceholders(row.pin.value, placeholders))} is forced as written`
+          : 'the pin applies nothing';
+        return finding(
+          placeholderPinUnknownValue,
+          `${quote(row.label)} pins ${quote(target.name)} to a value it no longer has — ${applies}`,
+          [pinSourceItem(row, world), target],
+        );
+      });
+  },
+  fix: (world) => {
+    const byId = indexPlaceholders(allPlaceholders(world));
+    return withMappedPins(world, (pin) => {
+      const ph = byId.get(pin.placeholderId);
+      return ph && hasDeadValueId(pin, ph) ? relinkedPin(pin, ph) : pin;
+    });
+  },
+};
+
+const placeholderPinConflict: Rule = {
+  id: 'placeholder-pin-conflict',
+  severity: 'info',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholders are pinned by more than one source that can be in force at once`,
+  // The editors' own conflict note decides who competes: pins that can never be in force together (two
+  // locations, two bands of one stat, two values of one Wildcard, exclusive trait siblings) are no contest,
+  // and pins forcing the same text disagree about nothing.
+  check: (world) => {
+    const editor = pinEditorWorld(world);
+    const byId = indexPlaceholders(editor.placeholders);
+    const rows = pinRowsOf(world);
+    const targets = [...new Set(rows.map((row) => row.pin.placeholderId))].filter((id) => byId.has(id));
+    return targets.flatMap((id) => {
+      const contested = rows
+        .filter((row) => row.pin.placeholderId === id)
+        .map((row) => ({ row, conflict: pinConflict(editor, id, row.source) }))
+        .filter((entry) => entry.conflict !== null);
+      const texts = new Set(contested.map((entry) => pinText(entry.row.pin, byId)));
+      if (contested.length < 2 || texts.size < 2) return [];
+      // A row no rival beats is a winner; two exclusive siblings can both be one, each over the same rival.
+      const winners = contested.filter((entry) => entry.conflict?.winner === null).map((entry) => quote(entry.row.label));
+      const verdict = winners.length === 1
+        ? `${winners[0]} wins whenever it is in force`
+        : `${winners.slice(0, -1).join(', ')} or ${winners[winners.length - 1]} wins, whichever is in force`;
+      const target = placeholderItem(id, world);
+      return [finding(
+        placeholderPinConflict,
+        `${quote(target.name)} is pinned by ${listNames(contested.map((entry) => quote(entry.row.label)))} — ${verdict}`,
+        [target, ...contested.map((entry) => pinSourceItem(entry.row, world))],
+      )];
+    });
+  },
+};
+
+/** The strongly connected parts of a directed graph that hold a cycle: two or more nodes reaching each
+ *  other, or one node reaching itself. Tarjan's walk, nodes in the order `edges` lists them. */
+const cyclicComponents = (edges: ReadonlyMap<string, readonly string[]>): string[][] => {
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const out: string[][] = [];
+  let next = 0;
+  const visit = (node: string): void => {
+    index.set(node, next);
+    low.set(node, next);
+    next += 1;
+    stack.push(node);
+    onStack.add(node);
+    for (const to of edges.get(node) ?? []) {
+      if (!index.has(to)) {
+        visit(to);
+        low.set(node, Math.min(low.get(node) ?? 0, low.get(to) ?? 0));
+      } else if (onStack.has(to)) {
+        low.set(node, Math.min(low.get(node) ?? 0, index.get(to) ?? 0));
+      }
+    }
+    if (low.get(node) !== index.get(node)) return;
+    const members: string[] = [];
+    for (;;) {
+      const popped = stack.pop() as string;
+      onStack.delete(popped);
+      members.push(popped);
+      if (popped === node) break;
+    }
+    if (members.length > 1 || (edges.get(node) ?? []).includes(node)) out.push(members.reverse());
+  };
+  for (const node of edges.keys()) if (!index.has(node)) visit(node);
+  return out;
+};
+
+/** Every way `choices` can roll, in value order, at most `cap` of them: the placeholders read as their
+ *  texts, one combination per record. One empty record when there is nothing to roll. */
+const rollCombos = (choices: readonly Placeholder[], cap: number): Array<Record<string, string>> => {
+  const out: Array<Record<string, string>> = [];
+  const pick = new Array<number>(choices.length).fill(0);
+  for (;;) {
+    out.push(Object.fromEntries(choices.map((ph, i) => [ph.id, ph.values[pick[i]].text])));
+    if (out.length >= cap) return out;
+    let i = choices.length - 1;
+    while (i >= 0 && pick[i] === choices[i].values.length - 1) {
+      pick[i] = 0;
+      i -= 1;
+    }
+    if (i < 0) return out;
+    pick[i] += 1;
+  }
+};
+
+/** How many roll combinations one loop of value-pinning placeholders is probed under, at most. Four
+ *  eight-value Wildcards pinning each other is the ceiling; a bigger loop is probed in value order up to it. */
+const CYCLE_PROBE_CAP = 4096;
+
+const placeholderPinCycle: Rule = {
+  id: 'placeholder-pin-cycle',
+  severity: 'error',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} sets of value pins flip each other forever`,
+  // The game's own collector decides: each loop of placeholders whose values pin each other is settled
+  // under every roll it can start from, and the first roll that never settles is the finding. Pins from
+  // traits, locations and bands only fix a value in place, so they are left out — they can end a loop,
+  // never start one.
+  check: (world) => {
+    const placeholders = allPlaceholders(world);
+    const byId = indexPlaceholders(placeholders);
+    const pinnerIds = new Set(valuePinners(placeholders).map((p) => p.id));
+    const edges = new Map([...pinnerIds].map((id) => [id, [...new Set(
+      (byId.get(id)?.values ?? []).flatMap((v) => (v.pins ?? []).map((pin) => pin.placeholderId).filter((to) => pinnerIds.has(to))),
+    )]]));
+    const name = (id: string) => placeholderItem(id, world).name;
+    const readAs = (state: Record<string, string>, ids: string[]) =>
+      ids.map((id) => `${name(id)} = ${describePlaceholders(state[id] ?? '', placeholders) || '(nothing)'}`).join(', ');
+    const reported = new Set<string>();
+    return cyclicComponents(edges).flatMap((members) => {
+      const choices = members.map((id) => byId.get(id) as Placeholder).filter((p) => placeholderIsChoice(p) && p.values.length >= 2);
+      for (const rolled of rollCombos(choices, CYCLE_PROBE_CAP)) {
+        let hit: PinFinding | undefined;
+        collectPins({ traits: [], placeholders, rolls: { world: rolled, unique: {} }, onFinding: (f) => { hit ??= f; } });
+        if (!hit) continue;
+        const ids = hit.placeholderIds;
+        if (reported.has(ids.join('|'))) return [];
+        reported.add(ids.join('|'));
+        const start = readAs(rolled, ids.filter((id) => id in rolled));
+        return [finding(
+          placeholderPinCycle,
+          `${listNames(ids.map((id) => quote(name(id))))} pin each other in a loop: ${start ? `rolled ${start}, they` : 'they'} flip to ${hit.loop.map((s) => readAs(s, ids)).join(', then ')}, and round again`,
+          ids.map((id) => placeholderItem(id, world)),
+        )];
+      }
+      return [];
+    });
+  },
+};
+
+/** True when `pin` holds the placeholder whose value carries it. */
+const isSelfPin = (pin: PlaceholderPin, ph: Placeholder): boolean => pin.placeholderId === ph.id;
+
+const placeholderPinSelf: Rule = {
+  id: 'placeholder-pin-self',
+  severity: 'error',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholder values pin the placeholder they belong to`,
+  // Direct self-pin only. A value pinning a placeholder that pins back is a loop, which the cycle rule
+  // reports in the terms that loop needs.
+  check: (world) => {
+    return pinRowsOf(world)
+      .filter((row) => row.source.kind === 'value' && row.source.placeholderId === row.pin.placeholderId)
+      .map((row) => {
+        const target = placeholderItem(row.pin.placeholderId, world);
+        return finding(
+          placeholderPinSelf,
+          `${quote(row.label)} pins ${quote(target.name)}, the placeholder that value belongs to — a value cannot hold its own placeholder, so the pin applies nothing`,
+          [target],
+        );
+      });
+  },
+  fix: (world) => withMappedPlaceholders(world, (ph) => {
+    if (!ph.values?.length) return ph;
+    const values = mapChanged(ph.values, (v) => {
+      if (!v.pins?.some((pin) => isSelfPin(pin, ph))) return v;
+      const pins = v.pins.filter((pin) => !isSelfPin(pin, ph));
+      const { pins: _drop, ...rest } = v;
+      return pins.length ? { ...rest, pins } : rest;
+    });
+    return values === ph.values ? ph : { ...ph, values };
+  }),
 };
 
 /** One owner of chip-bearing text: the finding item it maps to, and every field of it chips resolve in.
@@ -387,7 +701,10 @@ const chipOwners = (world: RuleWorld): ChipOwner[] => [
     item: { ...entryItem(entry, world), section: 'dictionary' as const },
     texts: [entry.name, ...(entry.key ?? []), ...(entry.secondaryKeys ?? []), entry.value],
   })),
-  ...(world.stats ?? []).map((s) => ({ item: namedItem(s.id, s.name, world, 'stats'), texts: [s.name] })),
+  ...(world.stats ?? []).map((s) => ({
+    item: namedItem(s.id, s.name, world, 'stats'),
+    texts: [s.name, s.description, ...(s.descriptors ?? []).map((d) => d.description)],
+  })),
   ...(world.traits ?? []).map((t) => ({
     item: namedItem(t.id, t.name, world, 'traits'),
     texts: [t.name, t.playerDescription, t.aiDescription],
@@ -418,7 +735,7 @@ const chipUnknownPlaceholder: Rule = {
   advanced: true,
   summary: (count) => `${count} items contain chips pointing at placeholders that don’t exist`,
   check: (world) => {
-    const known = new Set((world.placeholders ?? []).map((p) => p.id));
+    const known = new Set(allPlaceholders(world).map((p) => p.id));
     return chipOwners(world)
       .filter((owner) => [...chipIds(owner.texts)].some((id) => !known.has(id)))
       .map((owner) => finding(
@@ -429,43 +746,30 @@ const chipUnknownPlaceholder: Rule = {
   },
 };
 
-const chipNeverScanned: Rule = {
-  id: 'chip-never-scanned',
-  severity: 'error',
-  section: 'stats',
-  advanced: true,
-  summary: (count) => `${count} stats carry chips in fields placeholders never resolve — they’ll read as raw text`,
-  check: (world) => (world.stats ?? []).flatMap((stat) => {
-    const item = namedItem(stat.id, stat.name, world);
-    const spots: string[] = [];
-    if (stat.description && hasPlaceholders(stat.description)) spots.push('description');
-    if ((stat.descriptors ?? []).some((d) => d.description && hasPlaceholders(d.description))) spots.push('descriptors');
-    if (spots.length === 0) return [];
-    return [finding(
-      chipNeverScanned,
-      `${quote(item.name)} has a chip in its ${spots.join(' and ')} — placeholders never resolve there, so it’ll read as raw text`,
-      [item],
-    )];
-  }),
-};
-
 /** Every text in the world a chip token can sit in — deliberately wider than `chipOwners`, which lists only
  *  the fields the resolver scans. "Never used" has to mean unmentioned *anywhere*, or a chip parked somewhere
  *  that doesn't resolve would read as no mention at all and the placeholder under it would look disposable. */
 const allChipTexts = (world: RuleWorld): Array<string | undefined> => [
   ...chipOwners(world).flatMap((owner) => owner.texts),
+  // Values are chip-capable, so a structural child is placed by the parent that names it and by nothing
+  // else. Reading it as unused would put a delete-it Fix on the parts a whole character is built from.
+  ...allPlaceholders(world).flatMap((ph) => (ph.values ?? []).map((v) => v.text)),
   world.worldOverview?.description,
-  ...(world.stats ?? []).flatMap((s) => [s.description, ...(s.descriptors ?? []).map((d) => d.description)]),
   ...(world.statUpdates ?? []).map((u) => u.prompt),
 ];
 
-/** The placeholders nothing in the world reaches for — no chip anywhere, and no trait pinning them. */
-const unusedPlaceholders = (world: RuleWorld): Placeholder[] => {
-  const used = chipIds(allChipTexts(world));
-  for (const trait of world.traits ?? []) {
-    for (const pin of trait.placeholderPins ?? []) used.add(pin.placeholderId);
-  }
-  return (world.placeholders ?? []).filter((p) => !used.has(p.id));
+/** The placeholders no chip anywhere references, each with the traits still pinning it. A pin is authored
+ *  intent, not a placement — any pin entry counts, empty value included — so the two rules over this list
+ *  exactly partition "unplaced", and the delete-fix can never orphan a pin. */
+const unplacedPlaceholders = (world: RuleWorld): Array<{ placeholder: Placeholder; pinnedBy: Trait[] }> => {
+  const placed = chipIds(allChipTexts(world));
+  return allPlaceholders(world)
+    .filter((p) => !placed.has(p.id))
+    .map((placeholder) => ({
+      placeholder,
+      pinnedBy: (world.traits ?? []).filter((t) =>
+        (t.placeholderPins ?? []).some((pin) => pin.placeholderId === placeholder.id)),
+    }));
 };
 
 const placeholderUnused: Rule = {
@@ -474,14 +778,50 @@ const placeholderUnused: Rule = {
   section: 'placeholders',
   advanced: true,
   summary: (count) => `${count} placeholders are defined but never used`,
-  check: (world) => unusedPlaceholders(world).map((placeholder) => {
-    const item = namedItem(placeholder.id, placeholder.name, world);
-    return finding(placeholderUnused, `${quote(item.name)} is defined but never used`, [item]);
-  }),
+  check: (world) => unplacedPlaceholders(world)
+    .filter(({ pinnedBy }) => pinnedBy.length === 0)
+    .map(({ placeholder }) => {
+      const item = placeholderItem(placeholder.id, world);
+      return finding(placeholderUnused, `${quote(item.name)} is defined but never used`, [item]);
+    }),
   fix: (world) => {
-    const dead = new Set(unusedPlaceholders(world).map((p) => p.id));
+    const dead = new Set(unplacedPlaceholders(world)
+      .filter(({ pinnedBy }) => pinnedBy.length === 0)
+      .map(({ placeholder }) => placeholder.id));
     if (dead.size === 0) return world;
-    return withSlice(world, 'placeholders', (world.placeholders ?? []).filter((p) => !dead.has(p.id)));
+    return withoutDeadPlaceholders(world, dead);
+  },
+};
+
+/** The forgot-to-place case: a trait wires a value in, but no text carries the chip, so the pinned value
+ *  is never seen. No fix — only the author knows where the chip belongs. */
+const placeholderPinnedUnused: Rule = {
+  id: 'placeholder-pinned-unused',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholders are pinned by traits but placed in no text`,
+  check: (world) => {
+    const flagged = unplacedPlaceholders(world).filter(({ pinnedBy }) => pinnedBy.length > 0);
+    // A trait's chip carries every flagged placeholder it pins. The grouped row dedups items by id, so a
+    // trait pinning two of them lands beside only the first — the label, not adjacency, says which is whose.
+    const flaggedNames = new Map(flagged.map(({ placeholder }) =>
+      [placeholder.id, placeholderItem(placeholder.id, world).name]));
+    const traitItem = (t: Trait): FindingItem => {
+      const pinned = (t.placeholderPins ?? [])
+        .map((pin) => flaggedNames.get(pin.placeholderId))
+        .filter((name): name is string => name !== undefined);
+      const base = namedItem(t.id, t.name, world, 'traits');
+      return { ...base, name: `${base.name} (pins ${listNames(pinned.map(quote))})` };
+    };
+    return flagged.map(({ placeholder, pinnedBy }) => {
+      const item = placeholderItem(placeholder.id, world);
+      return finding(
+        placeholderPinnedUnused,
+        `${quote(item.name)} is pinned by ${listNames(pinnedBy.map((t) => namedItem(t.id, t.name, world).name))} but placed in no text — the pinned value never shows up`,
+        [item, ...pinnedBy.map(traitItem)],
+      );
+    });
   },
 };
 
@@ -513,7 +853,7 @@ const statCodeUnknownStat: Rule = {
   check: (world) => {
     // Code compares against runtime names, where chips have resolved — so both spellings are valid targets.
     const stats = world.stats ?? [];
-    const known = new Set(stats.flatMap((s) => [s.name, describePlaceholders(s.name ?? '', world.placeholders)]));
+    const known = new Set(stats.flatMap((s) => [s.name, describePlaceholders(s.name ?? '', allPlaceholders(world))]));
     return stats.flatMap((stat) => {
       if (!stat.code) return [];
       const item = namedItem(stat.id, stat.name, world);
@@ -926,7 +1266,7 @@ const codeReadsSelf = (stat: Stat, world: RuleWorld): boolean => {
     ? new RegExp(`["'\`]${stat.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'\`]`)
     : undefined;
   if (/\bcurrentStatId\b/.test(code) || quotedId?.test(code)) return true;
-  const names = new Set([stat.name, describePlaceholders(stat.name ?? '', world.placeholders)]);
+  const names = new Set([stat.name, describePlaceholders(stat.name ?? '', allPlaceholders(world))]);
   return statNamesInCode(code).some((name) => names.has(name));
 };
 
@@ -1031,7 +1371,7 @@ const statUpdateUnknownStat: Rule = {
   check: (world) => {
     // Updates target runtime names, where chips have resolved — so both spellings are valid targets.
     const known = new Set((world.stats ?? []).flatMap(
-      (s) => [s.name, describePlaceholders(s.name ?? '', world.placeholders)],
+      (s) => [s.name, describePlaceholders(s.name ?? '', allPlaceholders(world))],
     ));
     return (world.statUpdates ?? []).flatMap((update) => {
       const item = namedItem(update.id, update.name, world);
@@ -1058,7 +1398,7 @@ const aliasLowercaseNoTwin: Rule = {
     `${count} lowercase multi-word aliases have no capitalized twin — alias matching is case-sensitive, so they miss wherever the text capitalizes them`,
   check: (world) => (world.entities ?? []).flatMap((entity) => {
     const aliases = aliasesOf(entity, world);
-    const name = describePlaceholders(entity.name ?? '', world.placeholders);
+    const name = describePlaceholders(entity.name ?? '', allPlaceholders(world));
     return aliases
       // The leading article is the sharper diagnosis; once its fix strips it, this rule picks the alias up.
       .filter((alias) => !LEADING_ARTICLE.test(alias))
@@ -1083,16 +1423,16 @@ const entityNameInWildcardPool: Rule = {
   advanced: true,
   summary: (count) => `${count} entity names double as Wildcard values, so a roll can impersonate the entity`,
   check: (world) => (world.entities ?? []).flatMap((entity) => {
-    const nameKey = matchKey(describePlaceholders(entity.name ?? '', world.placeholders));
+    const nameKey = matchKey(describePlaceholders(entity.name ?? '', allPlaceholders(world)));
     if (!nameKey) return [];
-    return (world.placeholders ?? [])
-      .filter((ph) => (ph.values ?? []).length >= 2 && (ph.values ?? []).some((value) => matchKey(value) === nameKey))
+    return allPlaceholders(world)
+      .filter((ph) => (ph.values ?? []).length >= 2 && (ph.values ?? []).some((v) => matchKey(v.text) === nameKey))
       .map((ph) => {
         const item = asItem(entity, world);
         return finding(
           entityNameInWildcardPool,
           `${quote(item.name)} is also a value of the Wildcard ${quote(ph.name)} — a roll that lands on it reads as a mention of the entity`,
-          [item, namedItem(ph.id, ph.name, world, 'placeholders')],
+          [item, placeholderItem(ph.id, world, 'placeholders')],
         );
       });
   }),
@@ -1166,7 +1506,7 @@ const summaryOwners = (world: RuleWorld): SummaryOwner[] => [
 /** A field's cost as the prompt will actually pay it — chips resolved first, the same way AI Context
  *  estimates, so chip syntax can neither push a short description over a bound nor hide a bloated summary. */
 const resolvedTokens = (text: string | undefined, world: RuleWorld): number =>
-  estimateTokens(describePlaceholders(text ?? '', world.placeholders).length);
+  estimateTokens(describePlaceholders(text ?? '', allPlaceholders(world)).length);
 
 // Long enough that serving the full text on every turn is a real cost to a small model's budget — the
 // summary field exists exactly to shorten these.
@@ -1293,16 +1633,17 @@ const traitGroupTooSmall: Rule = {
 
 /** The values a roll can actually land on. Every value benched falls back to a uniform draw
  *  (`weightedPick`), so an all-zero weight map benches nothing. */
-const drawableValues = (ph: Placeholder): string[] => {
+const drawableValues = (ph: Placeholder): PlaceholderValue[] => {
   const values = ph.values ?? [];
   const positive = values.filter((value) => placeholderWeight(ph, value) > 0);
   return positive.length > 0 ? positive : values;
 };
 
-/** The weight-map keys that name no value in the pool — each one a weight applying to nothing. */
+/** The weight-map keys naming no value in the pool — each one a weight applying to nothing. Keys are
+ *  value ids, so this is what a value the author deleted leaves behind. */
 const deadWeightKeys = (ph: Placeholder): string[] => {
-  const values = new Set(ph.values ?? []);
-  return Object.keys(ph.weights ?? {}).filter((key) => !values.has(key));
+  const ids = new Set((ph.values ?? []).map((v) => v.id));
+  return Object.keys(ph.weights ?? {}).filter((key) => !ids.has(key));
 };
 
 const placeholderWeightUnknownValue: Rule = {
@@ -1311,17 +1652,20 @@ const placeholderWeightUnknownValue: Rule = {
   section: 'placeholders',
   advanced: true,
   summary: (count) => `${count} placeholders weight values their pool doesn’t contain`,
-  check: (world) => (world.placeholders ?? []).flatMap((ph) => {
+  check: (world) => allPlaceholders(world).flatMap((ph) => {
     const dead = deadWeightKeys(ph);
     if (dead.length === 0) return [];
-    const item = namedItem(ph.id, ph.name, world);
+    const item = placeholderItem(ph.id, world);
+    // A dead key names a value id, which says nothing to an author, so the count carries the finding.
     return [finding(
       placeholderWeightUnknownValue,
-      `${quote(item.name)} weights ${quote(dead[0])}, which isn’t one of its values — the weight applies to nothing`,
+      dead.length === 1
+        ? `${quote(item.name)} weights a value it no longer has — that weight applies to nothing`
+        : `${quote(item.name)} weights ${dead.length} values it no longer has — those weights apply to nothing`,
       [item],
     )];
   }),
-  fix: (world) => withSlice(world, 'placeholders', mapChanged(world.placeholders ?? [], (ph) => {
+  fix: (world) => withMappedPlaceholders(world, (ph) => {
     const dead = new Set(deadWeightKeys(ph));
     if (dead.size === 0) return ph;
     const weights = Object.fromEntries(Object.entries(ph.weights ?? {}).filter(([key]) => !dead.has(key)));
@@ -1331,7 +1675,7 @@ const placeholderWeightUnknownValue: Rule = {
       return rest;
     }
     return { ...ph, weights };
-  })),
+  }),
 };
 
 const wildcardSingleValue: Rule = {
@@ -1340,17 +1684,376 @@ const wildcardSingleValue: Rule = {
   section: 'placeholders',
   advanced: true,
   summary: (count) => `${count} Wildcards can only ever draw one value, so they never vary`,
-  check: (world) => (world.placeholders ?? [])
+  check: (world) => allPlaceholders(world)
     // One authored value is a Variable, which is supposed to be fixed — only weights can strand a Wildcard.
     .filter((ph) => (ph.values ?? []).length >= 2 && drawableValues(ph).length === 1)
     .map((ph) => {
-      const item = namedItem(ph.id, ph.name, world);
+      const item = placeholderItem(ph.id, world);
       return finding(
         wildcardSingleValue,
-        `${quote(item.name)} benches every value but ${quote(drawableValues(ph)[0])} by weight, so every roll lands the same`,
+        `${quote(item.name)} benches every value but ${quote(drawableValues(ph)[0].text)} by weight, so every roll lands the same`,
         [item],
       );
     }),
+};
+
+// ── Structured placeholders ───────────────────────────────────────────────────────────────────────────────
+
+/** Every chip in one text, decoded; a token too malformed to read is dropped, since nothing below can say
+ *  anything true about where it points. */
+const chipTokens = (text: string | undefined): PlaceholderToken[] =>
+  (text && hasPlaceholders(text) ? parsePlaceholderText(text) : [])
+    .flatMap((segment) => (segment.type === 'variable' ? [decodePlaceholderToken(segment.token)] : []))
+    .filter((token): token is PlaceholderToken => token !== null);
+
+/** How many branch rounds a probe walks at most. */
+const PROBE_ROUNDS = 8;
+
+/**
+ * Round *i* of a probe sends every choice to its *i*-th value. One playthrough only ever sees one variant,
+ * so a sweep is what turns "this roll works" into "every roll works" — and one round is enough for a world
+ * whose values carry no chips, where there is no branch to route through in the first place.
+ */
+const probeRounds = (world: RuleWorld): number => {
+  const placeholders = allPlaceholders(world);
+  if (!placeholders.some((ph) => (ph.values ?? []).some((v) => hasPlaceholders(v.text ?? '')))) return 1;
+  return Math.min(PROBE_ROUNDS, Math.max(1, ...placeholders.map((ph) => (ph.values ?? []).length)));
+};
+
+const branchPick = (round: number): PlaceholderPick =>
+  (values) => values[Math.min(round, values.length - 1)].text;
+
+/**
+ * `text` resolved once per branch round, with everything each walk reported. The real resolver runs it, so a
+ * diagnostic can never drift from what play does. Rolls are absent and nothing persists: every round draws
+ * fresh, and the union describes what the world *can* do rather than what one playthrough did.
+ */
+const probeText = (
+  text: string, world: RuleWorld, rounds: number,
+): { findings: PlaceholderFinding[]; results: string[] } => {
+  const findings: PlaceholderFinding[] = [];
+  const results: string[] = [];
+  for (let round = 0; round < rounds; round++) {
+    results.push(resolvePlaceholders(text, {
+      placeholders: allPlaceholders(world),
+      rolls: {},
+      pick: branchPick(round),
+      onFinding: (raised) => findings.push(raised),
+    }));
+  }
+  return { findings, results };
+};
+
+const placeholderSlotMiss: Rule = {
+  id: 'placeholder-slot-miss',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) =>
+    `${count} placed paths name a slot some variant doesn’t carry, so they resolve to nothing whenever it rolls`,
+  // Reported against the variant that came up short, not the chip that asked: one missing slot strands every
+  // sentence pointing at it, and the repair is always in the placeholder, never in the text.
+  check: (world) => {
+    const rounds = probeRounds(world);
+    const misses = new Map<string, { placeholderId: string; asked: string }>();
+    for (const text of chipBearingTexts(world)) {
+      for (const raised of probeText(text, world, rounds).findings) {
+        if (raised.kind !== 'slot-miss' || raised.segment !== 'slot') continue;
+        const { placeholderId, asked } = raised;
+        if (!placeholderId || !asked) continue;
+        misses.set(`${placeholderId} ${asked}`, { placeholderId, asked });
+      }
+    }
+    return [...misses.values()].map(({ placeholderId, asked }) => {
+      const item = placeholderItem(placeholderId, world);
+      return finding(
+        placeholderSlotMiss,
+        `${quote(item.name)} carries no ${quote(asked)}, so a placed ${quote(asked)} path routed through it resolves to nothing`,
+        [item],
+      );
+    });
+  },
+};
+
+/** The two references `chip-unknown-placeholder` cannot see: it reads the root id of a chip in world text,
+ *  which leaves out every chip living inside a value and every explicit pick a drill path names. */
+const placeholderDanglingReference: Rule = {
+  id: 'placeholder-dangling-reference',
+  severity: 'error',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholder chips point at a placeholder that no longer exists`,
+  check: (world) => {
+    const known = new Set(allPlaceholders(world).map((p) => p.id));
+    const gone = (id: string) => !known.has(id);
+    const drilledIntoNothing = (token: PlaceholderToken) =>
+      (token.path ?? []).some((segment) => segment.kind === 'val' && gone(segment.ref));
+    const inValues = allPlaceholders(world).flatMap((ph) => {
+      const item = placeholderItem(ph.id, world);
+      return (ph.values ?? [])
+        .flatMap((v) => chipTokens(v.text))
+        .filter((token) => gone(token.id) || drilledIntoNothing(token))
+        .map(() => finding(
+          placeholderDanglingReference,
+          `A value of ${quote(item.name)} points at a placeholder that no longer exists`,
+          [item],
+        ));
+    });
+    const inText = chipOwners(world).flatMap((owner) => owner.texts
+      .flatMap(chipTokens)
+      .filter(drilledIntoNothing)
+      .map(() => finding(
+        placeholderDanglingReference,
+        `${quote(owner.item.name)} drills into a placeholder that no longer exists`,
+        [owner.item],
+      )));
+    return [...inValues, ...inText];
+  },
+};
+
+/** Every placeholder id one placeholder's values reach: a chip anywhere in a value, plus every explicit pick
+ *  its path names. These are the edges a cycle can run along. */
+const valueReferences = (ph: Placeholder): string[] =>
+  (ph.values ?? []).flatMap((v) => chipTokens(v.text)).flatMap((token) =>
+    [token.id, ...(token.path ?? []).flatMap((segment) => (segment.kind === 'val' ? [segment.ref] : []))]);
+
+/** Each reference cycle among `placeholders`, as the ids standing on it. A tangle is reported once, by the
+ *  first ring found in it — the author untangles a knot, not one edge of it at a time. */
+const referenceCycles = (placeholders: Placeholder[]): string[][] => {
+  const edges = new Map(placeholders.map((ph) => [ph.id, valueReferences(ph)]));
+  const cycles = new Map<string, string[]>();
+  const settled = new Set<string>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const walk = (id: string) => {
+    if (onStack.has(id)) {
+      const ring = stack.slice(stack.indexOf(id));
+      cycles.set([...ring].sort().join(' '), ring);
+      return;
+    }
+    if (settled.has(id) || !edges.has(id)) return;
+    stack.push(id);
+    onStack.add(id);
+    for (const next of edges.get(id) ?? []) walk(next);
+    stack.pop();
+    onStack.delete(id);
+    settled.add(id);
+  };
+  for (const ph of placeholders) walk(ph.id);
+  return [...cycles.values()];
+};
+
+const placeholderReferenceCycle: Rule = {
+  id: 'placeholder-reference-cycle',
+  severity: 'error',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholders reference themselves in a loop, so every chip of one shows nothing`,
+  check: (world) => {
+    const placeholders = allPlaceholders(world);
+    return referenceCycles(placeholders).map((ring) => {
+      const items = ring.map((id) => placeholderItem(id, world));
+      const loop = items.length === 1
+        ? `${quote(items[0].name)} references itself`
+        : `${listNames(items.map((i) => quote(i.name)))} reference each other in a loop`;
+      return finding(placeholderReferenceCycle, `${loop}, so every chip of them shows nothing`, items);
+    });
+  },
+};
+
+const placeholderEmptyRecord: Rule = {
+  id: 'placeholder-empty-record',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  // Both nouns can land here, so the count line names neither: an Object joins every value, and a Variable
+  // has the one. Each finding says which it is.
+  summary: (count) => `${count} placeholders join their values into nothing, so a chip of one shows no text`,
+  // Never a Wildcard: one of those showing nothing is one empty value in a pool, which is the author's business.
+  check: (world) => {
+    const rounds = probeRounds(world);
+    return allPlaceholders(world)
+      .filter((ph) => (ph.values ?? []).length > 0 && !placeholderIsChoice(ph))
+      .flatMap((ph) => {
+        const token = encodePlaceholderToken({ id: ph.id, mode: 'world', placementId: 'bench' });
+        const { findings: raised, results } = probeText(token, world, rounds);
+        // A cycle, a dead reference and an over-deep walk all empty the join as well, and each already has
+        // a rule saying so in the terms the author can act on.
+        if (raised.some((f) => f.kind === 'cycle' || f.kind === 'dangling' || f.kind === 'depth')) return [];
+        if (results.some((text) => text !== '')) return [];
+        const item = placeholderItem(ph.id, world);
+        return [finding(
+          placeholderEmptyRecord,
+          placeholderKindNoun(ph) === 'Object'
+            ? `${quote(item.name)} is an Object whose values join into nothing — a chip of it shows no text at all`
+            : `${quote(item.name)} is a Variable whose one value reads as nothing — a chip of it shows no text at all`,
+          [item],
+        )];
+      });
+  },
+};
+
+const placeholderDuplicateSlot: Rule = {
+  id: 'placeholder-duplicate-slot',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholders carry two slots under one name, so a path naming it always takes the first`,
+  check: (world) => allPlaceholders(world).flatMap((ph) => {
+    const names = placeholderChildren(ph, allPlaceholders(world)).map((child) => child.target.name);
+    const repeated = [...new Set(names.filter((name, i) => names.indexOf(name) !== i))];
+    if (repeated.length === 0) return [];
+    const item = placeholderItem(ph.id, world);
+    return [finding(
+      placeholderDuplicateSlot,
+      `${quote(item.name)} carries ${listNames(repeated.map(quote))} more than once — a path naming it always takes the first, and the rest are unreachable`,
+      [item],
+    )];
+  }),
+};
+
+// ── Ownership and sharing ─────────────────────────────────────────────────────────────────────────────────
+//
+// Three conditions the app's own gestures cannot produce: the store releases a stale owner reference on
+// every write, and cutting a shared row prunes the override map with it. A hand-edited world is what gets
+// here, and none of it is visible anywhere else — an owner reference is data, and a dead override key
+// silently changes no odds at all.
+
+/**
+ * The original a shared row's override key names: the value holding the row's chip, then each placeholder
+ * the key walks below it. `null` where any step is gone — a key routing through nothing weights nothing,
+ * and the broken chip it routes through is already the dangling rule's finding.
+ */
+const sharedWeightOriginal = (
+  holder: Placeholder, byId: Map<string, Placeholder>, key: string,
+): Placeholder | null => {
+  const [valueId, ...under] = key.split(SHARED_PATH_SEP);
+  const value = (holder.values ?? []).find((v) => v.id === valueId);
+  const lone = value && lonePlaceholderToken(value.text);
+  let at = lone ? byId.get(decodePlaceholderToken(lone)?.id ?? '') : undefined;
+  for (const id of under) {
+    if (!at || !holdsAsChip(at, id)) return null;
+    at = byId.get(id);
+  }
+  return at ?? null;
+};
+
+/** Each of a holder's overrides that weights values its original no longer carries — the twin of
+ *  {@link deadWeightKeys} for a shared row, whose weights live on the holder rather than on the pool. */
+const deadSharedWeights = (
+  holder: Placeholder, byId: Map<string, Placeholder>,
+): Array<{ key: string; original: Placeholder; dead: string[] }> =>
+  Object.entries(holder.sharedWeights ?? {}).flatMap(([key, map]) => {
+    const original = sharedWeightOriginal(holder, byId, key);
+    if (!original) return [];
+    const ids = new Set((original.values ?? []).map((v) => v.id));
+    const dead = Object.keys(map).filter((id) => !ids.has(id));
+    return dead.length ? [{ key, original, dead }] : [];
+  });
+
+const placeholdersById = (world: RuleWorld) =>
+  new Map(allPlaceholders(world).map((ph) => [ph.id, ph]));
+
+const placeholderSharedWeightUnknownValue: Rule = {
+  id: 'placeholder-shared-weight-unknown-value',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} shared rows weight values their original no longer carries`,
+  check: (world) => {
+    const byId = placeholdersById(world);
+    return allPlaceholders(world).flatMap((ph) => deadSharedWeights(ph, byId).map(({ original, dead }) => {
+      const item = placeholderItem(ph.id, world);
+      const from = quote(placeholderItem(original.id, world).name);
+      // Dead keys are value ids, which say nothing to an author, so the count carries the finding.
+      return finding(
+        placeholderSharedWeightUnknownValue,
+        dead.length === 1
+          ? `${quote(item.name)} weights a value ${from} no longer carries — that weight applies to nothing`
+          : `${quote(item.name)} weights ${dead.length} values ${from} no longer carries — those weights apply to nothing`,
+        [item],
+      );
+    }));
+  },
+  fix: (world) => {
+    const byId = placeholdersById(world);
+    return withMappedPlaceholders(world, (ph) => {
+      const dead = deadSharedWeights(ph, byId);
+      if (dead.length === 0) return ph;
+      const drop = new Map(dead.map((d) => [d.key, new Set(d.dead)]));
+      const kept = Object.entries(ph.sharedWeights ?? {}).flatMap(([key, map]) => {
+        const gone = drop.get(key);
+        if (!gone) return [[key, map] as const];
+        const live = Object.entries(map).filter(([id]) => !gone.has(id));
+        return live.length ? [[key, Object.fromEntries(live)] as const] : [];
+      });
+      // An override the repair empties goes entirely — absent already means the original's own odds.
+      if (kept.length === 0) {
+        const { sharedWeights: _dead, ...rest } = ph;
+        return rest;
+      }
+      return { ...ph, sharedWeights: Object.fromEntries(kept) };
+    });
+  },
+};
+
+/** Every placeholder whose owner reference points at nothing that can hold it, split by which half is
+ *  wrong: the owner is not in the world at all, or it is and no longer holds the placeholder as a value. */
+const staleOwners = (world: RuleWorld, kind: 'orphan' | 'dropped'): Placeholder[] => {
+  const byId = placeholdersById(world);
+  return allPlaceholders(world).filter((ph) => {
+    if (ph.ownerId === undefined) return false;
+    const owner = byId.get(ph.ownerId);
+    return kind === 'orphan' ? !owner : !!owner && !holdsAsChip(owner, ph.id);
+  });
+};
+
+/** Clear the owner reference on exactly the placeholders the calling rule flagged — never on the other
+ *  rule's, so a Fix button repairs only the rows its own finding named. */
+const releaseOwners = (world: RuleWorld, kind: 'orphan' | 'dropped'): RuleWorld => {
+  const stale = new Set(staleOwners(world, kind).map((ph) => ph.id));
+  return withMappedPlaceholders(world, (ph) => {
+    if (!stale.has(ph.id)) return ph;
+    const { ownerId: _gone, ...rest } = ph;
+    return rest;
+  });
+};
+
+const placeholderOwnerOrphan: Rule = {
+  id: 'placeholder-owner-orphan',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} placeholders belong to a placeholder that doesn’t exist`,
+  check: (world) => staleOwners(world, 'orphan').map((ph) => {
+    const item = placeholderItem(ph.id, world);
+    return finding(
+      placeholderOwnerOrphan,
+      `${quote(item.name)} belongs to a placeholder that no longer exists, so it sits at the top level instead`,
+      [item],
+    );
+  }),
+  // Dropping the reference states what the tree already draws; whose it should be instead is the author's
+  // call, made by dragging it there.
+  fix: (world) => releaseOwners(world, 'orphan'),
+};
+
+const placeholderOwnerDropped: Rule = {
+  id: 'placeholder-owner-dropped',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} owned placeholders are no longer held by the placeholder they belong to`,
+  check: (world) => staleOwners(world, 'dropped').map((ph) => {
+    const item = placeholderItem(ph.id, world);
+    const owner = quote(placeholderItem(ph.ownerId ?? '', world).name);
+    return finding(
+      placeholderOwnerDropped,
+      `${quote(item.name)} says it belongs to ${owner}, which no longer holds it — so it sits at the top level instead`,
+      [item],
+    );
+  }),
+  fix: (world) => releaseOwners(world, 'dropped'),
 };
 
 // ── Dictionary authoring, continued ───────────────────────────────────────────────────────────────────────
@@ -1424,7 +2127,7 @@ const dictionaryDisabled: Rule = {
 /** The world as a finding names it — for rules whose subject has no list row of its own. */
 const worldItem = (world: RuleWorld): FindingItem => ({
   id: 'overview',
-  name: describePlaceholders(world.worldOverview?.name ?? '', world.placeholders).trim() || 'This World',
+  name: describePlaceholders(world.worldOverview?.name ?? '', allPlaceholders(world)).trim() || 'This World',
 });
 
 const worldEmptySystemPrompt: Rule = {
@@ -1544,8 +2247,8 @@ const imageMislabeled: Rule = {
 /** Every rule the Bench runs, in catalog order. Display order comes from severity, not this list. */
 export const RULES: readonly Rule[] = [
   aliasLeadingArticle, entityMatchCollision, aliasSelfDuplicate,
-  entityLocationOrphan, traitToggleMissingStat, traitPinInvalid,
-  chipUnknownPlaceholder, chipNeverScanned, placeholderUnused, statCodeUnknownStat,
+  entityLocationOrphan, traitToggleMissingStat, placeholderPinBroken,
+  chipUnknownPlaceholder, placeholderUnused, placeholderPinnedUnused, statCodeUnknownStat,
   entrySecondaryWithoutPrimary, entryInert, entryRegexInvalid,
   noStartingLocation, legacyStartLocation, entityNowhere, statDisabledForever,
   statStartingOutOfRange, statStartNoDescriptor, statDescriptorDuplicateThreshold, statDescriptorOutOfRange,
@@ -1557,6 +2260,10 @@ export const RULES: readonly Rule[] = [
   entityLongDescriptionNoSummary, aiSummaryHidesDescription, locationNoEntities,
   traitGroupMultipleDefaults, traitGroupTooSmall,
   placeholderWeightUnknownValue, wildcardSingleValue,
+  placeholderPinUnknownValue, placeholderPinConflict, placeholderPinCycle, placeholderPinSelf,
+  placeholderSlotMiss, placeholderDanglingReference, placeholderReferenceCycle, placeholderEmptyRecord,
+  placeholderDuplicateSlot,
+  placeholderSharedWeightUnknownValue, placeholderOwnerOrphan, placeholderOwnerDropped,
   dictionaryKeywordSubstring, dictionaryDisabled,
   worldEmptySystemPrompt, worldNoReadme, worldOversizedImages, imageNotWebp, imageMislabeled,
 ];

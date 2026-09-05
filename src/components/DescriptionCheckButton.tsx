@@ -8,6 +8,7 @@ import { TOOLBAR_BTN } from '@/components/prompt/toolbarStyles';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
+import { Tip } from '@/components/ui/tooltip';
 
 /**
  * Reads a subject's Player-Facing and AI-Facing descriptions against each other and reports where they
@@ -79,20 +80,23 @@ const DescriptionCheckButton = ({ playerText, aiText, kind, subjectName }: {
 
   return (
     <>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        onClick={run}
-        disabled={loading || !ready}
-        title={
+      <Tip
+        tip={
           loading ? 'Checking the descriptions…'
             : ready ? 'Check the two descriptions against each other'
               : 'Needs both a Player-Facing and an AI-Facing description'
         }
-        aria-label="Check the two descriptions against each other"
       >
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
-      </button>
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          onClick={run}
+          disabled={loading || !ready}
+          aria-label="Check the two descriptions against each other"
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
+        </button>
+      </Tip>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-xl">

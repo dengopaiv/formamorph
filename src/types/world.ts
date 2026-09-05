@@ -20,6 +20,8 @@ export interface StatDescriptor {
   id: string | number;
   threshold: number;
   description: string;
+  /** Placeholders held at a fixed value while the stat sits in this band. */
+  placeholderPins?: PlaceholderPin[];
 }
 
 /** What a descriptor threshold's number means: the stat's own units, or a percentage of min→max. */
@@ -76,10 +78,14 @@ export interface TraitStatToggle {
   enabled: boolean;
 }
 
-/** A placeholder this trait forces to a fixed value while active, masking that playthrough's roll. */
-export interface TraitPlaceholderPin {
+/** A placeholder its source forces to a fixed value while the source is active, masking that playthrough's
+ *  roll. The one shape every source carries: a trait, a location, a stat descriptor, a placeholder value. */
+export interface PlaceholderPin {
   placeholderId: string;
   value: string;
+  /** The pinned value's id, when the pin names one the placeholder carries. Preferred over `value`, so a
+   *  pin picked off the list follows the author re-spelling it. Absent for a value typed off the list. */
+  valueId?: string;
 }
 
 /** A folder grouping traits in the editor and the selection screen; nestable via `parentId`. */
@@ -128,7 +134,7 @@ export interface Trait {
   /** Stats forced on or off while this trait is active. */
   statToggles?: TraitStatToggle[];
   /** Placeholders held at a fixed value while this trait is active. */
-  placeholderPins?: TraitPlaceholderPin[];
+  placeholderPins?: PlaceholderPin[];
 }
 
 /** A character or object in the world, with separate player-facing and AI-facing descriptions plus optional media. */
@@ -173,10 +179,14 @@ export interface Entity {
   groupId?: string | null;
   /** Sibling order among entities sharing the same group; editor-only, never sent to the AI. */
   order?: number;
-  /** Placeholder defs this standalone/library item carries so its `{{ph…}}` chips resolve after import
-   *  (see lib/placeholders). Populated only off-world (export bundle / library); absent while the entity
-   *  lives in a world, where `World.placeholders` is authoritative — it's absorbed there on import. */
+  /** Placeholders of this entity's own. In a world they are live: every reader sees them beside
+   *  `World.placeholders` through the combined view (see lib/placeholderHomes), and they go with the
+   *  entity when it is deleted or duplicated. Off-world (export bundle / library) they stay the entity's
+   *  own, and an import keeps them so under fresh ids. */
   placeholders?: Placeholder[];
+  /** Off-world only: the shared placeholders this entity's chips use, so they resolve after import. An import
+   *  merges them into the world's shared list by name and values and clears the field. */
+  sharedPlaceholders?: Placeholder[];
 }
 
 /** An editor-only folder for organizing entities, nestable via `parentId`. Just a name — never sent to the
@@ -220,6 +230,9 @@ export interface GameLocation {
    *  nested, as the canvas reads a child's position. Editor-only: never sent to the AI. Absent means the
    *  canvas lays it out itself. */
   canvasPosition?: { x: number; y: number };
+  /** Placeholders held at a fixed value while the player is here. Released on leaving; a child location
+   *  inherits nothing through `parentId`. */
+  placeholderPins?: PlaceholderPin[];
 }
 
 /**
@@ -313,9 +326,13 @@ export interface Dictionary {
   /** Cover art for the listing. Decorative only; a book with none publishes with the server's stand-in. */
   thumbnail?: Base64Data | null;
   entries: DictionaryEntry[];
-  /** Placeholder defs this standalone/library book carries so its entries' `{{ph…}}` chips resolve after
-   *  import (see lib/placeholders). Off-world only; absorbed into `World.placeholders` on import to a world. */
+  /** Placeholders of this book's own. In a world they are live beside `World.placeholders` through the
+   *  combined view (see lib/placeholderHomes) and go with the book when it is deleted. Off-world
+   *  (export file / library) they stay the book's own, and an import keeps them so under fresh ids. */
   placeholders?: Placeholder[];
+  /** Off-world only: the shared placeholders this book's entries use, so they resolve after import. An import
+   *  merges them into the world's shared list by name and values and clears the field. */
+  sharedPlaceholders?: Placeholder[];
 }
 
 /**
@@ -385,6 +402,8 @@ export interface World {
   entities: Entity[];
   /** Editor-only folders organizing entities (name only; not reflected to the AI). */
   entityGroups?: EntityGroup[];
+  /** Editor-only folders organizing the world's shared placeholders on the Placeholders tab. */
+  placeholderGroups?: PlaceholderGroup[];
   traits: Trait[];
   /** Folders organizing traits in the editor and selection screen. */
   traitGroups?: TraitGroup[];
@@ -392,21 +411,62 @@ export interface World {
   /** v2.x: ordered books of lorebook entries (replaces the flat `dictionary`; legacy worlds fold to one
    *  "Default" book on load via `migrateWorld`). Guaranteed ≥1 book after that normalization. */
   dictionaries: Dictionary[];
-  /** Author-defined named values dropped into world text as inline chips. Type is inferred from `values`:
-   *  1 value = a fixed Variable (reused, edited in one place); 2+ = a random Wildcard (chips pick World or
-   *  Unique). Resolved at gameplay boundaries (see lib/placeholders); the name/token never reaches runtime. */
+  /** Author-defined named values dropped into world text as inline chips. A Wildcard picks one of its values
+   *  (chips pick World or Unique); an Object shows all of them; one value is a Variable either way. Resolved
+   *  at gameplay boundaries (see lib/placeholders); the name/token never reaches runtime. */
   placeholders?: Placeholder[];
 }
 
-/** One author-defined placeholder. `values.length`: 0 ⇒ empty (resolves to ""), 1 ⇒ Variable (fixed), 2+ ⇒
- *  Wildcard (random). `id` is stable — in-text chips reference it, so renaming `name` never breaks a chip. */
+/** One authored value: a stable id and the author's text. The id is minted once and never changes, so a
+ *  draw weight or a trait pin keyed by it survives the author re-spelling the value; `text` is what
+ *  resolves and what the editor edits. Values stay unique by text within one placeholder. */
+export interface PlaceholderValue {
+  id: string;
+  text: string;
+  /** Placeholders held at a fixed value while this placeholder's effective world value is this one: its
+   *  roll, or whatever pin masks it. Sits below every other pin source. */
+  pins?: PlaceholderPin[];
+}
+
+/** One author-defined placeholder. Empty `values` resolves to `""`; one value is a Variable, fixed whatever
+ *  the kind says. `id` is stable — in-text chips reference it, so renaming `name` never breaks a chip. A
+ *  value that is exactly one chip is a structural child, addressable by path from world text. */
 export interface Placeholder {
   id: string;
   name: string;
-  values: string[];
-  /** Relative draw weight per value; a value absent from the map weighs 1. Weight 0 benches a value without
-   *  deleting it. Absent map (or all-1 weights) = a uniform draw. */
+  values: PlaceholderValue[];
+  /** Relative draw weight per value id; a value absent from the map weighs 1. Weight 0 benches a value
+   *  without deleting it. Absent map (or all-1 weights) = a uniform draw. */
   weights?: Record<string, number>;
+  /** The kind, as the author declared it: `true` ⇒ a Wildcard, one value drawn per playthrough; `false` ⇒
+   *  an Object, whose whole placement joins every value with `", "`. Absent ⇒ inferred from the value count
+   *  (2+ draws), which is how every placeholder authored before the selector existed reads. */
+  roll?: boolean;
+  /** The placeholder this one belongs to: present ⇒ owned and private to it, absent ⇒ top level. Purely
+   *  organizational — it decides where the row sits and which insert surfaces offer it, and the resolver
+   *  never reads it. An owned placeholder is always also a chip value of its owner, so the owner dropping
+   *  that value releases it (see lib/placeholderTree). */
+  ownerId?: string;
+  /** Draw weights this placeholder sets on the shared rows it reaches, laid over each original's own map.
+   *  The outer key is the id of the value holding the shared chip, plus the id of every placeholder walked
+   *  below it, joined with `/`; the inner map keys by value id like `weights`. Deny-list: a value in
+   *  neither map weighs 1, so a value added to the original later rolls here too. */
+  sharedWeights?: Record<string, Record<string, number>>;
+  /** The editor folder this placeholder sits in on the Placeholders tab; null/absent = ungrouped. Only a
+   *  shared placeholder is grouped: a scoped one sits under its entity or book, an owned one under its
+   *  holder. Editor-only, never sent to the AI, and dropped from card and dictionary exports. */
+  groupId?: string | null;
+}
+
+/** An editor-only folder for organizing shared placeholders, nestable via `parentId`. Just a name — never
+ *  sent to the AI. Mirrors `EntityGroup`. */
+export interface PlaceholderGroup {
+  id: string;
+  name: string;
+  /** null = top-level; otherwise the parent group's id. */
+  parentId: string | null;
+  /** Sibling order among groups sharing the same parent. */
+  order?: number;
 }
 
 /** Lightweight preview record used by the main-menu world grid. */

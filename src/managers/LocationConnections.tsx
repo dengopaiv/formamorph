@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { describePlaceholders } from '@/lib/placeholders';
+import { labelPlaceholders } from '@/lib/placementLetters';
 import {
   connectionTargets,
   connectionsAt,
@@ -16,6 +16,7 @@ import {
   type ConnectionDirection,
 } from '@/lib/connectionEditing';
 import type { GameLocation } from '@/types';
+import { Tip } from '@/components/ui/tooltip';
 
 /** The direction control's options in the order they're offered, worded from the panel that's open. */
 const DIRECTIONS: { value: ConnectionDirection; label: string }[] = [
@@ -39,12 +40,12 @@ const DIRECTION_ICONS: Record<ConnectionDirection, typeof ArrowRight> = {
  * one-way orientations rather than hiding a flip behind a second gesture.
  */
 const LocationConnections = ({ location }: { location: GameLocation }) => {
-  const { locations, connections, addConnection, updateConnection, removeConnection, placeholders } = useGameData();
+  const { locations, connections, addConnection, updateConnection, removeConnection, placeholders, placementLetters, placeholderOwners } = useGameData();
   const [target, setTarget] = useState('');
 
   const nameOf = (id: string) => {
     const found = locations.find((l) => l.id === id);
-    return found ? describePlaceholders(found.name, placeholders) : 'Unknown Location';
+    return found ? labelPlaceholders(found.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) : 'Unknown Location';
   };
 
   const views = useMemo(() => connectionsAt(location.id, connections), [location.id, connections]);
@@ -74,15 +75,16 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
             <div className="flex items-center gap-2">
               <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               <span className="min-w-0 flex-grow truncate">{partnerName}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0"
-                onClick={() => removeConnection(connection.id)}
-                title={`Delete Connection to ${partnerName}`}
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              <Tip tip={`Delete Connection to ${partnerName}`}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0"
+                  onClick={() => removeConnection(connection.id)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </Tip>
             </div>
             <ToggleGroup
               type="single"
@@ -115,13 +117,15 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
           </SelectTrigger>
           <SelectContent>
             {targets.map((l) => (
-              <SelectItem key={l.id} value={l.id}>{describePlaceholders(l.name, placeholders)}</SelectItem>
+              <SelectItem key={l.id} value={l.id}>{labelPlaceholders(l.name, placeholders, { letters: placementLetters, owners: placeholderOwners })}</SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <Button onClick={handleAdd} disabled={!target} size="icon" className="h-9 w-9 shrink-0" aria-label="Add Connection" title="Add Connection">
-          <Plus className="h-4 w-4" />
-        </Button>
+        <Tip tip="Add Connection">
+          <Button onClick={handleAdd} disabled={!target} size="icon" className="h-9 w-9 shrink-0">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </Tip>
       </div>
     </div>
   );

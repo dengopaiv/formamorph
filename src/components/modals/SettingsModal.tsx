@@ -20,12 +20,16 @@ import { type SharedPreset } from '@/lib/promptPresetShare';
 import { APP_VERSION } from '@/lib/version';
 import { normalizeEndpointUrl, endpointUrlWasCompleted, endpointSendsInTheClear } from '@/lib/endpointUrl';
 import { computePromptTabAvailability } from '@/lib/promptTabAvailability';
-import { visibleGroups, SURFACE_LABELS, PROMPT_DESCRIPTIONS, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
+import { visibleGroups, SURFACE_LABELS, HUB_LABEL, HUB_ROUTE, PROMPT_DESCRIPTIONS, PROMPT_LABELS, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
+import type { MessageField, PromptJumpTarget } from '@/lib/promptJump';
+import { revealEditorChip } from '@/lib/editorFieldFocus';
+import type { AnatomyViewMode } from '@/components/game/RequestAnatomyView';
+import { RequestAnatomyPanel } from './RequestAnatomyPanel';
 import { Settings } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, dialogFullHeightMobile } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { FullscreenShell } from "@/components/FullscreenShell";
-import { useMorphFullscreen } from "@/lib/useMorphFullscreen";
+import { useMorphFullscreen, type MorphFullscreen } from "@/lib/useMorphFullscreen";
 import { composePreviewValues, languagePreviewValue } from "@/lib/previewValuePool";
 import { Button } from "@/components/ui/button";
 import { RevealAnimationDemoButton } from "@/components/RevealAnimationDemo";
@@ -33,6 +37,7 @@ import { FontTuneButton } from "@/components/FontTuneDialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tip } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
 import { loadEmbeddingModel, disposeEmbeddingModel, type EmbeddingLoadProgress } from '@/lib/embeddingWorkerClient';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -53,10 +58,11 @@ import { cachedImageBytes, clearCachedImages } from '@/lib/remoteImageCache';
 import { formatBytes } from '@/lib/imageOptim';
 import { DEFAULT_WORLDS, readDeletedDefaultWorlds, clearDeletedDefaultWorlds } from '@/lib/defaultWorlds';
 import { PresetNameDialog } from './PresetNameDialog';
-import { defaultSystemPrompt, defaultNarrationUserPrompt, defaultRecapUserPrompt, defaultRehydrateUserPrompt, defaultOocDirectivePrompt, defaultChoicesPrompt, defaultStatUpdatesPrompt, defaultLocationChangePrompt, defaultThinkingPrompt, defaultSummaryPrompt, defaultChoicesUserPrompt, defaultStatUpdatesUserPrompt, defaultLocationChangeUserPrompt, defaultSummaryUserPrompt, defaultDiaryPrompt, defaultDirectorPrompt, defaultDirectorUserPrompt, defaultCharacterPrompt, defaultStoryboardPrompt, defaultNowLinePrompt, defaultTimePassedPrompt, defaultTimePassedUserPrompt, defaultOpeningTimePrompt, defaultOpeningTimeUserPrompt, defaultSceneTagsPrompt, defaultSceneTagsUserPrompt } from '../game/GamePrompts';
+import { defaultSystemPrompt, defaultNarrationUserPrompt, defaultRecapUserPrompt, defaultRehydrateUserPrompt, defaultOocDirectivePrompt, defaultChoicesPrompt, defaultStatUpdatesPrompt, defaultLocationChangePrompt, defaultThinkingPrompt, defaultSummaryPrompt, defaultChoicesUserPrompt, defaultStatUpdatesUserPrompt, defaultLocationChangeUserPrompt, defaultSummaryUserPrompt, defaultDiaryPrompt, defaultDirectorPrompt, defaultDirectorUserPrompt, defaultCharacterPrompt, defaultStoryboardPrompt, defaultNowLinePrompt, defaultTimePassedPrompt, defaultTimePassedUserPrompt, defaultOpeningTimePrompt, defaultOpeningTimeUserPrompt, defaultSceneTagsPrompt, defaultSceneTagsUserPrompt, defaultDiscoverEntityPrompt, OPENING_SCENE_CUE } from '../game/GamePrompts';
 import { isDesktop } from '@/lib/imageGen/desktop';
 import { fetchComfyMeta, DEFAULT_COMFY_WORKFLOW, type ComfyMeta } from '@/lib/imageGen/comfyui';
 import { fetchInvokeMeta, invokeConnectionMessage, encodersFor, vaesFor, PREFIXED_BASES, type InvokeMeta } from '@/lib/imageGen/invokeai';
+import { NOVELAI_MODELS, NOVELAI_DEFAULTS } from '@/lib/imageGen/novelai';
 import { DEFAULT_ENDPOINT_BY_PROVIDER, resolveImageEndpoint } from '@/lib/imageGen';
 import { TokenAutocomplete } from '@/components/TokenAutocomplete';
 import { COMMON_LANGUAGES } from '@/lib/languages';
@@ -74,6 +80,9 @@ import {
   DEFAULT_DESC_CHECK_PROMPT, DEFAULT_CHECK_MAX_TOKENS, CHECK_MAX_TOKENS_MIN, CHECK_MAX_TOKENS_MAX,
 } from '@/lib/descriptionCheck';
 import { resetTutorials, useSeenTutorialCount, useTutorial } from '@/lib/tutorials';
+
+/** What the Model trigger shows for a NovelAI preset with no model set — the id the provider falls back to. */
+const novelaiDefaultLabel = NOVELAI_MODELS.find((m) => m.id === NOVELAI_DEFAULTS.model)?.label ?? NOVELAI_DEFAULTS.model;
 
 // The segmented rows' options. Copy lives in `settingsCopy`; these bindings only narrow `value` to the
 // setting's own union, so an option that drifts from the setting fails to compile.
@@ -424,40 +433,44 @@ function PromptOptionsPanel({ endpoint, verbatim, reasoning, reasoningBudget, sa
 }
 
 /**
- * The Prompts panel, either in place or filling the screen. Fullscreen is owned here rather than by
- * PromptField so the rail comes with it — the editor alone in a full-screen window loses the very
+ * The Prompts panel, either in place or filling the screen. Fullscreen belongs to the whole panel rather
+ * than to PromptField so the rail comes with it — the editor alone in a full-screen window loses the very
  * navigation that makes a long prompt findable.
+ *
+ * The caller owns the morph and hands the fields `morph.mounted` as their fullscreen flag. That flag
+ * stays up through the closing trip, so the panel keeps its full-screen form while the box shrinks —
+ * driven from a separate boolean, the fields snapped to their windowed layout inside the still-shrinking
+ * window the moment the toggle was pressed.
  *
  * Toggling re-parents the panel into the overlay, so the editor is rebuilt from its value: the text is
  * safe (it is controlled) but the undo stack starts fresh on either side of the toggle.
  */
-function PromptsShell({ fullscreen, sourceRef, children }: {
-  fullscreen: boolean;
-  /** The tab panel the rail sits in — what the window grows out of and shrinks back into. */
+function PromptsShell({ morph, sourceRef, children }: {
+  morph: MorphFullscreen;
+  /** The tab panel the rail sits in — what the window grows out of. */
   sourceRef: React.RefObject<HTMLElement | null>;
   children: React.ReactNode;
 }) {
-  // The caller owns the flag, so the morph follows it rather than the other way round. The rail has no
-  // wrapper of its own — its children are flex items of the tab panel — so the panel is what it grows from.
-  const morph = useMorphFullscreen(sourceRef);
-  useEffect(() => { if (fullscreen) morph.open(); else morph.close(); }, [fullscreen]); // eslint-disable-line react-hooks/exhaustive-deps
-
   if (!morph.mounted) return <>{children}</>;
   // A panel, not a field: nothing inside it carries a caption, so this is the one window that has to name
-  // itself.
+  // itself. While closing, the children are already back in the tab panel and the shell above them is just
+  // the fading panel.
   return (
-    <FullscreenShell
-      morph={morph}
-      title="Prompts"
-      showTitle
-      returnFocus={() => sourceRef.current?.querySelector<HTMLElement>('button[aria-label="Edit full screen"]')}
-    >
-      {children}
-    </FullscreenShell>
+    <>
+      {!morph.contentInOverlay && children}
+      <FullscreenShell
+        morph={morph}
+        title="Prompts"
+        showTitle
+        returnFocus={() => sourceRef.current?.querySelector<HTMLElement>('button[aria-label="Edit full screen"]')}
+      >
+        {morph.contentInOverlay ? children : null}
+      </FullscreenShell>
+    </>
   );
 }
 
-export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab, initialEndpointTab, initialPromptTab, onWorldsRestored, forcedMode }: {
+export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab, initialEndpointTab, initialPromptTab, initialPromptSurface, initialPromptField, onWorldsRestored, forcedMode }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called after Restore Default Worlds re-seeds, so a world list on screen can refresh. */
@@ -469,8 +482,12 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   /** Which AI Endpoints sub-tab to open ('text-endpoint' | 'img-endpoint' | 'img-tagprompt'). Used by the
    *  "Open Settings" shortcut in the image generation dialog to land straight on Image. */
   initialEndpointTab?: string;
-  /** DEV dev-router: which prompt under the Prompts tab to open (e.g. 'narration', 'thinking'). */
+  /** Which prompt under the Prompts tab to open (e.g. 'narration', 'thinking'). Set by the dev-router, and
+   *  by a click on a highlighted run in the in-game AI-context viewer. */
   initialPromptTab?: string;
+  initialPromptSurface?: string;
+  /** Which stacked field of the Messages view to scroll to and focus on arrival. */
+  initialPromptField?: MessageField;
   /** Overrides the stored Simple/Advanced preference (the dev-router's `mode` param; tests set it directly). */
   forcedMode?: SettingsMode;
 }) => {
@@ -944,9 +961,13 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // Guidance follows the player's own settings and is real either way; only the world-state tokens are
   // stand-ins, which is what the badge speaks to.
   const usingSampleValues = !previewValues;
-  const effectivePreviewValues = composePreviewValues(
-    { paragraphLimit, maxTokens, markdownOutput, sectionStyle: activeSectionStyle, limitActiveCharacters, activeCharacterLimit, language },
-    previewValues,
+  // Memoized because the Anatomy hub keys its whole assembly on this pool (see `hubSettings`).
+  const effectivePreviewValues = useMemo(
+    () => composePreviewValues(
+      { paragraphLimit, maxTokens, markdownOutput, sectionStyle: activeSectionStyle, limitActiveCharacters, activeCharacterLimit, language },
+      previewValues,
+    ),
+    [paragraphLimit, maxTokens, markdownOutput, activeSectionStyle, limitActiveCharacters, activeCharacterLimit, language, previewValues],
   );
   // The choices prompt's language chip names itself in the directive, so its preview says "choices" where
   // the pool's default says "narration".
@@ -956,20 +977,22 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   const [promptTab, setPromptTab] = useState(initialPromptTab ?? 'narration');
   // DEV dev-router: honor a requested prompt sub-tab (a `subtab=…` in the hash).
   useEffect(() => { if (initialPromptTab) setPromptTab(initialPromptTab); }, [initialPromptTab]);
+  // Names come from the shared map, so a jump that says where it goes and the rail row it lands on cannot
+  // call the same prompt two different things.
   const promptResets: Record<string, { label: string; reset: () => void }> = {
-    narration: { label: 'Narration', reset: () => setSystemPrompt(defaultSystemPrompt) },
-    thinking: { label: 'Planning', reset: () => setThinkingPrompt(defaultThinkingPrompt) },
-    choices: { label: 'Choices', reset: () => setChoicesPrompt(defaultChoicesPrompt) },
-    statupdates: { label: 'Stat Updates', reset: () => setStatUpdatesPrompt(defaultStatUpdatesPrompt) },
-    location: { label: 'Location Change', reset: () => setLocationChangePromptText(defaultLocationChangePrompt) },
-    summary: { label: 'Summaries', reset: () => setSummaryPrompt(defaultSummaryPrompt) },
-    timepassed: { label: 'Clock', reset: () => setTimePassedPrompt(defaultTimePassedPrompt) },
-    timeopening: { label: 'Opening', reset: () => setOpeningTimePrompt(defaultOpeningTimePrompt) },
-    scenetags: { label: 'Scene Tags', reset: () => setSceneTagsPrompt(defaultSceneTagsPrompt) },
-    diary: { label: 'Diary', reset: () => setDiaryPrompt(defaultDiaryPrompt) },
-    director: { label: 'Director', reset: () => setDirectorPrompt(defaultDirectorPrompt) },
-    character: { label: 'Character', reset: () => setCharacterPrompt(defaultCharacterPrompt) },
-    storyboard: { label: 'Storyboard', reset: () => setStoryboardPrompt(defaultStoryboardPrompt) },
+    narration: { label: PROMPT_LABELS.narration, reset: () => setSystemPrompt(defaultSystemPrompt) },
+    thinking: { label: PROMPT_LABELS.thinking, reset: () => setThinkingPrompt(defaultThinkingPrompt) },
+    choices: { label: PROMPT_LABELS.choices, reset: () => setChoicesPrompt(defaultChoicesPrompt) },
+    statupdates: { label: PROMPT_LABELS.statupdates, reset: () => setStatUpdatesPrompt(defaultStatUpdatesPrompt) },
+    location: { label: PROMPT_LABELS.location, reset: () => setLocationChangePromptText(defaultLocationChangePrompt) },
+    summary: { label: PROMPT_LABELS.summary, reset: () => setSummaryPrompt(defaultSummaryPrompt) },
+    timepassed: { label: PROMPT_LABELS.timepassed, reset: () => setTimePassedPrompt(defaultTimePassedPrompt) },
+    timeopening: { label: PROMPT_LABELS.timeopening, reset: () => setOpeningTimePrompt(defaultOpeningTimePrompt) },
+    scenetags: { label: PROMPT_LABELS.scenetags, reset: () => setSceneTagsPrompt(defaultSceneTagsPrompt) },
+    diary: { label: PROMPT_LABELS.diary, reset: () => setDiaryPrompt(defaultDiaryPrompt) },
+    director: { label: PROMPT_LABELS.director, reset: () => setDirectorPrompt(defaultDirectorPrompt) },
+    character: { label: PROMPT_LABELS.character, reset: () => setCharacterPrompt(defaultCharacterPrompt) },
+    storyboard: { label: PROMPT_LABELS.storyboard, reset: () => setStoryboardPrompt(defaultStoryboardPrompt) },
     // Reset restores the prompt AND its cap: the two were edited as a pair, so restoring only the text
     // would leave a default template running under a cap the author raised for a longer one.
     playerdesc: {
@@ -1005,13 +1028,43 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // Each prompt has a System editor, an Options sub-tab, and — for the aux prompts — a User-message editor.
   // Narration additionally has a Messages view: the conditional user-slot lines that ride the narration
   // exchange (Recap, Recall, Direction), stacked with per-field resets, each hidden with its feature.
-  // A System | User | Messages | Options toggle swaps between them (User/Messages only where they exist).
-  // `promptView` resets to System on every tab change.
-  const [promptView, setPromptView] = useState<'system' | 'user' | 'messages' | 'options'>('system');
-  // Fullscreen for the whole Prompts panel (rail included), not for one field — see PromptsShell.
-  const [promptsFullscreen, setPromptsFullscreen] = useState(false);
+  // Null is the Anatomy hub — the prompt with no editor open, which is where selecting one lands.
+  const [promptView, setPromptView] = useState<PromptSurface | null>(null);
+  // Which stacked field of the Messages view to scroll to and focus on arrival, set by a hub jump.
+  const [jumpField, setJumpField] = useState<MessageField | null>(null);
+  // Which chip the arriving editor should scroll to and ring, set by a hub jump onto one.
+  const [jumpChip, setJumpChip] = useState<string | null>(null);
+  // How the hub draws a request. Held here rather than in the panel so a trip into an editor and back
+  // keeps it, and rather than in settings because it is a way of looking, not a preference.
+  const [anatomyMode, setAnatomyMode] = useState<AnatomyViewMode>('chips');
+  // DEV dev-router: land on a named surface (`surface=…`). Re-runs when the prompt changes too, since
+  // switching prompts returns to the hub. `anatomy` is the hub itself, and so is anything unrecognized.
+  useEffect(() => {
+    if (!initialPromptSurface) return;
+    setPromptView(
+      initialPromptSurface === HUB_ROUTE || !(initialPromptSurface in SURFACE_LABELS)
+        ? null
+        : (initialPromptSurface as PromptSurface),
+    );
+    setJumpField(initialPromptField ?? null);
+  }, [initialPromptSurface, initialPromptTab, initialPromptField]);
+  // Fullscreen for the whole Prompts panel (rail included), not for one field — see PromptsShell. The
+  // morph is the single source of truth: fields read `contentInOverlay`, so they return to their docked
+  // form the moment the close starts — under the overlay, by then a fading solid panel.
   const promptsPanelRef = useRef<HTMLDivElement | null>(null);
-  const selectPromptTab = (t: string) => { setPromptTab(t); setPromptView('system'); };
+  const promptsMorph = useMorphFullscreen(promptsPanelRef);
+  const promptsFullscreen = promptsMorph.contentInOverlay;
+  // Selecting a prompt — including re-selecting the open one — returns to its hub, so the map is always
+  // one click away from any editor.
+  const selectPromptTab = (t: string) => { setPromptTab(t); setPromptView(null); setJumpField(null); };
+  /** A clicked run or chip in the anatomy: open the prompt, the editor that owns it, and — for a chip —
+   *  the placement itself. A target with no surface is another prompt's hub. */
+  const jumpToPrompt = (target: PromptJumpTarget) => {
+    setPromptTab(target.tab);
+    setPromptView(target.surface ?? null);
+    setJumpField(target.field ?? null);
+    setJumpChip(target.chip ?? null);
+  };
   // The rail's groups, with prompts whose feature is off already removed.
   const railGroups = visibleGroups(promptAvailable);
   const userPrompts: Record<string, { value: string; set: (s: string) => void; reset: () => void; variables: typeof PROMPT_KIND_VARIABLES.choices }> = {
@@ -1064,11 +1117,84 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
       variables: undefined,
     }] : []),
   ];
+  // The stacked Messages fields, by key, so a jump from the hub can land on the one it named.
+  const messageFieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  useEffect(() => {
+    if (!jumpField || !showingMessages) return;
+    const node = messageFieldRefs.current[jumpField];
+    // Instant, not smooth: the field has to be under the cursor by the time focus lands on it. A built-in
+    // preset's editors are read-only, so there is nothing to put a caret in — the scroll is the whole jump.
+    node?.scrollIntoView({ block: 'start' });
+    node?.querySelector<HTMLElement>('[data-lexical-editor][contenteditable="true"]')?.focus();
+    setJumpField(null);
+  }, [jumpField, showingMessages]);
+  // A chip jump lands on the editor holding it; the reveal waits out that editor's mount on its own.
+  useEffect(() => {
+    if (!jumpChip || !promptView) return;
+    revealEditorChip(jumpChip);
+    setJumpChip(null);
+  }, [jumpChip, promptView]);
+
+  // The generation settings the Anatomy hub draws under. Memoized alongside its prompts and its value pool
+  // so all three inputs are stable: a hub re-runs a turn's worth of assembly, and a fresh object on any of
+  // them would redo that for every unrelated state change in the modal.
+  const hubSettings = useMemo(() => ({
+    thinkingMode, sectionStyle: activeSectionStyle, markdownOutput, paragraphLimit,
+    language, maxTokens, memoryDigests, semanticMemory, semanticRehydration, timeContext,
+    locationAutoApply,
+  }), [
+    thinkingMode, activeSectionStyle, markdownOutput, paragraphLimit, language, maxTokens,
+    memoryDigests, semanticMemory, semanticRehydration, timeContext, locationAutoApply,
+  ]);
+
+  // Every prompt the Anatomy hub renders a request from, as authored.
+  const hubPrompts = useMemo(() => ({
+    system: systemPrompt,
+    recap: recapUserPrompt,
+    now: nowLinePrompt,
+    recall: rehydrateUserPrompt,
+    turn: {
+      locationChange: locationChangePromptText || '',
+      locationChangeUser: locationChangeUserPrompt,
+      thinking: thinkingPrompt,
+      director: directorPrompt,
+      directorUser: directorUserPrompt,
+      character: characterPrompt,
+      storyboard: storyboardPrompt,
+      narrationUser: narrationUserPrompt,
+      oocDirective: oocDirectivePrompt,
+      // The hub draws a mid-story turn, so the opening cue and the discovery prompt are along for the
+      // shape only — neither is an editor surface, and no hub renders either.
+      openingCue: OPENING_SCENE_CUE,
+      discoverEntity: defaultDiscoverEntityPrompt,
+      choices: choicesPrompt,
+      choicesUser: choicesUserPrompt,
+      statUpdates: statUpdatesPrompt,
+      statUpdatesUser: statUpdatesUserPrompt,
+      summary: summaryPrompt,
+      summaryUser: summaryUserPrompt,
+      timePassed: timePassedPrompt,
+      timePassedUser: timePassedUserPrompt,
+      openingTime: openingTimePrompt,
+      openingTimeUser: openingTimeUserPrompt,
+      diary: diaryPrompt,
+      sceneTags: sceneTagsPrompt,
+      sceneTagsUser: sceneTagsUserPrompt,
+    },
+  }), [
+    systemPrompt, recapUserPrompt, nowLinePrompt, rehydrateUserPrompt,
+    locationChangePromptText, locationChangeUserPrompt, thinkingPrompt, directorPrompt, directorUserPrompt,
+    characterPrompt, storyboardPrompt, narrationUserPrompt, oocDirectivePrompt,
+    choicesPrompt, choicesUserPrompt, statUpdatesPrompt, statUpdatesUserPrompt,
+    summaryPrompt, summaryUserPrompt, timePassedPrompt, timePassedUserPrompt,
+    openingTimePrompt, openingTimeUserPrompt, diaryPrompt, sceneTagsPrompt, sceneTagsUserPrompt,
+  ]);
+
   // The authoring prompts have only their system template: no user message, no riders, and no per-request
   // tuning to put under Options (they run outside the turn pipeline, so there is no AIRequestType to key
   // samplers or endpoint routing by). Their output cap rides the System view instead.
   const authoringPrompt = isAuthoringTab(activePromptTab);
-  // Which parts the open prompt actually has — the rail lists exactly these under it.
+  // Which editors the open prompt actually has — the rail lists exactly these under it.
   const activeSurfaces: PromptSurface[] = authoringPrompt ? ['system'] : [
     'system',
     ...(activeUserPrompt ? ['user' as const] : []),
@@ -1076,6 +1202,15 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     'options',
   ];
   const showingOptions = promptView === 'options' && !authoringPrompt;
+  // The hub: the prompt selected with no editor open. An editor the open prompt doesn't have lands here
+  // too, rather than on a blank panel.
+  //
+  // An authoring prompt is the exception: it runs outside the turn pipeline, so there is no request for a
+  // hub to draw and `buildAnatomyHub` returns nothing for it. Its System template is the only editor it
+  // has, so selecting one opens that template rather than landing on a hub that would render empty.
+  const showingHub = !authoringPrompt && (promptView === null || !activeSurfaces.includes(promptView));
+  /** The editor the surface controls point at — for an authoring prompt, never the hub it hasn't got. */
+  const promptSurface: PromptSurface | null = authoringPrompt ? (promptView ?? 'system') : promptView;
   // The Reset button targets whichever template is on screen. `label` is the full noun ("Narration Prompt"
   // or just "Message" for the user-message template), so the button reads "Reset <label>". The Messages
   // view carries its own per-field resets, so the footer button hides there (like Options).
@@ -1216,21 +1351,22 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 className="ml-auto h-8"
               >
                 <ToggleGroupItem value="simple" className="px-2 py-1">Simple</ToggleGroupItem>
-                <ToggleGroupItem
-                  value="advanced"
-                  className="relative px-2 py-1"
-                  // The marker rides the switch that acts on it: it says "there is more through here",
-                  // which is exactly what this control does.
-                  title={hasHiddenValues ? 'Some hidden settings are off their defaults. Switch to Advanced to see them.' : undefined}
+                {/* The marker rides the switch that acts on it: it says "there is more through here",
+                    which is exactly what this control does. */}
+                <Tip
+                  tip={hasHiddenValues ? 'Some hidden settings are off their defaults. Switch to Advanced to see them.' : undefined}
+                  labelsChild={false}
                 >
-                  Advanced
-                  {hasHiddenValues && (
-                    <span
-                      aria-label="Hidden settings are off their defaults"
-                      className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
-                    />
-                  )}
-                </ToggleGroupItem>
+                  <ToggleGroupItem value="advanced" className="relative px-2 py-1">
+                    Advanced
+                    {hasHiddenValues && (
+                      <span
+                        aria-label="Hidden settings are off their defaults"
+                        className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
+                      />
+                    )}
+                  </ToggleGroupItem>
+                </Tip>
               </ToggleGroup>
             </TutorialPopover>
           </div>
@@ -2017,6 +2153,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     <SelectItem value="comfyui">ComfyUI (local)</SelectItem>
                     <SelectItem value="invokeai">InvokeAI (local)</SelectItem>
                     <SelectItem value="a1111">Automatic1111 / Forge (local)</SelectItem>
+                    <SelectItem value="novelai">NovelAI (cloud)</SelectItem>
                     <SelectItem value="openai" disabled={!desktop}>
                       OpenAI-compatible (cloud){desktop ? '' : ' — desktop app only'}
                     </SelectItem>
@@ -2062,6 +2199,22 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     options={comfyMeta?.checkpoints ?? []}
                     placeholder="(server default)"
                   />
+                ) : imageProvider === 'novelai' ? (
+                  <Select value={imageModel} onValueChange={setImageModel}>
+                    {/* A preset seeded from the env var can arrive with no model; the provider falls back
+                        to its default, so the trigger names it rather than sitting blank. */}
+                    <SelectTrigger id="imageModel"><SelectValue placeholder={novelaiDefaultLabel} /></SelectTrigger>
+                    <SelectContent>
+                      {NOVELAI_MODELS.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                      ))}
+                      {/* A preset carrying a model id this build doesn't list still needs an item, or
+                          Radix would render an empty trigger. */}
+                      {imageModel && !NOVELAI_MODELS.some((m) => m.id === imageModel) && (
+                        <SelectItem value={imageModel}>{imageModel}</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
                 ) : imageProvider === 'invokeai' ? (
                   <div className="grid gap-1.5">
                     <TokenAutocomplete
@@ -2277,7 +2430,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
 
           {advanced && (
           <TabsContent ref={promptsPanelRef} value="prompts" className="pt-4 px-2 pb-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-4">
-            <PromptsShell fullscreen={promptsFullscreen} sourceRef={promptsPanelRef}>
+            <PromptsShell morph={promptsMorph} sourceRef={promptsPanelRef}>
             {/* Preset selector: the whole prompt set switches together. Built-in presets (Default, Simple)
                 are read-only and differ only in section-header style. */}
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -2339,17 +2492,17 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 {/* Prompt and surface entries live in one list but must not share a value string, or
                     Radix matches both and renders their labels concatenated. */}
                 <Select
-                  value={`surface:${promptView}`}
+                  value={`surface:${promptSurface ?? HUB_ROUTE}`}
                   onValueChange={(v) => {
                     const [kind, id] = v.split(':');
                     if (kind === 'prompt') selectPromptTab(id);
-                    else setPromptView(id as PromptSurface);
+                    else setPromptView(id === HUB_ROUTE ? null : (id as PromptSurface));
                   }}
                 >
                   {/* Named outright rather than via SelectValue: the value tracks only the surface, and
                       the reader needs to see which prompt they're in. */}
                   <SelectTrigger>
-                    <span className="truncate leading-normal">{selectedPrompt.label} &middot; {SURFACE_LABELS[promptView]}</span>
+                    <span className="truncate leading-normal">{selectedPrompt.label} &middot; {promptSurface ? SURFACE_LABELS[promptSurface] : HUB_LABEL}</span>
                   </SelectTrigger>
                   <SelectContent>
                     {railGroups.map((g) => (
@@ -2363,6 +2516,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     <SelectSeparator />
                     <SelectGroup>
                       <SelectLabel>{selectedPrompt.label}</SelectLabel>
+                      {/* The hub is a destination on mobile as well, since there is no prompt row to
+                          re-tap here — the dropdown carries both levels at once. An authoring prompt has
+                          no hub, so it offers only its System template. */}
+                      {!authoringPrompt && <SelectItem value={`surface:${HUB_ROUTE}`}>{HUB_LABEL}</SelectItem>}
                       {activeSurfaces.map((s) => (
                         <SelectItem key={s} value={`surface:${s}`}>{SURFACE_LABELS[s]}</SelectItem>
                       ))}
@@ -2424,11 +2581,14 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
 
               <div className="flex flex-1 min-w-0 min-h-0 flex-col gap-2">
 
-              {/* What this prompt is for, above it rather than beneath: at the bottom of a full-height
-                  editor it sat below the fold, which is the one place a description is no use. */}
-              <p className="flex-shrink-0 text-helper text-muted-foreground">
-                {PROMPT_DESCRIPTIONS[activePromptTab]}
-              </p>
+              {/* What this prompt is for — only over the System editor, which is the prompt it describes;
+                  the other surfaces have their own content and get the row back. Above rather than beneath:
+                  at the bottom of a full-height editor it sat below the fold. */}
+              {promptView === 'system' && (
+                <p className="flex-shrink-0 text-helper text-muted-foreground">
+                  {PROMPT_DESCRIPTIONS[activePromptTab]}
+                </p>
+              )}
 
               {showingOptions && (
                 <ScrollArea className="mt-4 flex-1 min-h-0">
@@ -2445,14 +2605,32 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 </ScrollArea>
               )}
 
-              {!showingOptions && (
+              {showingHub && (
+                <RequestAnatomyPanel
+                  tab={activePromptTab}
+                  prompts={hubPrompts}
+                  values={effectivePreviewValues}
+                  settings={hubSettings}
+                  mode={anatomyMode}
+                  onModeChange={setAnatomyMode}
+                  onJump={jumpToPrompt}
+                  fullscreen={promptsFullscreen}
+                  onRequestFullscreen={promptsMorph.toggle}
+                />
+              )}
+
+              {!showingOptions && !showingHub && (
               <>
               <TabsContent value="narration" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col">
                 {showingMessages ? (
                   <ScrollArea className="flex-1 min-h-0">
                     <div className="flex flex-col gap-5 pr-3">
                       {messageFields.map((f) => (
-                        <div key={f.key} className="flex flex-col gap-1">
+                        <div
+                          key={f.key}
+                          ref={(node) => { messageFieldRefs.current[f.key] = node; }}
+                          className="flex flex-col gap-1 scroll-mt-2"
+                        >
                           <div className="flex items-center justify-between">
                             <span className="flex items-center gap-1.5 text-label font-medium">
                               {f.label}
@@ -2468,6 +2646,9 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                               </ConfirmDialog>
                             )}
                           </div>
+                          {/* Read before the template: when this message is sent is runtime-conditional,
+                              so it can't be inferred from the field being visible. */}
+                          <p className="text-helper text-muted-foreground italic">{f.sentWhen}</p>
                           <PromptField
                             value={f.value}
                             onChange={f.set}
@@ -2477,7 +2658,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                             readOnly={activePresetIsBuiltIn}
                           />
                           <p className="text-helper text-muted-foreground">{f.description}</p>
@@ -2495,7 +2676,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 )}
@@ -2512,7 +2693,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2529,7 +2710,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2546,7 +2727,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2563,7 +2744,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2580,7 +2761,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2597,7 +2778,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2614,7 +2795,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2631,7 +2812,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2648,7 +2829,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2665,7 +2846,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2682,7 +2863,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2699,7 +2880,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     readOnlyReason={readOnlyReason}
                     onRequestEdit={duplicateForEditing}
                     fullscreen={promptsFullscreen}
-                    onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                    onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
@@ -2724,7 +2905,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   readOnlyReason={readOnlyReason}
                   onRequestEdit={duplicateForEditing}
                   fullscreen={promptsFullscreen}
-                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
                 />
                 <DescTokenCapField
@@ -2750,7 +2931,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   readOnlyReason={readOnlyReason}
                   onRequestEdit={duplicateForEditing}
                   fullscreen={promptsFullscreen}
-                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
                 />
                 <DescTokenCapField
@@ -2775,7 +2956,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   readOnlyReason={readOnlyReason}
                   onRequestEdit={duplicateForEditing}
                   fullscreen={promptsFullscreen}
-                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
                 />
                 <DescTokenCapField
@@ -2801,7 +2982,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   readOnlyReason={readOnlyReason}
                   onRequestEdit={duplicateForEditing}
                   fullscreen={promptsFullscreen}
-                  onRequestFullscreen={() => setPromptsFullscreen((f) => !f)}
+                  onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
                 />
                 <DescTokenCapField
@@ -2820,7 +3001,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
             {/* Reset targets the on-screen template; hidden on the Options sub-tab (edits no template)
                 and the Messages view (per-field resets). */}
             <div className="flex flex-wrap justify-end items-center gap-2 flex-shrink-0">
-              {!activePresetIsBuiltIn && !showingOptions && !showingMessages && (
+              {!activePresetIsBuiltIn && !showingOptions && !showingMessages && !showingHub && (
                 <ConfirmDialog
                   title={`Reset ${resetTarget.label}`}
                   description={`Are you sure you want to reset the ${resetTarget.label} to its default value?`}

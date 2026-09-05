@@ -7,6 +7,7 @@
 import { arrayMove } from '@dnd-kit/sortable';
 import { randomUUID } from "@/lib/uuid";
 import { clamp } from "@/lib/utils";
+import { remintPlaceholdersDeep } from "@/lib/placeholders";
 
 /** A nestable folder. `parentId` null = top-level. */
 export interface TreeGroup { id: string; name: string; parentId: string | null; order?: number }
@@ -31,13 +32,13 @@ export interface FlatTreeNode<G extends TreeGroup, L extends TreeLeaf> {
  * at a group id that doesn't exist. Orphan-referenced items surface at the root rather than vanishing — a
  * dangling reference (missing `entityGroups`, deleted group) must never make an item unreachable.
  */
-function effectiveParent(ref: string | null | undefined, knownGroupIds: Set<string>): string | null {
+function effectiveParent(ref: string | null | undefined, knownGroupIds: ReadonlySet<string>): string | null {
   return ref != null && knownGroupIds.has(ref) ? ref : null;
 }
 
 /** Direct children (subgroups + leaves) of `parentId`, ordered by `order` (falling back to array index). */
 function childrenOf<G extends TreeGroup, L extends TreeLeaf>(
-  groups: G[], leaves: L[], parentId: string | null, knownGroupIds: Set<string>,
+  groups: readonly G[], leaves: readonly L[], parentId: string | null, knownGroupIds: ReadonlySet<string>,
 ): GroupTreeNode<G, L>[] {
   const entries: { node: GroupTreeNode<G, L>; sort: number }[] = [];
   groups.forEach((g, i) => {
@@ -54,7 +55,7 @@ function childrenOf<G extends TreeGroup, L extends TreeLeaf>(
 }
 
 /** Build the full ordered tree of top-level nodes, each group carrying its recursive children. */
-export function buildTree<G extends TreeGroup, L extends TreeLeaf>(groups: G[], leaves: L[]): GroupTreeNode<G, L>[] {
+export function buildTree<G extends TreeGroup, L extends TreeLeaf>(groups: readonly G[], leaves: readonly L[]): GroupTreeNode<G, L>[] {
   const knownGroupIds = new Set(groups.map((g) => g.id));
   const build = (parentId: string | null): GroupTreeNode<G, L>[] =>
     childrenOf(groups, leaves, parentId, knownGroupIds).map((node) =>
@@ -109,14 +110,17 @@ export function duplicateNode<G extends TreeGroup, L extends TreeLeaf>(
     ? groups.find((g) => g.id === id)!.parentId ?? null
     : leaves.find((l) => l.id === id)!.groupId ?? null;
 
+  // One mint map across the whole subtree: placements the source shared internally stay shared with each
+  // other in the copy, but a Unique chip never keeps the source's roll.
+  const minted = new Map<string, string>();
   const clonedGroups: G[] = [...subtreeGroupIds].map((gid) => {
-    const copy = structuredClone(groups.find((g) => g.id === gid)!);
+    const copy = remintPlaceholdersDeep(structuredClone(groups.find((g) => g.id === gid)!), minted);
     copy.id = idMap.get(gid)!;
     copy.parentId = gid === id ? rootParent : idMap.get(copy.parentId!)!; // root keeps parent; rest remap
     return copy;
   });
   const clonedLeaves: L[] = subtreeLeafIds.map((lid) => {
-    const copy = structuredClone(leaves.find((l) => l.id === lid)!);
+    const copy = remintPlaceholdersDeep(structuredClone(leaves.find((l) => l.id === lid)!), minted);
     copy.id = idMap.get(lid)!;
     copy.groupId = isGroup ? idMap.get(copy.groupId!)! : rootParent;
     return copy;

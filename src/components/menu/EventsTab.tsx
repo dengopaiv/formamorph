@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { EventFormDialog } from "@/components/menu/EventFormDialog";
-import { WinnerPickDialog } from "@/components/menu/WinnerPickDialog";
+import { PodiumDialog } from "@/components/menu/PodiumDialog";
 import {
   ADMIN_EVENT_STATE_LABELS,
   ADMIN_EVENT_STATE_STYLES,
@@ -28,6 +28,8 @@ import { formatServerDate } from "@/lib/serverDate";
 import { isAdmin } from "@/lib/roles";
 import { useDevEventSample } from "@/lib/useDevEventSample";
 import { useDevRoute } from "@/lib/devRouter";
+import { refreshActiveEvents } from "@/lib/useActiveEvents";
+import { invalidateEvents } from "@/lib/eventsCache";
 import AuthService from "@/services/AuthService";
 import EventService from "@/services/EventService";
 import type { ServerEvent } from "@/types";
@@ -36,6 +38,14 @@ interface EventsTabProps {
   /** Whether the tab is visible; the list only fetches while it is. */
   active: boolean;
 }
+
+/**
+ * How many finished events the Past group shows before folding the rest behind its expander.
+ *
+ * Nothing is dropped — the record is permanent — but this is the group staff read straight after a
+ * contest ends, and at a monthly cadence it is years deep. Ten is a screenful of the recent ones.
+ */
+const PAST_SHOWN = 10;
 
 /** The badge saying which state an event is in. */
 function StateBadge({ event }: { event: ServerEvent }) {
@@ -73,9 +83,9 @@ function GroupHeading({ icon: Icon, children }: { icon: typeof Clock; children: 
 /**
  * Admin Panel → Events. The calendar of timed happenings, grouped by where each one stands.
  *
- * Staff-visible rather than an administrator's, because picking a contest winner belongs to any staff:
- * a moderator reads the calendar and crowns a winner, and everything that speaks to every player at
- * once — scheduling, editing, calling off — stays an administrator's and is hidden from the rest.
+ * Staff-visible rather than an administrator's, but read-only for the moderation team: everything that
+ * speaks to every player at once — scheduling, editing, calling off, and announcing a contest's results —
+ * is an administrator's and is hidden from the rest.
  */
 export function EventsTab({ active }: EventsTabProps) {
   const [events, setEvents] = useState<ServerEvent[]>([]);
@@ -83,10 +93,11 @@ export function EventsTab({ active }: EventsTabProps) {
   const [nonce, setNonce] = useState(0);
   const [composing, setComposing] = useState(false);
   const [editing, setEditing] = useState<ServerEvent | null>(null);
-  const [picking, setPicking] = useState<ServerEvent | null>(null);
+  const [judging, setJudging] = useState<ServerEvent | null>(null);
   const [canceling, setCanceling] = useState<ServerEvent | null>(null);
   const [removing, setRemoving] = useState<ServerEvent | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showAllPast, setShowAllPast] = useState(false);
 
   const devRoute = useDevRoute();
   const devFixture = import.meta.env.DEV && devRoute?.modal === 'adminPanel' && devRoute.tab === 'events';
@@ -95,7 +106,15 @@ export function EventsTab({ active }: EventsTabProps) {
   const devRoleView = devFixture ? devRoute?.subtab : undefined;
   const viewerIsAdmin = devRoleView ? devRoleView === 'admin' : isAdmin(AuthService.getCurrentUser());
 
-  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  // Every mutation lands here, so the app-wide events poll is nudged alongside the tab's own list —
+  // an extended deadline reopens the publish flow's contest card now, not at the next poll. The shared
+  // events cache is dropped for the same reason: a podium just announced has to reach the archive and its
+  // badges in this session, not the player's next launch.
+  const refresh = useCallback(() => {
+    setNonce((n) => n + 1);
+    refreshActiveEvents();
+    invalidateEvents();
+  }, []);
 
   useEffect(() => {
     if (!active || devFixture) return;
@@ -158,9 +177,14 @@ export function EventsTab({ active }: EventsTabProps) {
 
     return (
       <div className="flex flex-wrap gap-1.5">
-        {allowed.pickWinner && isContestEvent(event) && (
-          <Button size="sm" onClick={() => setPicking(event)}>
-            <Trophy className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Pick Winner
+        {allowed.announceResults && (
+          <Button size="sm" onClick={() => setJudging(event)}>
+            <Trophy className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Announce Results
+          </Button>
+        )}
+        {allowed.editPodium && (
+          <Button size="sm" variant="outline" onClick={() => setJudging(event)}>
+            <Trophy className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Edit Podium
           </Button>
         )}
         {allowed.edit && (
@@ -231,7 +255,7 @@ export function EventsTab({ active }: EventsTabProps) {
         <p className="text-helper text-muted-foreground">
           {viewerIsAdmin
             ? 'Timed events shown to every player. Starting one posts its pinned announcement automatically.'
-            : 'Timed events shown to every player. Moderators pick contest winners; scheduling and editing are an administrator’s.'}
+            : 'Timed events shown to every player. Scheduling, editing and announcing results are an administrator’s.'}
         </p>
 
         {viewerIsAdmin && (
@@ -269,8 +293,15 @@ export function EventsTab({ active }: EventsTabProps) {
 
           <GroupHeading icon={CheckCircle2}>Past</GroupHeading>
           {groups.past.length > 0
-            ? groups.past.map(eventRow)
+            ? (showAllPast ? groups.past : groups.past.slice(0, PAST_SHOWN)).map(eventRow)
             : <p className="text-meta text-muted-foreground">Nothing has finished yet.</p>}
+          {groups.past.length > PAST_SHOWN && (
+            <Button size="sm" variant="ghost" className="mt-2" onClick={() => setShowAllPast((shown) => !shown)}>
+              {showAllPast
+                ? 'Show Fewer'
+                : `Show Older (${groups.past.length - PAST_SHOWN})`}
+            </Button>
+          )}
         </>
       )}
 
@@ -291,12 +322,12 @@ export function EventsTab({ active }: EventsTabProps) {
         />
       )}
 
-      {picking && (
-        <WinnerPickDialog
+      {judging && (
+        <PodiumDialog
           open
-          onOpenChange={(isOpen) => { if (!isOpen) setPicking(null); }}
-          contest={picking}
-          onPicked={refresh}
+          onOpenChange={(isOpen) => { if (!isOpen) setJudging(null); }}
+          contest={judging}
+          onSaved={refresh}
         />
       )}
 

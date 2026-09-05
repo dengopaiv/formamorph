@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Stat } from '@/types';
+import type { Placeholder, Stat } from '@/types';
 import { EditorModeContext } from '@/lib/editorMode';
+import { encodePlaceholderToken } from '@/lib/placeholders';
+import { phValueId, phValues } from '@/test/placeholderValues';
 import StatManager from './StatManager';
 
 // Ten rockets banded in the stat's own units — the case the unit toggle exists for.
@@ -16,12 +18,16 @@ const rockets = {
   ],
 } as unknown as Stat;
 
-const store: { stat: Stat; writes: Stat[]; rerender: () => void } = { stat: rockets, writes: [], rerender: () => {} };
+const store: { stat: Stat; placeholders: Placeholder[]; writes: Stat[]; rerender: () => void } = {
+  stat: rockets, placeholders: [], writes: [], rerender: () => {},
+};
 
 vi.mock('@/contexts/GameDataContext', () => ({
   useGameData: () => ({
     stats: [store.stat],
-    placeholders: [],
+    placeholders: store.placeholders,
+    placementLetters: new Map(),
+    placeholderOwners: new Map(),
     updateStat: (next: Stat) => {
       store.writes.push(next);
       store.stat = next;
@@ -31,7 +37,9 @@ vi.mock('@/contexts/GameDataContext', () => ({
 }));
 // Neither the chip field nor the morph picker is under test; both pull in editors this test has no use for.
 vi.mock('@/components/prompt/PlaceholderField', () => ({
-  PlaceholderNameField: (props: { value: string }) => <input readOnly value={props.value} />,
+  PlaceholderNameField: (props: { value: string; ariaLabel?: string }) => (
+    <input readOnly value={props.value} aria-label={props.ariaLabel} data-chip-field="" />
+  ),
 }));
 vi.mock('@/lib/useBodyMorphNames', () => ({ useBodyMorphSources: () => ({ sources: [], loading: false, load: () => {} }) }));
 
@@ -50,6 +58,7 @@ const renderManager = () => render(
 
 beforeEach(() => {
   store.stat = { ...rockets, descriptors: rockets.descriptors.map((d) => ({ ...d })) };
+  store.placeholders = [];
   store.writes = [];
 });
 
@@ -92,8 +101,9 @@ describe('the descriptor unit control', () => {
 });
 
 describe('the coverage bar', () => {
-  /** Every bar segment as [label, bold?] — the segments are the elements carrying a range title. */
-  const segments = () => [...document.querySelectorAll('div[title*="–"]')]
+  /** Every bar segment as [label, bold?] — each segment raises its own range on hover, and Base UI
+   *  stamps every live trigger, so that attribute is what the segments have in common. */
+  const segments = () => [...document.querySelectorAll('div[data-base-ui-tooltip-trigger]')]
     .map((el) => [el.textContent, el.className.includes('font-semibold')]);
 
   it('bolds the band a fresh game opens in', () => {
@@ -118,5 +128,80 @@ describe('the coverage bar', () => {
     store.stat = { ...store.stat, thresholdUnit: 'percent' };
     renderManager();
     expect(segments()).toEqual([['low', false], ['stocked', false], ['full', false], ['no status', true]]);
+  });
+
+  it('reads a chip in a band by its placeholder name', () => {
+    const TOWN: Placeholder = { id: 'ph-town', name: 'Town Name', values: phValues(['Sedge', 'Marrow']) };
+    store.placeholders = [TOWN];
+    const chip = encodePlaceholderToken({ id: TOWN.id, mode: 'world', placementId: 'p1' });
+    store.stat = { ...store.stat, descriptors: [{ id: 'd1', threshold: 10, description: `Far from ${chip}` }] };
+    renderManager();
+    expect(segments()).toEqual([['Far from {Town Name}', true]]);
+    expect(screen.getByLabelText('Threshold for Far from {Town Name}')).toBeInTheDocument();
+  });
+});
+
+describe('the stat text fields', () => {
+  it('offers the chip field for the description and for every descriptor row, the new one included', () => {
+    renderManager();
+    const chipFields = document.querySelectorAll('[data-chip-field]');
+    expect(Array.from(chipFields).map((el) => (el as HTMLInputElement).value))
+      .toEqual(['Rockets', '', 'low', 'stocked', 'full', '']);
+    expect(screen.getByLabelText('New Description')).toHaveAttribute('data-chip-field');
+  });
+});
+
+describe('the descriptor pin button', () => {
+  const TOWN: Placeholder = { id: 'ph-town', name: 'Town Name', values: phValues(['Sedge', 'Marrow']) };
+  const pinned = () => {
+    store.placeholders = [TOWN];
+    store.stat = {
+      ...store.stat,
+      descriptors: [
+        { id: 'd1', threshold: 3, description: 'low', placeholderPins: [{ placeholderId: TOWN.id, value: 'Sedge' }] },
+        { id: 'd2', threshold: 6, description: 'stocked' },
+      ],
+    };
+  };
+
+  it('counts the row’s pins on the badge, and opens them in a popover', async () => {
+    pinned();
+    renderManager();
+    const low = screen.getByRole('button', { name: 'Pins for low' });
+    expect(low.textContent).toBe('1');
+    expect(screen.getByRole('button', { name: 'Pins for stocked' }).textContent).toBe('');
+    await userEvent.click(low);
+    expect(screen.getByRole('textbox', { name: 'Pinned Value' })).toHaveValue('Sedge');
+  });
+
+  it('writes the popover’s rows onto that descriptor, and nothing else', async () => {
+    pinned();
+    renderManager();
+    await userEvent.click(screen.getByRole('button', { name: 'Pins for low' }));
+    // A value picked off the list lands on this descriptor's pin, named by id.
+    await userEvent.click(screen.getByRole('textbox', { name: 'Pinned Value' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Marrow' }));
+    expect(store.writes.at(-1)!.descriptors[0].placeholderPins)
+      .toEqual([{ placeholderId: TOWN.id, value: 'Marrow', valueId: phValueId('Marrow') }]);
+    await userEvent.click(screen.getByRole('button', { name: 'Add Placeholder Pin' }));
+    const last = store.writes.at(-1)!.descriptors;
+    expect(last[0].placeholderPins).toEqual([
+      { placeholderId: TOWN.id, value: 'Marrow', valueId: phValueId('Marrow') }, { placeholderId: '', value: '' },
+    ]);
+    expect(last[1].placeholderPins).toBeUndefined();
+    // Emptying the list drops the field rather than leaving an empty array behind.
+    await userEvent.click(screen.getAllByRole('button', { name: 'Remove Pin' })[1]);
+    await userEvent.click(screen.getByRole('button', { name: 'Remove Pin' }));
+    expect(store.writes.at(-1)!.descriptors[0].placeholderPins).toBeUndefined();
+  });
+
+  it('shows no pin button in Simple mode, pins or no pins', () => {
+    pinned();
+    render(
+      <EditorModeContext.Provider value={{ mode: 'simple', advanced: false, setMode: () => {} }}>
+        <Harness />
+      </EditorModeContext.Provider>,
+    );
+    expect(screen.queryByRole('button', { name: /^Pins for/ })).toBeNull();
   });
 });

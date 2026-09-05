@@ -2,11 +2,22 @@ import AuthService from './AuthService';
 import type { CatalogKindQuery } from '@/lib/catalogKinds';
 import type { PublishPayload } from '@/lib/publishPayload';
 import { openDatabase, promisifyRequest } from '@/lib/idb';
-import { migrateWorld } from '@/lib/version';
+import { migrateCarriedPlaceholders, migrateWorld } from '@/lib/version';
 import { contentHash } from '@/lib/contentHash';
 import { describePlaceholders } from '@/lib/placeholders';
+import { allPlaceholders } from '@/lib/placeholderHomes';
 import { readDeletedDefaultWorlds, tombstoneDefaultWorld, type DefaultWorldSeed } from '@/lib/defaultWorlds';
-import type { Placeholder, WorldMetadata } from '@/types';
+import { changelogOf, type ChangelogDraft, type ChangelogEntry } from '@/lib/listingChangelog';
+import type { LikerAuditRow, LikerRow, WorldMetadata } from '@/types';
+
+/**
+ * What a conditional catalog fetch answers with: a fresh snapshot and the tag to store beside it, the
+ * word that the local copy still stands, or the error that stopped the request.
+ */
+export type CatalogFetch =
+  | { status: 'fresh'; data: unknown[]; tag: string | null }
+  | { status: 'unchanged' }
+  | { status: 'error'; error: string };
 
 /** The publish refused because this author already has an entry in the contest. */
 export const CONTEST_ALREADY_ENTERED = 'CONTEST_ALREADY_ENTERED';
@@ -14,8 +25,8 @@ export const CONTEST_ALREADY_ENTERED = 'CONTEST_ALREADY_ENTERED';
 /** The publish named a contest that isn't taking entries — the wrong one, or one that has since closed. */
 export const CONTEST_NOT_ACTIVE = 'CONTEST_NOT_ACTIVE';
 
-/** The withdrawal was refused because this entry was picked as the winner. */
-export const CONTEST_WINNER = 'CONTEST_WINNER';
+/** The withdrawal was refused because this entry is on the contest's podium. */
+export const CONTEST_PLACED = 'CONTEST_PLACED';
 
 /** A locally-stored world record (metadata + nested world `data`). Inner fields stay loose since
  *  they round-trip through IndexedDB/JSON and aren't read field-by-field here. */
@@ -61,6 +72,7 @@ export interface StoredWorldRecord {
     dictionary?: unknown[]; // legacy v1.2.0 flat form (read-only; folded to `dictionaries` on load)
     dictionaries?: unknown[]; // v2.x books
     placeholders?: unknown[]; // v2.x author-defined variables/wildcards
+    placeholderGroups?: unknown[]; // editor folders over the shared placeholders
   };
 }
 
@@ -116,6 +128,20 @@ class WorldStorageService {
     }
   }
 
+  /**
+   * Every stored world's id, and nothing else.
+   *
+   * `getAllKeys` reads the key index, so no record is deserialized — the library's whole payload stays
+   * on disc. That is what lets the menu draw its real tile layout before a single world is loaded, and
+   * it is how a caller that only needs a count should ask for one.
+   */
+  async getWorldIds(): Promise<string[]> {
+    await this.ensureInitialized();
+    const transaction = this.db!.transaction([this.storeName], 'readonly');
+    const keys = await promisifyRequest(transaction.objectStore(this.storeName).getAllKeys());
+    return keys.map(String);
+  }
+
   /** List all stored worlds as lightweight metadata (no nested `data`), for menu/library rendering. */
   async getWorldMetadata(): Promise<WorldMetadata[]> {
     await this.ensureInitialized();
@@ -127,7 +153,9 @@ class WorldStorageService {
       name: world.name,
       // The stored blurb keeps its raw chips; the card renders them display-only against the world's defs,
       // since a library card has no playthrough whose rolls it could read.
-      description: describePlaceholders(world.description ?? '', world.data?.placeholders as Placeholder[] | undefined),
+      // Stored records never pass through `migrateWorld`, so their defs take the value-record conversion
+      // here — the same read-boundary treatment the dictionary library gives its keyword arrays.
+      description: describePlaceholders(world.description ?? '', allPlaceholders({ ...world.data, placeholders: migrateCarriedPlaceholders(world.data?.placeholders) })),
       author: world.author || '',
       // A remote (http) thumbnail can't render offline and is blocked cross-origin by the server's CORP
       // header, so prefer the world's own embedded thumbnail (base64) when the stored one is a URL. New
@@ -277,11 +305,16 @@ class WorldStorageService {
     await this.ensureInitialized();
     const deleted = readDeletedDefaultWorlds();
     defaultWorlds = defaultWorlds.filter((w) => !deleted.has(w.id));
-    // Full records (not getWorldMetadata) so we can read each stored copy's `sourceHash` and `dirty`.
+    // Full records (not getWorldMetadata) so we can read each stored copy's `sourceHash` and `dirty`,
+    // but fetched by id rather than as a whole-store read: only the bundled defaults are ever compared,
+    // so reading the player's own worlds here loaded a library's worth of payload to look at none of it.
     const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const stored = await promisifyRequest(transaction.objectStore(this.storeName).getAll());
+    const store = transaction.objectStore(this.storeName);
+    const stored = await Promise.all(
+      defaultWorlds.map((w) => promisifyRequest(store.get(w.id))),
+    );
     const byId = new Map<string, { dirty?: boolean; sourceHash?: string }>(
-      stored.map((w) => [w.id, w]),
+      stored.filter(Boolean).map((w) => [w.id, w]),
     );
 
     const failed: string[] = [];
@@ -346,6 +379,45 @@ class WorldStorageService {
     return { failed, updated };
   }
 
+  /**
+   * Point a local world at the community listing it was just published to.
+   *
+   * The download path stamps the same two fields; this is the publish side of it, so an author's own copy
+   * is a copy of their listing rather than an unrelated world that happens to look like one. Only the
+   * wrapper fields are written — `storeWorld` wants a whole record, and a publish has no reason to
+   * rewrite the content it just uploaded.
+   *
+   * A world deleted between the upload and the reply is left alone rather than resurrected.
+   *
+   * @param worldId - The local library record that was published
+   * @param sourceId - The listing's server id
+   * @param sourceUpdatedAt - The listing's `updated_at` after the publish, so the author's own card offers
+   *                          no update against the version they just uploaded. Absent clears whatever was
+   *                          stamped before: an old download's stamp against a listing that has since been
+   *                          republished reads as exactly the update this is here to prevent, while no
+   *                          stamp at all reads as a plain re-download
+   */
+  async linkWorldToListing(worldId: string, sourceId: string, sourceUpdatedAt?: string): Promise<void> {
+    await this.ensureInitialized();
+
+    return new Promise<void>((resolve, reject) => {
+      const store = this.db!.transaction([this.storeName], 'readwrite').objectStore(this.storeName);
+      const getRequest = store.get(worldId);
+      getRequest.onsuccess = () => {
+        const existing = getRequest.result;
+        if (!existing) return resolve();
+        const putRequest = store.put({
+          ...existing,
+          sourceId,
+          sourceUpdatedAt,
+        });
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject('Failed to link world to its listing');
+      };
+      getRequest.onerror = () => reject('Failed to link world to its listing');
+    });
+  }
+
   /** Remove a world from IndexedDB by `id`; this is the only path that drops the sticky `sourceId` link. */
   async deleteWorld(worldId: string) {
     await this.ensureInitialized();
@@ -360,6 +432,42 @@ class WorldStorageService {
     // Deleting a default is permanent: without this the next seed pass sees it missing and re-creates it.
     // A no-op for any non-default id.
     tombstoneDefaultWorld(worldId);
+  }
+
+  /**
+   * Fetch the whole community catalog, conditionally.
+   *
+   * Given the tag the local copy was fetched with, the request carries `If-None-Match` and bypasses the
+   * browser's own HTTP cache, so a `304` reaches the caller rather than being answered as a `200` from
+   * store. A server that answers no tag at all leaves the caller storing none, and the next open asks
+   * unconditionally — which is exactly what shipped before. The bypass has to leave the request's own
+   * cache headers alone; see the comment on it.
+   *
+   * @param tag - The tag the stored catalog carries, when there is one worth sending back
+   * @returns The rows and the new tag, the word that nothing changed, or the error that stopped it
+   */
+  async fetchCatalog(tag?: string | null): Promise<CatalogFetch> {
+    try {
+      const headers: Record<string, string> = {};
+      if (AuthService.isAuthenticated()) {
+        headers['Authorization'] = `Bearer ${AuthService.token}`;
+      }
+      // `no-store` and not `reload`: `reload` sends `Cache-Control: no-cache`, which the server reads
+      // as an end-to-end reload and answers `200` with the whole body however well the tag matches.
+      const init: RequestInit = tag
+        ? { headers: { ...headers, 'If-None-Match': tag }, cache: 'no-store' }
+        : { headers };
+
+      const response = await fetch(`${this.API_URL}/worlds?page=1&limit=1000&kind=all`, init);
+      if (response.status === 304) return { status: 'unchanged' };
+      if (!response.ok) throw new Error('Failed to fetch worlds');
+
+      const body = await response.json();
+      return { status: 'fresh', data: body.data || [], tag: response.headers.get('ETag') };
+    } catch (error) {
+      console.error('Error fetching the world catalog:', error);
+      return { status: 'error', error: (error as Error).message };
+    }
   }
 
   /** Fetch a page of community worlds with optional search/sort; `ownedOnly` switches to the caller's own
@@ -520,6 +628,154 @@ class WorldStorageService {
     return responseData.data || responseData;
   }
 
+  /**
+   * Rewrite one's own comment. The server allows nobody else, moderators included.
+   *
+   * Addressed to the comment rather than to the world it sits on — the server has no world-scoped edit
+   * path. The returned row carries the server's `edited_at`, which is what the thread shows.
+   *
+   * @param commentId - The comment's server id
+   * @param content - The replacement text
+   */
+  async updateComment(commentId: string, content: string) {
+    if (!AuthService.isAuthenticated()) {
+      throw new Error('You must be logged in to comment');
+    }
+    const response = await fetch(`${this.API_URL}/comments/${commentId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AuthService.token}`,
+      },
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || errorData.message || 'Failed to save the comment');
+    }
+    const responseData = await response.json();
+    return responseData.data || responseData;
+  }
+
+  /**
+   * Remove a comment: its author, the author of the listing it sits on, or staff moderating.
+   *
+   * @param commentId - The comment's server id
+   */
+  async deleteComment(commentId: string) {
+    if (!AuthService.isAuthenticated()) {
+      throw new Error('You must be logged in to comment');
+    }
+    const response = await fetch(`${this.API_URL}/comments/${commentId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || errorData.message || 'Failed to delete the comment');
+    }
+  }
+
+  /**
+   * Read a listing's changelog, or learn that this server has none.
+   *
+   * Fetched as part of the listing behind the opt-in flag rather than from a route of its own, which is
+   * how the server serves it. Null means the deploy predates the feature — see `changelogOf`, which is
+   * what every surface reads the answer through, so the feature can be simply invisible against an older
+   * server rather than broken. A failed request is null for the same reason: nothing is worth an error
+   * toast over a panel the reader did not ask for.
+   *
+   * @param worldId - The listing's server id
+   */
+  async fetchChangelog(worldId: string): Promise<ChangelogEntry[] | null> {
+    try {
+      const headers: Record<string, string> = {};
+      if (AuthService.isAuthenticated()) {
+        headers['Authorization'] = `Bearer ${AuthService.token}`;
+      }
+      const response = await fetch(`${this.API_URL}/worlds/${worldId}?includeChangelog=true`, { headers });
+      if (!response.ok) return null;
+
+      const body = await response.json();
+
+      return changelogOf(body.data);
+    } catch (error) {
+      console.error('Error fetching the changelog:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Add an entry to a listing's changelog.
+   *
+   * @param worldId - The listing's server id
+   * @param draft - The three authored fields
+   */
+  async createChangelogEntry(worldId: string, draft: ChangelogDraft): Promise<ChangelogEntry> {
+    return this.writeChangelog('POST', `/worlds/${worldId}/changelog`, draft, 'Failed to add the entry');
+  }
+
+  /**
+   * Rewrite one entry. Addressed through its listing, because an entry has no meaning apart from it.
+   *
+   * @param worldId - The listing's server id
+   * @param entryId - The entry's id
+   * @param draft - The replacement fields
+   */
+  async updateChangelogEntry(worldId: string, entryId: string, draft: ChangelogDraft): Promise<ChangelogEntry> {
+    return this.writeChangelog(
+      'PUT', `/worlds/${worldId}/changelog/${entryId}`, draft, 'Failed to save the entry',
+    );
+  }
+
+  /**
+   * Remove one entry.
+   *
+   * @param worldId - The listing's server id
+   * @param entryId - The entry's id
+   */
+  async deleteChangelogEntry(worldId: string, entryId: string): Promise<void> {
+    if (!AuthService.isAuthenticated()) throw new Error('You must be logged in to edit a changelog');
+
+    const response = await fetch(`${this.API_URL}/worlds/${worldId}/changelog/${entryId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || body.message || 'Failed to delete the entry');
+    }
+  }
+
+  /** The half `createChangelogEntry` and `updateChangelogEntry` share: same body, same auth, same refusal. */
+  private async writeChangelog(
+    method: 'POST' | 'PUT',
+    path: string,
+    draft: ChangelogDraft,
+    fallbackError: string,
+  ): Promise<ChangelogEntry> {
+    if (!AuthService.isAuthenticated()) throw new Error('You must be logged in to edit a changelog');
+
+    const response = await fetch(`${this.API_URL}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AuthService.token}`,
+      },
+      body: JSON.stringify({ title: draft.title.trim(), body: draft.body.trim(), date: draft.date }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || body.message || fallbackError);
+    }
+
+    const body = await response.json();
+
+    return body.data as ChangelogEntry;
+  }
+
   /** Fetch the current user's published worlds; returns `[]` when unauthenticated or on error. */
   async getUserWorlds(kind: CatalogKindQuery = 'world') {
     if (!AuthService.isAuthenticated()) return [];
@@ -578,12 +834,6 @@ class WorldStorageService {
           name: payload.name,
           description: payload.description,
           thumbnail: payload.thumbnail,
-          // The catalog card reads previewData; it mirrors the list fields, never the content.
-          previewData: {
-            name: payload.name,
-            description: payload.description,
-            thumbnail: payload.thumbnail
-          },
           contentData: payload.contentData,
           kind: payload.kind,
           // Sent top-level because only a world keeps a copy inside its content, where the server looks
@@ -602,7 +852,10 @@ class WorldStorageService {
         throw failure;
       }
 
-      return await response.json();
+      // The listing itself, not the envelope around it: what the caller wants is its id and its fresh
+      // `updated_at`, to link the local copy to what was just published.
+      const responseData = await response.json();
+      return responseData.data || responseData;
     } catch (error) {
       console.error('Error publishing:', error);
       throw error;
@@ -614,7 +867,7 @@ class WorldStorageService {
    *
    * A withdrawal, never a move: the listing itself stays published and keeps its likes, comments and
    * downloads — only the entry flag goes. The server allows the author or a moderator, audits every one,
-   * and refuses to release a picked winner with a `CONTEST_WINNER` code.
+   * and refuses to release a placed world with a `CONTEST_PLACED` code.
    *
    * @param listingId - The published listing's server id
    */
@@ -636,6 +889,73 @@ class WorldStorageService {
       if (body.code) failure.code = body.code;
       throw failure;
     }
+  }
+
+  /**
+   * Who liked a listing, newest like first. Staff only.
+   *
+   * Answers with the full count as well as the rows, which the server caps: a listing with more likes
+   * than the cap is exactly the one worth looking at, and a list that quietly stopped short would say
+   * the opposite of what it means.
+   *
+   * @param worldId - The listing's server id
+   * @returns The full like count, and as many likers as the server will send
+   */
+  async fetchLikers(worldId: string): Promise<{ total: number; rows: LikerRow[] }> {
+    const response = await fetch(`${this.API_URL}/worlds/${worldId}/likes`, {
+      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || body.message || 'Failed to load who liked this');
+
+    const data = body.data as { total?: number; rows?: LikerRow[] } | undefined;
+
+    return { total: Number(data?.total) || 0, rows: data?.rows ?? [] };
+  }
+
+  /**
+   * The same likers with the network Signals behind them read across. Staff only.
+   *
+   * Asked for only when somebody opens the audit, never with the list: the server writes an audit row
+   * per call, so counting the likes on a listing would otherwise file a look at everyone who gave one.
+   *
+   * @param worldId - The listing's server id
+   * @returns The full like count, and the rows with their group and author link
+   */
+  async fetchLikersAudit(worldId: string): Promise<{ total: number; rows: LikerAuditRow[] }> {
+    const response = await fetch(`${this.API_URL}/worlds/${worldId}/likes/audit`, {
+      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || body.message || 'Failed to audit these likes');
+
+    const data = body.data as { total?: number; rows?: LikerAuditRow[] } | undefined;
+
+    return { total: Number(data?.total) || 0, rows: data?.rows ?? [] };
+  }
+
+  /**
+   * Take one account's like off a listing. Staff only.
+   *
+   * Answers with the new count for the same reason liking does: the number on the card behind the
+   * dialog has to move with the row that left the list.
+   *
+   * @param worldId - The listing's server id
+   * @param userId - Whose like to remove
+   * @returns The listing's new like count
+   */
+  async removeLike(worldId: string, userId: string): Promise<number> {
+    const response = await fetch(
+      `${this.API_URL}/worlds/${worldId}/likes/${encodeURIComponent(userId)}`,
+      { method: 'DELETE', headers: { 'Authorization': `Bearer ${AuthService.token}` } }
+    );
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || body.message || 'Failed to remove that like');
+
+    return Number((body.data as { likes?: number } | undefined)?.likes) || 0;
   }
 }
 

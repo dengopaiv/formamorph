@@ -1,5 +1,11 @@
 import type { AuthUser } from '@/types';
 
+/** What a sign-in tells the caller beyond the session it establishes. */
+export interface LoginResult {
+  /** The sign-in found a pending account deletion and called it off. Worth saying out loud. */
+  deletionCancelled: boolean;
+}
+
 /** Singleton holding the auth token and current user, mirrored to `localStorage`. Default-exported as
  *  one shared instance; the constructor rehydrates both from storage (tolerating a corrupt user blob). */
 class AuthService {
@@ -8,6 +14,10 @@ class AuthService {
   userKey: string;
   token: string | null;
   currentUser: AuthUser | null;
+  /** Told whenever the held session ends, so a surface keeping its own copy of the identity can drop it.
+   *  Signing out is raised from more than one place now — the profile dialog, the privacy prompt, and a
+   *  401 answering any request — and only this service sees all three. */
+  private sessionEndedListeners = new Set<() => void>();
 
   constructor() {
     // Use different API URL based on environment
@@ -34,8 +44,15 @@ class AuthService {
     return this.currentUser;
   }
 
-  /** Authenticate, persist the token, then adopt or fetch the user profile; rethrows on failure. */
-  async login(username: string, password: string) {
+  /** Listen for the session ending. Returns the unsubscribe. */
+  onSessionEnded(listener: () => void): () => void {
+    this.sessionEndedListeners.add(listener);
+    return () => { this.sessionEndedListeners.delete(listener); };
+  }
+
+  /** Authenticate, persist the token, then adopt or fetch the user profile; rethrows on failure.
+   *  Reports whether the sign-in cancelled a pending deletion, which is the only place that is said. */
+  async login(username: string, password: string): Promise<LoginResult> {
     try {
       const response = await fetch(`${this.API_URL}/auth/login`, {
         method: 'POST',
@@ -62,7 +79,7 @@ class AuthService {
         await this.fetchUserProfile();
       }
 
-      return true;
+      return { deletionCancelled: data.deletionCancelled === true };
     } catch (error) {
       console.error('Login error:', error);
       throw error;
@@ -222,6 +239,40 @@ class AuthService {
   }
 
   /**
+   * Ask for this account to be erased once the grace period runs out.
+   *
+   * The password goes with the request because the session alone is not enough to end an account — a
+   * stolen token must not be able to. Nothing changes until the window closes, and signing in before
+   * then calls the whole thing off.
+   *
+   * @param password - The account's own password, re-entered
+   * @param deleteContent - Whether published listings and comments go too. The server refuses a body
+   *   without it, so there is no default here either
+   * @returns When the erasure runs, as an ISO timestamp
+   */
+  async requestAccountDeletion(password: string, deleteContent: boolean): Promise<string> {
+    if (!this.token) throw new Error('Not authenticated');
+
+    const response = await fetch(`${this.API_URL}/auth/delete-account`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ password, deleteContent })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      // A wrong password and a suspended account both answer here, and both sentences are worth
+      // showing verbatim: they are the two things the user has to act on.
+      throw new Error(data.error || data.message || 'Failed to request the deletion');
+    }
+
+    return data.deletionScheduledFor as string;
+  }
+
+  /**
    * Replace the signed-in account's profile image and adopt the new URL locally.
    *
    * The cached user is updated in place rather than re-fetched: every surface reads the avatar from its
@@ -310,6 +361,16 @@ class AuthService {
     this.currentUser = null;
     localStorage.removeItem(this.tokenKey);
     localStorage.removeItem(this.userKey);
+    // After the state is cleared, so a listener that reads `isAuthenticated()` sees the session gone.
+    // Each is isolated: signing out has already happened by this point, and one subscriber throwing
+    // must not strand the others or escape into a caller — `logout()` also runs inside the 401 path.
+    this.sessionEndedListeners.forEach((listener) => {
+      try {
+        listener();
+      } catch (error) {
+        console.error('A session-ended listener failed:', error);
+      }
+    });
   }
 }
 

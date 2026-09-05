@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parsePromptTemplate, serializeSegments, renderPromptTemplate, resolveToken } from './promptTemplate';
+import { parsePromptTemplate, serializeSegments, renderPromptTemplate, renderPromptTemplateRuns, resolveToken } from './promptTemplate';
+import { runsTile } from './requestAnatomy';
 import { joinToken } from './promptVariables';
 import {
   defaultNowLinePrompt,
@@ -224,7 +225,7 @@ describe('the default now-line template', () => {
   });
 });
 
-// ── Chip affixes (docs-internal/chip-affixes-design.md) ──────────────────────────────────────────────
+// ── Chip affixes (docs-internal/designs/chip-affixes/design.md) ──────────────────────────────────────────────
 // Tests 1, 2 and 6 of the spec's gate are the load-bearing ones: they guard the round-trip, the
 // unchanged rendering of every shipped prompt, and survival through a style downcast.
 
@@ -351,5 +352,93 @@ describe('resolveToken (shared by the renderer and the editor preview)', () => {
   it('agrees with renderPromptTemplate for the same token', () => {
     const token = affixed('<ENTITIES>', 'name');
     expect(renderPromptTemplate(token, values)).toBe(resolveToken(token, values));
+  });
+});
+
+describe('renderPromptTemplateRuns', () => {
+  const labels = { source: 'system-template' as const };
+  const slice = (t: { content: string; runs: { start: number; end: number }[] }) =>
+    t.runs.map((r) => t.content.slice(r.start, r.end));
+
+  it('renders byte-identically to renderPromptTemplate', () => {
+    const values = {
+      '<WORLD DESCRIPTION>': 'A drowned delta town.',
+      '<NOTES>': 'Keep the tide rising.',
+      '<STATS DESCRIPTION>': 'Health 8/10',
+    };
+    for (const template of [
+      defaultSystemPrompt,
+      defaultChoicesPrompt,
+      defaultStatUpdatesPrompt,
+      'A <WORLD DESCRIPTION> B <NOTES> C',
+      'no chips at all',
+      '<WORLD DESCRIPTION>',
+      'trailing <UNKNOWN CHIP>',
+    ]) {
+      expect(renderPromptTemplateRuns(template, values, labels).content).toBe(
+        renderPromptTemplate(template, values),
+      );
+    }
+  });
+
+  it('splits authored template prose from the value a chip injected, and names the chip that did it', () => {
+    const tiled = renderPromptTemplateRuns('Before <WORLD DESCRIPTION> after.', { '<WORLD DESCRIPTION>': 'DELTA' }, labels);
+    expect(slice(tiled)).toEqual(['Before ', 'DELTA', ' after.']);
+    expect(tiled.runs.map((r) => r.chip)).toEqual([undefined, '<WORLD DESCRIPTION>', undefined]);
+    // Every run still names the editor it came out of, chips included, so a click knows where to go.
+    expect(tiled.runs.every((r) => r.source === 'system-template')).toBe(true);
+  });
+
+  it('identifies a chip by its variant, so two modes of one variable are two different chips', () => {
+    const tiled = renderPromptTemplateRuns(
+      '<STATS DESCRIPTION|numbers> then <STATS DESCRIPTION>',
+      { '<STATS DESCRIPTION|numbers>': '8/10', '<STATS DESCRIPTION>': 'Hale' },
+      labels,
+    );
+    expect(tiled.runs.map((r) => r.chip)).toEqual(['<STATS DESCRIPTION|numbers>', undefined, '<STATS DESCRIPTION>']);
+  });
+
+  it('identifies an affixed placement by the chip itself, so the wording it carries is not a new chip', () => {
+    const token = joinToken({ base: '<NOTES>', pre: 'Remember: ', post: '.' });
+    const tiled = renderPromptTemplateRuns(token, { '<NOTES>': 'tide' }, labels);
+    expect(tiled.runs.map((r) => r.chip)).toEqual(['<NOTES>']);
+  });
+
+  it('counts an unresolved token as authored text, since that is what the model reads', () => {
+    const tiled = renderPromptTemplateRuns('keep <NOTES>', {}, labels);
+    expect(tiled.content).toBe('keep <NOTES>');
+    expect(tiled.runs).toHaveLength(1);
+    expect(tiled.runs[0].source).toBe('system-template');
+  });
+
+  it('tiles the rendered content exactly, for every default prompt', () => {
+    const values = { '<WORLD DESCRIPTION>': 'W', '<NOTES>': 'N', '<ENTITIES>': 'E', '<LOCATION>': 'L' };
+    for (const template of [
+      defaultSystemPrompt, defaultChoicesPrompt, defaultStatUpdatesPrompt, defaultLocationChangePrompt,
+      defaultThinkingPrompt, defaultSummaryPrompt, defaultDirectorPrompt, defaultCharacterPrompt,
+      defaultStoryboardPrompt, defaultDiaryPrompt,
+    ]) {
+      const tiled = renderPromptTemplateRuns(template, values, labels);
+      expect(runsTile(tiled.content, tiled.runs)).toBe(true);
+    }
+  });
+
+  it('carries an affixed chip whole into its context run, wrapper included', () => {
+    const token = joinToken({ base: '<NOTES>', pre: 'Remember: ', post: '.' });
+    const tiled = renderPromptTemplateRuns(`x ${token} y`, { '<NOTES>': 'tide' }, labels);
+    expect(slice(tiled)).toEqual(['x ', 'Remember: tide.', ' y']);
+  });
+
+  it('labels the user template and the typed action apart', () => {
+    const tiled = renderPromptTemplateRuns(
+      'My action this turn: <PLAYER ACTION>',
+      { '<PLAYER ACTION>': 'I wade toward the skiff.' },
+      { source: 'user-template', tokens: { '<PLAYER ACTION>': 'action' } },
+    );
+    expect(slice(tiled)).toEqual(['My action this turn: ', 'I wade toward the skiff.']);
+    expect(tiled.runs[0].chip).toBeUndefined();
+    expect(tiled.runs[1].chip).toBe('<PLAYER ACTION>');
+    // The few chips holding what another pass wrote keep a name for it, on top of their own token.
+    expect(tiled.runs[1].contextLabel).toBe('action');
   });
 });

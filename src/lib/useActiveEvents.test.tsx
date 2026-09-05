@@ -8,18 +8,20 @@ import type { ServerEvent } from '@/types';
 const flag = vi.hoisted(() => ({ enabled: true }));
 vi.mock('@/lib/featureFlags', () => ({ get COMMUNITY_ENABLED() { return flag.enabled; } }));
 
-const { useActiveEvents, EVENTS_POLL_MS, EVENTS_FOCUS_FLOOR_MS } = await import('./useActiveEvents');
+const { useActiveEvents, refreshActiveEvents, EVENTS_POLL_MS, EVENTS_FOCUS_FLOOR_MS } = await import('./useActiveEvents');
 
 const sample: ServerEvent = {
   id: 'e1', type: 'contest', title: 'A Contest', bannerText: 'blurb', body: 'body',
   rulesText: null, startsAt: '2026-08-01T00:00:00Z', endsAt: '2026-09-01T00:00:00Z',
-  cancelledAt: null, startMessageId: null, endMessageId: null, winnerMessageId: null,
-  winnerWorldId: null, winnerName: null, winnerAuthorName: null,
+  cancelledAt: null, startMessageId: null, endMessageId: null, resultsMessageId: null,
+  resultsAnnouncedAt: null, placements: [],
 };
 
 /** Renders the hook and exposes what it last returned, plus the poll callback it was handed. */
-function Probe({ onPoll, seen }: { onPoll?: () => void; seen: (events: ServerEvent[]) => void }) {
-  const events = useActiveEvents({ onPoll });
+function Probe({ onPoll, enabled, seen }: {
+  onPoll?: () => void; enabled?: boolean; seen: (events: ServerEvent[]) => void;
+}) {
+  const events = useActiveEvents({ onPoll, enabled });
   seen(events);
   return null;
 }
@@ -76,6 +78,20 @@ describe('useActiveEvents', () => {
     await waitFor(() => expect(fetchActive).toHaveBeenCalledTimes(2));
   });
 
+  it('re-reads at once when an admin event write announces itself, and never after unmount', async () => {
+    const fetchActive = stub([sample]);
+    const { unmount } = render(<Probe seen={() => {}} />);
+    await waitFor(() => expect(fetchActive).toHaveBeenCalledTimes(1));
+
+    // An extended contest deadline must reach the publish flow now, not at the next 5-minute poll.
+    await act(async () => { refreshActiveEvents(); });
+    expect(fetchActive).toHaveBeenCalledTimes(2);
+
+    unmount();
+    await act(async () => { refreshActiveEvents(); });
+    expect(fetchActive).toHaveBeenCalledTimes(2);
+  });
+
   it('nudges its caller after each successful read, through whichever callback is current', async () => {
     stub([sample]);
     const first = vi.fn();
@@ -127,5 +143,29 @@ describe('useActiveEvents', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(EVENTS_POLL_MS * 2); });
 
     expect(fetchActive).not.toHaveBeenCalled();
+  });
+
+  it('costs nothing while disabled, so a mounted-but-hidden surface adds no second poll', async () => {
+    const fetchActive = stub([sample]);
+
+    render(<Probe enabled={false} seen={() => {}} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(EVENTS_POLL_MS * 2); });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+
+    expect(fetchActive).not.toHaveBeenCalled();
+  });
+
+  it('starts reading the moment it is enabled, and stops again when it is not', async () => {
+    const fetchActive = stub([sample]);
+    const { rerender } = render(<Probe enabled={false} seen={() => {}} />);
+    expect(fetchActive).not.toHaveBeenCalled();
+
+    rerender(<Probe enabled seen={() => {}} />);
+    await waitFor(() => expect(fetchActive).toHaveBeenCalledTimes(1));
+
+    // Disabled again, the interval it left behind must be gone with it.
+    rerender(<Probe enabled={false} seen={() => {}} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(EVENTS_POLL_MS * 2); });
+    expect(fetchActive).toHaveBeenCalledTimes(1);
   });
 });

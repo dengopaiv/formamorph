@@ -1,24 +1,12 @@
-import { useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  KeyboardSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  sortableKeyboardCoordinates,
-} from '@dnd-kit/sortable';
+import { useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
+import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { commaSplitCandidate, splitPastedChips, replaceChipValue } from '@/components/Chip';
 import { EditableChip } from '@/components/EditableChip';
 import ChipInput from '@/components/prompt/ChipInput';
 import { usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
-import { hasPlaceholders } from '@/lib/placeholders';
+import { hasPlaceholders, lonePlaceholderToken, placeholderValueLine } from '@/lib/placeholders';
 import { PLACEHOLDER_TRIGGER, placeholderHint } from '@/lib/placeholderInsert';
 import type { Placeholder } from '@/types';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
@@ -34,10 +22,10 @@ import PlaceholderText from '@/components/prompt/PlaceholderText';
  *
  * Given `placeholders`, a tag may mix text and chips (an "Old \{Town\} keeper" alias): the entry field becomes a chip
  * editor with the same `{` typeahead as every other placeholder field, and a committed tag draws its chips
- * as pills (double-click to edit it in place). Omit the prop for lists that must stay literal — placeholder values themselves, since resolution
- * is single-pass and a chip inside one would never expand.
+ * as pills (double-click to edit it in place). Omit the prop for lists that must stay literal.
  */
 const NO_PLACEHOLDERS: Placeholder[] = [];
+const NO_MODIFIERS: never[] = [];
 
 export function KeywordChips({
   keywords,
@@ -46,8 +34,12 @@ export function KeywordChips({
   offerCommaSplit = true,
   onChipClick,
   chipSuffix,
+  chipStyle,
   renderChip,
+  chipAside,
   placeholders,
+  ownerId,
+  lonePlaceholderAsPath = false,
 }: {
   keywords: string[];
   onChange: (keywords: string[]) => void;
@@ -55,25 +47,33 @@ export function KeywordChips({
   offerCommaSplit?: boolean;
   /** The world's placeholders, when tags may embed them. Absent ⇒ a plain literal tag list. */
   placeholders?: Placeholder[];
+  /** The placeholder whose own value list this is. A placeholder created from here is born owned by it,
+   *  and its owned rows read bare — the panel already says whose they are. */
+  ownerId?: string;
+  /** Label a tag that is *exactly* one chip with its full path name instead of what it resolves to. A lone
+   *  chip is structure in a placeholder's own value list — the part it holds — where in an alias it is
+   *  still prose. Chips inside a longer tag read as prose either way. */
+  lonePlaceholderAsPath?: boolean;
   /** Claims the single click/tap on a chip (rename moves to double-click). Pair with `renderChip` to hang
    *  a popover off it. */
   onChipClick?: (value: string) => void;
   /** Trailing decoration inside the chip, e.g. a rolled percentage. */
   chipSuffix?: (value: string) => string | undefined;
+  /** The host's own colors for a chip — a draw chance's tone, say. Given, it replaces the default accent
+   *  rule (a tag that is exactly one chip wears that placeholder's color). */
+  chipStyle?: (value: string) => CSSProperties | undefined;
   /** Wrap each rendered chip — the host's hook for anchoring per-chip UI. */
   renderChip?: (chip: ReactNode, value: string) => ReactNode;
+  /** A control drawn right after each chip, outside the chip and outside the `renderChip` wrapper (a pin
+   *  button). */
+  chipAside?: (value: string) => ReactNode;
 }) {
   const [inputValue, setInputValue] = useState('');
   const chipsEnabled = !!placeholders?.length;
   // A stable empty list, so a tag list with no placeholders doesn't rebuild its vocabulary every render.
-  const vocab = usePlaceholderChipVocabulary(placeholders ?? NO_PLACEHOLDERS);
+  const vocab = usePlaceholderChipVocabulary(placeholders ?? NO_PLACEHOLDERS, ownerId);
   // The last committed chip that reads like a comma-separated list, with the segments it would become.
   const [splitOffer, setSplitOffer] = useState<{ chip: string; parts: string[] } | null>(null);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   /** Append keywords that aren't already present; returns the resulting list. */
   const appendKeywords = (raw: string[]) => {
     const next = [...keywords];
@@ -152,22 +152,46 @@ export function KeywordChips({
     setSplitOffer(null);
   };
 
+  /** What a committed tag shows, when the stored string isn't readable as-is. Undefined ⇒ the string itself. */
+  const chipLabel = (kw: string): ReactNode => {
+    const lone = lonePlaceholderAsPath ? lonePlaceholderToken(kw) : null;
+    if (lone) return vocab.display?.(lone) ?? vocab.label(lone);
+    if (hasPlaceholders(kw)) return <PlaceholderText text={kw} placeholders={placeholders ?? []} />;
+    return kw.includes('\n') ? placeholderValueLine(kw) : undefined;
+  };
+
+  /** A tag that is nothing but a chip wears that placeholder's accent: it *is* the placeholder, so it reads
+   *  as one rather than as a literal string that happens to be spelled like one. A chip inside a longer tag
+   *  is prose, and the pill it already draws inside the neutral chip carries the accent instead. The same
+   *  accent-with-black-text recipe every other placeholder chip wears. */
+  const chipStyleOf = (kw: string): CSSProperties | undefined => {
+    if (chipStyle) return chipStyle(kw);
+    const lone = lonePlaceholderAsPath ? lonePlaceholderToken(kw) : null;
+    const color = lone ? vocab.color(lone) : undefined;
+    return color ? { backgroundColor: color, color: '#000' } : undefined;
+  };
+
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-background/80 p-2">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd} autoScroll={false}>
+        {/* No modifiers and no auto-scroll: chips wrap in two dimensions inside a box that never scrolls,
+            so the vertical-list clamps would pin a drag to a single column. */}
+        <EditorDndContext modifiers={NO_MODIFIERS} autoScroll={false} onDragEnd={handleDragEnd}>
           {/* rectSortingStrategy (2D), not horizontalListSortingStrategy: the container is flex-wrap, so chips
               span multiple rows — a single-row strategy mispositions drags once they wrap. Dedup stays
               case-sensitive (unlike TokenAutocomplete) because dictionary keyword matching supports a
               per-entry caseSensitive mode, so distinct-case keywords can be meaningful. */}
-          <SortableContext items={keywords} strategy={rectSortingStrategy}>
+          <StableSortableContext items={keywords} strategy={rectSortingStrategy}>
             {keywords.map((kw) => {
               const chip = (
                 <EditableChip
                   key={kw}
                   value={kw}
                   sortable
-                  label={hasPlaceholders(kw) ? <PlaceholderText text={kw} placeholders={placeholders ?? []} /> : undefined}
+                  // A value written in the multiline editor comes back as its first line — a chip row is a
+                  // one-line surface, and a paragraph in one would wrap the whole box.
+                  label={chipLabel(kw)}
+                  style={chipStyleOf(kw)}
                   placeholders={placeholders}
                   suffix={chipSuffix?.(kw)}
                   onActivate={onChipClick}
@@ -175,10 +199,19 @@ export function KeywordChips({
                   onCommit={(next) => { onChange(replaceChipValue(keywords, kw, next)); setSplitOffer(null); }}
                 />
               );
-              return renderChip ? <span key={kw}>{renderChip(chip, kw)}</span> : chip;
+              const aside = chipAside?.(kw);
+              if (!renderChip && !aside) return chip;
+              // The aside sits beside the host's wrapper, never inside it: the wrapper is what a host anchors
+              // a chip popover to, and a control inside it would count as part of the chip.
+              return (
+                <span key={kw} className={aside ? 'inline-flex items-center' : undefined}>
+                  {renderChip ? renderChip(chip, kw) : chip}
+                  {aside}
+                </span>
+              );
             })}
-          </SortableContext>
-        </DndContext>
+          </StableSortableContext>
+        </EditorDndContext>
         {chipsEnabled ? (
           // The growth lives out here, on the flex item itself. Passed through `className` it reaches the
           // editable instead, whose wrapper then shrink-wraps — leaving the editor a eighth of the box wide
@@ -188,6 +221,7 @@ export function KeywordChips({
             value={inputValue}
             onChange={(v) => { setInputValue(v); setSplitOffer(null); }}
             vocabulary={vocab}
+            ownerId={ownerId}
             trigger={PLACEHOLDER_TRIGGER}
             onSubmit={() => { addKeyword(inputValue); setInputValue(''); }}
             onBlur={() => { if (inputValue.trim()) { addKeyword(inputValue); setInputValue(''); } }}

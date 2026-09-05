@@ -3,7 +3,8 @@ import { openApp, gotoDev, signIn } from './app';
 
 /**
  * Publishing a world into a running contest, end to end: sign in, publish with the entry switch on, and
- * find the listing in both the Contest tab and the catalog it also belongs to.
+ * find the listing in both the Contest tab and the catalog it also belongs to. Then the other half of a
+ * contest's life — an admin announces the podium, and the place badge reaches the author's own library.
  *
  * This one needs a server. Every part of the entry — the switch's own visibility, the flag riding the
  * publish body, the tab reading the entries back — is covered against mocks in the unit suite; what no
@@ -21,14 +22,34 @@ import { openApp, gotoDev, signIn } from './app';
 /** Where the local server is. Unset — the normal case — skips the flow. */
 const API = process.env.E2E_API_URL ?? '';
 
+interface EventPlacement {
+  place: 1 | 2 | 3;
+  worldId: string | null;
+  worldName: string;
+  authorName: string;
+}
+
 interface ServerEvent {
   id: string;
   type: string;
   title: string;
+  resultsAnnouncedAt?: string | null;
+  placements?: EventPlacement[];
 }
+
+/** The admin account the announce goes through; the seeding recipe's defaults. Admin, not any staff:
+ *  announcing results speaks to every player at once, so the server refuses a moderator. */
+const ADMIN = {
+  username: process.env.E2E_ADMIN_USERNAME ?? 'e2eadmin',
+  password: process.env.E2E_ADMIN_PASSWORD ?? 'e2eadminpass',
+};
 
 /** Set when the flow cannot run here; the test reports it as a skip rather than a failure. */
 let unavailable = '';
+/** Set when the entry flow can run but the results half cannot — a contest only ever announces once. */
+let cannotAnnounce = '';
+/** The admin bearer the announce goes through, once `beforeAll` has proved there is one. */
+let adminToken: string | null = null;
 /** The contest this run enters, read from the server. */
 let contest: ServerEvent | null = null;
 
@@ -60,7 +81,32 @@ test.beforeAll(async () => {
   }
 
   contest = found;
+  // A contest refuses a second announcement, so a scratch server that has already run this once needs a
+  // fresh one. Said as a skip with the reason rather than a failure, like every other precondition here.
+  if (found.resultsAnnouncedAt) {
+    cannotAnnounce = `${found.title} has already announced its results — seed a fresh contest for that half`;
+    return;
+  }
+
+  // Checked here rather than mid-flow: without an admin account the results half cannot run at all, and
+  // finding that out after publishing would spend one of the server's few credential calls for nothing.
+  adminToken = await tokenFor(ADMIN.username, ADMIN.password);
+  if (!adminToken) {
+    cannotAnnounce = `no admin account at ${API} for ${ADMIN.username} — set E2E_ADMIN_USERNAME/PASSWORD`;
+  }
 });
+
+/** A bearer token for an account, from the API rather than the UI — fixture setup, not the subject. */
+async function tokenFor(username: string, password: string): Promise<string | null> {
+  const response = await fetch(`${API}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) return null;
+  const body = (await response.json()) as { token?: string; data?: { token?: string } };
+  return body.token ?? body.data?.token ?? null;
+}
 
 /**
  * Make the account this run signs in as.
@@ -82,6 +128,27 @@ async function registerAccount(): Promise<{ username: string; password: string }
     throw new Error(`Could not register an E2E account: ${body.error || body.message || registered.status}`);
   }
   return credentials;
+}
+
+/**
+ * Another entry in this contest, so the podium has a gold to sit above this run's silver.
+ *
+ * Null when this run's world is the only entry — a contest with one entrant can only award one place,
+ * and the flow falls back to gold rather than inventing a second entrant to test the ordinal with.
+ *
+ * @param mine - The listing id to exclude
+ */
+async function entryOtherThan(mine: string): Promise<string | null> {
+  const response = await fetch(`${API}/worlds?page=1&limit=1000`);
+  if (!response.ok) return null;
+  const catalog = ((await response.json()) as {
+    data?: { id: string; contest_event_id?: string | null; quarantined_at?: string | null }[];
+  }).data ?? [];
+
+  const other = catalog.find((row) => row.contest_event_id === contest!.id
+    && row.id !== mine
+    && !row.quarantined_at);
+  return other ? other.id : null;
 }
 
 /** Everything this flow legitimately talks to runs on this machine: the dev server, the local API, and
@@ -106,16 +173,26 @@ async function pinToLocalApi(page: Page): Promise<string[]> {
   return stray;
 }
 
-test('a world published with the entry switch on shows up in the contest tab', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop', 'one viewport is enough for a server flow');
-  test.skip(Boolean(unavailable), unavailable);
+/**
+ * Sign in as a fresh account and publish the first bundled world into the running contest.
+ *
+ * Shared by both flows below rather than repeated: each needs an entry of its own (one per creator), and
+ * everything up to "published successfully" is the same journey.
+ *
+ * @returns The account it made, the world it published, and the off-machine requests it caught
+ */
+async function publishIntoTheContest(page: Page): Promise<{
+  username: string; password: string; worldName: string; stray: string[];
+}> {
   const running = contest!;
   const { username, password } = await registerAccount();
 
   const stray = await pinToLocalApi(page);
-  // The contest's opening poster is acknowledge-only and would sit over the menu for the whole flow. It
-  // has its own component tests; here it is answered before the first paint.
-  await openApp(page, { FORMAMORPH_eventAcknowledged: [`${running.id}:start`] });
+  // The contest's posters are acknowledge-only and would sit over the menu for the whole flow. Both
+  // phases are answered before the first paint: the results half sees the closing one too.
+  await openApp(page, {
+    FORMAMORPH_eventAcknowledged: [`${running.id}:start`, `${running.id}:end`],
+  }, { liveEvents: true });
 
   await signIn(page, username, password);
   expect(stray, `the dev server on this port is not pointed at ${API} — restart it with E2E_API_URL set`)
@@ -147,6 +224,14 @@ test('a world published with the entry switch on shows up in the contest tab', a
 
   await expect(page.getByText('World published successfully!')).toBeVisible();
 
+  return { username, password, worldName, stray };
+}
+
+test('a world published with the entry switch on shows up in the contest tab', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'one viewport is enough for a server flow');
+  test.skip(Boolean(unavailable), unavailable);
+  const { username, worldName, stray } = await publishIntoTheContest(page);
+
   await gotoDev(page, 'mainMenu', { modal: 'community' });
   // Narrowed to this run's author: the grid pages, and a contest shuffles its entries, so the one listing
   // that matters could otherwise be on a page the assertion never looks at.
@@ -162,6 +247,53 @@ test('a world published with the entry switch on shows up in the contest tab', a
   await expect(page.getByRole('button', { name: 'Rules' })).toBeVisible();
   await expect(catalogEntry).toBeVisible();
   await expect(page.getByText(worldName, { exact: true }).first()).toBeVisible();
+
+  expect(stray).toEqual([]);
+});
+
+test('an announced podium reaches the player surfaces it was published from', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'one viewport is enough for a server flow');
+  test.skip(Boolean(unavailable), unavailable);
+  test.skip(Boolean(cannotAnnounce), cannotAnnounce);
+
+  const running = contest!;
+  const { username, password, worldName, stray } = await publishIntoTheContest(page);
+
+  // The listing id, read as the author: what the podium names, and what the local copy was linked to
+  // when it published. Both halves of the badge's matching rule meet on this one string.
+  const authorToken = await tokenFor(username, password);
+  expect(authorToken, 'the account this run just registered could not log in through the API').toBeTruthy();
+  const mine = await fetch(`${API}/users/me/worlds`, { headers: { Authorization: `Bearer ${authorToken}` } });
+  const listingId = ((await mine.json()) as { data?: { id: string }[] }).data?.[0]?.id;
+  expect(listingId, 'the published listing is not on the author’s own list').toBeTruthy();
+
+  // Second place rather than first, deliberately: gold is the one place a badge that ignored the podium
+  // and simply said "winner" would still get right.
+  const otherEntry = await entryOtherThan(listingId!);
+  const podium = otherEntry
+    ? [{ place: 1, worldId: otherEntry }, { place: 2, worldId: listingId }]
+    : [{ place: 1, worldId: listingId }];
+  const expectedPlace = otherEntry ? '2nd Place' : '1st Place';
+
+  const announced = await fetch(`${API}/events/${running.id}/results`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ placements: podium }),
+  });
+  expect(announced.ok, `the announce was refused: ${await announced.text()}`).toBe(true);
+
+  // Nothing about the placement is stored locally, so the library learns it by reading the archive again.
+  await page.reload();
+  await page.waitForFunction(() => '__fmDev' in window);
+  await page.getByText('Loaded default worlds').waitFor({ state: 'visible' });
+
+  const badge = page.getByText(`${expectedPlace} — ${running.title}`);
+  await expect(badge.first()).toBeVisible();
+
+  // And again one click in: the details modal is where the honor used to be lost.
+  await page.getByText(worldName, { exact: true }).first().click();
+  const details = page.getByRole('dialog').filter({ hasText: worldName });
+  await expect(details.getByText(`${expectedPlace} — ${running.title}`)).toBeVisible();
 
   expect(stray).toEqual([]);
 });

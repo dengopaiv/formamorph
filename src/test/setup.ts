@@ -59,6 +59,22 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView ==
   Element.prototype.scrollIntoView = () => {};
 }
 
+// jsdom has no PointerEvent constructor, so a dispatched pointer event falls back to a bare Event and
+// drops the coordinates with it — a drag then reads `clientX: undefined` and computes NaN. A mouse event
+// carries exactly the fields a pointer one needs on top of it.
+if (typeof window !== 'undefined' && typeof window.PointerEvent === 'undefined') {
+  class PointerEventStub extends MouseEvent {
+    pointerId: number;
+
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 0;
+    }
+  }
+
+  window.PointerEvent = PointerEventStub as unknown as typeof window.PointerEvent;
+}
+
 // jsdom implements no Pointer Capture either, and Radix's Select asks the pointer target whether it holds
 // capture before it will open — without these a click on any Select throws instead of opening its list.
 if (typeof Element !== 'undefined' && typeof Element.prototype.hasPointerCapture === 'undefined') {
@@ -75,5 +91,15 @@ if (typeof URL.createObjectURL === 'undefined') {
   URL.revokeObjectURL = () => {};
 }
 
-// Unmount anything React Testing Library rendered between tests.
-afterEach(() => cleanup());
+// Unmount anything React Testing Library rendered between tests, and forget the module-level session
+// state that would otherwise carry one test's server answers into the next — the shared events list and
+// the prose read back behind it both live for the session by design.
+afterEach(async () => {
+  cleanup();
+  // Imported here rather than at the top of this file, for two reasons. A static import would pull the
+  // real `EventService` into every suite's module graph before its own `vi.mock` calls are registered,
+  // and the cache would then read the live community server instead of the test's stub; and it reaches
+  // `AuthService`, which needs `localStorage` — absent in the suites that run outside jsdom.
+  if (typeof window === 'undefined') return;
+  (await import('@/lib/eventsCache')).resetEventsCache();
+});

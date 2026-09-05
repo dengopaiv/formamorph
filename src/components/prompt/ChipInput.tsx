@@ -29,8 +29,12 @@ import { ChipDragPlugin } from './ChipDrag';
 
 // Matches the shadcn Input shape (see components/ui/input.tsx); min-height rather than a fixed one so a name
 // long enough to wrap grows the box instead of hiding its own end.
+// `[&>p]:min-w-full` is load-bearing: the box is a flex container, so Lexical's paragraph is a flex item that
+// shrinks to its content — and an empty one shrinks to nothing, leaving the caret no line box to sit in. An
+// empty field then looks unfocusable. Full width also keeps two paragraphs from sharing a wrapped row.
 const INPUT_CLASS =
   'flex min-h-10 w-full flex-wrap items-center gap-y-0.5 rounded-md border border-input bg-background ' +
+  '[&>p]:min-w-full ' +
   'px-3 py-2 text-label outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ' +
   'disabled:cursor-not-allowed disabled:opacity-50';
 
@@ -224,10 +228,13 @@ function Surface({ placeholder, ariaLabel, className, multiline }: {
   );
 }
 
-const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, className, readOnly = false, trigger = '{', onSubmit, onBlur, multiline = false, children, autoFocus = false, onCancel }: {
+const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, className, readOnly = false, trigger = '{', onSubmit, onBlur, multiline = false, children, autoFocus = false, onCancel, ownerId }: {
   value: string;
   onChange: (v: string) => void;
   vocabulary: ChipVocabulary;
+  /** The placeholder whose own values this field adds to, told to the shared palette so it can leave out
+   *  anything that would loop back here. */
+  ownerId?: string;
   placeholder?: string;
   /** Names the editor for a screen reader — Lexical renders a `div`, so `<label htmlFor>` cannot reach it. */
   ariaLabel?: string;
@@ -273,7 +280,7 @@ const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, classN
           {autoFocus && <AutoFocusPlugin />}
           {onCancel && <CancelPlugin onCancel={onCancel} />}
           <EditablePlugin readOnly={readOnly} />
-          <ChipInsertTargetPlugin vocab={vocabulary} />
+          <ChipInsertTargetPlugin vocab={vocabulary} ownerId={ownerId} />
           <ChipDragPlugin dragKey={dragKey} vocab={readOnly ? undefined : vocabulary} />
           {trigger && !readOnly && <ChipTypeaheadPlugin trigger={trigger} vocab={vocabulary} />}
           {children}

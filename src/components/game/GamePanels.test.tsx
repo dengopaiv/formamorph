@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { screen, fireEvent, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { getGameplayText } from '@/lib/gameplayTextStore';
 import { CONTINUE_CHOICE } from '@/lib/choices';
 import { encodePlaceholderToken } from '@/lib/placeholders';
@@ -7,6 +8,7 @@ import { readTurn, renderLeftPanel, renderMiddlePanel, renderRightPanel, statFix
 import { resetTtsPlayback, setTtsPlayback } from '@/test/stubs/ttsPlayback';
 import { lastVrmViewerProps, resetVrmViewerStub } from '@/test/stubs/vrmViewer';
 
+import { phValues } from '@/test/placeholderValues';
 // three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
 vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
@@ -144,7 +146,7 @@ describe('MiddlePanel — the audio row', () => {
     setTtsPlayback({ duration: 12 });
     const view = renderMiddlePanel({ ttsLoaded: true }, { turns: TURNS, stats: STATS });
 
-    fireEvent.click(screen.getByTitle('Regenerate audio for current text'));
+    fireEvent.click(screen.getByRole('button', { name: 'Regenerate audio for current text' }));
     expect(view.props.onRegenerateTTS).toHaveBeenCalled();
     // With audio in hand the narration menu offers neither of the two entries that produce it.
     fireEvent.click(screen.getByRole('button', { name: 'More narration options' }));
@@ -247,7 +249,7 @@ describe('MiddlePanel — editing a turn\'s narration', () => {
 
   /** Rewrite the viewed turn through the Edit Text modal and save. */
   const rewriteAs = async (text: string) => {
-    fireEvent.click(screen.getByTitle('Edit text'));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit text' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: text } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
@@ -333,6 +335,220 @@ describe('RightPanel', () => {
     });
     expect(screen.getByText('Vigor')).toBeInTheDocument();
     expect(screen.queryByText('Luck')).toBeNull();
+  });
+});
+
+/** Vigor's authored bands: ≤30 Winded, ≤70 Steady. Above 70 the stat is in no band at all. */
+const BANDS = [
+  { id: 'b-low', threshold: 30, description: 'Winded' },
+  { id: 'b-mid', threshold: 70, description: 'Steady' },
+];
+/** Vigor at `value`, banded. */
+const banded = (value: number) => statFixture('Vigor', value, { descriptors: BANDS });
+/** The row a stat's name sits in — the descriptor line and the readout are siblings of that name. */
+const statRow = (name: string) => {
+  const row = screen.getByText(name).closest('div.mb-2');
+  if (!row) throw new Error(`no stat row for ${name}`);
+  return row as HTMLElement;
+};
+/** The descriptor line under a stat's bar, or null when the row doesn't carry one. */
+const descriptorLine = (name: string) => statRow(name).querySelector('p');
+
+describe('RightPanel — the stat descriptor line', () => {
+  it('names the band the current value falls in', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(20)] });
+    expect(descriptorLine('Vigor')).toHaveTextContent('Winded');
+  });
+
+  it('names the band a higher value falls in instead', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(50)] });
+    expect(descriptorLine('Vigor')).toHaveTextContent('Steady');
+  });
+
+  // An authoring gap is the author's business, not something to present to the player as "no status".
+  it('writes nothing when the value sits above every band', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(90)] });
+    expect(screen.queryByText('Steady')).toBeNull();
+    expect(descriptorLine('Vigor')).toHaveTextContent('');
+  });
+
+  it('keeps the line in a bandless stat of a world that has descriptors, so rows stay level', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(20), statFixture('Coin', 25)] });
+    expect(descriptorLine('Coin')).not.toBeNull();
+  });
+
+  it('costs a world with no descriptors at all nothing', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [statFixture('Vigor', 20), statFixture('Coin', 25)] });
+    expect(descriptorLine('Vigor')).toBeNull();
+    expect(descriptorLine('Coin')).toBeNull();
+  });
+
+  // A hidden stat has no row, so it can't be what puts the line on everyone else's.
+  it('does not let a hidden stat reserve the line for the ones the player can see', () => {
+    renderRightPanel({}, {
+      turns: TURNS,
+      stats: [statFixture('Vigor', 20), statFixture('Luck', 30, { hidden: true, descriptors: BANDS })],
+    });
+    expect(descriptorLine('Vigor')).toBeNull();
+  });
+
+  it('offers the full text on hover, so a paragraph-long band can be read without being shown', async () => {
+    const long = 'Comfortable enough to stop counting every coin twice over';
+    renderRightPanel({}, {
+      turns: TURNS,
+      stats: [statFixture('Vigor', 20, { descriptors: [{ id: 'b-long', threshold: 30, description: long }] })],
+    });
+
+    await userEvent.hover(descriptorLine('Vigor')!);
+
+    expect(await screen.findByText(long, { selector: 'div' })).toBeVisible();
+  });
+});
+
+describe('RightPanel — the band-change flash', () => {
+  const PAGED_TURNS = [
+    { action: 'rest', narration: 'You rest.', turnId: 't1', stats: [banded(50)] },
+    { action: 'run', narration: 'You run.', turnId: 't2' },
+  ];
+
+  /** The span the flash class lands on, inside a stat's descriptor line. */
+  const flashSpan = (name: string) => descriptorLine(name)?.querySelector('span');
+
+  it('does not flash a band that was simply there when the panel opened', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(20)] });
+    expect(flashSpan('Vigor')).not.toHaveClass('stat-band-flash');
+  });
+
+  it('flashes when paging back lands on a turn in a different band', () => {
+    const view = renderRightPanel({}, { turns: PAGED_TURNS, stats: [banded(20)] });
+    expect(flashSpan('Vigor')).toHaveTextContent('Winded');
+
+    act(() => {
+      const gameplay = view.gameplay();
+      gameplay.setUserPage(1);
+      gameplay.setDisplayedMessages(gameplay.fullMessageHistory.slice(0, 2));
+    });
+
+    expect(flashSpan('Vigor')).toHaveTextContent('Steady');
+    expect(flashSpan('Vigor')).toHaveClass('stat-band-flash');
+  });
+
+  it('shows the new band but skips the flash when the player asked for less motion', () => {
+    const real = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('prefers-reduced-motion'), media: query, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const view = renderRightPanel({}, { turns: PAGED_TURNS, stats: [banded(20)] });
+      act(() => {
+        const gameplay = view.gameplay();
+        gameplay.setUserPage(1);
+        gameplay.setDisplayedMessages(gameplay.fullMessageHistory.slice(0, 2));
+      });
+
+      expect(flashSpan('Vigor')).toHaveTextContent('Steady');
+      expect(flashSpan('Vigor')).not.toHaveClass('stat-band-flash');
+    } finally {
+      window.matchMedia = real;
+    }
+  });
+
+  it('leaves a band the player typed themselves alone', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(20)] });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Stats' }));
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Vigor' }), { target: { value: '50' } });
+
+    expect(flashSpan('Vigor')).toHaveTextContent('Steady');
+    expect(flashSpan('Vigor')).not.toHaveClass('stat-band-flash');
+  });
+});
+
+describe('RightPanel — typing a stat value', () => {
+  /** Edit mode, on the live turn, over one banded Vigor. */
+  const renderEditing = (stat = banded(20)) => {
+    const view = renderRightPanel({}, { turns: TURNS, stats: [stat] });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Stats' }));
+    return view;
+  };
+  const field = () => screen.getByRole('spinbutton', { name: 'Vigor' });
+  const value = (view: PanelHarness<unknown>) => view.gameplay().playerStats[0].value;
+
+  it('leaves the readout as plain text until edit mode is on', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [banded(20)] });
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(statRow('Vigor')).toHaveTextContent('20 / 100');
+  });
+
+  it('replaces the readout numeral with a field, keeping the range suffix beside it', () => {
+    renderEditing();
+    expect(field()).toHaveValue(20);
+    expect(screen.getByText('/ 100')).toBeInTheDocument();
+  });
+
+  it('commits every keystroke, so the bar and the descriptor track the typing', () => {
+    const view = renderEditing();
+    fireEvent.change(field(), { target: { value: '5' } });
+    expect(value(view)).toBe(5);
+
+    fireEvent.change(field(), { target: { value: '55' } });
+    expect(value(view)).toBe(55);
+    expect(descriptorLine('Vigor')).toHaveTextContent('Steady');
+  });
+
+  it('clamps a value typed over the max as it is typed', () => {
+    const view = renderEditing();
+    fireEvent.change(field(), { target: { value: '9999' } });
+    expect(value(view)).toBe(100);
+    expect(field()).toHaveValue(100);
+  });
+
+  it('clamps a value typed under the min of a stat whose floor is above zero', () => {
+    const view = renderEditing(statFixture('Vigor', 33, { min: 10, max: 50, descriptors: BANDS }));
+    fireEvent.change(field(), { target: { value: '3' } });
+    expect(value(view)).toBe(10);
+    expect(field()).toHaveValue(10);
+  });
+
+  it('holds the stat while the field is empty, and snaps the text back on blur', () => {
+    const view = renderEditing();
+    fireEvent.change(field(), { target: { value: '' } });
+    expect(value(view)).toBe(20);
+    expect(field()).toHaveValue(null);
+
+    fireEvent.blur(field());
+    expect(field()).toHaveValue(20);
+  });
+
+  it('follows the slider, which is still there for coarse adjustment', () => {
+    const view = renderEditing();
+    expect(screen.getByRole('slider')).toBeInTheDocument();
+
+    act(() => { view.gameplay().setPlayerStats([banded(80)]); });
+    expect(field()).toHaveValue(80);
+  });
+
+  it('offers no field or slider on a past turn', () => {
+    const view = renderRightPanel({}, {
+      turns: [
+        { action: 'rest', narration: 'You rest.', turnId: 't1' },
+        { action: 'run', narration: 'You run.', turnId: 't2' },
+      ],
+      stats: [banded(20)],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Stats' }));
+
+    act(() => {
+      const gameplay = view.gameplay();
+      gameplay.setUserPage(1);
+      gameplay.setDisplayedMessages(gameplay.fullMessageHistory.slice(0, 2));
+    });
+
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.queryByRole('slider')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Edit Stats' })).toBeDisabled();
   });
 });
 
@@ -575,7 +791,7 @@ describe('MiddlePanel — the continue pseudo-choice', () => {
 describe('placeholder names reach the panels resolved', () => {
   // A one-value placeholder is a Variable: it resolves from its own value with no roll, so the assertion is
   // deterministic without seeding a save's rolls. The chip is the real stored token, not a stand-in.
-  const TOWN = { id: 'ph-town', name: 'Town', values: ['Sedge'] };
+  const TOWN = { id: 'ph-town', name: 'Town', values: phValues(['Sedge']) };
   const CHIP = encodePlaceholderToken({ id: 'ph-town', mode: 'world', placementId: 'p1' });
 
   it('renders a stat whose name holds a chip by its value, never the raw token', () => {
@@ -587,6 +803,19 @@ describe('placeholder names reach the panels resolved', () => {
 
     // The panel reads the world through its own hook, so this is what catches it reaching past resolution.
     expect(screen.getByText('Sedge Standing')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('{{ph:');
+  });
+
+  it('renders a descriptor that holds a chip by its value under the stat bar', () => {
+    const { container } = renderRightPanel({}, {
+      turns: TURNS,
+      stats: [statFixture('Standing', 20, {
+        descriptors: [{ id: 'b-low', threshold: 30, description: `Shunned in ${CHIP}` }],
+      })],
+      world: { placeholders: [TOWN] },
+    });
+
+    expect(descriptorLine('Standing')).toHaveTextContent('Shunned in Sedge');
     expect(container.textContent).not.toContain('{{ph:');
   });
 
@@ -611,7 +840,7 @@ describe('placeholder names reach the panels resolved', () => {
   // A pin has to reach the panels, not just the pre-game pickers: stat deltas are matched by resolved name,
   // so a stat bar showing the roll while the AI is told the pinned name would silently stop matching.
   it('renders a stat name under the pin an active trait imposes, not the rolled value', () => {
-    const WILD = { id: 'ph-town', name: 'Town', values: ['Sedge', 'Marrow'] };
+    const WILD = { id: 'ph-town', name: 'Town', values: phValues(['Sedge', 'Marrow']) };
     const PINNER = {
       id: 't-sworn', name: 'Sworn', statChanges: [],
       placeholderPins: [{ placeholderId: 'ph-town', value: 'Marrow' }],
@@ -634,7 +863,7 @@ describe('placeholder names reach the panels resolved', () => {
   // card (here the stat bar) follows the winning active pin. This is the confusion it exists to remove —
   // "Native of X" flipping to the other trait's town the moment that one was ticked.
   it("keeps each pinning trait's own text on its own pin while the stat bar follows the winner", () => {
-    const WILD = { id: 'ph-town', name: 'Town', values: ['Sedge', 'Marrow'] };
+    const WILD = { id: 'ph-town', name: 'Town', values: phValues(['Sedge', 'Marrow']) };
     const NATIVE = {
       id: 't-native', name: `Native of ${CHIP}`, statChanges: [],
       playerDescription: `Home is ${encodePlaceholderToken({ id: 'ph-town', mode: 'world', placementId: 'p2' })}.`,
@@ -677,7 +906,7 @@ describe('placeholder names reach the panels resolved', () => {
   // Gameplay stores the whole location object, so the copy it holds froze how the name read on arrival.
   // Reading it back out of the resolved world is what lets a pin switched on later move it.
   it('re-reads the current location, so a pin switched on after arrival moves its name', () => {
-    const WILD = { id: 'ph-town', name: 'Town', values: ['Sedge', 'Marrow'] };
+    const WILD = { id: 'ph-town', name: 'Town', values: phValues(['Sedge', 'Marrow']) };
     const tok = (p: string) => encodePlaceholderToken({ id: 'ph-town', mode: 'world', placementId: p });
     const SWORN = {
       id: 't-sworn', name: 'Sworn', statChanges: [], playerToggle: true,
@@ -703,6 +932,55 @@ describe('placeholder names reach the panels resolved', () => {
     // Switch the pin off and it follows back to the roll, rather than to the arrival snapshot.
     act(() => { view.gameplay().setDisabledTraitIds(['t-sworn']); });
     expect(screen.getByText(/Current Location: Sedge Square/)).toBeInTheDocument();
+  });
+});
+
+describe('pins from the location and the stat bands reach the panels', () => {
+  const WILD = { id: 'ph-town', name: 'Town', values: phValues(['Sedge', 'Marrow']) };
+  const CHIP = encodePlaceholderToken({ id: 'ph-town', mode: 'world', placementId: 'p1' });
+  const STANDING = statFixture(`${CHIP} Standing`, 50, { id: 'standing' });
+  const ROLLS = { world: { 'ph-town': 'Sedge' }, unique: {} };
+
+  it('holds a location’s pin while the player is there and releases it on the next location', () => {
+    const FEN = { id: 'l-fen', name: 'Fen', placeholderPins: [{ placeholderId: 'ph-town', value: 'Marrow' }] };
+    const ROAD = { id: 'l-road', name: 'Road' };
+    const view = renderRightPanel({}, {
+      turns: TURNS,
+      stats: [STANDING],
+      world: { placeholders: [WILD], locations: [FEN, ROAD] },
+      seed: (gameplay) => {
+        gameplay.setPlaceholderRolls(ROLLS);
+        gameplay.setCurrentLocation(FEN);
+      },
+    });
+
+    expect(screen.getByText('Marrow Standing')).toBeInTheDocument();
+
+    act(() => { view.gameplay().setCurrentLocation(ROAD); });
+    expect(screen.getByText('Sedge Standing')).toBeInTheDocument();
+    // The pin masked the roll; it never wrote it.
+    expect(view.gameplay().placeholderRolls.world?.['ph-town']).toBe('Sedge');
+  });
+
+  it('flips a descriptor’s pin on and off as the stat crosses the band’s threshold', () => {
+    const vigor = (value: number) => statFixture('Vigor', value, {
+      descriptors: [{ id: 'b-low', threshold: 30, description: 'Winded', placeholderPins: [{ placeholderId: 'ph-town', value: 'Marrow' }] }],
+    });
+    const view = renderRightPanel({}, {
+      turns: TURNS,
+      stats: [STANDING, vigor(20)],
+      world: { placeholders: [WILD] },
+      seed: (gameplay) => { gameplay.setPlaceholderRolls(ROLLS); },
+    });
+
+    expect(screen.getByText('Marrow Standing')).toBeInTheDocument();
+
+    act(() => { view.gameplay().setPlayerStats([STANDING, vigor(80)]); });
+    expect(screen.getByText('Sedge Standing')).toBeInTheDocument();
+    expect(view.gameplay().placeholderRolls.world?.['ph-town']).toBe('Sedge');
+
+    act(() => { view.gameplay().setPlayerStats([STANDING, vigor(10)]); });
+    expect(screen.getByText('Marrow Standing')).toBeInTheDocument();
   });
 });
 
@@ -751,5 +1029,26 @@ describe('the action input grows in flow, not over the panel', () => {
       fireEvent.blur(box);
     });
     expect(wrap.style.height).toBe('40px');
+  });
+});
+
+describe('a placeholder an entity carries resolves in play', () => {
+  it('resolves a chip in a location at a placeholder that lives on an entity', () => {
+    // A one-value placeholder is a Variable, so no roll is needed for the assertion to be deterministic.
+    const EYES = { id: 'ph-eyes', name: 'Eyes', values: phValues(['amber']) };
+    const chip = encodePlaceholderToken({ id: 'ph-eyes', mode: 'world', placementId: 'p9' });
+    const HERE = { id: 'l1', name: `The ${chip} Room`, isStarting: true };
+    const { container } = renderRightPanel({}, {
+      turns: TURNS,
+      stats: STATS,
+      world: { entities: [{ id: 'molly', name: 'Molly', placeholders: [EYES] }], locations: [HERE] },
+      seed: (gameplay) => {
+        gameplay.setCurrentLocation(HERE);
+        gameplay.setActiveTab('location');
+      },
+    });
+
+    expect(screen.getByText(/Current Location: The amber Room/)).toBeInTheDocument();
+    expect(container.textContent).not.toContain('{{ph:');
   });
 });

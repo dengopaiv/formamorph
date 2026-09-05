@@ -8,10 +8,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Plus, X } from "lucide-react";
 import type { StatUpdate, ChatMessage } from '@/types';
-import { describePlaceholders } from '@/lib/placeholders';
+import { labelPlaceholders } from '@/lib/placementLetters';
+import { Tip } from "@/components/ui/tooltip";
 
 const StatUpdatesManager = ({ statUpdate }: { statUpdate: StatUpdate }) => {
-  const { stats, updateStatUpdate, placeholders } = useGameData();
+  const { stats, updateStatUpdate, placeholders, placementLetters, placeholderOwners } = useGameData();
   const { draft: editingStatUpdate, setField: handleChange } = useEditingDraft(statUpdate, updateStatUpdate);
 
   const handleStatToggle = (statName: string) => {
@@ -70,7 +71,7 @@ const StatUpdatesManager = ({ statUpdate }: { statUpdate: StatUpdate }) => {
                 onCheckedChange={() => handleStatToggle(stat.name)}
               />
               {/* Label only — the checkbox still keys off the raw `stat.name`, which is what gets stored. */}
-              <label htmlFor={`stat-${stat.id}`} className="cursor-pointer">{describePlaceholders(stat.name, placeholders)}</label>
+              <label htmlFor={`stat-${stat.id}`} className="cursor-pointer">{labelPlaceholders(stat.name, placeholders, { letters: placementLetters, owners: placeholderOwners })}</label>
             </div>
           ))}
         </ScrollArea>
@@ -78,9 +79,11 @@ const StatUpdatesManager = ({ statUpdate }: { statUpdate: StatUpdate }) => {
 
       <div className="space-y-2">
         <Label>Message History</Label>
-        <Button onClick={handleAddMessage} size="icon" aria-label="Add Message" title="Add Message">
-          <Plus className="h-4 w-4" />
-        </Button>
+        <Tip tip="Add Message">
+          <Button onClick={handleAddMessage} size="icon">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </Tip>
         <div className="border rounded-md p-2 space-y-2">
           {(editingStatUpdate.messageHistory || []).map((message, index) => (
             <div key={index} className="p-2 border rounded">

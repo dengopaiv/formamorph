@@ -27,7 +27,9 @@ import { CONTEST_ALREADY_ENTERED, CONTEST_NOT_ACTIVE } from "@/services/WorldSto
 import { useContestWithdrawal } from "@/lib/useContestWithdrawal";
 import { useDevEventSample } from "@/lib/useDevEventSample";
 import { useDevRoute } from "@/lib/devRouter";
-import { AlertTriangle } from "lucide-react";
+import { ChangelogEntryDialog } from "@/components/community/ChangelogEntryDialog";
+import { type ChangelogDraft } from "@/lib/listingChangelog";
+import { AlertTriangle, ScrollText, Trophy } from "lucide-react";
 import type { ServerEvent } from "@/types";
 
 interface PublishModalProps {
@@ -38,6 +40,14 @@ interface PublishModalProps {
   payload: PublishPayload | null;
   /** The events running right now, from the events poll. Only a contest among them is read here. */
   events?: ServerEvent[];
+  /**
+   * The local world this payload was built from, so a successful publish can link it to its listing.
+   * Worlds only: they are the kind whose local copy the community browser tracks, and the kind a contest
+   * can be won by.
+   */
+  localId?: string;
+  /** Called once a published world's link has been written, so the caller can re-read its library. */
+  onLinked?: () => void;
 }
 
 /**
@@ -47,7 +57,9 @@ interface PublishModalProps {
  *
  * The overwrite list is fetched per kind: your characters are never offered as targets for a world.
  */
-export function PublishModal({ open, onOpenChange, isAuthenticated, payload, events = [] }: PublishModalProps) {
+export function PublishModal({
+  open, onOpenChange, isAuthenticated, payload, events = [], localId, onLinked,
+}: PublishModalProps) {
   const [userWorlds, setUserWorlds] = useState<WorldRecord[]>([]);
   const [selectedWorldToOverride, setSelectedWorldToOverride] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -55,6 +67,16 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
   // Whether this upload is also a contest entry, and what the server said if it refused to take it.
   const [enterContest, setEnterContest] = useState(false);
   const [contestError, setContestError] = useState('');
+
+  // The optional note about what changed. Held here until the update-publish succeeds, so a refused
+  // upload costs nothing that was written. `changelogSupported` stays false against a server that has
+  // never heard of changelogs, which is what keeps the section off screen there.
+  const [changelogDraft, setChangelogDraft] = useState<ChangelogDraft | null>(null);
+  const [changelogSupported, setChangelogSupported] = useState(false);
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const changelogReqRef = useRef(0);
+  /** The answer, once one listing has given it. Null until then, and again on the next opening. */
+  const changelogSupportRef = useRef<boolean | null>(null);
 
   const policies = usePublishPolicies(open, isAuthenticated);
   // Which popup is in the way, and what the publish was going to do once it clears.
@@ -80,12 +102,18 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
 
   // Entering happens at publish time, so the opt-in belongs to a new listing only: a contest flag on an
   // overwrite would mean moving a listing that already exists into the contest, which nothing supports.
+  // The card itself reaches further than the opt-in does — see `showContestCard`.
   const contest = activeContestOf(devFixture ? devEvents : events);
-  const showContestCard = Boolean(contest) && kind === 'world' && selectedWorldToOverride === 'new';
   // The author's own listings are already on hand for the overwrite list, and they carry the column — so
   // an entry that would be refused is known before the upload rather than after it.
   const existingEntry = contest ? entriesOf(userWorlds, contest.id)[0] ?? null : null;
   const enteredName = existingEntry ? String(existingEntry.name ?? 'a world') : null;
+  const enteredId = existingEntry ? String(existingEntry._id || existingEntry.id) : null;
+  // Updating the entered listing is not a decision about entering — the entry rides along whatever
+  // happens here — so the card stays as context rather than vanishing the moment that row is picked.
+  const updatingEntry = Boolean(enteredId) && selectedWorldToOverride === enteredId;
+  const showContestCard = Boolean(contest) && kind === 'world'
+    && (selectedWorldToOverride === 'new' || updatingEntry);
   // What's open right now, readable from inside an async callback that captured an older `kind`.
   const kindRef = useRef(kind);
   kindRef.current = kind;
@@ -124,7 +152,37 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
     const entering = !targetId && enterContest && !enteredName && contest ? contest.id : null;
 
     try {
-      await WorldStorageService.publishItem(payload, targetId, entering);
+      const listing = await WorldStorageService.publishItem(payload, targetId, entering);
+
+      // The author's copy becomes a copy of the listing it just became, the way a downloaded one is —
+      // which is what carries a later contest win back to the library they actually work in. The listing's
+      // post-publish stamp rides along so their own card doesn't then offer them their own upload as an
+      // update. Failing to write it costs a link, never the publish, so its own failure is swallowed here
+      // rather than reaching the catch below and reading as a refused upload.
+      const listingId = listing?._id || listing?.id;
+      if (kind === 'world' && localId && listingId) {
+        const linked = await WorldStorageService.linkWorldToListing(localId, String(listingId), listing?.updated_at)
+          .then(() => true)
+          .catch((error) => { console.error('Failed to link the published world to its listing:', error); return false; });
+        // The library list the caller is holding predates the link, and the community browser reads its
+        // download states from it — so without this the author's own listing offers them a first download.
+        if (linked) onLinked?.();
+      }
+
+      // Sent only now that the update is really up: an entry describing changes nobody received would be
+      // a lie in the listing's own history, so a refused publish must leave the draft where it is. Its own
+      // failure is answered on its own rather than reaching the catch below — the update did go out, and
+      // reading that as a refused upload would be the same lie the other way round.
+      if (targetId && changelogDraft) {
+        try {
+          await WorldStorageService.createChangelogEntry(targetId, changelogDraft);
+        } catch (error) {
+          toast.error(
+            `${KIND_LABELS[kind].one} updated, but the changelog entry did not save. Add it from the listing's Changelog.`,
+          );
+          console.error('Failed to attach the changelog entry:', error);
+        }
+      }
 
       // No refetch: the modal closes here and reloads its listings on the next open, so re-reading them
       // only to discard them is a round-trip the user waits on.
@@ -210,6 +268,36 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
     setShowGate(false);
   };
 
+  /** The listing this publish would replace, or null when it is publishing something new. */
+  const overwriteTarget = selectedWorldToOverride && selectedWorldToOverride !== 'new'
+    ? selectedWorldToOverride
+    : null;
+
+  // Whether this server keeps changelogs at all. Asked only once picking an existing listing has made it
+  // relevant — a first publish has no history to add to, which is why the ask is update-only — and asked
+  // once per opening rather than once per row: the answer is about the deploy, not about the listing,
+  // while the question rides the single-listing endpoint, which serves the thumbnail as a base64
+  // data-URI. Clicking down five listings would otherwise fetch five thumbnails to learn one boolean.
+  useEffect(() => {
+    // A note written about one listing must not ride along on a publish to another.
+    setChangelogDraft(null);
+    if (!overwriteTarget) {
+      setChangelogSupported(false);
+      return;
+    }
+    if (changelogSupportRef.current !== null) {
+      setChangelogSupported(changelogSupportRef.current);
+      return;
+    }
+
+    const reqId = ++changelogReqRef.current;
+    void WorldStorageService.fetchChangelog(overwriteTarget).then((entries) => {
+      if (reqId !== changelogReqRef.current) return;
+      changelogSupportRef.current = entries !== null;
+      setChangelogSupported(entries !== null);
+    });
+  }, [overwriteTarget]);
+
   // Load the user's listings when the publish modal is opened, or when the kind changes under it.
   useEffect(() => {
     if (!open) return;
@@ -222,6 +310,9 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
     setPublishError('');
     setEnterContest(false);
     setContestError('');
+    // Asked again on the next opening rather than held for the app's lifetime: this dialog is mounted for
+    // the whole session, and one refused request must not hide the feature until a restart.
+    changelogSupportRef.current = null;
     fetchUserWorlds();
     // Fetch only when the modal opens, auth changes, or the kind changes — not on fetchUserWorlds identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -304,6 +395,14 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
                             <Label htmlFor={radioId}>
                               {world.name} ({shortId}, {downloads} downloads)
                             </Label>
+                            {/* Which listing carries the entry, said on the row where it is picked —
+                                otherwise an author updating a world has no way to know it is the one. */}
+                            {contest && worldId === enteredId && (
+                              <span className="inline-flex w-fit items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-meta text-warning">
+                                <Trophy className="h-3 w-3" aria-hidden />
+                                In {contest.title}
+                              </span>
+                            )}
                           </div>
                         </div>
                       );
@@ -313,23 +412,58 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
               </RadioGroup>
             </div>
 
-            {/* Hidden rather than disabled when there is no contest, this isn't a world, or an existing
-                listing is being replaced — a control nobody can use explains nothing. */}
-            {showContestCard && contest && (
-              <ContestEntryCard
-                contest={contest}
-                checked={enterContest}
-                onCheckedChange={setEnterContest}
-                enteredName={enteredName}
-                onWithdraw={existingEntry
-                  ? () => withdrawal.ask({ id: String(existingEntry._id || existingEntry.id), name: enteredName ?? 'That world' })
-                  : undefined}
-                withdrawing={withdrawal.busy}
-                error={contestError || null}
-              />
+            {/* Only for an update, and only where the server keeps changelogs. Optional throughout: a
+                quick fix should not have to be written up before it can go out. */}
+            {overwriteTarget && changelogSupported && (
+              <div className="mt-4 rounded-md border p-3 space-y-2">
+                <div className="flex items-start gap-2">
+                  <ScrollText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <div className="min-w-0">
+                    <p className="text-label font-medium">Changelog Entry</p>
+                    <p className="text-meta text-muted-foreground">
+                      Optional. Tell anyone holding a copy what this update changes.
+                    </p>
+                  </div>
+                </div>
+
+                {changelogDraft ? (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="min-w-0 truncate text-label">{changelogDraft.title}</span>
+                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setChangelogOpen(true)}>
+                      Edit
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setChangelogDraft(null)}>
+                      Remove
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => setChangelogOpen(true)}>
+                    Describe What Changed
+                  </Button>
+                )}
+              </div>
             )}
+
           </div>
         </ScrollArea>
+
+        {/* Hidden rather than disabled when there is no contest, this isn't a world, or some other
+            listing is being replaced — a control nobody can use explains nothing. Pinned below the
+            scrolling list so a long overwrite list can never push the opt-in out of sight. */}
+        {showContestCard && contest && (
+          <ContestEntryCard
+            contest={contest}
+            checked={enterContest}
+            onCheckedChange={setEnterContest}
+            enteredName={enteredName}
+            readOnly={updatingEntry}
+            onWithdraw={existingEntry && enteredId
+              ? () => withdrawal.ask({ id: enteredId, name: enteredName ?? 'That world' })
+              : undefined}
+            withdrawing={withdrawal.busy}
+            error={contestError || null}
+          />
+        )}
 
         {/* Warn, don't block: the author may know, or may be publishing a draft. But this is the one moment
             the breakage lands on other people, so it says so plainly rather than only badging the editor. */}
@@ -386,6 +520,17 @@ export function PublishModal({ open, onOpenChange, isAuthenticated, payload, eve
           onCancel={() => setTagNoticeOpen(false)}
         />
       )}
+
+      {/* The same popup the changelog tab uses, so writing an entry is one familiar act wherever it
+          starts. Here it only hands the draft back — nothing is sent until the update is up. */}
+      <ChangelogEntryDialog
+        open={changelogOpen}
+        onOpenChange={setChangelogOpen}
+        entry={changelogDraft}
+        submitLabel="Attach to Update"
+        description="Optional. This is added to the listing's changelog once the update is published."
+        onSubmit={setChangelogDraft}
+      />
 
       {withdrawal.dialog}
     </>

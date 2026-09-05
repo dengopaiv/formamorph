@@ -18,6 +18,9 @@ export type SettingCopy = {
   description: string;
   /** Markdown shown behind the `ⓘ`. Carries cost, tradeoff, or mechanism — never a restatement. */
   info?: string;
+  /** Narration-message fields only: when this message is sent, in terms of app features and the turn —
+   *  the timing is runtime-conditional, so it can't be inferred from the field being visible. */
+  sentWhen?: string;
   /** Renders the badge. The word itself never appears in `description`. */
   experimental?: true;
 };
@@ -46,7 +49,7 @@ export const SETTINGS_COPY = {
   },
   themeColor: {
     label: 'Theme Color',
-    description: 'Recolors the whole app in light and dark.',
+    description: 'Sets the app’s color palette for both themes.',
   },
   font: {
     label: 'Font',
@@ -65,7 +68,6 @@ export const SETTINGS_COPY = {
   backgroundFade: {
     label: 'Background Fade',
     description: 'Fades the location image toward the background for readability.',
-    info: '0% shows the full image; higher values trade the picture for legibility.',
   },
 
   // ── Display · Narration ─────────────────────────────────────────────────────
@@ -76,29 +78,24 @@ export const SETTINGS_COPY = {
   aiLanguage: {
     label: 'AI Language',
     description: 'Sets the language or style the AI writes in.',
-    info: `The language the AI writes narration and choices in.
+    info: `Applies to the narration and the choices.
 
-Pick a suggestion, type your own, or even a **style** — like *formal English* or *pirate speak*.`,
+Pick a suggestion or type your own. A **style** works too, like *formal English* or *pirate speak*.`,
   },
   paragraphLimit: {
     label: 'Paragraph Limit',
-    description: 'Limits how many paragraphs each turn may run to.',
+    description: 'Caps how many paragraphs the model writes each turn.',
   },
   markdownFormatting: {
     label: 'Markdown Formatting',
     description: 'Allows bold, lists, and tables in narration.',
-    info: `Let the AI format narration with **bold/italics**, lists, and tables.
-
-Works best when **Paragraph Limit** isn't set to *Single*.`,
   },
 
   // ── Display · Accessibility ─────────────────────────────────────────────────
   narrationFont: {
     label: 'Narration Font',
     description: 'Sets a separate typeface for the story text.',
-    info: `A separate font for the story text, defaulting to the app font.
-
-Includes faces tuned for **dyslexia**, **low vision**, and reading.`,
+    info: 'Includes typefaces tuned for **dyslexia** and **low vision**.',
   },
   narrationTextSize: {
     label: 'Narration Text Size',
@@ -113,29 +110,28 @@ Includes faces tuned for **dyslexia**, **low vision**, and reading.`,
   showReasoning: {
     label: 'Show Reasoning',
     description: 'Shows the model’s private reasoning above each turn.',
-    info: `Shows a reasoning model's (or the Inline mode's) private scratchpad as a collapsible **"Thinking…"** note above each turn's narration.
+    info: `Some models think privately before they write. Thinking modes add the same step. This setting shows that text as a collapsible **"Thinking…"** note above the narration.
 
-Captured and saved either way, so turning it on reveals it on past turns too.`,
+The text is saved either way. Turn this on later, and past turns show theirs too.`,
   },
   showSilentRequests: {
     label: 'Show Silent Requests',
     description: 'Shows background requests in the status bar and context viewer.',
-    info: `Surfaces requests that normally run quietly — **memory summaries**, **character diaries**, and new-character notes — in the status bar and the AI context viewer.
+    info: `The silent requests are **memory summaries**, **character diaries**, and notes on new characters.
 
-An inspection aid for authoring and debugging; off by default.`,
+An aid for world authoring and debugging.`,
   },
 
   // ── Output · Turn Extras ────────────────────────────────────────────────────
   systemPrompts: {
     label: 'System Prompts',
-    description: 'Chooses which extra passes run after each turn.',
+    description: 'Chooses which follow-up requests run after each turn.',
+    info: 'Each item is its own request after the narration. Turn one off and that feature stops: choice buttons, stat changes, or detected moves. Its editor under **Prompts** hides too.',
   },
   moveAutomatically: {
     label: 'Move Automatically',
     description: 'Resolves the move before the scene is written.',
-    info: `Resolves the move from your action **before** the scene is written, so it's narrated in the new location.
-
-Skips the "Move to…?" confirmation.`,
+    info: 'Your action\'s move applies first, so the scene is narrated in the new location. The "Move to…?" confirmation is skipped.',
   },
 
   // ── Output · Reasoning ──────────────────────────────────────────────────────
@@ -146,25 +142,23 @@ Skips the "Move to…?" confirmation.`,
   limitActiveCharacters: {
     label: 'Limit Active Characters',
     description: 'Caps how many characters the director stages per turn.',
-    info: `Caps how many characters the director stages each turn.
-
-- Each staged character adds its **own request**
-- Off lets the scene use as many as it calls for`,
+    info: `- Each staged character adds its **own request**
+- Off lets the scene stage as many as it needs`,
   },
   nativeReasoning: {
     label: 'Native Reasoning',
     description: 'Sets how hard reasoning models think per request.',
     // The caveat that used to close all eight effort levels, said once for the whole control.
-    info: 'Only applies to models with native reasoning. Other models ignore it entirely.',
+    info: 'Some models think privately before they answer. This sets how much effort they spend. Models without native reasoning ignore it.',
   },
 
   // ── Output · Memory ─────────────────────────────────────────────────────────
   memorySummaries: {
     label: 'Memory Summaries',
     description: 'Condenses older turns so long stories stay coherent.',
-    info: `Condenses older turns while keeping recent ones **word-for-word**, so long stories stay coherent without bloating each request.
+    info: `Recent turns stay word for word; older ones shrink to a summary the AI still reads.
 
-Runs an extra request per turn; edit its prompt under **Prompts → Summaries**.`,
+Runs one extra request per turn. Edit its prompt under **Prompts → Summaries**.`,
   },
   semanticMemory: {
     label: 'Semantic Memory',
@@ -178,18 +172,18 @@ Runs an extra request per turn; edit its prompt under **Prompts → Summaries**.
   },
   memoryCap: {
     label: 'Memory Cap',
-    description: 'Caps how many memories ride along each turn.',
-    info: `Keeps only this many memories in view each turn — the ones most relevant to your action — even when more would fit.
+    description: 'Caps how many memories the AI sees each turn.',
+    info: `Only the most relevant memories stay, even when more would fit.
 
 - Smaller, sharper prompts on long stories
-- The story opening and newest memories always stay
-- Off carries everything that fits`,
+- The story opening and the newest memories always stay
+- Off keeps everything that fits`,
   },
   sceneRecall: {
     label: 'Scene Recall',
     description: 'Recalls a full past scene when your action returns to it.',
     experimental: true,
-    info: `When your action returns to an old moment — going back to someone you made a promise to — the full original scene is recalled for the AI, word for word, clearly marked as the past.
+    info: `Go back to someone you made a promise to, and the AI rereads the original scene word for word, marked as the past.
 
 - At most **two scenes** per turn
 - Never near-duplicates of each other or of recent turns
@@ -199,27 +193,27 @@ Runs an extra request per turn; edit its prompt under **Prompts → Summaries**.
     label: 'Time in Memory',
     description: 'Records when each memory happened.',
     experimental: true,
-    info: `Each memory carries **when** it happened — *"Day 3, evening — two days ago"* — and the recap states the present moment.
+    info: `Each memory carries a stamp like *"Day 3, evening — two days ago"*, and the recap states the present moment.
 
-- Without it the AI sees the story as an undated list and guesses at how long ago things were
-- Time of day is coarse (*morning*, *evening*), never a clock reading
+- Without it, the AI sees an undated list and guesses how long ago things were
+- Time of day stays coarse (*morning*, *evening*), never a clock reading
 - Uses the game clock shown in the Log`,
   },
   measuredClock: {
     label: 'Measured Clock',
-    description: 'Measures how long each turn actually takes.',
+    description: 'Measures how much story time each turn takes.',
     experimental: true,
-    info: `How long each turn takes is measured from what actually happened, instead of the flat **one hour per action** the game charges otherwise.
+    info: `Without it, every action costs a flat **one hour**. With it, the turn's events set the cost.
 
-- A few words spoken cost minutes; a night's rest costs hours; *"three weeks later"* costs three weeks
-- Adds one small request per turn, alongside choices and stat updates
+- A few spoken words cost minutes; a night's rest costs hours; *"three weeks later"* costs three weeks
+- Adds one small request per turn, next to choices and stat updates
 - Feeds the Log's clock, stat regeneration, and Time in Memory`,
   },
   semanticLore: {
     label: 'Semantic Lore',
     description: 'Activates dictionary entries by meaning, not just keywords.',
     experimental: true,
-    info: `Dictionary entries also activate when your action's **meaning** matches them, even with none of their keywords — "the ruined tower" can wake an *Old Beacon* entry.
+    info: `Write *"the ruined tower"* and an *Old Beacon* entry can wake with none of its keywords present.
 
 - Keyword activation is unchanged; this only **adds** entries
 - Uses the same on-device model as Semantic Memory (~23 MB on first enable)`,
@@ -236,15 +230,15 @@ Runs one extra request the first time each new character is named. Remove any yo
   characterDiaries: {
     label: 'Character Diaries',
     description: 'Gives each character a diary that shapes their motivation.',
-    info: `Each character present in a turn records a **first-person diary entry** as turns age out, and its recent entries feed back into that character's motivation.
+    info: `As turns age out, each character present writes a **first-person diary entry**. A character's recent entries feed its motivation.
 
-Runs an extra request per participant; edit its prompt under **Prompts → Diary**.`,
+Runs one extra request per participant. Edit its prompt under **Prompts → Diary**.`,
   },
   diaryRecall: {
     label: 'Diary Recall',
     description: 'Recalls older diary entries relevant to the moment.',
     experimental: true,
-    info: `Instead of only their newest diary entries, characters also recall the older ones most relevant to what you're doing — she remembers the last time you drew a blade.
+    info: `Characters recall the older entries most relevant to the moment, not only their newest ones. She remembers the last time you drew a blade.
 
 - Same total entry count, so it costs **nothing extra**
 - Uses Semantic Memory's model`,
@@ -254,16 +248,16 @@ Runs an extra request per participant; edit its prompt under **Prompts → Diary
   continueTheStory: {
     label: 'Continue the Story',
     description: 'Adds a choice that nudges the story forward.',
-    info: `Adds a **[Continue the Story]** button under the choices. It fills the action box with that text, so you can take a turn without writing anything — the story reads it as a nudge to keep going rather than something your character does.
+    info: `A **[Continue the Story]** button sits under the choices. Press it and the turn runs with that text as your action. The story reads it as a nudge to keep going, not as something your character does.
 
-**Always** keeps the button even with the Choices request switched off.`,
+**Always** keeps the button even when the Choices request is off.`,
   },
 
   // ── Output · Performance ────────────────────────────────────────────────────
   concurrentRequests: {
     label: 'Concurrent Requests',
-    description: 'Fetches post-narration requests in parallel.',
-    info: `Fetches choices, stat updates, and location changes **at the same time** instead of one after another.
+    description: 'Runs each turn’s follow-up requests at the same time.',
+    info: `Choices, stat updates, and the location change go out together instead of one after another.
 
 - Faster turns on endpoints that handle parallel requests (e.g. LM Studio's **Parallel** setting)
 - Turn off if a memory-tight local model slows down under the load`,
@@ -302,12 +296,10 @@ Runs an extra request per participant; edit its prompt under **Prompts → Diary
   },
   sceneImages: {
     label: 'Scene Images',
-    description: 'Draws a picture of every turn automatically.',
-    info: `Draws a picture of every turn without being asked.
+    description: 'Generates an image of every turn automatically.',
+    info: `The image renders after the turn's text is done. Your next action waits for it, because one GPU cannot run the image model and the text model at the same time. Each turn then takes as long as your image server needs.
 
-The image renders **after** the turn's text is done and holds your next action until it finishes — one graphics card can't run the artist and the writer at once. Expect each turn to take as long as your image server needs.
-
-You can always draw a single scene by hand from the button above the story instead.`,
+You can still generate a single scene manually from the button above the story.`,
   },
   imageProvider: {
     label: 'Provider',
@@ -384,68 +376,96 @@ You can always draw a single scene by hand from the button above the story inste
   },
   localContextSize: {
     label: 'Context Size',
-    description: 'Sets how much the model keeps in context.',
-    info: `Also the engine's main **VRAM** cost, and capped at the loaded model's trained maximum.
+    description: 'Sets how much recent story the model can see.',
+    info: `Context is the model's working memory, measured in tokens (word pieces). Everything the model reads each turn must fit in it.
 
-Lower it first when a model won't fit.`,
+More context uses more **VRAM**. When a model does not fit, lower this first.`,
   },
   localGpuLayers: {
     label: 'GPU Layers',
     description: 'Chooses how much of the model runs on the GPU.',
-    info: `- **Auto** fits as many layers as your VRAM allows
-- **Max** offloads the whole model — needed for large or multi-GPU setups, and can run out of VRAM
-- **Custom** pins an exact count`,
+    info: `A model is a stack of layers. Each layer moved to the GPU runs faster, but takes VRAM.
+
+- **Auto** offloads as many layers as fit
+- **Max** offloads the whole model. Use it to split across GPUs. It can run out of VRAM
+- **Custom** sets an exact count`,
   },
   localLayers: {
     label: 'Layers',
     description: 'Sets how many layers to offload.',
-    info: '0 keeps the model on the CPU entirely.',
   },
   localGpu: {
     label: 'GPU',
     description: 'Runs the model on the GPU.',
-    info: 'Recommended. Off falls back to CPU-only — slower, but works without a capable GPU.',
+    info: 'Recommended. Off runs the model on the CPU. That is slower, but works without a capable GPU.',
+  },
+  localGpuDevice: {
+    label: 'GPU Device',
+    description: 'Chooses which GPU the engine loads models onto.',
+    info: `- **Auto** uses your discrete GPU. With more than one, it uses all of them. With none, it uses the integrated GPU
+- **All GPUs** always uses every GPU, so a large model can split across them
+- Pick a GPU by name to use only that one
+
+The **Engine device** line above shows the result.`,
   },
   localFlashAttention: {
     label: 'Flash Attention',
-    description: 'Uses less KV-cache VRAM and often runs faster.',
-    info: 'On by default; turn it off only if an older GPU or backend won\'t run it.',
+    description: 'Saves VRAM and often runs faster.',
+    info: `Flash Attention is a faster way for the model to read its context. The result is the same; the work uses less memory.
+
+Turn it off only if an old GPU or backend cannot run it.`,
   },
   localParallelRequests: {
     label: 'Parallel Requests',
     description: 'Sets how many requests the model answers at once.',
-    info: 'Higher speeds up a turn, but splits the context between slots and uses more VRAM.',
+    info: `After the narration, a turn sends several follow-up requests: choices, stat changes, the location check. This setting is how many the model answers at the same time instead of one after another.
+
+A higher value speeds up a turn. But the requests split the context between them, and each uses more VRAM.`,
   },
   localAutoLoad: {
     label: 'Auto-Load',
     description: 'Loads a model without waiting to be asked.',
-    info: '**On** — the first model in your download folder loads whenever the bundled engine is the one in use, and a finished download loads itself.\n\n**Off** — nothing loads until you press **Load**, so no VRAM is spent until you ask for it.',
+    info: '**On** — the first model in your download folder loads when the engine is in use. A finished download also loads itself.\n\n**Off** — nothing loads until you press **Load**. No VRAM is spent until you ask.',
   },
   localTemperature: {
     label: 'Temperature',
     description: 'Raises randomness; lower values stay focused.',
+    info: `Temperature scales how boldly the model picks each word. Low values take the safe pick. High values give rare words a chance.
+
+Around 0.7 fits most story models. Above 1.2 the text can lose coherence.`,
   },
   localMaxTokens: {
     label: 'Max Output Tokens',
     description: 'Caps how long each reply may run.',
+    info: 'A reply that hits the cap ends at the last full sentence.',
   },
   localTopP: {
     label: 'Top-p',
     description: 'Trims unlikely words below a probability cutoff.',
+    info: `The model picks from the smallest set of words whose chances add up to P.
+
+1 turns it off.`,
   },
   localTopK: {
     label: 'Top-k',
     description: 'Limits sampling to the K most likely tokens.',
-    info: '0 turns it off.',
+    info: `The model picks each word from only the K best candidates. A low value keeps the text focused. A high value allows more variety.
+
+0 turns it off.`,
   },
   localMinP: {
     label: 'Min-p',
     description: 'Drops tokens far below the top token’s probability.',
-    info: '0 turns it off.',
+    info: `The cutoff is a fraction of the best candidate's probability. So it adapts: strict when the model is confident, loose when it is not.
+
+0 turns it off.`,
   },
   localRepetitionPenalty: {
     label: 'Repetition Penalty',
-    description: 'Discourages repeating text above 1.',
+    description: 'Penalizes repeated words; 1 turns it off.',
+    info: `The model pays a small cost to reuse words it already wrote, so it reaches for new phrasing.
+
+Small steps matter: 1.05 to 1.15 is typical. High values can break names and punctuation.`,
   },
 
   // ── Prompts · Options ───────────────────────────────────────────────────────
@@ -481,22 +501,26 @@ Lower it first when a model won't fit.`,
   recapMessage: {
     label: 'Recap Message',
     description: 'Asks for the story so far in one exchange.',
-    info: 'The question the story recap answers — older turns ride the narration history as this one exchange. Only used while Memory Summaries is on.',
+    sentWhen: 'Rides the narration history once Memory Summaries has condensed older turns.',
+    info: 'The question the story recap answers. The reply is pre-written from the summaries, so the AI reads the story so far as its own words.',
   },
   nowMessage: {
     label: 'Now Message',
     description: 'Closes the recap with where things stand now.',
-    info: 'Each chip carries its own clause and disappears when it has nothing to say, so any combination still reads as a sentence.',
+    sentWhen: 'Rides the narration history at the end of the recap’s reply.',
+    info: 'The recap is all past tense; without this stated present, the AI can restart a live scene as a fresh arrival. Each chip carries its own clause and disappears when it has nothing to say, so any combination still reads as a sentence.',
   },
   recallMessage: {
     label: 'Recall Message',
     description: 'Frames a recalled scene as the past.',
-    info: 'Used when Scene Recall brings an old turn back word-for-word.',
+    sentWhen: 'Rides the narration history when Scene Recall brings an old turn back.',
+    info: 'Sent right after the recap, with the old turn’s full narration as the reply. The wording must mark the scene as past — an unframed old scene can overrule what the recap says happened since.',
   },
   directionMessage: {
     label: 'Direction Message',
     description: 'Marks bracketed text as your direction, not speech.',
-    info: 'Rides with your action whenever it contains [square brackets] — tells the AI the bracketed text is you directing the scene as the author, not something your character says.',
+    sentWhen: 'Rides with your action whenever it contains [square brackets].',
+    info: 'Tells the AI the bracketed text is you directing the scene as the author, not something your character says.',
   },
 
   // ── Data · Saves ────────────────────────────────────────────────────────────
@@ -582,13 +606,13 @@ export const SETTINGS_OPTIONS = {
     {
       value: 'none', label: 'None',
       help: 'The model writes until it finishes or hits the token cap.',
-      detail: 'No limit is sent. The model writes until it finishes or reaches **Max Output Tokens**, which can cut a reply off mid-sentence.',
+      detail: 'No limit is sent. A reply that hits **Max Output Tokens** stops at the last full sentence, so a long turn can stop without a real ending.',
     },
     { value: 'single', label: 'Single', help: 'One paragraph per turn, stopping at the first line break.' },
     {
       value: 'auto', label: 'Auto', recommended: true,
       help: 'Scales the paragraph count to your Max Output Tokens.',
-      detail: 'The paragraph count is scaled to your **Max Output Tokens**, so a reply fits the budget and ends cleanly instead of being cut off.',
+      detail: 'The paragraph count is scaled to your **Max Output Tokens**, so the model plans an ending that fits the budget.',
     },
   ],
   thinking: [
