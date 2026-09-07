@@ -4,6 +4,7 @@ import {
   isBuiltInPresetId, valuesForId,
   type TextEndpointPresetStore, type TextEndpointValues,
 } from './textEndpointPresets';
+import type { EndpointSamplerOverrides } from './endpointSamplers';
 
 /**
  * Which text-endpoint preset each prompt kind sends to, keyed by request type. A kind with no entry
@@ -17,10 +18,13 @@ export type PromptEndpointMap = Partial<Record<AIRequestType, string>>;
 export interface ResolvedPromptEndpoint {
   /** The preset this kind is pinned to, or null when it follows the active selection. */
   presetId: string | null;
+  /** Stable configuration identity, even when the prompt follows the active selection. */
+  endpointId: string;
   endpoint: string;
   apiToken: string;
   model: string;
-  maxTokens: number;
+  maxTokens: number | undefined;
+  samplerOverrides: EndpointSamplerOverrides;
   /** Manual context-window override on the resolved preset; null = detect or fall back. */
   contextWindowOverride: number | null;
   /** The resolved target is the built-in Default. */
@@ -37,7 +41,7 @@ export interface ActiveEndpointState {
   isBuiltIn: boolean;
   localEngine: boolean;
   /** The active max-output cap, which honors the desktop engine's separate local cap. */
-  maxTokens: number;
+  maxTokens: number | undefined;
   /** The bundled engine's own output cap, used whenever the engine is the resolved target. */
   engineMaxTokens: number;
   /** The GGUF the engine currently has loaded, or '' when it isn't running. The engine serves whatever is
@@ -83,12 +87,14 @@ export function resolvePromptEndpoint(
     const e = BUILTIN_ENGINE_VALUES;
     return {
       presetId: routed,
+      endpointId: id,
       endpoint: e.endpoint,
       apiToken: e.apiToken,
       // The loaded GGUF's own id when the engine is up; the nominal name only while it isn't.
       model: active.engineModelId || e.model,
       // The engine's own cap, whether it was pinned to or merely selected.
       maxTokens: active.engineMaxTokens,
+      samplerOverrides: e.samplerOverrides,
       contextWindowOverride: e.contextWindowOverride,
       isBuiltIn: true,
       localEngine: true,
@@ -97,10 +103,12 @@ export function resolvePromptEndpoint(
   if (routed === null) {
     return {
       presetId: null,
+      endpointId: id,
       endpoint: active.values.endpoint,
       apiToken: active.values.apiToken,
       model: active.values.model,
       maxTokens: active.maxTokens,
+      samplerOverrides: active.values.samplerOverrides,
       contextWindowOverride: active.values.contextWindowOverride,
       isBuiltIn: active.isBuiltIn,
       localEngine: false,
@@ -109,10 +117,12 @@ export function resolvePromptEndpoint(
   const values = valuesForId(store, routed);
   return {
     presetId: routed,
+    endpointId: id,
     endpoint: values.endpoint,
     apiToken: values.apiToken,
     model: values.model,
-    maxTokens: values.maxTokens,
+    maxTokens: values.maxOutputOverride.enabled ? values.maxOutputOverride.value : undefined,
+    samplerOverrides: values.samplerOverrides,
     contextWindowOverride: values.contextWindowOverride,
     isBuiltIn: routed === DEFAULT_TEXT_PRESET_ID,
     localEngine: false,
@@ -158,4 +168,3 @@ export function setPromptEndpoint(map: PromptEndpointMap, kind: AIRequestType, i
   }
   return { ...map, [kind]: id };
 }
-

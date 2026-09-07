@@ -20,6 +20,7 @@ import { NotificationsTab } from "@/components/menu/NotificationsTab";
 import { TermsTab } from "@/components/menu/TermsTab";
 import { PolicyDialog } from "@/components/menu/PolicyDialog";
 import { usePrivacyPolicy } from "@/contexts/PrivacyPolicyContext";
+import { useAgeGate } from "@/contexts/AgeGateContext";
 import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
 import PolicyService from "@/services/PolicyService";
 import AuthService from "@/services/AuthService";
@@ -130,6 +131,8 @@ export function AuthModals({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  // Optional at signup, and never asked for at sign-in. It is what password reset runs on.
+  const [email, setEmail] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
@@ -142,6 +145,7 @@ export function AuthModals({
   // The signed-in prompt. Registration answers the policy on its own, but a sign-in has to ask the
   // server whether this account already has.
   const { checkNow: checkPrivacyPolicy } = usePrivacyPolicy();
+  const { authenticationSucceeded, authenticationAbandoned } = useAgeGate();
 
   // Ending the account, and the notice that signing in has just called such an ending off. Both live
   // above the menu, because the privacy prompt raises the same flow from over the top of every screen.
@@ -151,6 +155,7 @@ export function AuthModals({
     setUsername('');
     setPassword('');
     setConfirmPassword('');
+    setEmail('');
     setCurrentPassword('');
     setNewPassword('');
     setAuthError('');
@@ -179,15 +184,13 @@ export function AuthModals({
     try {
       const { deletionCancelled } = await AuthService.login(username, password);
       onAuthenticated();
+      authenticationSucceeded(() => { void checkPrivacyPolicy(); });
       setShowAuthDialog(false);
       resetAuthForms();
       toast.success('Logged in successfully');
       // Signing in is what cancels a pending deletion, and the server does it without being asked. The
       // account may not remember asking, so it is said out loud rather than left to be noticed.
       if (deletionCancelled) noticeCancelled();
-      // After the dialog closes, so the prompt is not raised behind it. An account that has already
-      // accepted sees nothing.
-      void checkPrivacyPolicy();
     } catch (error) {
       setAuthError((error as Error).message || 'Login failed');
     }
@@ -222,6 +225,13 @@ export function AuthModals({
       return;
     }
 
+    // Checked here as well as in AuthService, because the policy step runs between the two. Left to the
+    // service, a mistyped address would be found only after the reader had read and accepted a policy.
+    if (email.trim() && !AuthService.isValidEmail(email.trim())) {
+      setAuthError('Invalid email format');
+      return;
+    }
+
     // The policy is read and answered before the account exists, so declining leaves nothing behind.
     // A read that fails is not a reason to refuse a signup: the account is created, and the signed-in
     // prompt asks at the first refused request instead.
@@ -248,7 +258,8 @@ export function AuthModals({
   /** Register, and report a refusal the same way whichever path arrived here. */
   const createAccount = async (): Promise<boolean> => {
     try {
-      await AuthService.register(username, password);
+      await AuthService.register(username, password, email.trim());
+      authenticationSucceeded();
       return true;
     } catch (error) {
       setAuthError((error as Error).message || 'Registration failed');
@@ -258,9 +269,10 @@ export function AuthModals({
 
   /** Hand the new session to the parent and close up. Both signup paths end here, so neither can
    *  quietly skip a step the other takes. */
-  const finishSignup = () => {
+  const finishSignup = (resolveAgeGate = true) => {
     setSignupPolicy(null);
     onAuthenticated();
+    if (resolveAgeGate) authenticationSucceeded(() => { void checkPrivacyPolicy(); });
     setShowAuthDialog(false);
     resetAuthForms();
     toast.success('Registered successfully');
@@ -276,6 +288,7 @@ export function AuthModals({
    */
   const acceptAtSignup = async () => {
     setSignupBusy(true);
+    let privacyAccepted = true;
     try {
       if (!await createAccount()) {
         setSignupPolicy(null);
@@ -290,11 +303,12 @@ export function AuthModals({
         } catch (error) {
           console.error('Failed to record the privacy acceptance after signup:', error);
           toast.warn('Your account was created, but recording your acceptance failed. You will be asked again.');
+          privacyAccepted = false;
           void checkPrivacyPolicy();
         }
       }
 
-      finishSignup();
+      finishSignup(privacyAccepted);
     } finally {
       setSignupBusy(false);
     }
@@ -325,7 +339,13 @@ export function AuthModals({
 
   return (
     <>
-      <Dialog open={showAuthDialog} onOpenChange={setShowAuthDialog}>
+      <Dialog
+        open={showAuthDialog}
+        onOpenChange={(open) => {
+          if (!open) authenticationAbandoned();
+          setShowAuthDialog(open);
+        }}
+      >
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>{authMode === 'login' ? 'Login' : 'Register'}</DialogTitle>
@@ -364,17 +384,49 @@ export function AuthModals({
               />
             </div>
 
+            {authMode === 'login' && (
+              <p className="text-right text-helper">
+                <a
+                  href="https://formamorph.ai/reset-password"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  Forgot password?
+                </a>
+              </p>
+            )}
+
             {authMode === 'register' && (
-              <div className="space-y-2">
-                <label htmlFor="confirmPassword" className="text-label font-medium">Confirm Password</label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm your password"
-                />
-              </div>
+              <>
+                <div className="space-y-2">
+                  <label htmlFor="confirmPassword" className="text-label font-medium">Confirm Password</label>
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm your password"
+                  />
+                </div>
+
+                {/* Last, and only in register mode, so switching between the two modes never moves a
+                    box the reader is already typing in. */}
+                <div className="space-y-2">
+                  <label htmlFor="email" className="text-label font-medium">Email (Optional)</label>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                  />
+                  <p className="text-meta text-muted-foreground">
+                    Lets you reset your password. We send one message to confirm it.
+                  </p>
+                </div>
+              </>
             )}
           </div>
 
@@ -413,6 +465,7 @@ export function AuthModals({
                 username={currentUser?.username as string | undefined}
                 avatarUrl={avatarUrl}
                 onChanged={(url) => { setAvatarUrl(url); onAvatarChanged?.(url); }}
+                notify={(message, kind) => toast[kind](message)}
                 disabled={isSuspended}
               />
               <div className="min-w-0 space-y-1">
