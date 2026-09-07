@@ -319,6 +319,40 @@ unaffected.
 
 ---
 
+# A · Openings upstream just created
+
+Not work in flight. Things the 2026-09-07 sync put on the board, noticed while reading the diff.
+
+### A1 · The new tile-board drag is pointer-only
+
+**State:** observed, nothing decided. **This is a candidate, not a commitment.**
+
+Upstream replaced the library's `cellSim` with a `gestureReader` and moved the tile board onto it —
+push/swap dragging, folder-or-move, a footprint that snaps to a named target. It is a nice piece of
+work and it is **entirely pointer-driven**: `GestureInput` is defined as *"one pointer reading of a
+drag"*, and there is no keyboard path and no announcement anywhere in the module. Playwright covers it
+with mouse gestures.
+
+So a new drag surface has appeared that a keyboard cannot reach — the same gap, in a second place, as
+the one K exists to close in the editor trees.
+
+Why it is only an opening:
+
+- **K1 comes first.** Proposing the same fix twice before the first one has been heard aloud is how you
+  find out twice that the wording was wrong.
+- **A 2D board is a harder problem than a tree.** Depth-stepping a tree has one axis and a legal-move
+  rule; a tile board has two axes, footprints of different sizes, and a move-versus-folder split that
+  currently depends on *where inside a cell* the pointer sits. There may be no keyboard gesture that
+  expresses that last one without redesigning it.
+- It is upstream's newest feature, so it is also the most likely to keep moving.
+
+**Notes**
+
+- 2026-09-07 · claude · Filed only so it is not re-discovered from scratch next time. The honest
+  sequence is K1 → K2/K3 → land that PR → then ask whether this one is worth proposing.
+
+---
+
 # ✅ Settled
 
 Decisions already made, with the reason. Neither of us reopens one of these without saying so out loud
