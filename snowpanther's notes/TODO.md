@@ -313,9 +313,20 @@ The damage is to the gate, not the code: *"expect 1 failure"* was a usable rule 
 between one and seven, and check which"* is not. Until this is fixed, the honest procedure is the one at
 the bottom of this file — **re-run any failure isolated before believing it**.
 
-Worth trying: capping worker concurrency (`--pool=threads --poolOptions.threads.maxThreads=4`) and
-seeing whether a slower run is a clean one. If it is, that becomes the local gate command and CI is
-unaffected.
+**Tried it, and it works.** Capping worker concurrency gave a **completely clean run — 515 files,
+8504 tests, zero failures** — where the uncapped run minutes earlier on the same tree failed two:
+
+```bash
+NODE_OPTIONS=--no-experimental-webstorage npx vitest run --pool=threads --poolOptions.threads.maxThreads=4
+```
+
+It costs **8m20s against 5m56s**. Two and a half minutes to turn "somewhere between one and seven
+failures, work out which" back into "green means green" is worth paying every time.
+
+**One run is not proof** — these are probabilistic, and a clean run can happen by luck. Treat it as the
+local gate from now on and let the next few runs confirm it; if a capped run ever fails, that failure is
+much more interesting than an uncapped one. CI is unaffected either way: it runs on Node 24 on a
+different machine, and this flag is local.
 
 ---
 
@@ -397,20 +408,23 @@ first — that is what this section is for.
 # How to check the gates
 
 ```bash
-NODE_OPTIONS=--no-experimental-webstorage npm run test     # the flag matters on Node 26
+# the thread cap is what makes the result trustworthy on this machine — see C5
+NODE_OPTIONS=--no-experimental-webstorage npx vitest run --pool=threads --poolOptions.threads.maxThreads=4
 npm run typecheck
 npm run lint
 npm run build
 ```
 
-Upstream's merge bar is all four green, plus "keep the diff scoped to one concern". CI runs only the
-first three.
+Both flags matter and for different reasons: `--no-experimental-webstorage` or Node 26 mass-fails ~375
+tests on `localStorage`, and the thread cap is what stops half a dozen heavy `views` suites timing out
+under parallel load. Capped, this tree runs **8504 tests green in about 8½ minutes**.
 
-**Do not read the full-suite failure count as a verdict** — see C5. A run failing a few heavy `views`
-suites is the normal state of this machine, not a regression. Re-run whatever failed on its own:
+Upstream's merge bar is all four green, plus "keep the diff scoped to one concern". CI runs only the
+first three, on Node 24, where neither flag applies.
+
+If you do run it uncapped, **do not read the failure count as a verdict** — re-run whatever it named on
+its own, and believe the isolated result:
 
 ```bash
 NODE_OPTIONS=--no-experimental-webstorage npx vitest run <the files it named>
 ```
-
-If they pass isolated, the branch is green. If one fails isolated, that is the real thing.
