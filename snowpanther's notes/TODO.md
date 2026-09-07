@@ -127,10 +127,14 @@ placeholder and **must not be restored until K1 is done**.
 
 ### K4 · Sign the CLA
 
-**State:** not started, one-time.
+**State:** not started, one-time, and **yours to do** — it is a signature.
 
 Every upstream PR needs it, via the CLA Assistant bot. GitHub issues and discussions are both disabled
 on upstream, so a PR is the only inbound channel there.
+
+**K1–K4 prepare a contribution; none of them opens one.** Per ✅ Settled, a PR to upstream happens only
+when you ask for it in so many words. The branch being ready is not the same as the branch being sent,
+and the decision to approach a solo maintainer under your own name is yours alone.
 
 ---
 
@@ -286,10 +290,15 @@ so a loose file at its root is doubly out of place. It belongs in `snowpanther's
 It is one doc on its own branch. Either fold it into `snowpanther's notes/` on a working branch, or
 keep it and write down why here.
 
-### C3 · Push the synced branches
+### C3 · ~~Push the synced branches~~ — **Done, 2026-09-07**
 
-Nothing has gone to `origin` since the merge. `main` is a clean upstream mirror and can go first.
-`keyboard-tree-nesting` needs `--force-with-lease` — it was rebased and `origin` has the old line.
+All four are on `origin` and in sync. `main` `46ea181c` · `description-consistency` `54d0fd57` ·
+`keyboard-tree-nesting` `93941b77` · `Colossally-expensive-curiosities` `31e8fd66` (new on the remote).
+
+The keyboard branch went with `--force-with-lease`, replacing the pre-rebase line at `db665f8d`. Every
+commit subject on the old tip was checked against the new one first and all of them were present, so the
+rebase re-expressed the work rather than dropping any. `db665f8d` is still reachable through GitHub's own
+reflog if it is ever wanted.
 
 ### C4 · ~~Two upstream tsdoc warnings~~ — **gone, upstream fixed it**
 
@@ -383,6 +392,13 @@ first — that is what this section is for.
   violation.)
 - **No root `CLAUDE.md` in this repo.** That path is not gitignored and would land in a PR diff.
   `.claude/` is.
+- **Nothing is ever PR'd upstream without you asking for it, each time.** Work goes to `origin`
+  (dengopaiv) and stops there. Not `JakeJamesDev`, not `FieryLionite`. Both remotes are already
+  `no_push`, but that stops a push and not a PR. Preparing a contribution is fine — that is what K2, K3
+  and K4 are — but **K5 does not exist and opening the PR is not mine to do.** Upstream has issues and
+  discussions disabled, so a PR there is a direct public approach to one person under your name.
+  *(Your words, 2026-09-07: "Nothing should be ever pr-ed to the upstream repos, unless explicitly
+  requested.")*
 
 ---
 
