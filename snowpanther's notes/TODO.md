@@ -192,10 +192,10 @@ was fine when the shared path had nothing they needed. Upstream's endpoint-overr
 
 Three concrete differences, in the order they will bite:
 
-- **A rejected parameter fails opaquely.** All three do `if (!res.ok) throw new Error(\`HTTP ${res.status}\`)`,
-  discarding the response body. The turn pipeline now reads a 400/422, attributes it to the *specific*
-  override the server refused, disables that override for the preset and shows the server's own message.
-  Ours shows *"Failed to generate."*
+- **A rejected parameter fails opaquely.** All three throw on `!res.ok` with nothing but the status
+  number, discarding the response body. The turn pipeline now reads a 400/422, attributes it to the
+  *specific* override the server refused, disables that override for the preset and shows the server's
+  own message. Ours shows *"Failed to generate."*
 - **They send a hard-coded `temperature`.** `CHECK_TEMPERATURE` and `BRIDGE_TEMPERATURE` are deliberate —
   a consistency check wants determinism, not the author's storytelling temperature — but an endpoint that
   **rejects** `temperature` outright (some reasoning endpoints do) now takes the whole button down with
