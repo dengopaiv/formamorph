@@ -119,8 +119,9 @@ environment variable `HF_TOKEN` in §5 — not on a command line, where it lands
 
 ### The scripts
 
-They live in this repo, in `snowpanther's notes/pod-scripts/`. You need them **on your own machine** —
-§7 is about getting them from there onto the pod.
+They live in this repo, in `snowpanther's notes/pod-scripts/`. You need them **on your own machine**.
+`rp.sh` stays there and drives the pod from outside; only the setup script for the path you pick has to
+travel, which is what §7 is about.
 
 ```bash
 cd "/c/GIT/sodi/formamorph/snowpanther's notes/pod-scripts"
@@ -276,13 +277,16 @@ Two obvious routes are closed:
 What works is sending the file as a byte stream over the direct SSH connection, where no PTY and no line
 limit is involved.
 
+**Only the setup script travels.** `rp.sh` runs on *your* machine and drives the pod from outside —
+copying it over would accomplish nothing. Send `pod-setup.sh` (§10) or `textgen-setup.sh` (§11),
+whichever path you are taking, and nothing else.
+
 ### Method A — pipe it in (recommended; nothing to install)
 
 In Git Bash, from the `pod-scripts` directory:
 
 ```bash
 ssh -p 22062 -i ~/.ssh/id_ed25519 root@69.30.85.59 'cat > /root/pod-setup.sh' < pod-setup.sh
-ssh -p 22062 -i ~/.ssh/id_ed25519 root@69.30.85.59 'cat > /root/rp.sh'        < rp.sh
 ```
 
 The file arrives on **stdin** as bytes, so the 4 KB line limit never applies. Note there is no `-tt`
@@ -291,7 +295,7 @@ here: forcing a PTY is precisely what would reintroduce the problem `rp.sh` norm
 ### Method B — `scp`, if you prefer the familiar tool
 
 ```bash
-scp -P 22062 -i ~/.ssh/id_ed25519 pod-setup.sh textgen-setup.sh root@69.30.85.59:/root/
+scp -P 22062 -i ~/.ssh/id_ed25519 pod-setup.sh root@69.30.85.59:/root/
 ```
 
 **`-P` is capital for `scp`** and lower-case for `ssh`; lower-case `-p` here means "preserve timestamps"
@@ -355,15 +359,20 @@ out of three, on different machines. Treat it as the expected state rather than 
 The symptom downstream is a model that loads cleanly, checksums clean against Hugging Face's own LFS
 hashes, and generates garbage.
 
+Send the test over as a file rather than as a quoted one-liner — the same trick as §7, and it avoids
+fighting two levels of shell quoting for no benefit:
+
 ```bash
-./rp.sh 'python3 -c "
+ssh -p 22062 -i ~/.ssh/id_ed25519 root@69.30.85.59 'cat > /root/p2p.py' <<'PY'
 import torch
 n = 1000000
-a = torch.arange(n, dtype=torch.float32, device=\"cuda:0\")
-direct = a.to(\"cuda:1\"); torch.cuda.synchronize()
-staged = a.cpu().to(\"cuda:1\"); torch.cuda.synchronize()
-print(\"OK\" if torch.equal(direct.cpu(), staged.cpu()) else \"BROKEN\")
-"'
+a = torch.arange(n, dtype=torch.float32, device="cuda:0")
+direct = a.to("cuda:1"); torch.cuda.synchronize()
+staged = a.cpu().to("cuda:1"); torch.cuda.synchronize()
+print("OK" if torch.equal(direct.cpu(), staged.cpu()) else "BROKEN")
+PY
+
+./rp.sh 'python3 /root/p2p.py'
 ```
 
 **The buffer size is not incidental.** A 4 KB copy *passes* on a pod whose 4 MB copies come back 100%
@@ -402,8 +411,13 @@ only untested thing left is the size of the real model.
 Then unload and run the real one:
 
 ```bash
-./rp.sh 'pkill -f tabbyapi; rm -rf /root/models/Llama-3.2-1B-Instruct-exl3-4.0bpw'
+./rp.sh 'pkill -f tabbyenv/bin/python; rm -rf /root/models/Llama-3.2-1B-Instruct-exl3-4.0bpw'
 ```
+
+Match on the venv's interpreter path, not on "tabbyapi": the script launches `main.py` from inside
+`/root/tabbyAPI` using `/root/tabbyenv/bin/python`, so the string "tabbyapi" appears nowhere in the
+process's command line. The model directory is `<repo basename>-<branch>`, which is where that name
+comes from.
 
 Skip this step only when you are repeating something you did earlier the same day.
 
