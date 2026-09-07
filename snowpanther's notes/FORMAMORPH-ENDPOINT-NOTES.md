@@ -339,6 +339,17 @@ e.g. `moonshotai/kimi-k2.5:nitro`.
   into *every* prompt, and you pay for it each turn. Start somewhere in the 32K–65K range and raise
   it only if summarization is dropping things you care about.
 - **Raise Max Output Tokens** from the 1024 default — narration turns want the headroom.
+
+> **Since v2.16.0, Max Output Tokens sits behind a checkbox — "Override endpoint limit" — and every
+> "raise it from 1024" row in this document assumes that box is ticked.** Unticked, the field greys out,
+> the row reads *Endpoint default*, and no cap is sent. That is a defensible choice against a hosted API
+> with sensible defaults and a poor one against your own server, which has none. It also has a
+> non-obvious second effect: the prompt's length guidance is sized against this number and is omitted
+> entirely without it, so **Paragraph Limit stops doing anything** while still reading "Auto" in the UI.
+> The same release added per-endpoint sampler overrides (Temperature, Repetition Penalty, Top P, Top K,
+> Min P), each behind its own switch and all off by default; and it now disables an override the server
+> rejects with a 400/422 naming that parameter, telling you which one it dropped. See §13.1 for how all
+> of this is stored.
 - Expect the seven `reasoning_effort` probe requests (§7) the first time the preset is used.
 
 ---
@@ -374,7 +385,9 @@ launcher) and puts the whole Chromium profile in `<root>/userdata`, beside the a
 - **File:** `userdata\Local Storage\leveldb\` — the `.log` is the write-ahead log (newest writes),
   the `.ldb` files are compacted older state.
 - **Key:** `FORMAMORPH_textEndpointPresets`, value is JSON:
-  `{"activeId": "<uuid>", "presets": [{"id","name","values":{endpoint, apiToken, model, contextWindowOverride, maxTokens}}]}`
+  `{"activeId": "<uuid>", "presets": [{"id","name","values":{endpoint, apiToken, model, contextWindowOverride, maxOutputOverride, samplerOverrides}}]}`
+  — the last two arrived in v2.16.0's endpoint-override work; see §13.1 for their shape and for what
+  happens to a preset still carrying the old flat `maxTokens`.
 - Built-in presets are **not** stored here — they only exist in code (`hpe` / `QS`); the file holds
   your own presets plus which id is active. An `activeId` of `builtin-engine` or `default` with an
   empty `presets` array is the normal post-migration state.
@@ -825,26 +838,48 @@ Key `FORMAMORPH_textEndpointPresets`, value is a JSON **string**:
         "apiToken": "<kcpp --password>",
         "model": "gguf",
         "contextWindowOverride": 32768,
-        "maxTokens": 2048
+        "maxOutputOverride": { "enabled": true, "value": 2048 },
+        "samplerOverrides": {
+          "temperature":       { "enabled": false, "value": 0.7 },
+          "repetitionPenalty": { "enabled": false, "value": 1.05 },
+          "topP":              { "enabled": false, "value": 1 },
+          "topK":              { "enabled": false, "value": 0 },
+          "minP":              { "enabled": false, "value": 0 }
+        }
       } }
   ]
 }
 ```
 
-Things the parser (`cU.parse`) actually enforces — it is far more permissive than it looks:
+**This shape changed in v2.16.0** and the paragraphs below were re-read from `textEndpointPresets.ts`
+at that version, replacing an earlier reading of a packaged build. The parser is now noticeably
+stricter than it was, and one thing it used to tolerate it no longer does.
 
-- **Only two checks.** `activeId` must be a string and `presets` must be an array. Fail either and
-  the whole store silently resets to `{activeId:"default", presets:[]}`. The contents of each preset
-  are **not validated at all**.
+- **Two checks at the top, unchanged.** `activeId` must be a string and `presets` must be an array.
+  Fail either and the whole store silently resets to the Default-only store.
+- **Each preset is now validated, and a bad one is dropped rather than kept.** A preset needs a string
+  `id`, a string `name`, and an object `values`; miss any and that entry vanishes while the rest of the
+  store loads. This is the part that used to be "not validated at all".
 - **`id` is any unique string** — a UUID is what the UI generates, but nothing requires one. Reserved:
   `default` and `builtin-engine` are the two read-only built-ins (§2); reusing those ids will shadow
   nothing and confuse you.
-- **`values` is merged over defaults** as `{...tT, ...preset.values}`, where
-  `tT = {endpoint, apiToken:"", model:"default", contextWindowOverride:null, maxTokens:1024}`.
-  So **partial `values` objects are fine** — omit any field you don't care about.
-- **Unknown keys are preserved but ignored**, which is why `runpod-endpoint-preset.json` can carry
-  `_note` / `_urlFormat` documentation fields inline.
-- `contextWindowOverride` is a number or `null`. `maxTokens` is a number.
+- **Partial `values` objects are still fine.** Every field is coerced individually against a default,
+  so omit anything you don't care about.
+- **Unknown keys are now discarded, not preserved.** `values` is rebuilt from the known fields rather
+  than spread over them, so inline documentation fields like `runpod-endpoint-preset.json`'s `_note` /
+  `_urlFormat` survive in the file but **not** through a save. Treat that template as reading material,
+  which is what §13.2 already calls it.
+- `contextWindowOverride` is a number or `null`.
+- **`maxOutputOverride` replaced the flat `maxTokens`**, as `{enabled, value}`. A stored preset still
+  carrying `maxTokens` migrates: the old number becomes the `value`, and `enabled` defaults to **true**,
+  so an existing preset keeps the cap it had. Writing `maxTokens` by hand in a new preset still works
+  for the same reason. `enabled: false` means *send no limit at all* — see `runpod-exl3.md` §13 for why
+  that also silently disables the prompt's length guidance.
+- **`samplerOverrides`** is a record of the five samplers, each `{enabled, value}`. All disabled by
+  default, which sends nothing; a missing or malformed entry falls back to that.
+- At the store level, `defaultMaxTokens` likewise became `defaultMaxOutputOverride`, with
+  `defaultSamplerOverrides` beside it. These tune the built-in Default, whose connection fields stay
+  immutable.
 
 ### 13.2. The two files in this folder
 

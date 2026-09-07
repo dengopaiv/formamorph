@@ -47,14 +47,23 @@ Write here. Anything, any length, any order.
 
 ## Where the branches stand
 
-Regenerated 2026-09-05, after syncing every branch onto upstream **v2.16.0** (`0a574d9`).
+Regenerated 2026-09-07, after syncing every branch onto upstream `46ea181c`. Upstream is **still tagged
+v2.16.0** — 58 commits with no version bump, so the tag is not a reliable "am I current" check on this
+repo. Compare commits.
 
 | Branch | Carries | Behind upstream | On `origin` |
 |---|---|---|---|
-| `main` | nothing of ours — a clean mirror of upstream | 0 | **stale**, 233 behind local |
+| `main` | nothing of ours — a clean mirror of upstream | 0 | **stale**, 291 behind local |
 | `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, this file | 0 | **not pushed** |
 | `keyboard-tree-nesting` | the keyboard-nesting a11y work, plus four commits that do not belong to it | 0 | **stale** — `origin` has the pre-rebase `db665f8`; needs `--force-with-lease` |
 | `Colossally-expensive-curiosities` | one doc, `docs-internal/behemoth-128b.md` | 0 | **not pushed** |
+
+All four merged with **no textual conflicts**, and all four gates are green on the two that carry code.
+What the 58 commits brought that touches us: a Capacitor **Android** build, a whole **website** with
+accounts and a second Vite config, the tile board's `cellSim` replaced by a `gestureReader`, and — the
+part that reaches our work — **per-endpoint sampler overrides and an optional max-output cap**. That
+last one is written up in `runpod-exl3.md` §13 and the endpoint notes §13.1, and it is what **D4** below
+is about.
 
 ---
 
@@ -174,6 +183,40 @@ The verdict-collapsing port (`6a8ed3b`) was written against transcripts already 
 it are not evidence until it has seen a new run.
 
 ---
+### D4 · Our authoring calls sit outside upstream's request layer, and that now costs something
+
+**State:** Filed, new on 2026-09-07 — found while folding in upstream, not by a failing test.
+
+`checkDescriptions`, `bridgeDescription` and `summarizeDescription` each build their own `fetch`. That
+was fine when the shared path had nothing they needed. Upstream's endpoint-override work changed that.
+
+Three concrete differences, in the order they will bite:
+
+- **A rejected parameter fails opaquely.** All three do `if (!res.ok) throw new Error(\`HTTP ${res.status}\`)`,
+  discarding the response body. The turn pipeline now reads a 400/422, attributes it to the *specific*
+  override the server refused, disables that override for the preset and shows the server's own message.
+  Ours shows *"Failed to generate."*
+- **They send a hard-coded `temperature`.** `CHECK_TEMPERATURE` and `BRIDGE_TEMPERATURE` are deliberate —
+  a consistency check wants determinism, not the author's storytelling temperature — but an endpoint that
+  **rejects** `temperature` outright (some reasoning endpoints do) now takes the whole button down with
+  it, and the app cannot tell you why.
+- **They ignore the preset's sampler overrides**, which is correct for temperature and probably wrong for
+  the rest.
+
+Two sizes of answer:
+
+1. **Cheap, and worth doing before D1:** surface the server's message instead of the bare status. Three
+   one-line changes, and it turns a live-endpoint debugging session from guesswork into reading.
+2. **Proper:** route the authoring calls through the shared request layer. Bigger, and it drags in the
+   `AIRequestType` question the authoring prompts were deliberately kept out of — see the ✅ note about
+   the hub in *Recently landed*, 2026-09-05. Do not start here.
+
+**Notes**
+
+- 2026-09-07 · claude · Nothing is broken today; every gate is green and the fixed temperature is a
+  design decision, not an oversight. This is a *divergence that has started to cost*, and D1 is the run
+  that will expose it.
+
 
 # P · Running the model — pods, endpoints, hardware
 
@@ -248,16 +291,31 @@ keep it and write down why here.
 Nothing has gone to `origin` since the merge. `main` is a clean upstream mirror and can go first.
 `keyboard-tree-nesting` needs `--force-with-lease` — it was rebased and `origin` has the old line.
 
-### C4 · Two upstream tsdoc warnings
+### C4 · ~~Two upstream tsdoc warnings~~ — **gone, upstream fixed it**
 
-`src/lib/localNetworkEmbed.ts`, lines 98–99, unclosed code spans. Not ours, not blocking, and a
-one-line fix worth sending upstream on its own as a first easy PR.
+`src/lib/localNetworkEmbed.ts`, unclosed code spans. This was going to be our first easy PR to upstream.
+`46ea181c` "Fix Local Network Embed TSDoc" is literally their newest commit, so that door is shut. If a
+first easy PR is still wanted, C1's tsdoc is not it — look for something in the a11y work instead.
 
-### C5 · `CodeArea.test.tsx` flakes under full-suite load
+### C5 · The full suite fails a *handful* of view tests under load, and the number moves
 
-Passes 37/37 alone. A known flake, not a regression — but it means **"1 failed" is the expected clean
-result**, which is exactly the shape of thing that hides a real failure later. Worth fixing for that
-reason alone.
+**State:** worse than it was written down as, and the wording mattered.
+
+This used to read *"`CodeArea.test.tsx` flakes; expect 1 failed"*. After the sync that is wrong in a way
+that would hide a real regression. Three full runs on 2026-09-07: **1 failure**, then **2**, both on
+`description-consistency`, then **7** on `keyboard-tree-nesting` — and no two runs failed the same set.
+The names that came up were all heavy `views` or modal suites: `WorldEditor.bench`, `.fix`,
+`.imageWebpFix`, `.statCodeCheck`, `MainMenu.sessionSync`, `SettingsModal.mode`, `EventFormDialog`.
+**All seven were re-run isolated and all seven passed.** Upstream added ~90 test files in this sync, so
+there is simply more running in parallel on the same machine.
+
+The damage is to the gate, not the code: *"expect 1 failure"* was a usable rule and *"expect somewhere
+between one and seven, and check which"* is not. Until this is fixed, the honest procedure is the one at
+the bottom of this file — **re-run any failure isolated before believing it**.
+
+Worth trying: capping worker concurrency (`--pool=threads --poolOptions.threads.maxThreads=4`) and
+seeing whether a slower run is a clean one. If it is, that becomes the local gate command and CI is
+unaffected.
 
 ---
 
@@ -285,6 +343,14 @@ first — that is what this section is for.
 
 # 🗓️ Recently landed
 
+- **2026-09-07** — all four branches synced onto upstream `46ea181c`, 58 commits, **no conflicts and no
+  re-expression needed** — the opposite of the previous sync. Upstream's new work (Android, the website,
+  the gesture reader) landed beside ours rather than through it. The one thing that reached us is the
+  endpoint-override work, now written up in three places and filed as **D4**.
+- **2026-09-07** — `runpod-exl3.md` rewritten as a procedure you can follow start to finish: a one-screen
+  spine, a *Before you rent anything* section, a **§7 on getting the scripts onto the pod** — which the
+  old draft simply did not have, since it told you to `curl` from a URL that does not exist because
+  nothing is pushed — and a 1B rehearsal step before the expensive download.
 - **2026-09-05** — every branch synced onto upstream v2.16.0. Two real integration problems, not just
   conflicts: `SortableTree` re-expressed against upstream's new shared `EditorDndContext` (which gained
   an `accessibility` prop, because dnd-kit's stock wording only knows the vertical axis), and the
@@ -304,4 +370,13 @@ npm run build
 ```
 
 Upstream's merge bar is all four green, plus "keep the diff scoped to one concern". CI runs only the
-first three. Expect **1 failure** from C5.
+first three.
+
+**Do not read the full-suite failure count as a verdict** — see C5. A run failing a few heavy `views`
+suites is the normal state of this machine, not a regression. Re-run whatever failed on its own:
+
+```bash
+NODE_OPTIONS=--no-experimental-webstorage npx vitest run <the files it named>
+```
+
+If they pass isolated, the branch is green. If one fails isolated, that is the real thing.
