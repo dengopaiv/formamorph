@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light dark">
+<script src="/theme.js"></script>
 <title>Formamorph — an AI text RPG that brings your world to life</title>
 <meta name="description" content="An AI text RPG that brings your world to life. Create your own characters and locations, or play any of the hundreds the community has published. Runs in your browser or fully offline on your desktop, with any AI model you choose.">
 <link rel="canonical" href="https://formamorph.ai/">
@@ -23,7 +24,14 @@
 <meta name="twitter:description" content="Create your own characters and locations, or play any of the hundreds the community has published. Runs in your browser or fully offline on your desktop, with any AI model you choose.">
 <meta name="twitter:image" content="https://formamorph.ai/site/og.jpg">
 <style>
-  :root { --bg:#0d0f12; --text:#e8eaed; --dim:#9aa0a8; --accent:#7ac47f; --line:#2a2e35; }
+  :root { color-scheme:light; --bg:#f7f8f6; --text:#18201a; --dim:#5f6a61; --accent:#3a7e41;
+    --accent-ink:#fff; --line:#d7ddd7; --edge:#b9c2b9; --lift:#0000000a;
+    --account-bg:#f7f8f6e8; --notice-bg:#eaf4eb; --notice-border:#3a7e4173;
+    --surface-shadow:#0000001f; --hero-opacity:.22; --hero-filter:blur(6px) saturate(.7); }
+  .dark { color-scheme:dark; --bg:#0d0f12; --text:#e8eaed; --dim:#9aa0a8; --accent:#7ac47f;
+    --accent-ink:#0c130d; --line:#2a2e35; --edge:#3a3f47; --lift:#ffffff14;
+    --account-bg:#0d0f12b3; --notice-bg:#142018; --notice-border:#7ac47f73;
+    --surface-shadow:#0000004d; --hero-opacity:1; --hero-filter:blur(6px) brightness(.35); }
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--text); font:16px/1.55 system-ui,sans-serif;
     -webkit-text-size-adjust:100%; }
@@ -32,10 +40,10 @@
 
   .btn { display:inline-flex; align-items:center; gap:.5em; padding:.8em 1.6em; border-radius:10px;
     border:1px solid transparent; font-weight:600; text-decoration:none; cursor:pointer; font-size:1rem; }
-  .btn-play { background:var(--accent); color:#0c130d; font-size:1.15rem; }
+  .btn-play { background:var(--accent); color:var(--accent-ink); font-size:1.15rem; }
   .btn-play:hover { filter:brightness(1.1); }
-  .btn-ghost { border-color:#3a3f47; color:var(--text); }
-  .btn-ghost:hover { background:#ffffff14; }
+  .btn-ghost { border-color:var(--edge); color:var(--text); }
+  .btn-ghost:hover { background:var(--lift); }
   .dl-row { display:flex; gap:.6rem; flex-wrap:wrap; justify-content:center; }
   .dl-note { color:var(--dim); font-size:.85rem; }
 
@@ -64,17 +72,36 @@
   .thumbs img { width:clamp(96px,28vw,148px); aspect-ratio:16/9; display:block; border-radius:6px; }
   .thumbs .lbl { color:var(--dim); font-size:.72rem; padding:.2em 0 .4em; }
 
+  /* Over the hero rather than above it: the hero is the whole first screen and a bar of its own would
+     push the logo down without giving the page anything. */
+  .topbar { position:absolute; top:0; left:0; right:0; z-index:10;
+    display:flex; justify-content:flex-end; padding:1rem 1.25rem; }
+  .acct { display:inline-flex; align-items:center; justify-content:center; gap:.45em; height:42px; padding:0 .85em; border-radius:999px;
+    border:1px solid var(--edge); background:var(--account-bg); color:var(--text); font-weight:600;
+    font-size:1.05rem; text-decoration:none; }
+  .acct:hover { background:var(--lift); }
+  /* Both session states share one control height. */
+  .acct.face { width:42px; padding:0; }
+  .acct-icon { width:22px; height:22px; display:block; }
+  .acct.face .acct-icon { width:26px; height:26px; }
+  .acct-avatar { width:30px; height:30px; border-radius:999px; object-fit:cover; display:block; }
+  .session-notice { position:fixed; z-index:3; top:4.5rem; left:50%; transform:translateX(-50%);
+    width:min(560px,calc(100% - 2rem)); padding:.85rem 1rem; border:1px solid var(--notice-border);
+    border-radius:10px; background:var(--notice-bg); box-shadow:0 12px 30px var(--surface-shadow); }
+  .session-notice strong { display:block; margin-bottom:.2rem; }
+  .session-notice span { color:var(--dim); }
+
   .hero { min-height:92vh; min-height:92svh; display:grid; place-items:center; text-align:center;
-    position:relative; overflow:hidden; }
+    position:relative; overflow:hidden; background:var(--bg); }
   .hero .bgimg { position:absolute; inset:-40px; background-position:center; background-size:cover;
-    filter:blur(6px) brightness(.35); }
+    filter:var(--hero-filter); opacity:var(--hero-opacity); }
   .hero .in { position:relative; padding:2rem 1.25rem; max-width:780px; }
   .hero img.logo { width:96px; height:96px; border-radius:20px; margin-bottom:1.2rem; }
   h1 { font-size:clamp(2.2rem,9vw,3.4rem); letter-spacing:-.02em; }
   .tagline { color:var(--dim); font-size:clamp(1.02rem,3.6vw,1.25rem); margin:.8rem 0 2rem; }
   .cta { display:flex; gap:.8rem; justify-content:center; flex-wrap:wrap; }
   section { max-width:1100px; margin:0 auto; padding:4rem 1.5rem; }
-  footer { text-align:center; color:var(--dim); padding:3rem 1rem; border-top:1px solid #22262d; }
+  footer { text-align:center; color:var(--dim); padding:3rem 1rem; border-top:1px solid var(--line); }
 
   @media (prefers-reduced-motion: reduce) {
     .skin img.lay { transition:none; }
@@ -82,6 +109,24 @@
 </style>
 </head>
 <body>
+
+<!-- Signed out is the markup, not a render: a visitor whose browser never runs the module below still
+     gets a working Sign In. The script swaps in the avatar when a session is held. -->
+<header class="topbar">
+  <a class="acct" data-account href="/login?next=/">
+    <span>Sign In</span>
+    <svg class="acct-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="8.5" r="3.5"></circle>
+      <path d="M5 20a7 7 0 0 1 14 0"></path>
+    </svg>
+  </a>
+</header>
+
+<div class="session-notice" data-deletion-notice role="status" hidden>
+  <strong>Account deletion canceled</strong>
+  <span>Signing in called it off. Your account and everything in it are still here.</span>
+</div>
 
 <div class="hero">
   <div class="bgimg"></div>
@@ -103,7 +148,13 @@
 <section><div data-gallery></div></section>
 
 <footer>
-  <div class="dl-row" style="margin-bottom:1.2rem" data-dl-buttons></div>
+  <div class="dl-row" data-dl-buttons></div>
+  <!-- Android is a sideloaded APK, so the phone asks a question the other three never do. The guide
+       sits under the button rather than in the row, which is downloads only. -->
+  <p class="dl-note" style="margin:.7rem 0 1.2rem">
+    Android installs from the file, not the Play Store &mdash;
+    <a href="https://github.com/JakeJamesDev/formamorph/wiki/Install-on-Android">how to install it</a>
+  </p>
   <a href="https://github.com/JakeJamesDev/formamorph">GitHub</a> &middot;
   <a href="https://patreon.com/JakeJamesNSFW?utm_medium=unknown&amp;utm_source=join_link&amp;utm_campaign=creatorshare_creator&amp;utm_content=copyLink">Patreon</a> &middot;
   <a href="/play/">Play</a> &middot;
@@ -212,27 +263,71 @@ fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
   .then((r) => (r.ok ? r.json() : null))
   .catch(() => null)
   .then((rel) => {
+    // The Android asset carries no version in its name, so its link is the latest-release redirect
+    // and needs no API lookup.
     const rows = [
       { label: 'Windows', match: /\.exe$|win.*\.zip$/i },
       { label: 'Linux', match: /\.AppImage$/i },
       { label: 'macOS', match: /\.dmg$/i },
+      { label: 'Android', href: `${RELEASES}/download/Formamorph-android.apk` },
     ];
     document.querySelectorAll('[data-dl-buttons]').forEach((host) => {
       for (const row of rows) {
-        const asset = rel && rel.assets ? rel.assets.find((a) => row.match.test(a.name)) : null;
+        const asset = rel && rel.assets && row.match ? rel.assets.find((a) => row.match.test(a.name)) : null;
         const a = document.createElement('a');
         a.className = 'btn btn-ghost';
-        a.href = asset ? asset.browser_download_url : RELEASES;
+        a.href = row.href || (asset ? asset.browser_download_url : RELEASES);
         a.textContent = row.label;
         host.appendChild(a);
       }
     });
     document.querySelectorAll('[data-dl-note]').forEach((el) => {
       el.textContent = rel && rel.tag_name
-        ? `Desktop ${rel.tag_name} — free on GitHub`
-        : 'Desktop builds — free on GitHub';
+        ? `Desktop and Android ${rel.tag_name} — free on GitHub`
+        : 'Desktop and Android builds — free on GitHub';
     });
   });
+</script>
+
+<script type="module">
+// The header's account control. The session is read through the shared module rather than out of
+// localStorage here, so this page and the account pages never disagree about the keys.
+import { readSession, watchSession, avatarSrc, takeDeletionCancellation } from '/session.js';
+
+const control = document.querySelector('[data-account]');
+// Both pieces of the signed-out control, detached and kept so every later state is built from them:
+// the label is put back or left out, and the icon is cloned wherever a face is missing.
+const labelNode = control.querySelector('span');
+const iconTemplate = control.querySelector('svg');
+
+function render(session) {
+  control.href = session ? `/u/${encodeURIComponent(session.username)}` : '/login?next=/';
+  control.classList.toggle('face', !!session);
+  // Signed out the label names the link. Signed in there is no text, so the name is said here.
+  if (session) control.setAttribute('aria-label', `${session.username} — your profile`);
+  else control.removeAttribute('aria-label');
+
+  const src = session ? avatarSrc(session.avatarUrl) : null;
+  if (!src) {
+    control.replaceChildren(...(session ? [] : [labelNode]), iconTemplate.cloneNode(true));
+    return;
+  }
+
+  const img = document.createElement('img');
+  img.className = 'acct-avatar';
+  img.alt = '';
+  // A dead URL would otherwise leave a torn-page glyph where a face belongs.
+  img.addEventListener('error', () => control.replaceChildren(iconTemplate.cloneNode(true)));
+  img.src = src;
+  control.replaceChildren(img);
+}
+
+render(readSession());
+watchSession(render);
+
+if (takeDeletionCancellation()) {
+  document.querySelector('[data-deletion-notice]').hidden = false;
+}
 </script>
 </body>
 </html>

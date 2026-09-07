@@ -26,10 +26,59 @@ const RELEASE = {
 };
 
 const API = 'https://api.github.com/repos/JakeJamesDev/formamorph/releases/latest';
+const LATEST = 'https://github.com/JakeJamesDev/formamorph/releases/latest';
+/** The APK's name carries no version, so its link is the latest redirect rather than an API asset. */
+const APK = `${LATEST}/download/Formamorph-android.apk`;
 
 /** Opacity of every light-stack layer, in palette order. */
 const opacities = (page: Page) =>
   page.$$eval('.skin > img.lay', (imgs) => imgs.map((i) => Number(getComputedStyle(i).opacity)));
+
+test.describe('site theme', () => {
+  test('the landing page follows the held light preference without rewriting it', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.addInitScript(() => localStorage.setItem('vite-ui-theme', 'light'));
+    await page.goto(SITE_URL);
+
+    await expect(page.locator('html')).toHaveClass(/\blight\b/);
+    expect(await page.evaluate(() => ({
+      colorScheme: getComputedStyle(document.documentElement).colorScheme,
+      stored: localStorage.getItem('vite-ui-theme'),
+    }))).toEqual({ colorScheme: 'light', stored: 'light' });
+  });
+
+  test('the landing page follows the OS when no preference is held', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(SITE_URL);
+
+    await expect(page.locator('html')).toHaveClass(/\blight\b/);
+    expect(await page.evaluate(() => localStorage.getItem('vite-ui-theme'))).toBeNull();
+  });
+
+  test('an open landing page follows an OS scheme change in system mode', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.addInitScript(() => localStorage.setItem('vite-ui-theme', 'system'));
+    await page.goto(SITE_URL);
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+
+    await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+    expect(await page.evaluate(() => localStorage.getItem('vite-ui-theme'))).toBe('system');
+  });
+
+  test('an open landing page follows a preference changed in another tab', async ({ context }) => {
+    const landing = await context.newPage();
+    const app = await context.newPage();
+    await landing.addInitScript(() => localStorage.setItem('vite-ui-theme', 'light'));
+    await landing.goto(SITE_URL);
+    await app.goto(`${SITE_URL}/privacy`);
+
+    await app.evaluate(() => localStorage.setItem('vite-ui-theme', 'dark'));
+
+    await expect(landing.locator('html')).toHaveClass(/\bdark\b/);
+  });
+
+});
 
 test.describe('landing page', () => {
   test('gallery renders both theme stacks with only the first palette showing', async ({ page }) => {
@@ -138,23 +187,29 @@ test.describe('landing page', () => {
     await page.route(API, (route) => route.fulfill({ json: RELEASE }));
     await page.goto(SITE_URL);
     const links = page.locator('[data-dl-buttons] a');
-    await expect(links).toHaveCount(3);
+    await expect(links).toHaveCount(4);
     await expect(links.nth(0)).toHaveAttribute('href', 'https://example.test/win.zip');
     await expect(links.nth(1)).toHaveAttribute('href', 'https://example.test/linux.AppImage');
     await expect(links.nth(2)).toHaveAttribute('href', 'https://example.test/mac.dmg');
+    await expect(links.nth(3)).toHaveAttribute('href', APK);
     await expect(page.locator('[data-dl-note]')).toContainText('v9.9.9');
+    // A sideloaded APK raises questions the other three do not, so the guide sits beside the button.
+    await expect(page.getByRole('link', { name: 'how to install it' }))
+      .toHaveAttribute('href', 'https://github.com/JakeJamesDev/formamorph/wiki/Install-on-Android');
   });
 
   test('download buttons fall back to the releases page when the API fails', async ({ page }) => {
     await page.route(API, (route) => route.abort('failed'));
     await page.goto(SITE_URL);
     const links = page.locator('[data-dl-buttons] a');
-    await expect(links).toHaveCount(3);
+    await expect(links).toHaveCount(4);
     for (const i of [0, 1, 2]) {
-      await expect(links.nth(i)).toHaveAttribute(
-        'href', 'https://github.com/JakeJamesDev/formamorph/releases/latest');
+      await expect(links.nth(i)).toHaveAttribute('href', LATEST);
     }
-    await expect(page.locator('[data-dl-note]')).toHaveText('Desktop builds — free on GitHub');
+    // Android needs no API lookup, so a dead API costs it nothing.
+    await expect(links.nth(3)).toHaveAttribute('href', APK);
+    await expect(page.locator('[data-dl-note]'))
+      .toHaveText('Desktop and Android builds — free on GitHub');
   });
 
   test('the page fits its viewport', async ({ page }) => {
@@ -168,6 +223,80 @@ test.describe('landing page', () => {
     expect(overflow.scroll).toBeLessThanOrEqual(overflow.client);
     await expect(page.getByRole('link', { name: /Play in your browser/ })).toBeVisible();
     await expect(page.locator('.skin')).toBeVisible();
+  });
+});
+
+/**
+ * The header's account control. It reads `localStorage` the app writes and follows the `storage`
+ * event, and neither is provable from a rendered tree: the event only ever fires in a *different*
+ * document, so the second test drives two real pages in one context.
+ */
+test.describe('landing header account control', () => {
+  const AVATAR = '/api/avatars/9f2c.webp';
+  const control = (page: Page) => page.locator('[data-account]');
+
+  /** Sign in before the page loads, the way a reader arriving with a held session does. */
+  const holding = (page: Page, user: Record<string, unknown>) =>
+    page.addInitScript(([held]) => {
+      localStorage.setItem('authToken', 'tok');
+      localStorage.setItem('currentUser', JSON.stringify(held));
+    }, [user]);
+
+  /** The stored avatar loads from the API host, which no test run can reach. */
+  const serveAvatar = (page: Page) =>
+    page.route(`https://api.formamorph.ai${AVATAR}`, (route) =>
+      route.fulfill({ path: 'hosting/site/icon.png', contentType: 'image/png' }));
+
+  test('signed out it offers Sign In with a person icon', async ({ page }) => {
+    await page.goto(SITE_URL);
+
+    const link = page.getByRole('link', { name: 'Sign In' });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute('href', '/login?next=/');
+    await expect(control(page).locator('svg')).toBeVisible();
+    await expect(control(page).locator('img')).toHaveCount(0);
+  });
+
+  test('signed in it is the avatar, linking to the profile', async ({ page }) => {
+    await serveAvatar(page);
+    await holding(page, { username: 'rowan', avatarUrl: AVATAR });
+    await page.goto(SITE_URL);
+
+    await expect(control(page)).toHaveAttribute('href', '/u/rowan');
+    await expect(page.getByText('Sign In')).toHaveCount(0);
+    const avatar = control(page).locator('img');
+    await expect(avatar).toBeVisible();
+    // A real decode, not just an attribute: a wrong origin would render an empty box.
+    expect(await avatar.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  });
+
+  test('signed in with no avatar it falls back to the person icon', async ({ page }) => {
+    await holding(page, { username: 'rowan' });
+    await page.goto(SITE_URL);
+
+    await expect(control(page)).toHaveAttribute('href', '/u/rowan');
+    await expect(control(page).locator('svg')).toBeVisible();
+    await expect(page.getByText('Sign In')).toHaveCount(0);
+  });
+
+  // The test's own context rather than a fresh one, so the pages carry the project's viewport: a
+  // `browser.newContext()` here would run the phone project at desktop size and prove it twice.
+  test('a sign-in in another tab reaches an open landing page', async ({ context }) => {
+    const landing = await context.newPage();
+    const other = await context.newPage();
+    await landing.goto(SITE_URL);
+    // Any other document on the origin stands in for /login and /play/, which are the real writers.
+    await other.goto(`${SITE_URL}/privacy`);
+
+    await other.evaluate(() => {
+      localStorage.setItem('authToken', 'tok');
+      localStorage.setItem('currentUser', JSON.stringify({ username: 'rowan' }));
+    });
+    await expect(control(landing)).toHaveAttribute('href', '/u/rowan');
+
+    await other.evaluate(() => localStorage.clear());
+    await expect(control(landing)).toHaveAttribute('href', '/login?next=/');
+    await expect(landing.getByRole('link', { name: 'Sign In' })).toBeVisible();
   });
 });
 

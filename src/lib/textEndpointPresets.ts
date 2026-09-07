@@ -2,16 +2,25 @@ import { randomUUID } from '@/lib/uuid';
 import type { Codec } from './usePersistentState';
 import { isDesktop, DEFAULT_LOCAL_LLM_ENDPOINT } from '@/lib/imageGen/desktop';
 import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS } from '../contexts/settingsDefaults';
+import {
+  coerceEndpointSamplerOverrides,
+  coerceEndpointMaxOutputOverride,
+  defaultEndpointSamplerOverrides,
+  type EndpointSampler,
+  type EndpointMaxOutputOverride,
+  type EndpointSamplerOverride,
+  type EndpointSamplerOverrides,
+} from './endpointSamplers';
 
-/** The custom text-endpoint fields a preset captures. Everything desktop-local (GPU layers, sampling, the
- *  local Max Output cap) and every global toggle stays out — this is only the "point at your own API" set. */
+/** The custom text-endpoint fields a preset captures. */
 export interface TextEndpointValues {
   endpoint: string;
   apiToken: string;
   model: string;
   /** Manual context-window override; null = use the auto-detected value. */
   contextWindowOverride: number | null;
-  maxTokens: number;
+  maxOutputOverride: EndpointMaxOutputOverride;
+  samplerOverrides: EndpointSamplerOverrides;
 }
 
 export type TextEndpointValueKey = keyof TextEndpointValues;
@@ -27,6 +36,10 @@ export interface TextEndpointPreset {
 export interface TextEndpointPresetStore {
   activeId: string;
   presets: TextEndpointPreset[];
+  /** Tuning for the virtual hosted Default, whose connection fields remain immutable. */
+  defaultSamplerOverrides?: EndpointSamplerOverrides;
+  /** Output-limit tuning for the virtual hosted Default. */
+  defaultMaxOutputOverride?: EndpointMaxOutputOverride;
 }
 
 /** The read-only "Default" preset — the shipped/embedded shared endpoint. Selecting it = "use our endpoint". */
@@ -47,7 +60,8 @@ export const BUILTIN_ENGINE_VALUES: TextEndpointValues = {
   apiToken: '',
   model: 'default',
   contextWindowOverride: null,
-  maxTokens: DEFAULT_MAX_TOKENS,
+  maxOutputOverride: { enabled: true, value: DEFAULT_MAX_TOKENS },
+  samplerOverrides: defaultEndpointSamplerOverrides(),
 };
 
 /** The read-only presets available on this platform, in dropdown order. */
@@ -68,7 +82,8 @@ export const DEFAULT_TEXT_ENDPOINT_VALUES: TextEndpointValues = {
   apiToken: DEFAULT_API_TOKEN,
   model: DEFAULT_MODEL_NAME,
   contextWindowOverride: null,
-  maxTokens: DEFAULT_MAX_TOKENS,
+  maxOutputOverride: { enabled: true, value: DEFAULT_MAX_TOKENS },
+  samplerOverrides: defaultEndpointSamplerOverrides(),
 };
 
 /** The initial store: no user presets, the Default built-in active. */
@@ -87,8 +102,15 @@ function coerceValues(rec: Record<string, unknown>): TextEndpointValues {
       typeof rec.contextWindowOverride === 'number' && Number.isFinite(rec.contextWindowOverride)
         ? (rec.contextWindowOverride as number)
         : null,
-    maxTokens: num('maxTokens', d.maxTokens),
+    maxOutputOverride: coerceEndpointMaxOutputOverride(rec.maxOutputOverride, num('maxTokens', d.maxOutputOverride.value)),
+    samplerOverrides: coerceEndpointSamplerOverrides(rec.samplerOverrides),
   };
+}
+
+/** Environment presets seed a fresh configuration, so they retain values but never activate overrides. */
+function coerceFreshValues(rec: Record<string, unknown>): TextEndpointValues {
+  const values = coerceValues(rec);
+  return { ...values, maxOutputOverride: { ...values.maxOutputOverride, enabled: false } };
 }
 
 /**
@@ -113,7 +135,7 @@ export function presetStoreFromEnv(
     const rec = item as Record<string, unknown>;
     const name = typeof rec.name === 'string' ? rec.name.trim() : '';
     if (!name) continue;
-    presets.push({ id: randomUUID(), name, values: coerceValues(rec) });
+    presets.push({ id: randomUUID(), name, values: coerceFreshValues(rec) });
   }
   if (presets.length === 0) return null;
   return { activeId: presets[0].id, presets };
@@ -125,7 +147,21 @@ export const textEndpointPresetCodec: Codec<TextEndpointPresetStore> = {
     try {
       const parsed = JSON.parse(raw) as Partial<TextEndpointPresetStore>;
       if (!parsed || typeof parsed.activeId !== 'string' || !Array.isArray(parsed.presets)) return emptyStore;
-      return { activeId: parsed.activeId, presets: parsed.presets as TextEndpointPreset[] };
+      const presets = parsed.presets.flatMap((preset): TextEndpointPreset[] => {
+        if (!preset || typeof preset !== 'object') return [];
+        const record = preset as unknown as Record<string, unknown>;
+        if (typeof record.id !== 'string' || typeof record.name !== 'string' || !record.values || typeof record.values !== 'object') return [];
+        return [{ id: record.id, name: record.name, values: coerceValues(record.values as Record<string, unknown>) }];
+      });
+      const defaultSamplerOverrides = coerceEndpointSamplerOverrides(parsed.defaultSamplerOverrides);
+      const legacyStore = parsed as Partial<TextEndpointPresetStore> & { defaultMaxTokens?: unknown };
+      const defaultMaxOutputOverride = coerceEndpointMaxOutputOverride(
+        parsed.defaultMaxOutputOverride,
+        typeof legacyStore.defaultMaxTokens === 'number' && Number.isFinite(legacyStore.defaultMaxTokens)
+          ? legacyStore.defaultMaxTokens
+          : DEFAULT_TEXT_ENDPOINT_VALUES.maxOutputOverride.value,
+      );
+      return { activeId: parsed.activeId, presets, defaultSamplerOverrides, defaultMaxOutputOverride };
     } catch {
       return emptyStore;
     }
@@ -148,9 +184,17 @@ export function isEngineActive(store: TextEndpointPresetStore): boolean {
  *  preset missing a future key falls back cleanly. An unknown id resolves to Default. */
 export function valuesForId(store: TextEndpointPresetStore, id: string): TextEndpointValues {
   if (id === BUILTIN_ENGINE_PRESET_ID) return BUILTIN_ENGINE_VALUES;
-  if (id === DEFAULT_TEXT_PRESET_ID) return DEFAULT_TEXT_ENDPOINT_VALUES;
+  if (id === DEFAULT_TEXT_PRESET_ID) return {
+    ...DEFAULT_TEXT_ENDPOINT_VALUES,
+    samplerOverrides: coerceEndpointSamplerOverrides(store.defaultSamplerOverrides),
+    maxOutputOverride: coerceEndpointMaxOutputOverride(store.defaultMaxOutputOverride),
+  };
   const preset = store.presets.find((p) => p.id === id);
-  return preset ? { ...DEFAULT_TEXT_ENDPOINT_VALUES, ...preset.values } : DEFAULT_TEXT_ENDPOINT_VALUES;
+  return preset ? {
+    ...DEFAULT_TEXT_ENDPOINT_VALUES,
+    ...preset.values,
+    samplerOverrides: coerceEndpointSamplerOverrides(preset.values.samplerOverrides),
+  } : valuesForId(store, DEFAULT_TEXT_PRESET_ID);
 }
 
 /** The active preset's values. A ghost id lands on Default, the same defensive fallback as before. */
@@ -164,7 +208,11 @@ export function setActive(store: TextEndpointPresetStore, id: string): TextEndpo
 
 /** Add a user preset (a copy of `values`) and select it. */
 export function addPreset(store: TextEndpointPresetStore, id: string, name: string, values: TextEndpointValues): TextEndpointPresetStore {
-  return { activeId: id, presets: [...store.presets, { id, name, values: { ...values } }] };
+  return {
+    ...store,
+    activeId: id,
+    presets: [...store.presets, { id, name, values: { ...values, samplerOverrides: coerceEndpointSamplerOverrides(values.samplerOverrides) } }],
+  };
 }
 
 export function renamePreset(store: TextEndpointPresetStore, id: string, name: string): TextEndpointPresetStore {
@@ -174,6 +222,7 @@ export function renamePreset(store: TextEndpointPresetStore, id: string, name: s
 /** Remove a user preset; if it was active, fall back to the Default built-in. */
 export function deletePreset(store: TextEndpointPresetStore, id: string): TextEndpointPresetStore {
   return {
+    ...store,
     activeId: store.activeId === id ? DEFAULT_TEXT_PRESET_ID : store.activeId,
     presets: store.presets.filter((p) => p.id !== id),
   };
@@ -184,6 +233,43 @@ export function resetPreset(store: TextEndpointPresetStore, id: string): TextEnd
   return {
     ...store,
     presets: store.presets.map((p) => (p.id === id ? { ...p, values: { ...DEFAULT_TEXT_ENDPOINT_VALUES } } : p)),
+  };
+}
+
+/** Change one external endpoint's sampler state without making its connection fields editable. */
+export function updateSamplerOverride(
+  store: TextEndpointPresetStore,
+  id: string,
+  sampler: EndpointSampler,
+  override: EndpointSamplerOverride,
+): TextEndpointPresetStore {
+  if (id === BUILTIN_ENGINE_PRESET_ID) return store;
+  const current = id === DEFAULT_TEXT_PRESET_ID
+    ? coerceEndpointSamplerOverrides(store.defaultSamplerOverrides)
+    : coerceEndpointSamplerOverrides(store.presets.find((preset) => preset.id === id)?.values.samplerOverrides);
+  const samplerOverrides = { ...current, [sampler]: override };
+  if (id === DEFAULT_TEXT_PRESET_ID) return { ...store, defaultSamplerOverrides: samplerOverrides };
+  return {
+    ...store,
+    presets: store.presets.map((preset) => preset.id === id
+      ? { ...preset, values: { ...preset.values, samplerOverrides } }
+      : preset),
+  };
+}
+
+/** Change an external endpoint's remembered output limit and whether it reaches requests. */
+export function updateMaxOutputOverride(
+  store: TextEndpointPresetStore,
+  id: string,
+  override: EndpointMaxOutputOverride,
+): TextEndpointPresetStore {
+  if (id === BUILTIN_ENGINE_PRESET_ID) return store;
+  if (id === DEFAULT_TEXT_PRESET_ID) return { ...store, defaultMaxOutputOverride: override };
+  return {
+    ...store,
+    presets: store.presets.map((preset) => (preset.id === id
+      ? { ...preset, values: { ...preset.values, maxOutputOverride: override } }
+      : preset)),
   };
 }
 

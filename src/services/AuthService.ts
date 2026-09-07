@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '@/lib/apiBase';
 import type { AuthUser } from '@/types';
 
 /** What a sign-in tells the caller beyond the session it establishes. */
@@ -6,8 +7,35 @@ export interface LoginResult {
   deletionCancelled: boolean;
 }
 
+/** What writing or re-mailing an address leaves behind. */
+export interface EmailOutcome {
+  /** Whether the address on file is proven. */
+  emailVerified: boolean;
+  /** Whether the verification mail went out. Delivery runs through somebody else's service, so an
+   *  address can be saved and the mail still not sent; the caller offers another try. */
+  mailSent: boolean;
+}
+
+/** How opening a verification link ended. A dead link is an expected outcome rather than a failure, so
+ *  it comes back instead of being thrown: the page has a different thing to say for each. */
+export type VerifyEmailResult =
+  | { verified: true; email: string | null }
+  | {
+      verified: false;
+      /** The server refused the link itself — expired, or already used. False when the request never
+       *  reached an answer, which is a different sentence and a different next step. */
+      spent: boolean;
+      message: string;
+    };
+
+/** How consuming a password-reset token ended. */
+export type PasswordResetResult =
+  | { reset: true }
+  | { reset: false; message: string };
+
 /** Singleton holding the auth token and current user, mirrored to `localStorage`. Default-exported as
- *  one shared instance; the constructor rehydrates both from storage (tolerating a corrupt user blob). */
+ *  one shared instance; the constructor rehydrates both from storage (tolerating a corrupt user blob)
+ *  and then follows the `storage` event, so a sign-in or sign-out in another tab reaches this one. */
 class AuthService {
   API_URL: string;
   tokenKey: string;
@@ -18,21 +46,83 @@ class AuthService {
    *  Signing out is raised from more than one place now — the profile dialog, the privacy prompt, and a
    *  401 answering any request — and only this service sees all three. */
   private sessionEndedListeners = new Set<() => void>();
+  /** Told when another tab hands this one a signed-in session, so a surface holding its own copy of the
+   *  identity can pick it up. The site pages and the game are separate builds on one origin, so a sign-in
+   *  on either reaches the other only through the `storage` event below. */
+  private sessionAdoptedListeners = new Set<() => void>();
+  /** Told whenever the held identity changes, including local writes and foreign avatar updates. */
+  private sessionChangedListeners = new Set<() => void>();
 
   constructor() {
-    // Use different API URL based on environment
-    this.API_URL = import.meta.env.MODE === 'production'
-      ? import.meta.env.VITE_API_URL_PROD
-      : import.meta.env.VITE_API_URL_DEV;
+    this.API_URL = API_BASE_URL;
     this.tokenKey = 'authToken';
     this.userKey = 'currentUser';
-    this.token = localStorage.getItem(this.tokenKey);
-    // Guard against a corrupted value: an unguarded JSON.parse here would throw during construction.
-    try {
-      this.currentUser = JSON.parse(localStorage.getItem(this.userKey) || 'null');
-    } catch {
-      this.currentUser = null;
+    const stored = this.readStoredSession();
+    this.token = stored.token;
+    this.currentUser = stored.user;
+
+    // Never removed: the singleton lives as long as the document does.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', this.handleStorage);
     }
+  }
+
+  /** The token and user as `localStorage` currently holds them, tolerating a corrupt user blob. */
+  private readStoredSession(): { token: string | null; user: AuthUser | null } {
+    // A browser set to refuse site data throws on the read rather than answering null, and an unreadable
+    // user blob throws on the parse. Unguarded, either would throw during construction and again on
+    // every foreign write — inside an event handler, where nothing would catch it.
+    try {
+      const token = localStorage.getItem(this.tokenKey);
+      let user: AuthUser | null = null;
+      try {
+        user = JSON.parse(localStorage.getItem(this.userKey) || 'null');
+      } catch {
+        user = null;
+      }
+      return { token, user };
+    } catch {
+      return { token: null, user: null };
+    }
+  }
+
+  /**
+   * Follow a sign-in or sign-out another tab performed.
+   *
+   * The `storage` event fires only in the other tabs, which is the whole case: signing in at `/login`
+   * has to reach an open `/play/`, and signing out at either has to reach the other. The write itself
+   * is already done by the time this runs, so the stored values are read back rather than taken from
+   * the event — one event carries one key, and the session is two.
+   */
+  private handleStorage = (event: StorageEvent) => {
+    // A null key is `localStorage.clear()`, which takes the session with it.
+    if (event.key !== null && event.key !== this.tokenKey && event.key !== this.userKey) return;
+
+    const { token, user } = this.readStoredSession();
+    const unchanged = token === this.token
+      && JSON.stringify(user ?? null) === JSON.stringify(this.currentUser ?? null);
+    if (unchanged) return;
+
+    const wasAuthenticated = !!this.token;
+    this.token = token;
+    this.currentUser = user;
+    this.notify(this.sessionChangedListeners);
+
+    // A foreign sign-out reaches the same listeners a local one does: every surface that drops an
+    // identity is already subscribed there, and the two cases want the same thing done.
+    if (wasAuthenticated && !token) this.notify(this.sessionEndedListeners);
+    if (token) this.notify(this.sessionAdoptedListeners);
+  };
+
+  /** Run every listener, isolating each: one throwing must not strand the others or escape the caller. */
+  private notify(listeners: Set<() => void>) {
+    listeners.forEach((listener) => {
+      try {
+        listener();
+      } catch (error) {
+        console.error('A session listener failed:', error);
+      }
+    });
   }
 
   /** Whether a token is held (presence check only — does not validate it against the server). */
@@ -48,6 +138,18 @@ class AuthService {
   onSessionEnded(listener: () => void): () => void {
     this.sessionEndedListeners.add(listener);
     return () => { this.sessionEndedListeners.delete(listener); };
+  }
+
+  /** Listen for another tab handing this one a signed-in session. Returns the unsubscribe. */
+  onSessionAdopted(listener: () => void): () => void {
+    this.sessionAdoptedListeners.add(listener);
+    return () => { this.sessionAdoptedListeners.delete(listener); };
+  }
+
+  /** Listen for any local or foreign change to the held session. Returns the unsubscribe. */
+  onSessionChanged(listener: () => void): () => void {
+    this.sessionChangedListeners.add(listener);
+    return () => { this.sessionChangedListeners.delete(listener); };
   }
 
   /** Authenticate, persist the token, then adopt or fetch the user profile; rethrows on failure.
@@ -72,8 +174,7 @@ class AuthService {
 
       // If the login response includes user data, store it
       if (data.user) {
-        this.currentUser = data.user;
-        localStorage.setItem(this.userKey, JSON.stringify(data.user));
+        this.adoptUser(data.user);
       } else {
         // Otherwise, fetch user profile
         await this.fetchUserProfile();
@@ -116,8 +217,11 @@ class AuthService {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Registration failed');
+        // This API answers refusals in `error`. A taken name and a taken address are two sentences with
+        // two different fixes — pick another name, or recover the account holding the address — so both
+        // are shown verbatim rather than collapsing into one generic failure.
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || 'Registration failed');
       }
 
       const data = await response.json();
@@ -127,8 +231,7 @@ class AuthService {
 
       // If the registration response includes user data, store it
       if (data.user) {
-        this.currentUser = data.user;
-        localStorage.setItem(this.userKey, JSON.stringify(data.user));
+        this.adoptUser(data.user);
       } else {
         // Otherwise, fetch user profile
         await this.fetchUserProfile();
@@ -136,8 +239,7 @@ class AuthService {
 
       // If we still don't have a username, create a basic user object with the username
       if (!this.currentUser || !this.currentUser.username) {
-        this.currentUser = { username };
-        localStorage.setItem(this.userKey, JSON.stringify(this.currentUser));
+        this.adoptUser({ username });
       }
 
       return true;
@@ -181,8 +283,7 @@ class AuthService {
         userObject.username = this.currentUser.username;
       }
 
-      this.currentUser = userObject;
-      localStorage.setItem(this.userKey, JSON.stringify(userObject));
+      this.adoptUser(userObject);
 
       return userObject;
     } catch (error) {
@@ -192,7 +293,7 @@ class AuthService {
       if (!this.currentUser || !this.currentUser.username) {
         const storedUser = JSON.parse(localStorage.getItem(this.userKey) || 'null');
         if (storedUser && storedUser.username) {
-          this.currentUser = storedUser;
+          this.adoptUser(storedUser);
         }
       }
 
@@ -236,6 +337,177 @@ class AuthService {
       console.error('Change password error:', error);
       throw error;
     }
+  }
+
+  /** Ask for a password-reset mail by username or email. */
+  async requestPasswordReset(account: string): Promise<void> {
+    const response = await fetch(`${this.API_URL}/auth/request-password-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to request a password reset');
+    }
+  }
+
+  /** Replace the password named by a reset token. */
+  async resetPassword(token: string, newPassword: string): Promise<PasswordResetResult> {
+    const response = await fetch(`${this.API_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, newPassword })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (data.code === 'TOKEN_INVALID') {
+        return {
+          reset: false,
+          message: data.error || data.message || 'That password reset link could not be used'
+        };
+      }
+      throw new Error(data.error || data.message || 'Failed to reset the password');
+    }
+
+    return { reset: true };
+  }
+
+  /**
+   * Set or replace the address on the signed-in account.
+   *
+   * The account record the server answers with is adopted whole, so the address and its verified state
+   * are read back from the one place every surface already reads the identity from.
+   *
+   * @param email - The address to write. An empty one is refused by the server; removing an address is
+   *   not offered at all
+   * @returns Whether the address is proven, and whether the verification mail went out
+   */
+  async setEmail(email: string): Promise<EmailOutcome> {
+    if (!this.token) throw new Error('Not authenticated');
+
+    const response = await fetch(`${this.API_URL}/auth/email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ email })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      // A taken address and a spent mail budget both land here, and each sentence is the one thing the
+      // reader has to act on.
+      throw new Error(data.error || data.message || 'Failed to save the email address');
+    }
+
+    if (data.user) this.adoptUser(data.user as AuthUser);
+
+    return { emailVerified: data.user?.emailVerified === true, mailSent: data.mailSent === true };
+  }
+
+  /**
+   * The address on file and whether it is proven, read fresh from the server.
+   *
+   * Deliberately does not write the cached account, which `fetchUserProfile` replaces wholesale: a read
+   * started on arrival can land after the reader has changed something else on the page, and putting
+   * the old record back would undo it. Answers null when there is no session or the read fails, which
+   * both mean "keep showing what the cached account said".
+   */
+  async fetchEmailState(): Promise<{ email: string | null; emailVerified: boolean } | null> {
+    if (!this.token) return null;
+
+    try {
+      const response = await fetch(`${this.API_URL}/auth/me`, {
+        headers: { 'Authorization': `Bearer ${this.token}` }
+      });
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const user = data.user ?? data;
+
+      return {
+        email: (user.email as string | null | undefined) ?? null,
+        emailVerified: user.emailVerified === true
+      };
+    } catch (error) {
+      console.error('Could not read the account email state:', (error as Error).message);
+      return null;
+    }
+  }
+
+  /** Ask for the verification mail again, for one that never arrived. */
+  async resendVerification(): Promise<EmailOutcome> {
+    if (!this.token) throw new Error('Not authenticated');
+
+    const response = await fetch(`${this.API_URL}/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Failed to send the verification email');
+    }
+
+    return { emailVerified: data.emailVerified === true, mailSent: data.mailSent === true };
+  }
+
+  /**
+   * Prove an address by handing back the token out of the mail.
+   *
+   * Unauthenticated, because the link is opened wherever the mail was read and that is often not the
+   * device holding the session. The token is the credential.
+   *
+   * @param token - The `token` query value off the verification link
+   */
+  async verifyEmail(token: string): Promise<VerifyEmailResult> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.API_URL}/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+    } catch (error) {
+      // Caught rather than thrown on, so a page can tell "the link is dead" from "we never asked".
+      return {
+        verified: false,
+        spent: false,
+        message: (error as Error).message || 'Could not reach the server'
+      };
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        verified: false,
+        spent: data.code === 'TOKEN_INVALID',
+        message: data.error || data.message || 'That verification link could not be used'
+      };
+    }
+
+    // A session held on this device stops saying the address is unproven — but only when the session is
+    // the one the link belongs to. A mail opened in a browser signed in as somebody else would
+    // otherwise stamp that account's record with an address it does not hold. Folded, because the
+    // server's unique index folds too.
+    const held = (this.currentUser?.email as string | null | undefined) ?? null;
+    const proven = (data.email as string | null | undefined) ?? null;
+    if (this.currentUser && held && proven && held.toLowerCase() === proven.toLowerCase()) {
+      this.adoptUser({ ...this.currentUser, emailVerified: true });
+    }
+
+    return { verified: true, email: (data.email as string | null) ?? null };
+  }
+
+  /** Write a fresh account record into the cached user, so every surface reading it follows. */
+  private adoptUser(user: AuthUser) {
+    this.currentUser = user;
+    localStorage.setItem(this.userKey, JSON.stringify(user));
+    this.notify(this.sessionChangedListeners);
   }
 
   /**
@@ -344,9 +616,7 @@ class AuthService {
   /** Write an avatar URL into the cached user, so the header changes without a round trip. */
   applyAvatar(avatarUrl: string | null) {
     if (!this.currentUser) return;
-
-    this.currentUser = { ...this.currentUser, avatarUrl };
-    localStorage.setItem(this.userKey, JSON.stringify(this.currentUser));
+    this.adoptUser({ ...this.currentUser, avatarUrl });
   }
 
   /** Loose format check for the optional registration email. */
@@ -357,20 +627,14 @@ class AuthService {
 
   /** Clear the token and user from memory and `localStorage`; also invoked on a `401` from the server. */
   logout() {
+    const changed = !!this.token || this.currentUser !== null;
     this.token = null;
     this.currentUser = null;
     localStorage.removeItem(this.tokenKey);
     localStorage.removeItem(this.userKey);
+    if (changed) this.notify(this.sessionChangedListeners);
     // After the state is cleared, so a listener that reads `isAuthenticated()` sees the session gone.
-    // Each is isolated: signing out has already happened by this point, and one subscriber throwing
-    // must not strand the others or escape into a caller — `logout()` also runs inside the 401 path.
-    this.sessionEndedListeners.forEach((listener) => {
-      try {
-        listener();
-      } catch (error) {
-        console.error('A session-ended listener failed:', error);
-      }
-    });
+    this.notify(this.sessionEndedListeners);
   }
 }
 

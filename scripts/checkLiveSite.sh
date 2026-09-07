@@ -82,6 +82,25 @@ battery() {
   esac
   check_glob "$SITE_ASSET cache-control" "*max-age=86400*" "$(cache_control "$BASE_AI$SITE_ASSET")"
 
+  # The header's account control imports this module. A 404, or a type a browser refuses to run as a
+  # module, leaves a signed-in reader looking at Sign In — and the landing page still serves 200, so
+  # nothing else here would notice.
+  check "/session.js status" "200" "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$BASE_AI/session.js")"
+  check_glob "/session.js content-type" "*javascript*" "$(content_type "$BASE_AI/session.js")"
+  check "/theme.js status" "200" "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$BASE_AI/theme.js")"
+  check_glob "/theme.js content-type" "*javascript*" "$(content_type "$BASE_AI/theme.js")"
+
+  # The account pages. /login is served by a rewrite onto /site-app/, so this proves the
+  # entry's build reached the upload root AND that the rule fired. The body check is what tells the two
+  # apart: a missing rule would serve the landing page here, which is also HTML and also 200.
+  check "/login status" "200" "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "$BASE_AI/login")"
+  check "/login content-type" "text/html" "$(content_type "$BASE_AI/login")"
+  LOGIN_BODY=$(curl -sS --max-time 20 "$BASE_AI/login")
+  case "$LOGIN_BODY" in
+    *'id="root"'*) echo "ok    /login serves the account entry" >> "$REPORT" ;;
+    *) echo "FAIL  /login serves the account entry - the served page is not it" >> "$REPORT"; fail=1 ;;
+  esac
+
   # The privacy policy. Collection on the server is only lawful once this page is public, so the deploy
   # that publishes it has to prove it, not assume it. Redirects are followed: the page is a directory
   # index, and whether Pages answers /privacy directly or sends it to /privacy/ is Cloudflare's call.

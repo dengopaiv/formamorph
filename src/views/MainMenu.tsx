@@ -60,7 +60,7 @@ import ModelStorageService from '../services/ModelStorageService';
 import AuthService from '../services/AuthService';
 import type { World, Stat, CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, ServerEvent, WorldOverview } from '@/types';
 import { migrateWorld } from '@/lib/version';
-import { isDesktop } from '@/lib/imageGen/desktop';
+import { updateBridge } from '@/lib/updates/updateBridge';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { UpdateVersionControl } from '@/components/menu/UpdateVersionControl';
 import { WebVersionChangelog } from '@/components/menu/WebVersionChangelog';
@@ -334,8 +334,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // DEV dev-router: open Settings (or the Load menu) when the hash asks. Tree-shaken in prod.
   const devRoute = useDevRoute();
   const isMobile = useIsMobile();
+  // Whether this build can install an update. The Android app is always "mobile", so its version line has
+  // to stay in the footer rather than collapsing into the ⋯ menu — an update offer nobody opens is no offer.
+  const canUpdate = updateBridge() !== null;
   // The age attestation every community surface waits on (see AgeGateContext).
-  const { attested, gateOpen, requireAttestation } = useAgeGate();
+  const { attested, gateOpen, requireAttestation, requireAuthentication } = useAgeGate();
 
   /**
    * Open Community Creations, asking for the age attestation first.
@@ -362,6 +365,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     // The likers list hangs off a listing's details, so this route opens the catalog and lands there.
     if (devRoute?.modal === 'likers') openCommunityBrowser();
     if (devRoute?.modal === 'profile') setShowProfileDialog(true);
+    if (devRoute?.modal === 'auth') setShowAuthDialog(true);
     if (devRoute?.modal === 'feedbackHub') setShowFeedback(true);
     if (devRoute?.modal === 'adminPanel') setShowAdminPanel(true);
     if (devRoute?.modal === 'worldEditor') setShowWorldEditor(true);
@@ -473,6 +477,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [currentUser, setCurrentUser] = useState<WorldRecord | null>(null);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
+  // Bumped when another tab signs in, so the identity below is re-read rather than left as this tab
+  // found it. Signing in on formamorph.ai writes the same storage keys this build reads.
+  const [adoptedSessionNonce, setAdoptedSessionNonce] = useState(0);
 
   // The two footer circles explain themselves, and only ever one of them is on screen: the profile circle
   // offers an account while signed out, the feedback circle appears once there is one.
@@ -638,7 +645,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     };
 
     checkAuth();
-  }, [attested]);
+  }, [attested, adoptedSessionNonce]);
 
   // Reload the world grid from storage. Reused on mount and after the World Editor modal closes so the
   // grid reflects renames/edits/deletes without remounting MainMenu (mirrors refreshDictionaries/Entities).
@@ -1414,6 +1421,13 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     setUnreadMessages(0);
   }), []);
 
+  // Signing in is raised from more than this screen's dialog too: /login on the site writes the same
+  // session, and this tab has to show it without a reload. The check above does the adopting — it is
+  // already the one path that waits on the age attestation and refreshes the profile.
+  useEffect(() => AuthService.onSessionAdopted(() => {
+    setAdoptedSessionNonce((nonce) => nonce + 1);
+  }), []);
+
   // Handle logout
   const handleLogout = () => {
     AuthService.logout();
@@ -1912,7 +1926,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 // An account is what unlocks profiles and comments, so signing up sits behind the same
                 // attestation the browser does. A player who already attested is not asked twice.
                 if (isAuthenticated) setShowProfileDialog(true);
-                else requireAttestation({ onAccept: () => setShowAuthDialog(true) });
+                else requireAuthentication({ onAccept: () => setShowAuthDialog(true) });
               }}
               aria-label={
                 isAuthenticated
@@ -1983,7 +1997,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               </TooltipPortal>
             </Tooltip>
           )}
-          {!isMobile && (isDesktop() ? <UpdateVersionControl /> : <WebVersionChangelog />)}
+          {canUpdate ? <UpdateVersionControl /> : !isMobile && <WebVersionChangelog />}
         </div>
 
         {/* Center: copyright + origin credit (original is MIT — see THIRD-PARTY-NOTICES / legal/). The
@@ -2026,7 +2040,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 </button>
               </PopoverTrigger>
               <PopoverContent align="end" side="top" className="w-56 flex flex-col gap-1">
-                {isDesktop() ? <UpdateVersionControl /> : <WebVersionChangelog />}
+                {!canUpdate && <WebVersionChangelog />}
                 <a
                   href="https://www.patreon.com/JakeJamesNSFW"
                   target="_blank"
@@ -2683,7 +2697,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           hideClose
           onEscapeKeyDown={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
-          className="max-w-none w-screen h-dvh sm:max-w-none left-0 top-0 translate-x-0 translate-y-0 rounded-none sm:rounded-none p-0 gap-0 flex flex-col data-[state=open]:!slide-in-from-top-0 data-[state=open]:!slide-in-from-left-0 data-[state=closed]:!slide-out-to-top-0 data-[state=closed]:!slide-out-to-left-0"
+          className="max-w-none w-screen h-dvh sm:max-w-none left-0 top-0 translate-x-0 translate-y-0 rounded-none sm:rounded-none p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] gap-0 flex flex-col data-[state=open]:!slide-in-from-top-0 data-[state=open]:!slide-in-from-left-0 data-[state=closed]:!slide-out-to-top-0 data-[state=closed]:!slide-out-to-left-0"
         >
           <DialogTitle className="sr-only">World Editor</DialogTitle>
           <WorldEditor
