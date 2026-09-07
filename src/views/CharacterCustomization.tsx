@@ -14,6 +14,7 @@ import { useGameData } from '../contexts/GameDataContext';
 import type { CharacterData, ModelMetadata } from '@/types';
 import ModelStorageService from '@/services/ModelStorageService';
 import { usePlayerModelUrl } from '@/lib/usePlayerModelUrl';
+import { useBackStop } from '@/hooks/useBackStop';
 import { useVrmCustomization } from '@/lib/useVrmCustomization';
 import { DEFAULT_AVATAR_ID, DEFAULT_AVATAR_URL } from '@/lib/defaultAvatar';
 import { toast } from 'react-toastify';
@@ -26,6 +27,9 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
   onAbort?: () => void;
 }) => {
   const { worldOverview } = useGameData();
+  // This screen replaces the menu rather than layering over it, so the Android back button cannot see it
+  // and would offer to close the app instead. Whichever way out the flow gave us is the back step.
+  useBackStop(onBack ?? onAbort);
   // The sliders and color pickers (and the state that drives the preview) live in the shared hook, so the
   // model-library details modal can offer the same controls to test an exported model.
   const { setCaps, vrmViewerRef, viewerProps, controls, characterData } = useVrmCustomization();
@@ -154,7 +158,7 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
   }
 
   return (
-    <div className="flex app-viewport">
+    <div className="flex app-viewport pt-[env(safe-area-inset-top)]">
       {viewer}
       <Card className="w-1/3 m-4 flex flex-col overflow-hidden">
         <ScrollArea className="flex-1 min-h-0">

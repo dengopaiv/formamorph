@@ -17,13 +17,17 @@ import {
 } from '../lib/imageEndpointPresets';
 import {
   textEndpointPresetCodec, emptyStore as emptyTextStore, presetStoreFromEnv as textPresetStoreFromEnv,
-  DEFAULT_TEXT_PRESET_ID, BUILTIN_ENGINE_PRESET_ID, builtinTextPresets,
+  DEFAULT_TEXT_PRESET_ID, DEFAULT_TEXT_ENDPOINT_VALUES, BUILTIN_ENGINE_PRESET_ID, builtinTextPresets,
   activeValues as textActiveValues, isBuiltInActive as isTextBuiltInActive,
+  valuesForId as textValuesForId,
   isEngineActive as isTextEngineActive, setActive as textSetActive,
   addPreset as textAddPreset, renamePreset as textRenamePreset, deletePreset as textDeletePreset,
-  resetPreset as textResetPreset, updateValue as textUpdateValue,
+  resetPreset as textResetPreset, updateValue as textUpdateValue, updateSamplerOverride as textUpdateSamplerOverride,
+  updateMaxOutputOverride as textUpdateMaxOutputOverride,
   type TextEndpointPresetStore, type TextEndpointValues, type TextEndpointValueKey,
 } from '../lib/textEndpointPresets';
+import type { EndpointSampler } from '../lib/endpointSamplers';
+import type { RejectedEndpointOverride } from '../lib/aiRequest/rejectedOverride';
 import { fetchContextLength } from '../lib/contextLength';
 import { normalizeEndpointUrl } from '../lib/endpointUrl';
 import { registerDevHook } from '../lib/devRouter';
@@ -135,7 +139,8 @@ function seedTextPresetStore(): TextEndpointPresetStore {
     model: get('modelName') ?? DEFAULT_MODEL_NAME,
     contextWindowOverride:
       overrideRaw === null || overrideRaw === '' || !Number.isFinite(parseInt(overrideRaw)) ? null : parseInt(overrideRaw),
-    maxTokens: maxRaw === null ? DEFAULT_MAX_TOKENS : parseInt(maxRaw) || DEFAULT_MAX_TOKENS,
+    maxOutputOverride: { enabled: true, value: maxRaw === null ? DEFAULT_MAX_TOKENS : parseInt(maxRaw) || DEFAULT_MAX_TOKENS },
+    samplerOverrides: DEFAULT_TEXT_ENDPOINT_VALUES.samplerOverrides,
   };
   // Endpoints compare normalized: a legacy install stashed the built-in as a full chat-completions URL, and
   // the shipped default is now the base URL — the same endpoint either way, so it isn't a custom config.
@@ -456,12 +461,50 @@ function useProvideSettings() {
       setTextPresetStore((s) => textUpdateValue(s, key, value)),
     [setTextPresetStore],
   );
-  const { endpoint: endpointUrl, apiToken, model: modelName, contextWindowOverride, maxTokens } = textValues;
+  const { endpoint: endpointUrl, apiToken, model: modelName, contextWindowOverride, maxOutputOverride } = textValues;
+  const maxTokens = maxOutputOverride.value;
   const setEndpointUrl = useMemo(() => patchText('endpoint'), [patchText]);
   const setApiToken = useMemo(() => patchText('apiToken'), [patchText]);
   const setModelName = useMemo(() => patchText('model'), [patchText]);
   const setContextWindowOverride = useMemo(() => patchText('contextWindowOverride'), [patchText]);
-  const setMaxTokens = useMemo(() => patchText('maxTokens'), [patchText]);
+  const setMaxTokens = useCallback((value: number) => {
+    setTextPresetStore((store) => {
+      const current = textActiveValues(store).maxOutputOverride;
+      return textUpdateMaxOutputOverride(store, store.activeId, { ...current, value });
+    });
+  }, [setTextPresetStore]);
+  const setMaxOutputOverrideEnabled = useCallback((enabled: boolean) => {
+    setTextPresetStore((store) => {
+      const current = textActiveValues(store).maxOutputOverride;
+      return textUpdateMaxOutputOverride(store, store.activeId, { ...current, enabled });
+    });
+  }, [setTextPresetStore]);
+  const setEndpointSampler = useCallback((sampler: EndpointSampler, patch: { enabled?: boolean; value?: number }) => {
+    setTextPresetStore((store) => {
+      const current = textActiveValues(store).samplerOverrides[sampler];
+      return textUpdateSamplerOverride(store, store.activeId, sampler, { ...current, ...patch });
+    });
+  }, [setTextPresetStore]);
+  const setEndpointSamplerEnabled = useCallback(
+    (sampler: EndpointSampler, enabled: boolean) => setEndpointSampler(sampler, { enabled }),
+    [setEndpointSampler],
+  );
+  const setEndpointSamplerValue = useCallback(
+    (sampler: EndpointSampler, value: number) => setEndpointSampler(sampler, { value }),
+    [setEndpointSampler],
+  );
+  /** Disable the captured request target's rejected override without changing its remembered value. */
+  const disableEndpointOverride = useCallback((id: string, override: RejectedEndpointOverride) => {
+    setTextPresetStore((store) => {
+      if (id !== DEFAULT_TEXT_PRESET_ID && !store.presets.some((preset) => preset.id === id)) return store;
+      if (override === 'maxOutput') {
+        const current = textValuesForId(store, id).maxOutputOverride;
+        return textUpdateMaxOutputOverride(store, id, { ...current, enabled: false });
+      }
+      const current = textValuesForId(store, id).samplerOverrides[override];
+      return textUpdateSamplerOverride(store, id, override, { ...current, enabled: false });
+    });
+  }, [setTextPresetStore]);
   const textIsBuiltInActive = isTextBuiltInActive(textPresetStore);
 
   // The bundled engine is an endpoint preset now, not a mode, so "am I on my own endpoint" is simply
@@ -511,7 +554,7 @@ function useProvideSettings() {
   const engineState = useLocalLlmStatus();
   // Honor the desktop local engine's own cap when it's active; otherwise the active endpoint preset's cap
   // (the Default preset holds DEFAULT_MAX_TOKENS, so a Default selection matches the shared-endpoint cap).
-  const activeMaxTokens = localModelActive ? localMaxTokens : maxTokens;
+  const activeMaxTokens = localModelActive ? localMaxTokens : maxOutputOverride.enabled ? maxTokens : undefined;
 
   // Generation sampling for the local model — sent while the local engine is active.
   const [genTemperature, setGenTemperature] = usePersistentState<number>(`${APP_ID}_genTemperature`, DEFAULT_GEN_TEMPERATURE, floatCodec);
@@ -946,7 +989,16 @@ function useProvideSettings() {
   const selectTextEndpointPreset = (id: string) => setTextPresetStore((s) => textSetActive(s, id));
   const addTextEndpointPreset = (name: string) => {
     const id = randomUUID();
-    setTextPresetStore((s) => textAddPreset(s, id, name, textActiveValues(s)));
+    setTextPresetStore((s) => {
+      const source = textActiveValues(s);
+      return textAddPreset(s, id, name, {
+        ...source,
+        maxOutputOverride: { ...source.maxOutputOverride, enabled: false },
+        samplerOverrides: Object.fromEntries(
+          Object.entries(source.samplerOverrides).map(([sampler, override]) => [sampler, { ...override, enabled: false }]),
+        ) as typeof source.samplerOverrides,
+      });
+    });
     return id;
   };
   const renameTextEndpointPreset = (id: string, name: string) => setTextPresetStore((s) => textRenamePreset(s, id, name));
@@ -1261,6 +1313,12 @@ function useProvideSettings() {
     setModelName,
     maxTokens,
     setMaxTokens,
+    maxOutputOverrideEnabled: maxOutputOverride.enabled,
+    setMaxOutputOverrideEnabled,
+    endpointSamplerOverrides: textValues.samplerOverrides,
+    setEndpointSamplerEnabled,
+    setEndpointSamplerValue,
+    disableEndpointOverride,
     localMaxTokens,
     setLocalMaxTokens,
     engineWanted,

@@ -1,20 +1,24 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { streamAiRequest, AiStreamError, ABORTED_FINISH_REASON, type AiStreamEvent } from './aiStream';
 import type { AiRequestSpec } from './aiRequestSpec';
+import { defaultEndpointSamplerOverrides } from '@/lib/endpointSamplers';
 
 const spec: AiRequestSpec = {
   url: 'http://localhost:1234/v1/chat/completions',
   headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token' },
   body: { model: 'test-model', messages: [{ role: 'user', content: 'hi' }], max_tokens: 64, stream: true },
   target: {
+    endpointId: 'test-endpoint',
     url: 'http://localhost:1234/v1/chat/completions',
     apiToken: 'token',
     model: 'test-model',
     maxTokens: 64,
     localEngine: false,
+    samplerOverrides: defaultEndpointSamplerOverrides(),
     supportedReasoningEfforts: null,
   },
   requestType: 'narration',
+  samplerSources: {},
 };
 
 /** A response whose body yields exactly the given chunks, so tests control every split point. */
@@ -134,6 +138,22 @@ describe('streamAiRequest', () => {
     await expect(collect(iterator)).rejects.toMatchObject({ kind: 'http', status: 503 });
     await expect(collect(streamAiRequest(spec, { fetchImpl: fetchOf(streamingResponse([], { ok: false, status: 503 })) })))
       .rejects.toBeInstanceOf(AiStreamError);
+  });
+
+  it('carries a structured server rejection through the stream boundary', async () => {
+    const rejected = new Response(JSON.stringify({
+      error: { message: 'top_p is not supported', type: 'invalid_request_error', param: 'top_p' },
+    }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+
+    await expect(collect(streamAiRequest(spec, { fetchImpl: fetchOf(rejected) }))).rejects.toMatchObject({
+      kind: 'http',
+      status: 400,
+      serverError: {
+        message: 'top_p is not supported',
+        parameter: 'top_p',
+        type: 'invalid_request_error',
+      },
+    });
   });
 
   it('throws a typed no-body error when the response has no stream', async () => {

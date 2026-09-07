@@ -79,9 +79,10 @@ import { selectRelevantDiary } from "../lib/semanticDiary";
 import { selectDueDiscovery, materializeDiscoveredEntity, discoveredAsEntities, cleanDiscoveredDescription, pruneDiscoveredToHistory, INITIAL_SOURCE_TURN_ID } from "../lib/runtimeCharacters";
 import { entityIdsAt } from "../lib/entityPresence";
 import { selectRegenSource, buildRegenContext, buildRegenUserMessage, REGEN_LABELS } from "../lib/discoveredRegen";
-import { trimToLastSentence } from "../lib/outputLength";
+import { outputReserve, trimToLastSentence } from "../lib/outputLength";
 import { buildAiRequestSpec, type AiSettingsSnapshot } from "../lib/aiRequest/aiRequestSpec";
 import { streamAiRequest, ABORTED_FINISH_REASON, DEFAULT_REASONING_THROTTLE_MS } from "../lib/aiRequest/aiStream";
+import { surfaceRejectedEndpointOverride } from "../lib/aiRequest/rejectedOverrideNotice";
 import { splitSentenceSegments } from "../lib/ttsChunks";
 import { selectDueDigests, applyDigest, applyImportance, parseTurnContent, recentParticipants, selectDueDiaries, pendingDiaryNames, applyDiary, collectCharacterDiary } from "../lib/turnDigest";
 import { buildTraitContext } from "../lib/traitTree";
@@ -371,6 +372,7 @@ const GameViewer = ({
     // Per-prompt endpoint routing: every AI call resolves its own target, so a prompt pinned to another
     // preset sends there. An unpinned prompt resolves to the active endpoint, i.e. the values above.
     resolveEndpointForKind,
+    disableEndpointOverride,
     disableThinking,
     genTemperature,
     genTopP,
@@ -1236,7 +1238,8 @@ const GameViewer = ({
   // The planner resolves its own below, since routing may point the two at very differently-sized models.
   const narrationEndpoint = useMemo(() => resolveEndpointForKind('narration'), [resolveEndpointForKind]);
   const contextWindow = narrationEndpoint.contextWindow;
-  const maxTokens = narrationEndpoint.maxTokens;
+  const narrationMaxTokens = narrationEndpoint.maxTokens;
+  const maxTokens = outputReserve(narrationMaxTokens);
 
   const getTrimmedMessageHistory = useCallback((promptTokens = 0, action = "", relevanceScores: Map<string, number> | null = null, actionVec: Float32Array | null = null, liveRecall = false) => {
     const turns = parseEffectiveTurns(fullMessageHistory);
@@ -1910,7 +1913,7 @@ const GameViewer = ({
           embedVectors: embedVectorsRef.current,
           language,
           paragraphLimit,
-          maxTokens,
+          maxTokens: narrationMaxTokens,
           markdownOutput,
           sectionStyle: activeSectionStyle,
           resolvePH,
@@ -2721,12 +2724,17 @@ const GameViewer = ({
       // No AbortError case: the stream turns both the fetch rejection and the read rejection into a
       // graceful `done`, so a user stop lands on the aborted branch above and never reaches here.
       console.error("Error in makeAIRequest:", error);
-      // A failed silent request (the digest) is non-fatal — let the drainer swallow it without a toast.
-      if (silent) throw error;
-      // A network failure (server off / wrong URL / CORS disabled) is opaque and unactionable from the
-      // generic toast — offer the connection guide instead. The turn knows this already showed, because it
-      // knows the failed request wasn't silent.
-      if (isLikelyConnectionError(error)) {
+      const rejectedOverride = surfaceRejectedEndpointOverride(error, spec, target.presetName, disableEndpointOverride);
+      if (rejectedOverride) {
+        // A persisted settings change must explain itself even when the caller otherwise suppresses failures.
+        if (silent) throw error;
+      } else if (silent) {
+        // A failed silent request (the digest) is non-fatal — let the drainer swallow it without a toast.
+        throw error;
+      } else if (isLikelyConnectionError(error)) {
+        // A network failure (server off / wrong URL / CORS disabled) is opaque and unactionable from the
+        // generic toast — offer the connection guide instead. The turn knows this already showed, because it
+        // knows the failed request wasn't silent.
         toast.error(
           <div className="flex flex-col items-start gap-1">
             <span>Couldn&apos;t reach your AI server.</span>
@@ -3950,7 +3958,7 @@ const GameViewer = ({
 
   return (
     <div
-      className={`flex ${isMobile ? "flex-col" : "p-4"} app-viewport isolate text-label md:text-body bg-background overflow-hidden`}
+      className={`flex ${isMobile ? "flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]" : "p-4"} app-viewport isolate text-label md:text-body bg-background overflow-hidden`}
     >
       {locationBackground && (
         <LocationBackdrop

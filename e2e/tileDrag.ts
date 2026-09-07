@@ -55,6 +55,12 @@ export interface DragOptions {
   onHeld?: () => Promise<void>;
   /** Points to travel through on the way, for a gesture that turns rather than going straight there. */
   via?: { x: number; y: number }[];
+  /** Which half of the destination tile to rest on. See {@link aimAt}; defaults to dead center. */
+  aim?: 'center' | 'near' | 'far';
+  /** Re-reads the destination once the travel is done, for a list that scrolled under the hand. */
+  reaim?: () => Promise<{ x: number; y: number }>;
+  /** How far off the destination's center `aim` steps, in px. See {@link aimAt}. */
+  reach?: number;
 }
 
 /**
@@ -70,17 +76,25 @@ export async function dragTile(
   toIndex: number,
   options: DragOptions = {},
 ): Promise<void> {
-  await dragBetween(page, await tileCenter(page, fromIndex), await tileCenter(page, toIndex), options);
+  const box = await tiles(page).nth(toIndex).boundingBox();
+  await dragBetween(page, await tileCenter(page, fromIndex), await tileCenter(page, toIndex), {
+    reach: box ? reachOf(box) : undefined,
+    reaim: () => tileCenter(page, toIndex),
+    ...options,
+  });
 }
 
 /** The same gesture between two points, for a tile the thumbnail selectors do not reach — a folder. */
 export async function dragBetween(
   page: Page,
   start: { x: number; y: number },
-  end: { x: number; y: number },
+  target: { x: number; y: number },
   options: DragOptions = {},
 ): Promise<void> {
-  const { steps = 12, hold = 250, interval = 0, cancel = false, onHeld, via = [] } = options;
+  const {
+    steps = 12, hold = 250, interval = 0, cancel = false, onHeld, via = [], aim, reaim, reach,
+  } = options;
+  const end = aimAt(start, target, aim, reach);
 
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
@@ -97,6 +111,15 @@ export async function dragBetween(
     from = leg;
   }
   await page.mouse.move(end.x, end.y);
+  if (reaim) {
+    // A list auto-scrolls when a drag nears its edge, so the tile aimed at may not be where it was when
+    // the travel began. Re-read it and correct, which is what a hand watching the screen does.
+    await page.waitForTimeout(150);
+    const corrected = aimAt(start, await reaim(), aim, reach);
+    if (Math.hypot(corrected.x - end.x, corrected.y - end.y) > 2) {
+      await page.mouse.move(corrected.x, corrected.y, { steps: 3 });
+    }
+  }
   if (hold) await page.waitForTimeout(hold);
   await onHeld?.();
   if (cancel) await page.keyboard.press('Escape');
@@ -306,6 +329,45 @@ export function boardCells(page: Page): Promise<Record<string, TileCell>> {
   });
 }
 
+/** How far off a target's center an aimed rest lands when the caller has not measured the tile, in px. */
+const AIM_REACH = 30;
+
+/** A quarter of a tile's smaller side: clear of the split, and well inside the tile at every size. */
+const reachOf = (box: { width: number; height: number }) => Math.min(box.width, box.height) / 4;
+
+/**
+ * Where to rest on a target for a given intent.
+ *
+ * The drag splits a target along the line from the pickup: resting past its center moves it, resting
+ * short of the center folds the two into a folder. `far` and `near` step off the center along that line
+ * by `reach`, which lands in the right half from whichever side the drag approaches — and keeps a test
+ * that means one of the two off the boundary between them. The step is a distance rather than a share
+ * of the travel, because a long carry onto a small tile would otherwise overshoot it entirely.
+ */
+export function aimAt(
+  from: { x: number; y: number },
+  target: { x: number; y: number },
+  aim: 'center' | 'near' | 'far' = 'center',
+  reach = AIM_REACH,
+): { x: number; y: number } {
+  if (aim === 'center') return target;
+  const length = Math.hypot(target.x - from.x, target.y - from.y) || 1;
+  const step = (aim === 'far' ? reach : -reach) / length;
+  return { x: target.x + (target.x - from.x) * step, y: target.y + (target.y - from.y) * step };
+}
+
+/** The center of a footprint on the page, for a tile the thumbnail selectors do not reach. */
+export function cellCenter(
+  pitch: { left: number; top: number; x: number; y: number },
+  cell: TileCell,
+  gap = 16,
+): { x: number; y: number } {
+  return {
+    x: pitch.left + cell.col * pitch.x + (cell.span * pitch.x - gap) / 2,
+    y: pitch.top + cell.row * pitch.y + (cell.span * pitch.y - gap) / 2,
+  };
+}
+
 /** The grid's own geometry, so a cell can be turned into a point on the page. */
 export function gridPitch(page: Page): Promise<{ left: number; top: number; x: number; y: number }> {
   return page.evaluate(() => {
@@ -323,13 +385,18 @@ export function gridPitch(page: Page): Promise<{ left: number; top: number; x: n
  * Carry one named tile until its top-left corner sits on a chosen base cell.
  *
  * The drag is aimed at the tile's corner rather than at another tile, because a mixed-size board has
- * cells no tile occupies and the whole point is which cell the footprint claims.
+ * cells no tile occupies and the whole point is which cell the footprint claims. There is no target
+ * tile to take a side of, so `aim` has no meaning here; use {@link dragTile} where it does.
  */
 export async function dragTileToCell(
   page: Page,
   name: string,
   cell: { row: number; col: number },
-  options: DragOptions & { via?: never; through?: { row: number; col: number }[] } = {},
+  options: DragOptions & {
+    via?: never;
+    aim?: never;
+    through?: { row: number; col: number }[];
+  } = {},
 ): Promise<void> {
   const box = await page.getByRole('img', { name, exact: true }).first().boundingBox();
   if (!box) throw new Error(`no tile named ${name}`);
@@ -386,4 +453,51 @@ export function startTransformSampler(page: Page): Promise<void> {
 /** The furthest any tile was pushed since the last {@link startTransformSampler}, in pixels. */
 export function maxTransformSeen(page: Page): Promise<number> {
   return page.evaluate(() => Math.round((window as unknown as { __shiftMax: number }).__shiftMax));
+}
+
+/**
+ * Carry one tile with a finger: press, hold still until the touch sensor lets go of the scroll, travel,
+ * rest, and lift.
+ *
+ * Dispatched through the browser's own input pipeline rather than synthesized in the page, because a
+ * scripted `TouchEvent` is untrusted and the board reads the real one. The still press is the gesture's
+ * own: the touch sensor waits 200ms with the finger within a few pixels, which is what tells a drag
+ * apart from a scroll.
+ */
+export async function touchDrag(
+  page: Page,
+  start: { x: number; y: number },
+  target: { x: number; y: number },
+  options: {
+    steps?: number;
+    hold?: number;
+    aim?: 'center' | 'near' | 'far';
+    reach?: number;
+    /** Runs once the finger has arrived and rested, just before it lifts. */
+    onHeld?: () => Promise<void>;
+  } = {},
+): Promise<void> {
+  const { steps = 12, hold = 600, aim, reach, onHeld } = options;
+  const end = aimAt(start, target, aim, reach);
+  const cdp = await page.context().newCDPSession(page);
+  const point = (x: number, y: number) => [{ x, y, radiusX: 1, radiusY: 1, force: 1 }];
+  const send = (type: 'touchStart' | 'touchMove' | 'touchEnd', at?: { x: number; y: number }) =>
+    cdp.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: at ? point(at.x, at.y) : [],
+    });
+
+  await send('touchStart', start);
+  await page.waitForTimeout(300);
+  for (let i = 1; i <= steps; i++) {
+    await send('touchMove', {
+      x: start.x + ((end.x - start.x) * i) / steps,
+      y: start.y + ((end.y - start.y) * i) / steps,
+    });
+  }
+  await page.waitForTimeout(hold);
+  await onHeld?.();
+  await send('touchEnd');
+  await page.waitForTimeout(300);
+  await cdp.detach();
 }

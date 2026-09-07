@@ -54,7 +54,7 @@ export interface NarrationPromptInput {
   embedVectors: Map<string, Float32Array>;
   language: string;
   paragraphLimit: ParagraphLimit;
-  maxTokens: number;
+  maxTokens: number | undefined;
   markdownOutput: boolean;
   sectionStyle: SectionStyle;
   /** Placeholder resolution, which depends on this playthrough's rolled values. */

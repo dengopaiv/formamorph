@@ -216,7 +216,7 @@ export const SAMPLE_PREVIEW_VALUES: Record<string, string> = Object.fromEntries(
 /** Settings the derived layer reads. Exactly the inputs the real guidance functions take. */
 export interface DerivedPreviewSettings {
   paragraphLimit: ParagraphLimit;
-  maxTokens: number;
+  maxTokens: number | undefined;
   markdownOutput: boolean;
   sectionStyle: SectionStyle;
   limitActiveCharacters: boolean;
