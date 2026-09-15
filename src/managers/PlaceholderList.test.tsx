@@ -251,9 +251,9 @@ describe('PlaceholderList — folders over the shared list', () => {
     render(<WorldHarness initial={GROUPED} groups={groups} />);
     const visible = adapter!.getVisible(new Set());
     // Gear over Town, one indent in: under a row, which a folder cannot land in.
-    expect(adapter!.projectDepth(visible, 'gear', 'town', 24)).toBeNull();
+    expect(adapter!.project(visible, 'gear', 'town', 24)).toBeNull();
     // Gear over Body at the same depth: a legal reorder, so the indicator stays.
-    expect(adapter!.projectDepth(visible, 'gear', 'body', 0)).toBe(0);
+    expect(adapter!.project(visible, 'gear', 'body', 0)?.depth).toBe(0);
   });
 
   it('writes the folder move the pure module resolved', () => {

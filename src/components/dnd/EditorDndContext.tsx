@@ -31,6 +31,12 @@ export interface EditorDndContextProps {
   modifiers?: Modifier[];
   /** Defaults to scrolling only a real inner viewport. `false` for a strip that has none. */
   autoScroll?: DndContextProps['autoScroll'];
+  /**
+   * Screen-reader instructions and live announcements. Worth passing wherever dnd-kit's stock wording is
+   * wrong about the gesture — a depth-nesting tree moves sideways as well as up and down, and the stock
+   * text only knows the vertical axis.
+   */
+  accessibility?: DndContextProps['accessibility'];
   measuring?: DndContextProps['measuring'];
   onDragStart?: (event: DragStartEvent) => void;
   onDragMove?: (event: DragMoveEvent) => void;
@@ -61,6 +67,7 @@ export function EditorDndContext({
   collisionDetection = closestCenter,
   modifiers = VERTICAL_LIST_MODIFIERS,
   autoScroll = CONTAINED_AUTO_SCROLL,
+  accessibility,
   measuring,
   onDragStart,
   onDragMove,
@@ -78,6 +85,7 @@ export function EditorDndContext({
       collisionDetection={collisionDetection}
       modifiers={modifiers}
       autoScroll={autoScroll}
+      accessibility={accessibility}
       measuring={measuring}
       onDragStart={(event) => { setActiveId(String(event.active.id)); onDragStart?.(event); }}
       onDragMove={onDragMove}

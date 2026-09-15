@@ -125,10 +125,10 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
     getVisible: (collapsed) => removeCollapsedPlaceholderRows(nodes, collapsed),
     // Over a world the indicator refuses what the drop would (a scoped row into a folder, a folder under
     // a row), so the indent never promises a landing that will not happen.
-    projectDepth: (visible, activeId, overId, offsetLeft) => {
+    project: (visible, activeId, overId, offsetLeft) => {
       const { depth, parentId } = getPlaceholderDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT);
       if (lists && !scope && !placeholderDropAllowed(lists, nodes, activeId, parentId)) return null;
-      return depth;
+      return { depth, parentId };
     },
     onDrop,
     rowSpec: (node) => {
@@ -140,6 +140,7 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
           collapseLabels: ['Expand group', 'Collapse group'],
           icon: <Folder className="h-4 w-4 shrink-0" />,
           label: node.group.name,
+          name: node.group.name,
           labelClass: 'font-medium',
           remove: () => {
             if (!lists || !setLists) return;
@@ -159,6 +160,9 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
             ? <User className="h-4 w-4 shrink-0" />
             : <BookOpen className="h-4 w-4 shrink-0" />,
           label: <PlaceholderText text={node.owner.name} placeholders={placeholders} />,
+          // The label is a node that resolves chips; a live region needs the words, so it reads the
+          // owner's name as authored.
+          name: node.owner.name,
           labelClass: 'font-medium',
           fixed: true,
         };
@@ -184,6 +188,7 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
           </Tip>
         ) : undefined,
         label: placeholder.name,
+        name: placeholder.name,
         meta: usedBy ? `Used by ${usedBy.count}` : undefined,
         metaTitle: usedBy ? `Held as a value of ${usedBy.names.join(', ')}` : undefined,
         actions: shared || holderId === null ? undefined : [{

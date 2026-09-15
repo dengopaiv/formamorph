@@ -267,6 +267,18 @@ Two consequences worth knowing:
 
 If the AI's answer doesn't match a connected place, it's discarded and nothing is offered — the story can never teleport the player somewhere unconnected.
 
+### Building the tree
+
+A new location always arrives at the top level. Nesting it is a separate move, and there are three ways to make it:
+
+| | How |
+|---|---|
+| **List view** | Drag a row by its grip. Up and down reorder; **sideways sets depth** — one step right per level. A row can go at most one level deeper than the row above it. |
+| **Keyboard** | Tab to a row's grip, press **space** to lift it, then **↑ ↓** to move it through the list and **← →** to take it out of or into the row above. **Space** drops it, **escape** puts it back. |
+| **Canvas view** | Drag a box into another box. One that already holds something takes the drop on contact; over a **childless** box, hold still for half a second — it lights up to show it is armed, and releasing nests into it. Release without waiting and the box has only moved. |
+
+> 💡 **Deleting a parent never deletes the branch.** Its children move up to take its place, one level shallower.
+
 ### What reaches the AI
 
 | Field | Sent? |
