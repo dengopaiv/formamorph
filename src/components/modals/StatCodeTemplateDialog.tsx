@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   dialogFullHeightMobile,
@@ -29,9 +29,13 @@ import {
   parseTemplateSlots,
   resolveSlotValue,
   validateSlotValues,
+  isNameSlotType,
+  templatesForTiming,
+  type NameSlotType,
   type StatCodeTemplate,
   type TemplateSlot,
 } from '@/lib/statCodeTemplates';
+import { STAT_CODE_TIMINGS, TIMING_LABEL, type StatCodeTiming } from '@/lib/statCodeTiming';
 import {
   buildTemplatePack,
   deleteUserTemplate,
@@ -42,36 +46,74 @@ import {
 } from '@/services/StatTemplateStorageService';
 import type { Stat } from '@/types';
 import { Tip } from '@/components/ui/tooltip';
+import { Meta } from '@/components/ui/typography';
 
-const BLANK_TEMPLATE: StatCodeTemplate = {
+/** A new template starts in the box the author opened the menu from, which is where they were about to
+ *  paste it. The Runs field is right there to move it. */
+const blankTemplate = (timing: StatCodeTiming): StatCodeTemplate => ({
   id: '',
   name: '',
   description: '',
   code: 'return {{amount:number=1}};',
+  timing,
+});
+
+export interface StatTemplateRepository {
+  list: () => Promise<StatCodeTemplate[]>;
+  save: (template: StatCodeTemplate) => Promise<StatCodeTemplate>;
+  remove: (id: string) => Promise<void>;
+  import: (templates: StatCodeTemplate[]) => Promise<number>;
+}
+
+export interface StatTemplateFileTransfer {
+  readImportPack: () => Promise<string | null>;
+  writeExportPack: (contents: string, filename: string) => void;
+}
+
+const productionRepository: StatTemplateRepository = {
+  list: listUserTemplates,
+  save: saveUserTemplate,
+  remove: deleteUserTemplate,
+  import: importTemplates,
 };
 
-/** One control for one slot. Stat and daypart slots pick from a list so the generated string is always
+/** The world's names a name slot of each type picks from. */
+type SlotNames = Record<NameSlotType, readonly string[]>;
+
+/** What a name slot's empty picker asks for. */
+const PICK_PROMPT: Record<NameSlotType, string> = {
+  stat: 'Pick a stat…', placeholder: 'Pick a placeholder…', trait: 'Pick a trait…',
+};
+
+/** One control for one slot. Name and daypart slots pick from a list so the generated string is always
  *  a name the sandbox will actually match. */
-function SlotField({ slot, value, problem, stats, onChange }: {
+function SlotField({ slot, value, problem, names, onChange }: {
   slot: TemplateSlot;
   value: string;
   problem?: string;
-  stats: Stat[];
+  names: SlotNames;
   onChange: (value: string) => void;
 }) {
   /** What the author is part-way through typing, or null when the field is showing its resolved value. */
   const [typing, setTyping] = useState<string | null>(null);
-  const options = slot.type === 'stat'
-    ? stats.map(stat => stat.name).filter(Boolean)
+  const fieldId = useId();
+  const labelId = `${fieldId}-label`;
+  const problemId = `${fieldId}-problem`;
+  const options = isNameSlotType(slot.type)
+    ? names[slot.type]
     : slot.type === 'daypart'
       ? [...DAYPART_OPTIONS]
       : slot.options ?? [];
 
   return (
-    <label className="flex flex-col gap-1 min-w-0">
-      <span className="text-label">{humanizeSlotName(slot.name)}</span>
+    <label htmlFor={fieldId} className="flex flex-col gap-1 min-w-0">
+      <span id={labelId} className="text-label">{humanizeSlotName(slot.name)}</span>
       {slot.type === 'number' || slot.type === 'text' ? (
         <Input
+          id={fieldId}
+          aria-labelledby={labelId}
+          aria-invalid={!!problem}
+          aria-describedby={problem ? problemId : undefined}
           // While the field is being typed in it shows exactly what was typed, empty included. Resolving
           // on every keystroke would refill a backspaced field before the next character landed, so a
           // defaulted number could only be replaced by typing over the selection.
@@ -82,25 +124,32 @@ function SlotField({ slot, value, problem, stats, onChange }: {
         />
       ) : (
         <Select value={value || undefined} onValueChange={onChange}>
-          <SelectTrigger><SelectValue placeholder={slot.type === 'stat' ? 'Pick a stat…' : 'Pick one…'} /></SelectTrigger>
+          <SelectTrigger
+            id={fieldId}
+            aria-labelledby={labelId}
+            aria-invalid={!!problem}
+            aria-describedby={problem ? problemId : undefined}
+          >
+            <SelectValue placeholder={isNameSlotType(slot.type) ? PICK_PROMPT[slot.type] : 'Pick one…'} />
+          </SelectTrigger>
           <SelectContent>
             {options.length === 0 && <div className="px-2 py-1.5 text-meta text-muted-foreground">Nothing to pick</div>}
             {options.map(option => <SelectItem key={option} value={option}>{option}</SelectItem>)}
           </SelectContent>
         </Select>
       )}
-      {problem && <span className="text-meta text-destructive">{problem}</span>}
+      {problem && <span id={problemId} className="text-meta text-destructive">{problem}</span>}
     </label>
   );
 }
 
 /** The fill-in form and the code it generates. Shared by the picker and the template editor's Preview tab,
  *  so an author writing a template sees the exact interface theirs will present. */
-function TemplateForm({ code, stats, values, onChange }: {
+function TemplateForm({ code, names, values, onChange }: {
   code: string;
-  stats: Stat[];
+  names: SlotNames;
   values: Record<string, string>;
-  onChange: (values: Record<string, string>) => void;
+  onChange: (update: (values: Record<string, string>) => Record<string, string>) => void;
 }) {
   const parsed = useMemo(() => parseTemplateSlots(code), [code]);
   const problems = validateSlotValues(parsed.slots, values);
@@ -115,13 +164,13 @@ function TemplateForm({ code, stats, values, onChange }: {
             <SlotField
               key={slot.name}
               slot={slot}
-              stats={stats}
+              names={names}
               // Read through the resolver rather than straight out of `values`: a slot the author has
               // only just typed into the code has no answer yet, and its declared default is what the
               // generated code below already shows for it.
               value={resolveSlotValue(slot, values)}
               problem={problems[slot.name]}
-              onChange={(value) => onChange({ ...values, [slot.name]: value })}
+              onChange={(value) => onChange(current => ({ ...current, [slot.name]: value }))}
             />
           ))}
         </div>
@@ -145,18 +194,41 @@ function TemplateForm({ code, stats, values, onChange }: {
  * code field — the finished stat keeps no link to the template it came from, so the author is free to
  * edit the result by hand afterwards.
  */
-export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatId, hasExistingCode, onInsert }: {
+export function StatCodeTemplateDialog({
+  open,
+  onOpenChange,
+  timing,
+  stats,
+  currentStatId,
+  hasExistingCode,
+  onInsert,
+  placeholderNames = [],
+  traitNames = [],
+  repository = productionRepository,
+  fileTransfer,
+}: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The box this menu fills. It lists only the templates written for that box, and a template saved here
+   *  starts out belonging to it. */
+  timing: StatCodeTiming;
+  /** Under their code names: what a slot fills in has to be what the run reaches. */
   stats: Stat[];
   /** Excluded from stat pickers — a stat built from itself is a mistake, and templates reach their own
    *  value through `currentStatId` rather than by name. */
   currentStatId?: string;
   hasExistingCode: boolean;
+  /** What a placeholder slot's picker offers. */
+  placeholderNames?: readonly string[];
+  /** What a trait slot's picker offers. */
+  traitNames?: readonly string[];
   onInsert: (code: string) => void;
+  repository?: StatTemplateRepository;
+  fileTransfer?: StatTemplateFileTransfer;
 }) {
   const [userTemplates, setUserTemplates] = useState<StatCodeTemplate[]>([]);
-  const [selectedId, setSelectedId] = useState<string>(BUILT_IN_TEMPLATES[0].id);
+  const builtIns = useMemo(() => templatesForTiming(BUILT_IN_TEMPLATES, timing), [timing]);
+  const [selectedId, setSelectedId] = useState<string>(builtIns[0].id);
   const [values, setValues] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<StatCodeTemplate | null>(null);
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
@@ -167,28 +239,29 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
 
   const refresh = useCallback(async () => {
     try {
-      setUserTemplates(await listUserTemplates());
+      setUserTemplates(await repository.list());
     } catch (error) {
       toast.error(`Couldn’t read your templates: ${(error as Error).message}`);
     }
-  }, []);
+  }, [repository]);
 
   useResetOnOpen(open, () => {
-    setSelectedId(BUILT_IN_TEMPLATES[0].id);
+    setSelectedId(builtIns[0].id);
     setDraft(null);
     void refresh();
   });
 
   const sortedUser = useMemo(
-    () => [...userTemplates].sort((a, b) => a.name.localeCompare(b.name)),
-    [userTemplates],
+    () => templatesForTiming(userTemplates, timing).sort((a, b) => a.name.localeCompare(b.name)),
+    [userTemplates, timing],
   );
-  const all = useMemo(() => [...BUILT_IN_TEMPLATES, ...sortedUser], [sortedUser]);
+  const all = useMemo(() => [...builtIns, ...sortedUser], [builtIns, sortedUser]);
   const selected = all.find(template => template.id === selectedId) ?? all[0];
-  const pickableStats = useMemo(
-    () => stats.filter(stat => stat.id !== currentStatId),
-    [stats, currentStatId],
-  );
+  const slotNames = useMemo<SlotNames>(() => ({
+    stat: stats.filter(stat => stat.id !== currentStatId).map(stat => stat.name).filter(Boolean),
+    placeholder: placeholderNames,
+    trait: traitNames,
+  }), [stats, currentStatId, placeholderNames, traitNames]);
   // Every stat, not the pickable ones: a slot picker must not offer the stat being edited (a formula
   // reading its own value from the list is a loop), but code written by hand reads it through
   // `currentStatId` all the time, so its name belongs in the completions.
@@ -219,7 +292,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
   const saveDraft = async () => {
     if (!draft?.name.trim() || !draft.code.trim()) return;
     try {
-      const saved = await saveUserTemplate({ ...draft, name: draft.name.trim() });
+      const saved = await repository.save({ ...draft, name: draft.name.trim() });
       await refresh();
       setSelectedId(saved.id);
       setDraft(null);
@@ -232,29 +305,31 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
   const remove = async (template: StatCodeTemplate) => {
     setConfirmDelete(null);
     try {
-      await deleteUserTemplate(template.id);
+      await repository.remove(template.id);
       await refresh();
-      setSelectedId(BUILT_IN_TEMPLATES[0].id);
+      setSelectedId(builtIns[0].id);
     } catch (error) {
       toast.error(`Couldn’t delete: ${(error as Error).message}`);
     }
   };
 
   const exportPack = () => {
-    if (sortedUser.length === 0) return;
-    downloadBlob(
-      new Blob([JSON.stringify(buildTemplatePack(sortedUser), null, 2)], { type: 'application/json' }),
-      'stat-templates.json',
-    );
+    if (userTemplates.length === 0) return;
+    const filename = 'stat-templates.json';
+    // Every template the author has, not just this box's: a pack is their library, not one menu.
+    const contents = JSON.stringify(buildTemplatePack([...userTemplates]), null, 2);
+    if (fileTransfer) {
+      fileTransfer.writeExportPack(contents, filename);
+      return;
+    }
+    downloadBlob(new Blob([contents], { type: 'application/json' }), filename);
   };
 
-  const importPack = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const [file] = filesFrom(event);
-    // Clearing the input is what lets the same file be chosen twice — an unchanged value fires no change.
-    event.target.value = '';
-    if (!file) return;
+  const importPackText = async (readText: () => Promise<string | null>) => {
     try {
-      const added = await importTemplates(parseTemplatePack(await file.text()));
+      const text = await readText();
+      if (text === null) return;
+      const added = await repository.import(parseTemplatePack(text));
       await refresh();
       toast.success(added > 0
         ? `Imported ${added} template${added === 1 ? '' : 's'}`
@@ -262,6 +337,21 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
     } catch (error) {
       toast.error((error as Error).message);
     }
+  };
+
+  const importPack = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const [file] = filesFrom(event);
+    // Clearing the input is what lets the same file be chosen twice — an unchanged value fires no change.
+    event.target.value = '';
+    if (file) void importPackText(() => file.text());
+  };
+
+  const requestImport = () => {
+    if (fileTransfer) {
+      void importPackText(fileTransfer.readImportPack);
+      return;
+    }
+    fileRef.current?.click();
   };
 
   const templateButton = (template: StatCodeTemplate) => (
@@ -306,6 +396,18 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                 <span className="text-label">Description</span>
                 <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
               </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-label">Runs</span>
+                <Select
+                  value={draft.timing}
+                  onValueChange={(value) => setDraft({ ...draft, timing: value as StatCodeTiming })}
+                >
+                  <SelectTrigger aria-label="Runs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {STAT_CODE_TIMINGS.map(t => <SelectItem key={t} value={t}>{TIMING_LABEL[t]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </label>
               {/* Preview is the creation interface the template will present, so the author edits the code
                   and reads what it asks for in the same place — side by side once full screen allows. */}
               <CodeArea
@@ -317,13 +419,13 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                 slots
                 className="flex-1"
                 preview={(
-                  <TemplateForm code={draft.code} stats={pickableStats} values={draftValues} onChange={setDraftValues} />
+                  <TemplateForm code={draft.code} names={slotNames} values={draftValues} onChange={setDraftValues} />
                 )}
               />
               <p className="text-meta text-muted-foreground">
-                A slot is <code>{'{{name:type=default}}'}</code>. Stat and daypart slots become quoted
-                strings; number, choice and text are pasted as written, so quote them yourself when you
-                need a string.
+                A slot is <code>{'{{name:type=default}}'}</code>. Stat, placeholder, trait and daypart
+                slots become quoted strings; number, choice and text are pasted as written, so quote them
+                yourself when you need a string.
               </p>
             </div>
 
@@ -339,9 +441,9 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
             <div className={cn('flex-1 min-h-0 gap-4', isMobile ? 'flex flex-col' : 'grid grid-cols-[minmax(0,15rem)_minmax(0,1fr)]')}>
               {isMobile ? (
                 <Select value={selected?.id} onValueChange={setSelectedId}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger aria-label="Code Template"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {BUILT_IN_TEMPLATES.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                    {builtIns.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
                     {sortedUser.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -349,7 +451,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                 <ScrollArea className="h-full rounded-md border">
                   <div className="p-2 flex flex-col gap-1">
                     <p className="text-meta text-muted-foreground px-1 pt-1">Built-In</p>
-                    {BUILT_IN_TEMPLATES.map(templateButton)}
+                    {builtIns.map(templateButton)}
 
                     <div className="flex items-center justify-between gap-1 px-1 pt-3">
                       <p className="text-meta text-muted-foreground">My Templates</p>
@@ -358,7 +460,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                           <button
                             type="button"
                             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                            onClick={() => fileRef.current?.click()}
+                            onClick={requestImport}
                           >
                             <ActionIcon.import className="h-3.5 w-3.5" />
                           </button>
@@ -366,7 +468,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                         <Tip tip="Export templates">
                           <button
                             type="button"
-                            disabled={sortedUser.length === 0}
+                            disabled={userTemplates.length === 0}
                             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                             onClick={exportPack}
                           >
@@ -379,7 +481,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
 
                     <button
                       type="button"
-                      onClick={() => openDraft({ ...BLANK_TEMPLATE })}
+                      onClick={() => openDraft(blankTemplate(timing))}
                       className="flex items-center gap-1 rounded border border-dashed px-2 py-1.5 text-label text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <Plus className="h-4 w-4" />New Template
@@ -393,9 +495,10 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                   <>
                     <div>
                       <p className="text-label font-medium">{selected.name}</p>
+                      <Meta className="block text-muted-foreground">Runs {TIMING_LABEL[selected.timing]}</Meta>
                       <p className="text-helper text-muted-foreground">{selected.description}</p>
                     </div>
-                    <TemplateForm code={selected.code} stats={pickableStats} values={values} onChange={setValues} />
+                    <TemplateForm code={selected.code} names={slotNames} values={values} onChange={setValues} />
                   </>
                 )}
               </div>
@@ -405,7 +508,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
                 form runs. */}
             <DialogFooter className="flex-row flex-wrap justify-end gap-2">
               {isMobile && (
-                <Button variant="outline" size="sm" onClick={() => openDraft({ ...BLANK_TEMPLATE })}>
+                <Button variant="outline" size="sm" onClick={() => openDraft(blankTemplate(timing))}>
                   <Plus className="h-4 w-4 mr-1" />New
                 </Button>
               )}
@@ -442,7 +545,7 @@ export function StatCodeTemplateDialog({ open, onOpenChange, stats, currentStatI
           open={confirmReplace}
           onOpenChange={setConfirmReplace}
           title="Replace The Existing Code"
-          description="This stat already has code. Inserting this template writes over it."
+          description="This box already has code. Inserting this template overwrites it."
           onConfirm={doInsert}
         />
       </DialogContent>

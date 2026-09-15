@@ -9,6 +9,7 @@
 // Same request shape as `bridgeDescription`/`summarize`, and the same editable-template contract.
 
 import { SUBJECT_TOKEN, BRIDGE_SUBJECT, type BridgeKind } from './bridgeDescription';
+import { authoringReasoningBody, authoringRequestError, type AuthoringReasoning } from './authoringRequest';
 
 /**
  * The default, user-editable prompt. Written to report and nothing else: a model asked to "check" a
@@ -188,6 +189,8 @@ export async function checkDescriptions(
     template?: string;
     maxTokens?: number;
     signal?: AbortSignal;
+    /** The active endpoint's reasoning record; the request sends reasoning off (see `lib/authoringRequest`). */
+    reasoning?: AuthoringReasoning;
   },
 ): Promise<string[]> {
   const template = opts.template?.trim() || DEFAULT_DESC_CHECK_PROMPT;
@@ -205,11 +208,12 @@ export async function checkDescriptions(
       ],
       temperature: CHECK_TEMPERATURE,
       max_tokens: opts.maxTokens ?? DEFAULT_CHECK_MAX_TOKENS,
+      ...authoringReasoningBody(opts.reasoning),
       stream: false,
     }),
     signal: opts.signal,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await authoringRequestError(res);
 
   const json = (await res.json()) as ChatCompletion;
   const content = json?.choices?.[0]?.message?.content;

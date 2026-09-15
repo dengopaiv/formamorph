@@ -1,202 +1,308 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { reasoningEffortBody, reasoningTabs, reasoningPromptTabs, defaultPromptReasoning, resolvePromptReasoning, defaultReasoningBudgetPct, resolveReasoningBudgetPct, reasoningBudgetBody, isReasoningEngaged, SAFE_REASONING_EFFORTS, detectReasoningCapability, detectSupportedReasoningEfforts } from './reasoningEffort';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { reasoningEffortBody, reasoningLevelOptions, promptReasoningLevelOptions, defaultPromptReasoning, defaultPromptReasoningSetting, resolvePromptReasoning, resolveReasoningSetting, resolvePromptReasoningSetting, parseReasoningSetting, parsePromptReasoningSetting, parseReasoningCapability, reasoningCapabilityFromLevels, reasoningRuledOut, defaultReasoningBudgetPct, resolveReasoningBudgetPct, reasoningBudgetBody, isReasoningEngaged, nativeReasoningSuppressed, MIN_REASONING_BUDGET_PCT, resolveReasoningCapability, type ReasoningCapability, type ReasoningEffortField, type PromptReasoning } from './reasoningEffort';
+import { resetProbeMemo } from '@/lib/probeMemo';
+import type { AIRequestType } from '@/types';
+
+/** A record answering the levels question only, as a probe leaves it. */
+const accepts = (...levels: ReasoningEffortField[]): ReasoningCapability => reasoningCapabilityFromLevels(levels, 'probe');
+
+const ALL_KINDS: AIRequestType[] = [
+  'thinking', 'director', 'character', 'storyboard', 'narration', 'choices', 'statUpdates', 'locationChange',
+  'summary', 'milestoneSelect', 'diary', 'discoverEntity', 'timePassed', 'openingTime', 'sceneTags',
+];
 
 describe('reasoningEffortBody', () => {
-  const all = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+  const all = accepts('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max');
 
-  it('sends the hint verbatim under Native mode for every non-auto level the endpoint accepts', () => {
-    expect(reasoningEffortBody('off', 'none', all)).toEqual({ reasoning_effort: 'none' });
-    expect(reasoningEffortBody('off', 'low', all)).toEqual({ reasoning_effort: 'low' });
-    expect(reasoningEffortBody('off', 'medium', all)).toEqual({ reasoning_effort: 'medium' });
-    expect(reasoningEffortBody('off', 'high', all)).toEqual({ reasoning_effort: 'high' });
-    expect(reasoningEffortBody('off', 'max', all)).toEqual({ reasoning_effort: 'max' });
+  it('sends the hint verbatim for every non-auto level the endpoint accepts', () => {
+    expect(reasoningEffortBody('none', all)).toEqual({ reasoning_effort: 'none' });
+    expect(reasoningEffortBody('low', all)).toEqual({ reasoning_effort: 'low' });
+    expect(reasoningEffortBody('medium', all)).toEqual({ reasoning_effort: 'medium' });
+    expect(reasoningEffortBody('high', all)).toEqual({ reasoning_effort: 'high' });
+    expect(reasoningEffortBody('max', all)).toEqual({ reasoning_effort: 'max' });
   });
 
   it('omits the field for auto (send nothing → endpoint default)', () => {
-    expect(reasoningEffortBody('off', 'auto', all)).toEqual({});
-    expect('reasoning_effort' in reasoningEffortBody('off', 'auto', all)).toBe(false);
-  });
-
-  it('forces none in guided modes to suppress native reasoning fighting the guided step', () => {
-    for (const mode of ['precall', 'inline', 'staged'] as const) {
-      expect(reasoningEffortBody(mode, 'high', all)).toEqual({ reasoning_effort: 'none' });
-      expect(reasoningEffortBody(mode, 'auto', all)).toEqual({ reasoning_effort: 'none' });
-    }
-  });
-
-  it('omits none on a guided-mode request when the endpoint does not accept it (no 400)', () => {
-    expect(reasoningEffortBody('inline', 'high', [])).toEqual({});
-    expect(reasoningEffortBody('staged', 'low', ['low', 'medium', 'high'])).toEqual({});
+    expect(reasoningEffortBody('auto', all)).toEqual({});
+    expect('reasoning_effort' in reasoningEffortBody('auto', all)).toBe(false);
   });
 
   it('omits a value the active endpoint does not accept (a stale selection cannot 400 a turn)', () => {
     // Ollama-like: accepts max, not minimal.
-    const ollama = ['none', 'low', 'medium', 'high', 'max'] as const;
-    expect(reasoningEffortBody('off', 'minimal', ollama)).toEqual({});
-    expect(reasoningEffortBody('off', 'max', ollama)).toEqual({ reasoning_effort: 'max' });
+    const ollama = accepts('none', 'low', 'medium', 'high', 'max');
+    expect(reasoningEffortBody('minimal', ollama)).toEqual({});
+    expect(reasoningEffortBody('max', ollama)).toEqual({ reasoning_effort: 'max' });
+    expect(reasoningEffortBody('none', accepts('low', 'medium', 'high'))).toEqual({});
   });
 
-  it('sends nothing until support is confirmed — unknown (null/undefined) omits the field', () => {
-    expect(reasoningEffortBody('off', 'low', null)).toEqual({});
-    expect(reasoningEffortBody('off', 'low')).toEqual({});
-    expect(reasoningEffortBody('inline', 'high', null)).toEqual({});
+  it('sends nothing until the levels question is answered — an unknown record omits the field', () => {
+    expect(reasoningEffortBody('low', { reasons: null, levels: null, budget: null, sources: {} })).toEqual({});
+    expect(reasoningEffortBody('low', null)).toEqual({});
+    expect(reasoningEffortBody('low')).toEqual({});
   });
 
-  it('sends nothing to a conclusively non-reasoning endpoint (empty support), even none', () => {
-    expect(reasoningEffortBody('off', 'none', [])).toEqual({});
-    expect(reasoningEffortBody('inline', 'high', [])).toEqual({});
+  it('sends nothing to a conclusively non-reasoning endpoint (empty levels), even none', () => {
+    expect(reasoningEffortBody('none', accepts())).toEqual({});
+    expect(reasoningEffortBody('high', accepts())).toEqual({});
+  });
+
+  it('sends nothing to a model the record says does not reason, whatever levels it lists', () => {
+    const listedButNotReasoning: ReasoningCapability = {
+      reasons: false, levels: ['none', 'low', 'high'], budget: null, sources: { reasons: 'native' },
+    };
+    expect(reasoningEffortBody('high', listedButNotReasoning)).toEqual({});
   });
 });
 
-describe('reasoningTabs', () => {
-  it('always leads with Default, then the supported levels in canonical order', () => {
-    const tabs = reasoningTabs(['high', 'none', 'low']); // out of order in
-    expect(tabs.map((t) => t.value)).toEqual(['auto', 'none', 'low', 'high']);
-    expect(tabs[0].label).toBe('Default');
+describe('the capability record', () => {
+  it('reads an empty levels answer as conclusive: the model does not reason, from that same source', () => {
+    expect(reasoningCapabilityFromLevels([], 'probe')).toEqual({
+      reasons: false, levels: [], budget: null, sources: { levels: 'probe', reasons: 'probe' },
+    });
   });
 
-  it('falls back to the universal safe levels when support is unknown', () => {
-    const tabs = reasoningTabs(null);
-    expect(tabs.map((t) => t.value)).toEqual(['auto', ...SAFE_REASONING_EFFORTS]);
+  it('leaves the reasons question open when levels came back non-empty (accepting `none` proves nothing)', () => {
+    expect(reasoningCapabilityFromLevels(['none', 'low'], 'probe')).toEqual({
+      reasons: null, levels: ['none', 'low'], budget: null, sources: { levels: 'probe' },
+    });
   });
 
-  it('surfaces backend-specific levels (minimal, xhigh, max) when the endpoint accepts them', () => {
-    const cloud = reasoningTabs(['none', 'minimal', 'low', 'medium', 'high']);
-    expect(cloud.map((t) => t.value)).toContain('minimal');
-    const ollama = reasoningTabs(['none', 'low', 'medium', 'high', 'max']);
-    expect(ollama.map((t) => t.label)).toContain('Max');
+  it('rules reasoning out on a negative reasons answer or an empty levels list, never on an unknown one', () => {
+    expect(reasoningRuledOut({ reasons: false, levels: null, budget: null, sources: {} })).toBe(true);
+    expect(reasoningRuledOut(accepts())).toBe(true);
+    expect(reasoningRuledOut(accepts('none', 'low'))).toBe(false);
+    expect(reasoningRuledOut({ reasons: null, levels: null, budget: null, sources: {} })).toBe(false);
+    expect(reasoningRuledOut(null)).toBe(false);
+  });
+
+  it('loads a cache entry written as a bare effort list, so an update re-detects nothing', () => {
+    expect(parseReasoningCapability(['none', 'low', 'high'])).toEqual({
+      reasons: null, levels: ['none', 'low', 'high'], budget: null, sources: { levels: 'cache' },
+    });
+  });
+
+  it('keeps a cached empty list hiding the controls, though its reasons answer is unknown', () => {
+    const migrated = parseReasoningCapability([]);
+    expect(migrated).toEqual({ reasons: null, levels: [], budget: null, sources: { levels: 'cache' } });
+    expect(reasoningRuledOut(migrated)).toBe(true);
+  });
+
+  it('loads a stored record back verbatim', () => {
+    const stored: ReasoningCapability = {
+      reasons: true, levels: ['none', 'low'], budget: true, sources: { reasons: 'native', levels: 'probe', budget: 'engine' },
+    };
+    expect(parseReasoningCapability(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
+  });
+
+  it('drops a stored source it does not know, rather than letting it stand as one', () => {
+    const loaded = parseReasoningCapability({
+      reasons: true, levels: null, budget: null, sources: { reasons: 'astrology', levels: 'probe', mood: 'probe' },
+    });
+    expect(loaded?.sources).toEqual({ levels: 'probe' });
+  });
+
+  it('rejects anything that is not a record or a list of known levels', () => {
+    expect(parseReasoningCapability(['none', 'turbo'])).toBeNull();
+    expect(parseReasoningCapability('high')).toBeNull();
+    expect(parseReasoningCapability(null)).toBeNull();
+    expect(parseReasoningCapability({ reasons: 'yes', levels: null, budget: null })).toBeNull();
+    expect(parseReasoningCapability({ reasons: null, levels: ['turbo'], budget: null })).toBeNull();
+  });
+});
+
+describe('nativeReasoningSuppressed', () => {
+  it('suppresses only the narration call under Inline mode, which writes its own <think> block', () => {
+    expect(nativeReasoningSuppressed('inline', 'narration')).toBe(true);
+  });
+
+  it('leaves every other kind under Inline, and every kind under the other modes, to its own choice', () => {
+    for (const kind of ALL_KINDS.filter((k) => k !== 'narration')) expect(nativeReasoningSuppressed('inline', kind)).toBe(false);
+    for (const mode of ['off', 'precall', 'staged'] as const) {
+      for (const kind of ALL_KINDS) expect(nativeReasoningSuppressed(mode, kind)).toBe(false);
+    }
   });
 });
 
 describe('per-prompt reasoning', () => {
-  it('ships narration as Global and everything else as None', () => {
+  it('ships tiered defaults: narration Global, planning and memory passes Low, parsers and choices None', () => {
     expect(defaultPromptReasoning('narration')).toBe('global');
-    expect(defaultPromptReasoning('choices')).toBe('none');
-    expect(defaultPromptReasoning('summary')).toBe('none');
+    for (const kind of ['thinking', 'director', 'character', 'storyboard', 'summary', 'diary'] as const) {
+      expect(defaultPromptReasoning(kind)).toBe('low');
+    }
+    for (const kind of ['choices', 'statUpdates', 'locationChange', 'milestoneSelect', 'discoverEntity', 'timePassed', 'openingTime', 'sceneTags'] as const) {
+      expect(defaultPromptReasoning(kind)).toBe('none');
+    }
   });
 
-  it('leads the prompt tabs with Global, then the supported levels (no Default)', () => {
-    const tabs = reasoningPromptTabs(['none', 'low', 'high']);
-    expect(tabs[0]).toEqual({ value: 'global', label: 'Global' });
-    expect(tabs.map((t) => t.value)).not.toContain('auto');
-    expect(tabs.map((t) => t.value)).toEqual(['global', 'none', 'low', 'high']);
+  it('ships the switch shape: narration on at Global, tiers on at Low, the rest off remembering Global', () => {
+    expect(defaultPromptReasoningSetting('narration')).toEqual({ enabled: true, level: 'global' });
+    expect(defaultPromptReasoningSetting('director')).toEqual({ enabled: true, level: 'low' });
+    expect(defaultPromptReasoningSetting('choices')).toEqual({ enabled: false, level: 'global' });
+  });
+
+  it('lists a prompt\'s strengths as Global, Model Default, then the accepted levels in order, never none', () => {
+    const opts = promptReasoningLevelOptions(accepts('high', 'none', 'low')); // out of order in
+    expect(opts.map((o) => o.value)).toEqual(['global', 'auto', 'low', 'high']);
+    expect(opts.map((o) => o.label)).toEqual(['Global', 'Model Default', 'Low', 'High']);
+    expect(promptReasoningLevelOptions(null).map((o) => o.value)).toEqual(['global', 'auto', 'low', 'medium', 'high']); // safe fallback
+  });
+
+  it('keeps the current pick listed when the record no longer accepts it, so the dropdown never renders blank', () => {
+    const onOff = accepts('none'); // LM Studio's on/off models: nothing graded
+    expect(promptReasoningLevelOptions(onOff, 'low').map((o) => o.value)).toEqual(['global', 'auto', 'low']);
+    expect(promptReasoningLevelOptions(onOff, 'global').map((o) => o.value)).toEqual(['global', 'auto']);
+    expect(reasoningLevelOptions(onOff, 'high').map((o) => o.value)).toEqual(['auto', 'high']);
+    expect(reasoningLevelOptions(onOff, 'auto').map((o) => o.value)).toEqual(['auto']);
+  });
+
+  it('lists the endpoint-wide strengths with full-word labels for backend-specific levels', () => {
+    const cloud = reasoningLevelOptions(accepts('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'));
+    expect(cloud.map((o) => o.label)).toEqual(['Model Default', 'Minimal', 'Low', 'Medium', 'High', 'Extra High', 'Max']);
+    expect(cloud.map((o) => o.value)).not.toContain('none');
   });
 
   it('resolves Global to the endpoint-wide effort, explicit choices to themselves', () => {
-    expect(resolvePromptReasoning('narration', {}, 'high')).toBe('high'); // default global → follows global
-    expect(resolvePromptReasoning('narration', { narration: 'low' }, 'high')).toBe('low'); // override wins
-    expect(resolvePromptReasoning('choices', {}, 'high')).toBe('none'); // default none, ignores global
-    expect(resolvePromptReasoning('choices', { choices: 'global' }, 'medium')).toBe('medium');
+    expect(resolvePromptReasoning('narration', {}, 'high', 'off')).toBe('high'); // default global → follows global
+    expect(resolvePromptReasoning('narration', { narration: 'low' }, 'high', 'off')).toBe('low'); // override wins
+    expect(resolvePromptReasoning('choices', {}, 'high', 'off')).toBe('none'); // default none, ignores global
+    expect(resolvePromptReasoning('choices', { choices: 'global' }, 'medium', 'off')).toBe('medium');
   });
 
-  it('forces uncontrolled prompts to none regardless of stored prefs or global', () => {
-    expect(resolvePromptReasoning('summary', { summary: 'high' }, 'high')).toBe('none');
-    expect(resolvePromptReasoning('statUpdates', {}, 'high')).toBe('none');
+  it('honors a stored level on every kind, in every mode', () => {
+    for (const mode of ['off', 'precall', 'staged', 'inline'] as const) {
+      expect(resolvePromptReasoning('summary', { summary: 'high' }, 'low', mode)).toBe('high');
+      expect(resolvePromptReasoning('statUpdates', { statUpdates: 'global' }, 'medium', mode)).toBe('medium');
+      expect(resolvePromptReasoning('director', {}, 'high', mode)).toBe('low'); // shipped tier
+    }
+  });
+
+  it('resolves Inline narration to none whatever is stored or set globally', () => {
+    expect(resolvePromptReasoning('narration', { narration: 'high' }, 'high', 'inline')).toBe('none');
+    expect(resolvePromptReasoning('narration', {}, 'max', 'inline')).toBe('none');
+    expect(resolvePromptReasoning('narration', { narration: 'high' }, 'high', 'staged')).toBe('high');
   });
 });
 
 describe('reasoning budget (local engine)', () => {
-  it('ships narration at 40% and everything else at 0%', () => {
+  it('ships narration at 40% and every other prompt at 25%; the switch, not the %, decides off', () => {
     expect(defaultReasoningBudgetPct('narration')).toBe(40);
-    expect(defaultReasoningBudgetPct('choices')).toBe(0);
-    expect(defaultReasoningBudgetPct('summary')).toBe(0);
+    for (const kind of ALL_KINDS.filter((k) => k !== 'narration')) expect(defaultReasoningBudgetPct(kind)).toBe(25);
   });
 
-  it('resolves a controlled prompt to its stored/default %, others to 0, clamped', () => {
+  it('resolves every kind to its stored/default %, clamped to the slider floor and 100', () => {
     expect(resolveReasoningBudgetPct('narration', {})).toBe(40);
     expect(resolveReasoningBudgetPct('narration', { narration: 20 })).toBe(20);
-    expect(resolveReasoningBudgetPct('choices', {})).toBe(0);
     expect(resolveReasoningBudgetPct('choices', { choices: 30 })).toBe(30);
-    expect(resolveReasoningBudgetPct('summary', { summary: 90 })).toBe(0); // uncontrolled → 0
-    expect(resolveReasoningBudgetPct('narration', { narration: 250 })).toBe(100); // clamp
+    expect(resolveReasoningBudgetPct('summary', { summary: 90 })).toBe(90);
+    expect(resolveReasoningBudgetPct('statUpdates', { statUpdates: 0 })).toBe(MIN_REASONING_BUDGET_PCT); // clamp low
+    expect(resolveReasoningBudgetPct('narration', { narration: 250 })).toBe(100); // clamp high
   });
 
-  it('converts the % to a token cap against max output under Native mode', () => {
-    expect(reasoningBudgetBody('off', 'narration', {}, 500)).toEqual({ thinking_budget_tokens: 200 }); // 40% of 500
-    expect(reasoningBudgetBody('off', 'narration', { narration: 20 }, 500)).toEqual({ thinking_budget_tokens: 100 });
-    expect(reasoningBudgetBody('off', 'choices', {}, 500)).toEqual({ thinking_budget_tokens: 0 }); // choices off by default
-    expect(reasoningBudgetBody('off', 'choices', { choices: 30 }, 400)).toEqual({ thinking_budget_tokens: 120 });
-    expect(reasoningBudgetBody('off', 'summary', { summary: 50 }, 500)).toEqual({ thinking_budget_tokens: 0 }); // uncontrolled
+  it('converts the % to a token cap against max output for any resolved level', () => {
+    expect(reasoningBudgetBody('auto', 'narration', {}, 500)).toEqual({ thinking_budget_tokens: 200 }); // 40% of 500
+    expect(reasoningBudgetBody('high', 'narration', { narration: 20 }, 500)).toEqual({ thinking_budget_tokens: 100 });
+    expect(reasoningBudgetBody('low', 'choices', { choices: 30 }, 400)).toEqual({ thinking_budget_tokens: 120 });
+    expect(reasoningBudgetBody('low', 'director', {}, 400)).toEqual({ thinking_budget_tokens: 100 }); // 25% default
   });
 
-  it('forces 0 in guided modes (local engine ignores reasoning_effort, so this is how they suppress)', () => {
-    expect(reasoningBudgetBody('inline', 'narration', { narration: 40 }, 500)).toEqual({ thinking_budget_tokens: 0 });
-    expect(reasoningBudgetBody('staged', 'narration', {}, 500)).toEqual({ thinking_budget_tokens: 0 });
+  it('sends 0 when the resolved choice is none, whatever % is stored', () => {
+    expect(reasoningBudgetBody('none', 'narration', { narration: 40 }, 500)).toEqual({ thinking_budget_tokens: 0 });
+    expect(reasoningBudgetBody('none', 'choices', {}, 500)).toEqual({ thinking_budget_tokens: 0 });
+  });
+});
+
+describe('reasoning settings (switch + strength)', () => {
+  it('resolves to the level while on and to none while off', () => {
+    expect(resolveReasoningSetting({ enabled: true, level: 'high' })).toBe('high');
+    expect(resolveReasoningSetting({ enabled: true, level: 'auto' })).toBe('auto');
+    expect(resolveReasoningSetting({ enabled: false, level: 'high' })).toBe('none');
+    expect(resolvePromptReasoningSetting({ enabled: true, level: 'global' })).toBe('global');
+    expect(resolvePromptReasoningSetting({ enabled: false, level: 'global' })).toBe('none');
+  });
+
+  it('reads the current object and rejects a malformed one', () => {
+    expect(parseReasoningSetting({ enabled: false, level: 'medium' })).toEqual({ enabled: false, level: 'medium' });
+    expect(parseReasoningSetting({ enabled: 'yes', level: 'medium' })).toBeNull();
+    expect(parseReasoningSetting({ enabled: true, level: 'none' })).toBeNull(); // none is the switch, not a level
+    expect(parseReasoningSetting({ enabled: true, level: 'global' })).toBeNull(); // global is prompt-only
+    expect(parsePromptReasoningSetting({ enabled: true, level: 'global' })).toEqual({ enabled: true, level: 'global' });
+    expect(parsePromptReasoningSetting(42)).toBeNull();
+  });
+
+  it('folds the plain string written before the switch existed: none → off, a level → on at that level', () => {
+    expect(parseReasoningSetting('none')).toEqual({ enabled: false, level: 'auto' });
+    expect(parseReasoningSetting('auto')).toEqual({ enabled: true, level: 'auto' });
+    expect(parseReasoningSetting('xhigh')).toEqual({ enabled: true, level: 'xhigh' });
+    expect(parseReasoningSetting('bogus')).toBeNull();
+    expect(parsePromptReasoningSetting('none')).toEqual({ enabled: false, level: 'global' });
+    expect(parsePromptReasoningSetting('global')).toEqual({ enabled: true, level: 'global' });
+    expect(parsePromptReasoningSetting('low')).toEqual({ enabled: true, level: 'low' });
   });
 });
 
 describe('isReasoningEngaged', () => {
-  it('is false for the default off/auto setup with default per-prompt reasoning', () => {
-    expect(isReasoningEngaged('off', 'auto', { narration: 'global', choices: 'none' })).toBe(false);
-    expect(isReasoningEngaged('off', 'auto', {})).toBe(false);
+  const everyKindOff = Object.fromEntries(ALL_KINDS.map((k) => [k, 'none'])) as Record<string, PromptReasoning>;
+
+  it('is true out of the box: nothing stored, yet the shipped tiers switch several prompts on', () => {
+    expect(isReasoningEngaged('off', 'auto', {})).toBe(true);
   });
-  it('is true when a Thinking mode is active', () => {
-    expect(isReasoningEngaged('staged', 'auto', {})).toBe(true);
-    expect(isReasoningEngaged('inline', 'auto', {})).toBe(true);
+  it('is false only when every prompt resolves to none', () => {
+    expect(isReasoningEngaged('off', 'auto', everyKindOff)).toBe(false);
+    // Narration at Global follows a switched-off endpoint-wide setting, so it counts as none too.
+    expect(isReasoningEngaged('off', 'none', { ...everyKindOff, narration: 'global' })).toBe(false);
   });
-  it('is true when a global native effort is chosen', () => {
-    expect(isReasoningEngaged('off', 'high', {})).toBe(true);
+  it('is true when a Thinking mode is active, whatever the prompts say', () => {
+    expect(isReasoningEngaged('staged', 'none', everyKindOff)).toBe(true);
+    expect(isReasoningEngaged('inline', 'none', everyKindOff)).toBe(true);
   });
-  it('is true when a per-prompt positive level is set, but not for global/none', () => {
-    expect(isReasoningEngaged('off', 'auto', { narration: 'high' })).toBe(true);
-    expect(isReasoningEngaged('off', 'auto', { narration: 'global', choices: 'none' })).toBe(false);
+  it('is true when one prompt follows a positive endpoint-wide level, or carries its own', () => {
+    expect(isReasoningEngaged('off', 'high', { ...everyKindOff, narration: 'global' })).toBe(true);
+    expect(isReasoningEngaged('off', 'none', { ...everyKindOff, summary: 'low' })).toBe(true);
+    expect(isReasoningEngaged('off', 'none', { ...everyKindOff, summary: 'auto' })).toBe(true); // Model Default lets it reason
   });
 });
 
-describe('detectReasoningCapability (LM Studio native /api/v1/models)', () => {
-  afterEach(() => vi.unstubAllGlobals());
+describe('resolveReasoningCapability: the budget answer', () => {
+  // Each source's own shape is covered in reasoningCapability.test.ts. These cases guard one contract:
+  // which answers settle the budget question, since the request builder and the Options tab both read it.
+  beforeEach(() => resetProbeMemo());
 
-  const stubFetch = (impl: (url: string) => { ok: boolean; json?: () => Promise<unknown> }) =>
-    vi.stubGlobal('fetch', vi.fn(async (u: string) => impl(u) as unknown as Response));
+  const TARGET = { url: 'http://localhost:1234/v1/chat/completions', token: '', model: 'meromero' };
+  const NATIVE_LIST = 'http://localhost:1234/api/v1/models';
 
-  const list = (models: unknown[]) => ({ ok: true, json: async () => ({ models }) });
+  /** LM Studio answering its native list with one model, and 404ing every other advertisement path. */
+  const lmStudio = (models: unknown[]) => vi.fn(async (u: string) => (
+    u === NATIVE_LIST
+      ? { ok: true, status: 200, json: async () => ({ models }), text: async () => '' }
+      : { ok: false, status: 404, json: async () => ({}), text: async () => '' }
+  ) as unknown as Response);
 
-  it('returns false when the model is listed without a reasoning capability', async () => {
-    stubFetch(() => list([{ key: 'cydonia-24b', capabilities: { vision: false, trained_for_tool_use: false } }]));
-    expect(await detectReasoningCapability('http://localhost:1234/v1/chat/completions', '', 'cydonia-24b')).toBe(false);
+  it('takes a token budget when the native list calls the model reasoning', async () => {
+    const record = await resolveReasoningCapability(TARGET, lmStudio([{ key: 'meromero', capabilities: { reasoning: {} } }]));
+    expect(record?.budget).toBe(true);
+    expect(record?.sources.budget).toBe('native');
   });
 
-  it('returns true when the model exposes a reasoning capability object', async () => {
-    stubFetch(() => list([{ key: 'g4-meromero-31b', capabilities: { reasoning: { allowed_options: ['off', 'on'], default: 'on' } } }]));
-    expect(await detectReasoningCapability('http://localhost:1234/v1/chat/completions', '', 'g4-meromero-31b')).toBe(true);
+  it('never takes a budget on a model the native list calls non-reasoning', async () => {
+    const record = await resolveReasoningCapability({ ...TARGET, model: 'cydonia' }, lmStudio([{ key: 'cydonia', capabilities: {} }]));
+    expect(record?.budget).not.toBe(true);
   });
 
-  it('hits the origin-derived native path, not the configured completions URL', async () => {
-    const fetchMock = vi.fn(async () => list([{ key: 'm', capabilities: {} }]) as unknown as Response);
-    vi.stubGlobal('fetch', fetchMock);
-    await detectReasoningCapability('http://localhost:1234/v1/chat/completions', '', 'm');
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:1234/api/v1/models', expect.anything());
-  });
-
-  it('falls back to the loaded model when the configured name is unmatched (e.g. "default")', async () => {
-    stubFetch(() => list([
-      { key: 'cydonia-24b@q4_k_m', loaded_instances: [{ id: 'cydonia-24b@q4_k_m' }], capabilities: { vision: false } },
-      { key: 'g4-meromero-31b', loaded_instances: [], capabilities: { reasoning: { allowed_options: ['off', 'on'], default: 'on' } } },
-    ]));
-    // "default" matches no key → resolves to the loaded (Cydonia) entry, which has no reasoning capability.
-    expect(await detectReasoningCapability('http://127.0.0.1:1234/v1/chat/completions', '', 'default')).toBe(false);
-  });
-
-  it('is inconclusive (null) when the model is absent, the shape is foreign, or the endpoint errors', async () => {
-    stubFetch(() => list([{ key: 'other', capabilities: {} }]));
-    expect(await detectReasoningCapability('http://x/v1/chat/completions', '', 'missing')).toBeNull();
-    stubFetch(() => ({ ok: true, json: async () => ({ data: [] }) })); // OpenAI shape, not native
-    expect(await detectReasoningCapability('http://x/v1/chat/completions', '', 'm')).toBeNull();
-    stubFetch(() => ({ ok: false })); // 404 on non-LM-Studio backends
-    expect(await detectReasoningCapability('http://x/v1/chat/completions', '', 'm')).toBeNull();
-    expect(await detectReasoningCapability('not a url', '', 'm')).toBeNull();
-  });
-
-  it('short-circuits detectSupportedReasoningEfforts to [] without sending any effort probe', async () => {
-    const fetchMock = vi.fn(async (u: string) =>
-      (u.includes('/api/v1/models')
-        ? list([{ key: 'cydonia', capabilities: {} }])
-        : { ok: true, status: 200, text: async () => '' }) as unknown as Response,
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    expect(await detectSupportedReasoningEfforts('http://localhost:1234/v1/chat/completions', '', 'cydonia')).toEqual([]);
+  it('answers every question from the native list when it calls the model non-reasoning, sending no probe', async () => {
+    const doFetch = lmStudio([{ key: 'cydonia', capabilities: {} }]);
+    expect(await resolveReasoningCapability({ ...TARGET, model: 'cydonia' }, doFetch)).toEqual({
+      reasons: false, levels: [], budget: null, sources: { reasons: 'native', levels: 'native' },
+    });
     // Only the capability GET fired — no POST probe reached the completions URL.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:1234/api/v1/models', expect.anything());
+    expect(doFetch.mock.calls.filter(([u]) => u === TARGET.url)).toHaveLength(0);
+  });
+
+  it('leaves the budget question unanswered when only the probe spoke', async () => {
+    const doFetch = vi.fn(async (u: string) => (
+      u === TARGET.url
+        ? { ok: true, status: 200, json: async () => ({}), text: async () => '' }
+        : { ok: false, status: 404, json: async () => ({}), text: async () => '' }
+    ) as unknown as Response);
+    expect((await resolveReasoningCapability({ ...TARGET, model: 'plain' }, doFetch))?.budget).toBeNull();
   });
 });

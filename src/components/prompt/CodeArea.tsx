@@ -12,6 +12,7 @@ import { FullscreenShell } from '@/components/FullscreenShell';
 import { cn } from '@/lib/utils';
 import { SLOT_SNIPPETS, STAT_CODE_SNIPPETS, type InsertSnippet } from '@/lib/codeSnippets';
 import type { CodeSession } from '@/components/prompt/codeSession';
+import type { CodePlaceholders } from '@/lib/statCodeAnalysis';
 
 function InsertMenu({ items, label, Icon, onPick }: {
   items: InsertSnippet[]; label: string; Icon: typeof Braces; onPick: (snippet: InsertSnippet) => void;
@@ -57,8 +58,14 @@ interface CodeAreaProps {
   label?: ReactNode;
   /** Offer the `{{slot}}` menu. Template editing only. */
   slots?: boolean;
-  /** The world's stat names, completed inside string literals — the one place a typo fails silently. */
+  /** The world's stat names, completed after `stats` and inside string literals, and checked by name. */
   statNames?: readonly string[];
+  /** The name of the stat the code belongs to, so a write to it through `stats` is not flagged. */
+  selfName?: string;
+  /** The world's placeholders, completed after `placeholders` and checked by name. */
+  placeholders?: CodePlaceholders;
+  /** The world's trait names, completed after `traits` and checked by name. */
+  traits?: readonly string[];
   /** What the code produces. Given this, the field grows the Edit | Preview pair, which becomes a
    *  side-by-side split once full screen has the width for it. */
   preview?: ReactNode;
@@ -71,7 +78,7 @@ interface CodeAreaProps {
 function CodeAreaBody({
   value, onChange, ariaLabel, placeholder, label, slots, preview, className, rows = 8, fullscreen,
   onToggleFullscreen, session, active, expose,
-}: Omit<CodeAreaProps, 'statNames'> & {
+}: Omit<CodeAreaProps, 'statNames' | 'selfName' | 'placeholders' | 'traits'> & {
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   /** The one editor both copies take turns hosting. Null until its chunk has loaded. */
@@ -263,6 +270,9 @@ export function CodeArea(props: CodeAreaProps) {
         placeholder,
         slots,
         statNames: latest.current.statNames,
+        selfName: latest.current.selfName,
+        placeholders: latest.current.placeholders,
+        traits: latest.current.traits,
         onChange: (next) => latest.current.onChange(next),
         onUpdate,
       });
@@ -277,7 +287,10 @@ export function CodeArea(props: CodeAreaProps) {
   // read by hovering its squiggle.
   useEffect(() => { session?.setLintGutter(morph.mounted); }, [session, morph.mounted]);
   // Stats are renamed and added while a code field is open, so the completions follow the list.
-  useEffect(() => { session?.setStatNames(props.statNames ?? []); }, [session, props.statNames]);
+  useEffect(() => { session?.setStatNames(props.statNames); }, [session, props.statNames]);
+  useEffect(() => { session?.setSelfName(props.selfName); }, [session, props.selfName]);
+  useEffect(() => { session?.setPlaceholders(props.placeholders); }, [session, props.placeholders]);
+  useEffect(() => { session?.setTraits(props.traits); }, [session, props.traits]);
 
   return (
     <>

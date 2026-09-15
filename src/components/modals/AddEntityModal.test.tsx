@@ -29,7 +29,7 @@ describe('AddEntityModal', () => {
     getEntityData.mockClear();
   });
 
-  it('lists the library characters once open', async () => {
+  it('lists the library entities once open', async () => {
     render(<AddEntityModal open onOpenChange={() => {}} onAdd={() => {}} />);
     expect(await screen.findByText('Alpha')).toBeTruthy();
     expect(screen.getByText('Beta')).toBeTruthy();
@@ -37,28 +37,30 @@ describe('AddEntityModal', () => {
     expect(screen.getByAltText('Alpha')).toBeTruthy();
   });
 
-  it('disables Add until at least one is checked', async () => {
+  it('disables Add Entity until at least one is checked', async () => {
     render(<AddEntityModal open onOpenChange={() => {}} onAdd={() => {}} />);
     await screen.findByText('Alpha');
-    const add = screen.getByText('Add').closest('button')!;
+    const add = screen.getByRole('button', { name: 'Add Entity' }) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
     fireEvent.click(screen.getByText('Alpha'));
     expect(add.disabled).toBe(false);
   });
 
-  it('adds every selected character as a fresh-id copy', async () => {
+  it('hands over every selected entity as a fresh-id copy, in one batch', async () => {
     const onAdd = vi.fn();
     const onOpenChange = vi.fn();
     render(<AddEntityModal open onOpenChange={onOpenChange} onAdd={onAdd} />);
     await screen.findByText('Alpha');
     fireEvent.click(screen.getByText('Alpha'));
     fireEvent.click(screen.getByText('Beta'));
-    fireEvent.click(screen.getByText('Add'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Entity' }));
 
-    await waitFor(() => expect(onAdd).toHaveBeenCalledTimes(2));
-    const added = onAdd.mock.calls.map((c) => c[0] as Entity);
+    // One call, not one per pick: what the batch expects of the world is settled for all of it together.
+    await waitFor(() => expect(onAdd).toHaveBeenCalledTimes(1));
+    const added = (onAdd.mock.calls[0][0] as { item: Entity }[]).map((pick) => pick.item);
     expect(added.map((e) => e.name)).toEqual(['Alpha', 'Beta']);
     expect(added[0].id).not.toBe('a'); // fresh id, independent of the library original
+    expect(added[1].id).not.toBe('b');
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

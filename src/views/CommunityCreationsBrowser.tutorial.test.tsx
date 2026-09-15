@@ -68,8 +68,10 @@ const renderBrowser = ({ signedIn = true, open = true } = {}) =>
       setWorlds={() => {}}
       entities={[]}
       dictionaries={[]}
+      models={[]}
       refreshEntities={() => {}}
       refreshDictionaries={() => {}}
+      refreshModels={() => {}}
       isAuthenticated={signedIn}
       currentUser={signedIn ? reader : null}
       openImageViewer={() => {}}
@@ -109,15 +111,15 @@ afterEach(() => {
 describe('Community Creations tour', () => {
   it('holds off until the appear delay, then explains the content types first', () => {
     renderBrowser();
-    expect(screen.queryByText('Worlds, Entities & Dictionaries')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worlds, Entities, Dictionaries & Avatars')).not.toBeInTheDocument();
     settle();
-    expect(screen.getByText('Worlds, Entities & Dictionaries')).toBeInTheDocument();
+    expect(screen.getByText('Worlds, Entities, Dictionaries & Avatars')).toBeInTheDocument();
   });
 
   it('waits for the browser to open rather than for the app to start', () => {
     const view = renderBrowser({ open: false });
     settle();
-    expect(screen.queryByText('Worlds, Entities & Dictionaries')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worlds, Entities, Dictionaries & Avatars')).not.toBeInTheDocument();
 
     view.rerender(
       <CommunityCreationsBrowser
@@ -127,8 +129,10 @@ describe('Community Creations tour', () => {
         setWorlds={() => {}}
         entities={[]}
         dictionaries={[]}
+        models={[]}
         refreshEntities={() => {}}
         refreshDictionaries={() => {}}
+        refreshModels={() => {}}
         isAuthenticated
         currentUser={reader}
         openImageViewer={() => {}}
@@ -137,10 +141,10 @@ describe('Community Creations tour', () => {
     // The delay restarts from the open, so the popover still arrives as a change rather than as part of
     // the browser's first paint.
     act(() => { vi.advanceTimersByTime(TUTORIAL_APPEAR_DELAY_MS - 100); });
-    expect(screen.queryByText('Worlds, Entities & Dictionaries')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worlds, Entities, Dictionaries & Avatars')).not.toBeInTheDocument();
 
     settle();
-    expect(screen.getByText('Worlds, Entities & Dictionaries')).toBeInTheDocument();
+    expect(screen.getByText('Worlds, Entities, Dictionaries & Avatars')).toBeInTheDocument();
   });
 
   it('takes the tour over from the screen it opened on top of', () => {
@@ -155,7 +159,7 @@ describe('Community Creations tour', () => {
     settle();
 
     expect(screen.getByText('menu:none')).toBeInTheDocument();
-    expect(screen.getByText('Worlds, Entities & Dictionaries')).toBeInTheDocument();
+    expect(screen.getByText('Worlds, Entities, Dictionaries & Avatars')).toBeInTheDocument();
   });
 
   it('hands the tour back when the browser closes', () => {
@@ -176,16 +180,16 @@ describe('Community Creations tour', () => {
     renderBrowser();
     settle();
     gotIt();
-    expect(screen.queryByText('Worlds, Entities & Dictionaries')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worlds, Entities, Dictionaries & Avatars')).not.toBeInTheDocument();
     expect(screen.getByText('Narrow the Catalog')).toBeInTheDocument();
   });
 
   it('counts switching tabs as reading the tabs explanation', () => {
     renderBrowser();
     settle();
-    fireEvent.pointerDown(screen.getByRole('tab', { name: 'Entities' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Entities' }));
     expect(seenTutorials()).toContain('community-kind-tabs');
-    expect(screen.queryByText('Worlds, Entities & Dictionaries')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worlds, Entities, Dictionaries & Avatars')).not.toBeInTheDocument();
   });
 
   it('reaches the like heart third, on a card the reader can actually like', () => {
@@ -224,21 +228,21 @@ describe('Community Creations tour', () => {
     // ends up floating over that dialog, pointing at a header the reader can no longer see.
     renderBrowser();
     settle();
-    expect(screen.getByText('Worlds, Entities & Dictionaries')).toBeInTheDocument();
+    expect(screen.getByText('Worlds, Entities, Dictionaries & Avatars')).toBeInTheDocument();
 
     // What Radix does to the browser's own dialog when a modal opens above it.
-    const browserDialog = document.querySelector('[role="tablist"]')!.closest('[role="dialog"]')!;
+    const browserDialog = screen.getByRole('button', { name: 'Worlds' }).closest('[role="dialog"]')!;
     await act(async () => {
       browserDialog.setAttribute('aria-hidden', 'true');
       await Promise.resolve();
     });
-    expect(screen.queryByText('Worlds, Entities & Dictionaries')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worlds, Entities, Dictionaries & Avatars')).not.toBeInTheDocument();
 
     await act(async () => {
       browserDialog.removeAttribute('aria-hidden');
       await Promise.resolve();
     });
-    expect(screen.getByText('Worlds, Entities & Dictionaries')).toBeInTheDocument();
+    expect(screen.getByText('Worlds, Entities, Dictionaries & Avatars')).toBeInTheDocument();
     // Standing down is not reading: it must still be owed.
     expect(seenTutorials()).not.toContain('community-kind-tabs');
   });
@@ -288,7 +292,7 @@ describe('Community Creations tour', () => {
     expect(screen.getByText('2 / 5')).toBeInTheDocument();
 
     back();
-    expect(screen.getByText('Worlds, Entities & Dictionaries')).toBeInTheDocument();
+    expect(screen.getByText('Worlds, Entities, Dictionaries & Avatars')).toBeInTheDocument();
     expect(screen.getByText('1 / 5')).toBeInTheDocument();
   });
 

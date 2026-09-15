@@ -2,8 +2,8 @@ import type { AIRequestType, ChatMessage } from '@/types';
 import type { ThinkingMode, ReasoningEffort } from '@/contexts/SettingsContext';
 import type { ParagraphLimit } from '@/lib/outputLength';
 import {
-  reasoningBudgetBody, reasoningEffortBody, resolvePromptReasoning,
-  type PromptReasoning, type ReasoningEffortField,
+  reasoningBudgetBody, reasoningEffortBody, reasoningRuledOut, resolvePromptReasoning,
+  type PromptReasoning, type ReasoningCapability, type ReasoningEffortField,
 } from '@/lib/reasoningEffort';
 import { resolvePromptSampler, type PromptSamplerMap } from '@/lib/promptSamplers';
 import type { EndpointSampler, EndpointSamplerOverrides } from '@/lib/endpointSamplers';
@@ -20,8 +20,9 @@ export interface AiEndpointTarget {
   localEngine: boolean;
   /** Per-endpoint sampler switches and remembered values. The engine ignores these. */
   samplerOverrides: EndpointSamplerOverrides;
-  /** Effort literals this target accepts, or null when unprobed — an unprobed target is sent none. */
-  supportedReasoningEfforts: readonly ReasoningEffortField[] | null;
+  /** What is known about this target's native reasoning: whether the model reasons, which effort literals the
+   *  endpoint accepts, and whether it takes a token budget. An unanswered question sends no field. */
+  reasoning: ReasoningCapability;
 }
 
 /** The per-call settings snapshot: plain values plus the endpoint resolver, so nothing here touches React. */
@@ -131,9 +132,11 @@ function resolveSamplers(
 /**
  * Builds the complete chat-completions body for one call, engine split included.
  *
- * The built-in engine takes its own sampler trio and caps reasoning by a token budget; an external endpoint
- * keeps its own trio and takes the coarse effort hint instead — and only when reasoning is engaged, so a plain
- * endpoint is never sent a field it rejects. The penalty ships under both spellings: `repetition_penalty` for
+ * The built-in engine takes its own sampler trio; an external endpoint keeps its own. The capability record
+ * decides the reasoning fields, and the two are independent. A target that takes a token budget is capped by
+ * one, unless the record rules native reasoning out. The coarse effort hint rides beside the cap on an
+ * external target whose record lists the literal, and only when reasoning is engaged, so a plain endpoint is
+ * never sent a field it rejects. The penalty ships under both spellings: `repetition_penalty` for
  * vLLM-family servers and the built-in engine, `repeat_penalty` for LM Studio, which ignores the other.
  */
 export function buildRequestBody(snapshot: AiSettingsSnapshot, call: AiCall): AiRequestBody {
@@ -146,6 +149,8 @@ function bodyForTarget(snapshot: AiSettingsSnapshot, call: AiCall, target: AiEnd
   const maxTokens = call.maxTokensOverride ?? target.maxTokens;
   const { temperature, repetitionPenalty } = resolveSamplers(snapshot, requestType, target);
   const externalOverrides = target.samplerOverrides;
+  // One resolved choice drives both engines: the effort hint outside, the on/off of the token budget inside.
+  const effort = resolvePromptReasoning(requestType, snapshot.promptReasoning, snapshot.reasoningEffort, snapshot.thinkingMode);
 
   return {
     model: target.model,
@@ -161,15 +166,12 @@ function bodyForTarget(snapshot: AiSettingsSnapshot, call: AiCall, target: AiEnd
         }),
     ...(temperature.value !== undefined && { temperature: temperature.value }),
     ...(repetitionPenalty.value !== undefined && { repetition_penalty: repetitionPenalty.value, repeat_penalty: repetitionPenalty.value }),
-    ...(localEngine
-      ? reasoningBudgetBody(snapshot.thinkingMode, requestType, snapshot.promptReasoningBudget, maxTokens ?? 0)
-      : snapshot.reasoningEngaged
-        ? reasoningEffortBody(
-            snapshot.thinkingMode,
-            resolvePromptReasoning(requestType, snapshot.promptReasoning, snapshot.reasoningEffort),
-            target.supportedReasoningEfforts,
-          )
-        : {}),
+    ...(target.reasoning.budget && !reasoningRuledOut(target.reasoning)
+      ? reasoningBudgetBody(effort, requestType, snapshot.promptReasoningBudget, maxTokens ?? 0)
+      : {}),
+    // The bundled engine caps by tokens and ignores the hint, so it never receives one — not even once
+    // something answers the levels question for the endpoint whose record it shares.
+    ...(snapshot.reasoningEngaged && !localEngine ? reasoningEffortBody(effort, target.reasoning) : {}),
     // Single-paragraph stop, but not in inline-thinking mode — the <think> block needs newlines.
     ...(requestType === 'narration' && snapshot.paragraphLimit === 'single' && snapshot.thinkingMode !== 'inline' && { stop: ['\n'] }),
   };

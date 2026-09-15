@@ -1,13 +1,13 @@
-// The join between the trait runtime and the save envelope: a movement record has to survive a save/load
-// round trip, because that is where the ratchet it exists to prevent would come back. Storage is real
-// (in-memory) — the provider writes to IndexedDB. Must be imported before anything touches `indexedDB`.
+// The join between the trait runtime and the save envelope: a movement record and a code bound each have to
+// survive a save/load round trip, because that is where a lost one would silently rebalance a stat. Storage is
+// real (in-memory) — the provider writes to IndexedDB. Must be imported before anything touches `indexedDB`.
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { GameplayProvider, useGameplay } from './GameplayContext';
 import { GameDataProvider } from './GameDataContext';
 import { PlaceholderSessionProvider } from './PlaceholderSessionContext';
-import { acquireTrait, seedStatBases, setTraitEnabled, type TraitRuntimeState } from '@/lib/traitRuntime';
+import { acquireTrait, applyCodeTraitSwitches, seedStatBases, setTraitEnabled, type TraitRuntimeState } from '@/lib/traitRuntime';
 import type { PlayerStat, Stat, Trait } from '@/types';
 
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
@@ -131,5 +131,77 @@ describe('trait movement records across a save/load round trip', () => {
       await live().loadGame('save-2', [], [authored]);
     });
     expect(live().appliedTraitValues).toEqual({});
+  });
+});
+
+describe('a code trait switch under undo', () => {
+  it('restores the pre-switch trait state and the value the switch moved', async () => {
+    const live = mount();
+    const drain: Trait = { id: 'd', name: 'Drained', statChanges: [{ statId: 'vigor', value: -30, type: 'starting' }] };
+    const world = { traits: [trait, drain], groups: [] };
+    await act(async () => {
+      commit(live(), { stats: seedStatBases([startStat]), traits: [], disabledTraitIds: [], appliedValues: {} });
+    });
+    const preTurn = live().saveCurrentGameState();
+
+    await act(async () => {
+      commit(live(), applyCodeTraitSwitches(slice(live()), [{ traitId: 'd', enabled: true, by: 'Vigor' }], world).state);
+    });
+    expect(live().playerTraits.map((t) => t.id)).toEqual(['d']);
+    expect(valueOf(live().playerStats)).toBe(70);
+
+    // Undo loads the snapshot the turn before the switch left.
+    await act(async () => {
+      live().loadGameState(preTurn, [], { keepLiveHistory: true });
+    });
+    expect(slice(live())).toMatchObject({ traits: [], disabledTraitIds: [], appliedValues: {} });
+    expect(valueOf(live().playerStats)).toBe(100);
+  });
+});
+
+describe('code bounds across a save/load round trip', () => {
+  const raiseCap: Trait = { id: 'r', name: 'Robust', statChanges: [{ statId: 'vigor', value: 30, type: 'max' }] };
+  const statOf = (g: Gameplay) => g.playerStats.find((s) => s.id === 'vigor')!;
+
+  it('loads a save with no code bound fields with none, its bounds as saved', async () => {
+    const live = mount();
+    await act(async () => {
+      commit(live(), { stats: seedStatBases([startStat]), traits: [], disabledTraitIds: [], appliedValues: {} });
+    });
+    await act(async () => {
+      await live().saveGame('slot', 'World', 'w1', 'save-3');
+    });
+    await act(async () => {
+      commit(live(), { stats: [], traits: [], disabledTraitIds: [], appliedValues: {} });
+    });
+    await act(async () => {
+      await live().loadGame('save-3', [], [authored]);
+    });
+    const loaded = statOf(live());
+    expect(loaded).toMatchObject({ min: 0, max: 100, value: 100 });
+    expect('codeBounds' in loaded).toBe(false);
+  });
+
+  it('keeps a code bound through the round trip, still winning the next trait switch', async () => {
+    const live = mount();
+    const coded: PlayerStat = { ...seedStatBases([startStat])[0], max: 40, value: 40, codeBounds: { max: 40 } };
+    await act(async () => {
+      commit(live(), { stats: [coded], traits: [raiseCap], disabledTraitIds: ['r'], appliedValues: {} });
+    });
+    await act(async () => {
+      await live().saveGame('slot', 'World', 'w1', 'save-4');
+    });
+    await act(async () => {
+      commit(live(), { stats: [], traits: [], disabledTraitIds: [], appliedValues: {} });
+    });
+    await act(async () => {
+      await live().loadGame('save-4', [], [authored]);
+    });
+    expect(statOf(live())).toMatchObject({ max: 40, codeBounds: { max: 40 } });
+
+    await act(async () => {
+      commit(live(), setTraitEnabled(slice(live()), 'r', true, { traits: [raiseCap], groups: [] }).state);
+    });
+    expect(statOf(live())).toMatchObject({ max: 40, value: 40 });
   });
 });

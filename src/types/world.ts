@@ -44,7 +44,10 @@ export interface Stat {
   /** How this stat's descriptor thresholds read: `raw` in the stat's own units (bands stay put when the
    *  range changes), `percent` as a share of min→max (bands rescale). Absent = raw. */
   thresholdUnit?: ThresholdUnit;
-  /** Optional JS executed to derive this stat's value from others. */
+  /** Optional JS run before the turn's AI calls, on the turn's starting state. Its writes reach that
+   *  turn's prompt. */
+  beforeCode?: string;
+  /** Optional JS run after the AI's asks and regen land. */
   code?: string;
   /** Body-mesh morph target names this stat drives; the value maps linearly across [min, authored max],
    *  so a max raised in play pushes the influence past 1. */
@@ -187,6 +190,19 @@ export interface Entity {
   /** Off-world only: the shared placeholders this entity's chips use, so they resolve after import. An import
    *  merges them into the world's shared list by name and values and clears the field. */
   sharedPlaceholders?: Placeholder[];
+  /** Off-world only: the locations this entity stood in, named so a receiving world can connect each one
+   *  to a location of its own. The entity keeps ownership of the references; `locations` holds them once
+   *  the world resolves them, and an import clears this field. */
+  locationRefs?: ContentLocationRef[];
+  /** What this copy follows, where it follows anything (see `ContentLink`). Absent = independent copy. */
+  link?: ContentLink;
+}
+
+/** One location a piece of off-world content expects, as the world it left named it. The id is the key its
+ *  connection is stored under, so the source renaming the location keeps the connection. */
+export interface ContentLocationRef {
+  id: string;
+  name: string;
 }
 
 /** An editor-only folder for organizing entities, nestable via `parentId`. Just a name — never sent to the
@@ -333,6 +349,8 @@ export interface Dictionary {
   /** Off-world only: the shared placeholders this book's entries use, so they resolve after import. An import
    *  merges them into the world's shared list by name and values and clears the field. */
   sharedPlaceholders?: Placeholder[];
+  /** What this copy follows, where it follows anything (see `ContentLink`). Absent = independent copy. */
+  link?: ContentLink;
 }
 
 /**
@@ -458,6 +476,40 @@ export interface Placeholder {
   groupId?: string | null;
 }
 
+/**
+ * What one world's copy of an entity or dictionary follows. The record lives on the copy inside the world,
+ * so two worlds holding the same source track it separately; a copy with no record is an independent copy
+ * and follows nothing.
+ *
+ * Not `CommunityLink`: that is local-only bookkeeping about a downloaded library item and is never exported.
+ * This record is part of the authored world and travels with a world export.
+ */
+export interface ContentLink {
+  /** The local library item this copy follows. */
+  libraryId?: string;
+  /** The published listing behind that library item, where it has one. */
+  sourceId?: string;
+  /** The source revision this copy holds — what an update compares against. */
+  sourceRevision?: string;
+  /** The last revision the player reviewed, so a revision they kept does not return to review until the
+   *  source changes again. Absent until something has been reviewed. */
+  reviewedRevision?: string;
+  /** The copy has been edited away from its source but still tracks it. */
+  localReplacement?: boolean;
+  /** The source's name as it read when the link was made. Display only, never identity — a name alone
+   *  cannot establish a link. Carried so an exported world, or one whose library item is gone, can still
+   *  say what the copy follows. */
+  sourceName?: string;
+  /** What each world-owned thing the source expects resolves to here: the source's own id for a shared
+   *  placeholder or a location, against this world's id for it. Written by the Connect World References
+   *  step and read by every later update, so the source renaming a reference keeps it connected. */
+  connections?: Record<string, string>;
+  /** The copy arrived bundled in an imported world file, and the library item it followed where that file
+   *  was written is not on this machine. The value is that item's id, which groups the copies that
+   *  followed one source, so Link bundled content places one library item for the group. */
+  bundledFrom?: string;
+}
+
 /** An editor-only folder for organizing shared placeholders, nestable via `parentId`. Just a name — never
  *  sent to the AI. Mirrors `EntityGroup`. */
 export interface PlaceholderGroup {
@@ -489,6 +541,9 @@ export interface CommunityLink {
   /** The account that published the listing, captured at download. The authored `author` string is free
    *  text and names nobody in particular; this is who actually put it on Community Creations. */
   sourceAuthorId?: string;
+  /** That account's display name at download, so a picker can print who a copy follows without a lookup.
+   *  Display only; `sourceAuthorId` is the identity. */
+  sourceAuthorName?: string;
 }
 
 export interface WorldMetadata extends CommunityLink {
@@ -528,4 +583,11 @@ export interface EntityMetadata extends CommunityLink {
   lastAccessed?: string;
   /** Listing tags, shown on the library card the way a world's are. */
   tags?: string[];
+}
+
+/** A find-bar hit handed to a detail panel, so the panel can open the tab that holds the field. `itemId`
+ *  names the item the hit sits in, or is null for Overview, which has no item list. */
+export interface FocusFieldHint {
+  fieldKey: string;
+  itemId: string | null;
 }

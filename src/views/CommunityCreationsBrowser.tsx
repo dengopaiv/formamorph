@@ -7,12 +7,14 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Search, RotateCcw, ArrowDownWideNarrow, ArrowUpNarrowWide, ArrowLeft, X, SlidersHorizontal, ChevronDown,
-  Earth, User, BookOpen, Globe, ShieldAlert, Trophy,
+  Earth, User, BookOpen, PersonStanding, Globe, ShieldAlert, Trophy,
+  type LucideIcon,
 } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
-import { KIND_LABELS, kindOf, type CatalogKind } from "@/lib/catalogKinds";
+import { CATALOG_KINDS, KIND_LABELS, kindOf, type CatalogKind } from "@/lib/catalogKinds";
 import { BROWSE_TABS, BROWSE_TAB_LABELS, type BrowseTab } from "@/lib/browseTabs";
+import { listingId, listingRef, type ListingRef } from "@/lib/worldDependencies";
 import { contestPhase, placementsBy, entriesOf, orderContestEntries } from "@/lib/contests";
 import { isContestEvent } from "@/lib/serverEvents";
 import { useContests } from "@/lib/useContests";
@@ -29,22 +31,29 @@ import { useCatalogSync } from "@/lib/useCatalogSync";
 import { replaceCatalog, type CatalogWorld } from "@/lib/worldCatalog";
 import { useThumbnailPreload } from "@/lib/useCachedThumbnail";
 import { useContestWithdrawal } from "@/lib/useContestWithdrawal";
-import { useDownloadCoordinator } from "@/lib/useDownloadCoordinator";
+import { useDownloadCoordinator, type DownloadPlan } from "@/lib/useDownloadCoordinator";
 import { useLibraryDownload } from "@/lib/useLibraryDownload";
+import { useDeviceDownload } from "@/lib/useDeviceDownload";
 import { useDownscalePrompt } from "@/lib/useDownscalePrompt";
 import EntityStorageService from "@/services/EntityStorageService";
 import DictionaryStorageService from "@/services/DictionaryStorageService";
-import type { Entity, Dictionary, EntityMetadata, DictionaryMetadata, ServerEvent } from "@/types";
+import ModelStorageService from "@/services/ModelStorageService";
+import { avatarListingToVrmData } from "@/lib/avatarDownload";
+import type {
+  Entity, Dictionary, EntityMetadata, DictionaryMetadata, ModelMetadata, AvatarListingContent, ServerEvent,
+} from "@/types";
 import { EventBanner, EventBannerChips } from "@/components/events/EventBanner";
 import { useEventBanners } from "@/components/events/useEventBanners";
 import { useClosingSnapshot } from "@/lib/useClosingSnapshot";
-import { useCommunityBrowserFilters } from "@/lib/useCommunityBrowserFilters";
+import { useCommunityBrowserFilters, type CommunityFilterPreferences } from "@/lib/useCommunityBrowserFilters";
 import { MessageComposerDialog } from "@/components/menu/MessageComposerDialog";
 import { takedownTargetFor, takedownTemplate, type TakedownTarget } from "@/lib/takedownNotice";
 import {
   isQuarantined, quarantineTargetFor, quarantineTemplate, type QuarantineTarget,
 } from "@/lib/quarantine";
 import { isStaff } from "@/lib/roles";
+import { ManageAddonsDialog } from "@/components/community/ManageAddonsDialog";
+import { WorldUpdateReviewDialog } from "@/components/modals/WorldUpdateReviewDialog";
 import { QuarantineDialog } from "@/components/community/QuarantineDialog";
 import {
   Dialog,
@@ -60,6 +69,7 @@ import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { useBackStop } from "@/hooks/useBackStop";
+import { APP_COMMUNITY_CAPABILITIES, type CommunityBrowserCapabilities } from '@/lib/communityBrowserCapabilities';
 import WorldStorageService from '../services/WorldStorageService';
 import AuthService from '../services/AuthService';
 import { getDownloadState, type DownloadState } from '@/lib/downloadState';
@@ -74,8 +84,33 @@ import { useTutorial } from "@/lib/tutorials";
 // Key string kept as-is so an existing user's saved preference survives the rename.
 const COMMUNITY_BROWSER_MODAL_COLLAPSED_KEY = 'FORMAMORPH_discoverModalCollapsed';
 
+/** Icon for each catalog kind's row in the section switcher (rail on landscape, dropdown on portrait). */
+const SECTION_ICON_BY_KIND: Record<CatalogKind, LucideIcon> = {
+  world: Earth,
+  entity: User,
+  dictionary: BookOpen,
+  // The same figure the local library's Avatars tab wears, so one thing has one icon everywhere.
+  model: PersonStanding,
+};
+
+/** A row in the section switcher: one per catalog kind, plus Contest while a contest exists. */
+type SwitcherSection = { key: BrowseTab; label: string; icon: LucideIcon };
+
 /** How the browser is presented: the app's full-screen modal, or a page that is the whole surface. */
-export type BrowserPresentation = 'dialog' | 'page';
+export type BrowserPresentation = 'dialog' | 'page' | 'embedded';
+
+/** A published creation controlled by an external caller such as the website router. */
+export interface CommunityListing {
+  id: string;
+  kind: CatalogKind;
+}
+
+/**
+ * Controls the actions a shell may expose without forking the shared browser.
+ *
+ * The app keeps every action; the website begins as a read-only catalog while its download and
+ * account interaction slices land separately.
+ */
 
 /**
  * The browser's outer shell.
@@ -93,8 +128,8 @@ const BrowserShell = ({ presentation, open, onOpenChange, children }: {
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) => {
-  // The page presentation is not a Radix layer, so the Android back button cannot see it and closes it here.
-  useBackStop(presentation === 'page' && open ? () => onOpenChange(false) : undefined);
+  // The page presentations are not Radix layers, so the Android back button cannot see them and closes them here.
+  useBackStop(presentation !== 'dialog' && open ? () => onOpenChange(false) : undefined);
   if (presentation === 'page') {
     if (!open) return null;
     return (
@@ -102,6 +137,10 @@ const BrowserShell = ({ presentation, open, onOpenChange, children }: {
         {children}
       </div>
     );
+  }
+  if (presentation === 'embedded') {
+    if (!open) return null;
+    return <div className="flex min-h-0 flex-1 flex-col bg-background">{children}</div>;
   }
 
   return (
@@ -126,17 +165,25 @@ interface CommunityCreationsBrowserProps {
   onOpenChange: (open: boolean) => void;
   /** Which shell to raise. Defaults to the app's modal; `page` is for a surface that is only this. */
   presentation?: BrowserPresentation;
+  /** The actions the shell is allowed to expose. */
+  capabilities?: CommunityBrowserCapabilities;
+  /** Preference scope and first-visit sort for this surface. */
+  filterPreferences?: CommunityFilterPreferences;
   // Local world list (drives download-state) + setter (download/overwrite add or update local copies).
   worlds: WorldRecord[];
   setWorlds: React.Dispatch<React.SetStateAction<WorldRecord[]>>;
-  // The entity/dictionary libraries drive their tabs' download-state; refreshing re-reads them after a
-  // download lands (unlike worlds, these are stored by their own service rather than set here).
+  // The entity/dictionary/model libraries drive their tabs' download-state; refreshing re-reads them after
+  // a download lands (unlike worlds, these are stored by their own service rather than set here).
   entities: EntityMetadata[];
   dictionaries: DictionaryMetadata[];
+  models: ModelMetadata[];
   refreshEntities: () => void;
   refreshDictionaries: () => void;
+  refreshModels: () => void;
   isAuthenticated: boolean;
   currentUser: WorldRecord | null;
+  /** Starts authentication instead of mutating when a guest presses Like. */
+  onGuestLike?: (world: WorldRecord) => void;
   openImageViewer: (src: string | undefined, alt: string | undefined) => void;
   /** The tab to open on — the dev-router's (`#dev?modal=community&tab=entity`), or Contest when an
    *  event banner sent the player here. */
@@ -145,26 +192,38 @@ interface CommunityCreationsBrowserProps {
   openListing?: { id: string; kind: string } | null;
   /** Fired once that listing has been opened, or found to be gone, so the host can clear its request. */
   onListingOpened?: () => void;
+  /** A website-controlled destination; an explicit null closes the visible selection. */
+  listing?: CommunityListing | null;
+  /** Reports a card, direct destination, or details close to a website router. */
+  onListingChange?: (listing: CommunityListing | null) => void;
+  /** Reports a destination only after the catalog has resolved without it. */
+  onListingUnavailable?: (listing: CommunityListing) => void;
+  /** A read-only action shown in this surface's selected listing details. */
+  detailsAction?: React.ReactNode;
   /** Running community events, announced in the header the same way the main menu announces them. */
   events?: ServerEvent[];
   /** Open the place an event's content lives — the contest tab, for a contest. */
   onOpenEvent?: (event: ServerEvent) => void;
   /** DEV only: open the first listing's details and raise its likers list, for the dev route. */
   openLikersOnMount?: boolean;
+  /** DEV only: raise the add-on review over the first world listing, for the dev route. */
+  openManageAddonsOnMount?: boolean;
 }
 
 // The Community Creations browser: browse/search/filter/sort the published catalog, view world details
 // and comments, and download/refresh/update copies to the local library.
 const CommunityCreationsBrowser = ({
-  open, onOpenChange, presentation = 'dialog', worlds, setWorlds, entities, dictionaries,
-  refreshEntities, refreshDictionaries,
-  isAuthenticated, currentUser, openImageViewer, initialTab, openListing, onListingOpened,
-  events = [], onOpenEvent, openLikersOnMount = false,
+  open, onOpenChange, presentation = 'dialog', capabilities = APP_COMMUNITY_CAPABILITIES, filterPreferences, worlds, setWorlds, entities, dictionaries, models,
+  refreshEntities, refreshDictionaries, refreshModels,
+  isAuthenticated, currentUser, onGuestLike, openImageViewer, initialTab, openListing, onListingOpened, listing: controlledListing,
+  onListingChange, onListingUnavailable, detailsAction,
+  events = [], onOpenEvent, openLikersOnMount = false, openManageAddonsOnMount = false,
 }: CommunityCreationsBrowserProps) => {
   // The header's title element, which differs per shell (see PageHeading).
-  const Heading = presentation === 'page' ? PageHeading : DialogTitle;
+  const Heading = presentation === 'dialog' ? DialogTitle : PageHeading;
   // Catalog fetch/cache/sync (loads on open, refreshes in the background).
-  const { remoteWorlds, setRemoteWorlds, isLoadingRemoteWorlds, isSyncingCatalog, catalogSettled, loadCatalog } = useCatalogSync(open);
+  const catalogReader = isAuthenticated ? String(currentUser?.id ?? AuthService.token ?? '') : '';
+  const { remoteWorlds, setRemoteWorlds, isLoadingRemoteWorlds, isSyncingCatalog, catalogSettled, loadCatalog } = useCatalogSync(open, catalogReader);
   const [remoteWorldToDelete, setRemoteWorldToDelete] = useState<string | null>(null);
   // Set once someone else's item has been deleted, offering to tell its author why. The takedown itself
   // has already landed — declining leaves it removed and simply unexplained, as suspending does.
@@ -177,6 +236,8 @@ const CommunityCreationsBrowser = ({
   // Admin-only view of just what is hidden — the whole catalog is already in memory, so this is a filter
   // over it rather than another request.
   const [quarantinedOnly, setQuarantinedOnly] = useState(false);
+  // The published world whose add-on offers the author is reviewing.
+  const [managingAddons, setManagingAddons] = useState<ListingRef | null>(null);
   const [selectedRemoteWorld, setSelectedRemoteWorld] = useState<WorldRecord | null>(null);
   const [showRemoteWorldDetailsModal, setShowRemoteWorldDetailsModal] = useState(false);
   // Offer to downscale oversized images right after a world is downloaded/overwritten.
@@ -187,7 +248,15 @@ const CommunityCreationsBrowser = ({
     overwriteSelectedId, setOverwriteSelectedId, showOverwriteSelect, setShowOverwriteSelect,
     localCopiesBySource, copiesForWorld, downloadStateForWorld,
     handleContextualDownload, handleChooseOverwrite, handleConfirmOverwrite, handleDownloadWorld,
+    pendingDownload, retryDownload, dismissPendingDownload,
+    worldUpdateReview, applyWorldUpdate, cancelWorldUpdate,
   } = useDownloadCoordinator(worlds, setWorlds, (_id, data) => promptWorld(data));
+
+  // Hold the failure report through the dialog's fade-out, as the copy-vs-overwrite decision does.
+  const shownPending = useClosingSnapshot(!!pendingDownload, pendingDownload);
+
+  // Same, for the update review: its rows and the copy's name outlive the state that closes it.
+  const shownUpdateReview = useClosingSnapshot(!!worldUpdateReview, worldUpdateReview);
 
   // Hold the copy-vs-overwrite decision's content while its dialogs fade out (contextualAction nulls on close,
   // which would otherwise flip the title/description to the other mode's text for a frame or two).
@@ -202,8 +271,8 @@ const CommunityCreationsBrowser = ({
   // Contest is a fourth tab rather than a fourth kind — a narrowing of the worlds already in hand.
   const [browseTab, setBrowseTab] = useState<BrowseTab>(initialTab ?? 'world');
 
-  // Entities and dictionaries download into their own libraries, one copy per listing. Worlds keep the
-  // coordinator's multi-copy flow (see useLibraryDownload for why the two differ).
+  // Entities, dictionaries, and models download into their own libraries, one copy per listing. Worlds
+  // keep the coordinator's multi-copy flow (see useLibraryDownload for why the two differ).
   const entityDownload = useLibraryDownload<Entity>({
     kind: 'entity',
     records: entities,
@@ -224,7 +293,31 @@ const CommunityCreationsBrowser = ({
     refresh: refreshDictionaries,
   });
 
-  const downloadFor = (kind: CatalogKind) => (kind === 'entity' ? entityDownload : dictionaryDownload);
+  const modelDownload = useLibraryDownload<AvatarListingContent>({
+    kind: 'model',
+    records: models,
+    // The content carries no name of its own (just `{ vrm, license, hash }`); the file's own embedded
+    // title wins, as it does for an uploaded model, else the listing's name stands in for it. No
+    // thumbnail is stored either — `ensureThumbnail` backfills one lazily on first view, from these
+    // same bytes, exactly as it does for any other legacy or freshly-migrated record.
+    store: async (id, content, link, listingName) => {
+      const data = await avatarListingToVrmData(content);
+      await ModelStorageService.storeModel({ id, name: content.license?.title?.trim() || listingName, data, ...link });
+    },
+    refresh: refreshModels,
+  });
+  const deviceDownload = useDeviceDownload();
+
+  /**
+   * The library that stores a downloaded listing of this kind, or null for a kind with none yet.
+   *
+   * Named per kind rather than defaulted, so a kind the catalog gains before its library does offers no
+   * download at all — falling through to another kind's library would hand a listing's content to an
+   * importer written for a different shape.
+   */
+  const downloadFor = (kind: CatalogKind) => (
+    kind === 'entity' ? entityDownload : kind === 'dictionary' ? dictionaryDownload : kind === 'model' ? modelDownload : null
+  );
 
   /**
    * The none/refresh/update state for any listing, from whichever library holds that kind.
@@ -234,25 +327,34 @@ const CommunityCreationsBrowser = ({
    */
   const downloadStateForRecord = useCallback((record: WorldRecord): DownloadState => {
     const kind = kindOf(record);
-    return kind === 'world' ? downloadStateForWorld(record) : downloadFor(kind).downloadStateFor(record);
+    if (kind === 'world') return downloadStateForWorld(record);
+    // A kind with no library holds no copy, so it is never downloaded and never out of date.
+    return downloadFor(kind)?.downloadStateFor(record) ?? 'none';
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localCopiesBySource, entityDownload.copyBySource, dictionaryDownload.copyBySource]);
+  }, [localCopiesBySource, entityDownload.copyBySource, dictionaryDownload.copyBySource, modelDownload.copyBySource]);
 
-  // Every in-flight bar, keyed by listing id — unique across kinds, so the three sources merge cleanly.
+  // Every in-flight bar, keyed by listing id — unique across kinds, so the four sources merge cleanly.
   const allDownloadProgress = {
     ...downloadProgress,
     ...entityDownload.downloadProgress,
     ...dictionaryDownload.downloadProgress,
+    ...modelDownload.downloadProgress,
+    ...deviceDownload.downloadProgress,
   };
 
-  const handleCardDownload = (record: WorldRecord, state: DownloadState) => {
+  // `plan` carries the add-on selection the details window made. A card has no review on it, so its
+  // download takes the world and everything it requires and nothing else.
+  const handleCardDownload = (record: WorldRecord, state: DownloadState, plan?: DownloadPlan) => {
     const kind = kindOf(record);
     if (kind === 'world') {
-      handleContextualDownload(record, state);
+      handleContextualDownload(record, state, plan ?? { addons: [] });
       return;
     }
-    downloadFor(kind).startDownload(record);
+    downloadFor(kind)?.startDownload(record);
   };
+
+  /** Whether a listing of this kind can be saved into a local library at all. */
+  const savesLocally = (record: WorldRecord) => kindOf(record) === 'world' || downloadFor(kindOf(record)) !== null;
 
   // Browse pipeline: search/author/tag/sort filters, hide preferences, and responsive pagination.
   // Moderation controls are offered to any staff account; the server narrows it per listing.
@@ -352,6 +454,7 @@ const CommunityCreationsBrowser = ({
     catalogInView, downloadStateForRecord, open, browseTab,
     currentUser?.id ? String(currentUser.id) : undefined,
     browseTab === 'contest' ? contestOrder : undefined,
+    filterPreferences,
   );
 
   // One read for the whole page's stored thumbnails, so a page of seen cards paints together rather
@@ -366,7 +469,7 @@ const CommunityCreationsBrowser = ({
 
   // Admin-only, and only once something is actually quarantined: a toggle that can only ever show an
   // empty list is a control that teaches nothing.
-  const quarantineControl = viewerIsStaff && quarantinedCount > 0 && browseTab !== 'contest' ? (
+  const quarantineControl = capabilities.moderation && viewerIsStaff && quarantinedCount > 0 && browseTab !== 'contest' ? (
     <Tip tip="Show only what is hidden pending changes" labelsChild={false}>
       <Button
         variant={quarantinedOnly ? 'default' : 'outline'}
@@ -522,6 +625,24 @@ const CommunityCreationsBrowser = ({
   const handleViewRemoteWorldDetails = (world: WorldRecord) => {
     setSelectedRemoteWorld(world);
     setShowRemoteWorldDetailsModal(true);
+    onListingChange?.({ id: String(world._id || world.id), kind: kindOf(world) });
+  };
+
+  /**
+   * Follow a listing named by the one on screen — the worlds a component is offered for.
+   *
+   * Resolved out of the catalog in hand, like every other way into the details window. A listing that is
+   * not there is said so rather than swapped in blank: the section that named it was drawn from the
+   * server's answer, which can be older than this catalog.
+   */
+  const handleOpenNamedListing = (named: CommunityListing) => {
+    const found = remoteWorlds.find((w) => listingId(w) === named.id && kindOf(w) === named.kind);
+    if (!found) {
+      toast.info('That listing is no longer in Community Creations');
+      return;
+    }
+    setBrowseTab(kindOf(found));
+    handleViewRemoteWorldDetails(found);
   };
 
   // A listing named from outside — a notification feed row. The catalog is one request for every kind, so
@@ -534,24 +655,34 @@ const CommunityCreationsBrowser = ({
       if (openListing) onListingOpened?.();
       return;
     }
-    if (!openListing) return;
+    const requestedListing = controlledListing === undefined ? openListing : controlledListing;
+    if (!requestedListing) {
+      if (controlledListing === null) {
+        setSelectedRemoteWorld(null);
+        setShowRemoteWorldDetailsModal(false);
+      }
+      return;
+    }
 
-    const found = remoteWorlds.find((w) => (w._id || w.id) === openListing.id);
+    const found = remoteWorlds.find((w) =>
+      (w._id || w.id) === requestedListing.id && kindOf(w) === requestedListing.kind);
     if (found) {
       setBrowseTab(kindOf(found));
       // Set directly rather than through the click handler, which is rebuilt every render and would
       // make this effect chase its own identity.
       setSelectedRemoteWorld(found);
       setShowRemoteWorldDetailsModal(true);
+      onListingChange?.({ id: String(found._id || found.id), kind: kindOf(found) });
     } else if (!catalogSettled) {
       return;
     } else {
       // Deleted or quarantined between the feed being read and the row being clicked.
       toast.info('That listing is no longer in Community Creations');
+      if (controlledListing) onListingUnavailable?.(controlledListing);
     }
 
     onListingOpened?.();
-  }, [open, openListing, catalogSettled, remoteWorlds, onListingOpened]);
+  }, [open, openListing, controlledListing, catalogSettled, remoteWorlds, onListingOpened, onListingChange, onListingUnavailable]);
 
   // DEV: `#dev?modal=likers` lands on the likers list of whichever listing the catalog puts first, the
   // same way `modal=modelDetails` opens the library's first model. Does nothing on an empty catalog.
@@ -564,44 +695,95 @@ const CommunityCreationsBrowser = ({
     setShowRemoteWorldDetailsModal(true);
   }, [open, openLikersOnMount, remoteWorlds, selectedRemoteWorld]);
 
-  // Header control fragments — reused across the mobile (collapsible) and desktop (inline) header layouts.
-  // Mirrors the local library's tabs (MainMenu's `cardType`) so the same three kinds read the same way
-  // in both places — icons below the label breakpoint, matching that header.
-  const kindTabs = (
+  // DEV: `#dev?modal=manageAddons` raises the review over the first world the catalog holds. The dialog
+  // reads a real listing's offers, so it has nothing to draw without one.
+  useEffect(() => {
+    if (!import.meta.env.DEV || !open || !openManageAddonsOnMount || managingAddons) return;
+    const first = remoteWorlds.find((row) => kindOf(row) === 'world');
+    if (!first) return;
+
+    setManagingAddons(listingRef(first));
+  }, [open, openManageAddonsOnMount, remoteWorlds, managingAddons]);
+
+  // Section switcher: a rail on landscape, a dropdown on portrait. Rows come from the kinds list; Contest
+  // is appended rather than generated (see browseTabs.ts), only while one exists to browse.
+  const kindSections: SwitcherSection[] = CATALOG_KINDS.map((kind) => ({
+    key: kind,
+    label: BROWSE_TAB_LABELS[kind].many,
+    icon: SECTION_ICON_BY_KIND[kind],
+  }));
+  const sections: SwitcherSection[] = contests.length > 0
+    ? [...kindSections, { key: 'contest', label: 'Contest', icon: Trophy }]
+    : kindSections;
+  const activeSectionMeta = sections.find((s) => s.key === browseTab) ?? sections[0];
+
+  // Landscape: a vertical rail beside the results, below the header. Its explanation opens to the right of
+  // the rows, not of the rail: the rail is as tall as the results, so above or below it is off the screen,
+  // and an arrow can't aim at the middle of a column that is mostly empty.
+  const landscapeRail = (
+    <nav
+      className="flex flex-col w-48 shrink-0 border-r p-3"
+      onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}
+    >
+    <TutorialPopover
+      entry={tutorial?.id === 'community-kind-tabs' ? tutorial : null}
+      nav={tutorialNav}
+      side="right"
+      align="start"
+    >
+    <div className="flex flex-col gap-1">
+      {sections.map(({ key, label, icon: Icon }) => {
+        const active = browseTab === key;
+        return (
+          <React.Fragment key={key}>
+            {key === 'contest' && <div className="my-2 h-px bg-border" />}
+            <button
+              onClick={() => setBrowseTab(key)}
+              aria-current={active ? 'true' : undefined}
+              className={cn(
+                "flex items-center gap-2 rounded-md px-3 py-2 text-label font-medium transition-colors shrink-0",
+                active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              {label}
+            </button>
+          </React.Fragment>
+        );
+      })}
+    </div>
+    </TutorialPopover>
+    </nav>
+  );
+
+  // Portrait: a dropdown carrying every section, icon mirrored onto the closed trigger itself.
+  const portraitDropdown = (
     <TutorialPopover
       entry={tutorial?.id === 'community-kind-tabs' ? tutorial : null}
       nav={tutorialNav}
       align="start"
     >
-    <TabsList onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}>
-      <Tip tip="Worlds">
-        <TabsTrigger value="world">
-          <Earth className="h-5 w-5 min-[1040px]:hidden" />
-          <span className="hidden min-[1040px]:inline">Worlds</span>
-        </TabsTrigger>
-      </Tip>
-      <Tip tip="Entities">
-        <TabsTrigger value="entity">
-          <User className="h-5 w-5 min-[1040px]:hidden" />
-          <span className="hidden min-[1040px]:inline">Entities</span>
-        </TabsTrigger>
-      </Tip>
-      <Tip tip="Dictionaries">
-        <TabsTrigger value="dictionary">
-          <BookOpen className="h-5 w-5 min-[1040px]:hidden" />
-          <span className="hidden min-[1040px]:inline">Dictionaries</span>
-        </TabsTrigger>
-      </Tip>
-      {/* A fourth tab only while there is a contest to browse — running, or finished and archived. */}
-      {contests.length > 0 && (
-        <Tip tip="Contest">
-          <TabsTrigger value="contest">
-            <Trophy className="h-5 w-5 min-[1040px]:hidden" />
-            <span className="hidden min-[1040px]:inline">Contest</span>
-          </TabsTrigger>
-        </Tip>
-      )}
-    </TabsList>
+    <div onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}>
+    <Select value={browseTab} onValueChange={(v) => setBrowseTab(v as BrowseTab)}>
+      <SelectTrigger className="w-[170px] h-9">
+        {/* A `<div>`, not a `<span>`: the trigger's `[&>span]:line-clamp-1` style stacks a direct-child span's flex children instead of rowing them. */}
+        <div className="flex items-center gap-2 min-w-0">
+          <activeSectionMeta.icon className="h-4 w-4 shrink-0" />
+          <span className="truncate">{activeSectionMeta.label}</span>
+        </div>
+      </SelectTrigger>
+      <SelectContent>
+        {sections.map(({ key, label, icon: Icon }) => (
+          <SelectItem key={key} value={key}>
+            <span className="flex items-center gap-2">
+              <Icon className="h-4 w-4 shrink-0" />
+              {label}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+    </div>
     </TutorialPopover>
   );
 
@@ -682,7 +864,7 @@ const CommunityCreationsBrowser = ({
     </div>
   );
 
-  const hiddenControl = (
+  const hiddenControl = capabilities.hiddenFilters ? (
     // The tutorial wraps the Hidden popover rather than sitting inside it: its own Popover would otherwise
     // become the context the trigger below binds to.
     <TutorialPopover entry={hiddenTutorial} nav={tutorialNav} align="start">
@@ -739,9 +921,9 @@ const CommunityCreationsBrowser = ({
     </Popover>
     </span>
     </TutorialPopover>
-  );
+  ) : null;
 
-  const updatesControl = browseTab === 'contest' ? null : (
+  const updatesControl = !capabilities.localLibrary || browseTab === 'contest' ? null : (
     <label className="flex items-center gap-2 shrink-0 cursor-pointer text-label select-none">
       <Checkbox
         checked={sortUpdatesFirst}
@@ -753,10 +935,13 @@ const CommunityCreationsBrowser = ({
 
   // Hidden and updates-first ride along inside the bar: they narrow or reorder the same grid, and a second
   // row for two controls reads as a second, unrelated set of filters.
+  // The explanation anchors to the Add Filter control inside the bar, not the bar: the bar spans the
+  // row, and a popover can't aim its arrow at the middle of something wider than itself.
   const filterBar = (
-    <TutorialPopover entry={filterBarTutorial} nav={tutorialNav} align="start">
     <div onPointerDownCapture={() => dismissIfShowing('community-filters')}>
     <CommunityFilterBar
+      addFilterTutorial={filterBarTutorial}
+      tutorialNav={tutorialNav}
       authorFilter={authorFilter}
       setAuthorFilter={setAuthorFilter}
       tagFilter={tagFilter}
@@ -775,7 +960,6 @@ const CommunityCreationsBrowser = ({
       {hiddenControl}
     </CommunityFilterBar>
     </div>
-    </TutorialPopover>
   );
 
   return (
@@ -823,7 +1007,7 @@ const CommunityCreationsBrowser = ({
                     {refreshControl}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {kindTabs}
+                    {portraitDropdown}
                     {quarantineControl}
                     <TutorialPopover entry={filtersToggleTutorial} nav={tutorialNav} align="end">
                     <CollapsibleTrigger asChild>
@@ -850,7 +1034,6 @@ const CommunityCreationsBrowser = ({
                     <ArrowLeft className="h-5 w-5" />
                   </Button>
                   <Heading className="flex items-center gap-2 whitespace-nowrap mr-2"><Globe className="h-4 w-4 shrink-0" /> Community Creations</Heading>
-                  {kindTabs}
                   {searchControl}
                   {quarantineControl}
                   {refreshControl}
@@ -874,6 +1057,11 @@ const CommunityCreationsBrowser = ({
             </div>
           </Collapsible>
 
+          {/* The section switcher's landscape rail sits beside the results; the pager stays with them in
+              the same column. */}
+          <div className={cn("flex min-h-0 flex-1", !isMobile ? "flex-row" : "flex-col")}>
+          {!isMobile && landscapeRail}
+          <div className="flex min-h-0 flex-1 flex-col">
           {/* The contest's own header: which contest, where it stands, its rules, and — once several have
               been run — which archive is being read. Above the grid rather than inside it, so it stays put
               while the entries scroll. */}
@@ -935,22 +1123,27 @@ const CommunityCreationsBrowser = ({
                       isAuthenticated={isAuthenticated}
                       currentUser={currentUser}
                       onView={handleViewRemoteWorldDetails}
-                      onHideWorld={hideRemoteWorld}
-                      onHideAuthor={hideRemoteAuthor}
-                      onHideTag={hideRemoteTag}
-                      onContextualDownload={handleCardDownload}
-                      onDelete={setRemoteWorldToDelete}
-                      onLike={handleLike}
-                      onQuarantine={setQuarantining}
-                      onRelease={handleRelease}
+                      onHideWorld={capabilities.hiddenFilters ? hideRemoteWorld : undefined}
+                      onHideAuthor={capabilities.hiddenFilters ? hideRemoteAuthor : undefined}
+                      onHideTag={capabilities.hiddenFilters ? hideRemoteTag : undefined}
+                      onContextualDownload={capabilities.localLibrary && savesLocally(world) ? handleCardDownload : undefined}
+                      onDeviceDownload={capabilities.deviceDownloads ? deviceDownload.download : undefined}
+                      onDelete={capabilities.authorManagement ? setRemoteWorldToDelete : undefined}
+                      onLike={capabilities.likes ? handleLike : undefined}
+                      onGuestLike={capabilities.likes ? onGuestLike : undefined}
+                      onQuarantine={capabilities.moderation ? setQuarantining : undefined}
+                      onRelease={capabilities.moderation ? handleRelease : undefined}
                       placements={placementsBy(world, contests)}
                       // Only where the entry is the subject, and only while it is still an entry: a
                       // decided contest keeps its podium, and the server refuses to release a placed world.
-                      onWithdraw={browseTab === 'contest' && shownContest && contestPhase(shownContest) !== 'decided'
+                      onWithdraw={capabilities.contestParticipation && browseTab === 'contest' && shownContest && contestPhase(shownContest) !== 'decided'
                         ? (entry) => withdrawal.ask({
                             id: String(entry._id || entry.id),
                             name: String(entry.name ?? 'That world'),
                           })
+                        : undefined}
+                      onManageAddons={capabilities.authorManagement
+                        ? (own) => setManagingAddons(listingRef(own))
                         : undefined}
                       likeTutorial={
                         tutorial?.id === 'community-like' && worldId === likeAnchorId ? tutorial : null
@@ -970,13 +1163,28 @@ const CommunityCreationsBrowser = ({
               <Pager page={currentPage} pageCount={totalPages} onPageChange={setCurrentPage} />
             )}
           </div>
+          </div>
+          </div>
           </Tabs>
       </BrowserShell>
 
       {/* Remote World Details Modal — details + comments live in the component */}
+      {/* The author's answer to what other authors offer for their world. */}
+      <ManageAddonsDialog
+        open={managingAddons !== null}
+        onOpenChange={(isOpen) => { if (!isOpen) setManagingAddons(null); }}
+        world={managingAddons}
+      />
+
       <RemoteWorldDetailsModal
         open={showRemoteWorldDetailsModal}
-        onOpenChange={setShowRemoteWorldDetailsModal}
+        onOpenChange={(detailsOpen) => {
+          setShowRemoteWorldDetailsModal(detailsOpen);
+          if (!detailsOpen && controlledListing !== undefined) {
+            setSelectedRemoteWorld(null);
+            onListingChange?.(null);
+          }
+        }}
         world={selectedRemoteWorld}
         collapsed={communityBrowserModalCollapsed}
         onToggleCollapsed={toggleCommunityBrowserModalCollapsed}
@@ -984,12 +1192,72 @@ const CommunityCreationsBrowser = ({
         openImageViewer={openImageViewer}
         downloadStateForWorld={downloadStateForRecord}
         downloadProgress={allDownloadProgress}
-        onContextualDownload={handleCardDownload}
+        // Withheld for a kind whose library instance has not landed yet, on the same rule as the card's.
+        onContextualDownload={
+          capabilities.localLibrary && selectedRemoteWorld && savesLocally(selectedRemoteWorld)
+            ? handleCardDownload
+            : undefined
+        }
+        onDeviceDownload={capabilities.deviceDownloads ? deviceDownload.download : undefined}
         currentUser={currentUser}
         onLike={handleLike}
+        onGuestLike={capabilities.likes ? onGuestLike : undefined}
         onLikesChanged={handleLikesChanged}
         openLikersOnMount={openLikersOnMount}
         contests={contests}
+        capabilities={capabilities}
+        detailsAction={detailsAction}
+        onOpenListing={handleOpenNamedListing}
+      />
+
+      {/* What a download could not finish. A required failure leaves the world pending; a failed add-on
+          leaves it installed. Either way, what already landed is kept and Retry finishes the rest. */}
+      <Dialog open={!!pendingDownload} onOpenChange={(o) => { if (!o) dismissPendingDownload(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {shownPending?.worldReady ? 'Some add-ons did not download' : 'Download not finished'}
+            </DialogTitle>
+            <DialogDescription>
+              {shownPending?.worldReady
+                ? `"${shownPending?.worldName}" is in your library. These add-ons are not.`
+                : `"${shownPending?.worldName}" needs content that did not download. It is not in your library yet. What already downloaded is kept.`}
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="py-2 space-y-2">
+            {(shownPending?.failures ?? []).map((failure) => (
+              // Keyed by the listing rather than the name: two listings may share a name.
+              <li key={failure.id} className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-label font-medium">{failure.name}</p>
+                  <p className="text-meta text-muted-foreground">{failure.message}</p>
+                </div>
+                {/* One row's own Retry, which only an add-on gets: a world still waiting on a required
+                    source cannot be installed until every one of them is in. */}
+                {shownPending?.worldReady && (
+                  <Button size="sm" variant="secondary" onClick={() => retryDownload(failure.id)}>
+                    Retry
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <DialogFooter className="flex flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={dismissPendingDownload}>Close</Button>
+            <Button onClick={() => retryDownload()}>
+              {shownPending?.worldReady ? 'Retry All' : 'Retry'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* What updating an existing copy in place does to its linked content. Nothing is written until
+          Apply Updates; downloading a separate copy never reaches this. */}
+      <WorldUpdateReviewDialog
+        open={!!worldUpdateReview}
+        review={shownUpdateReview}
+        onApply={applyWorldUpdate}
+        onCancel={cancelWorldUpdate}
       />
 
       {/* Refresh/Update decision: download a separate copy vs overwrite an existing local copy */}

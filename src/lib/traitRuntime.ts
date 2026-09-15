@@ -10,7 +10,7 @@
 //   switching it off must give back nothing. Each switch stores what actually moved and the next switch of
 //   that trait reverses it, rather than the authored number.
 
-import type { PlayerStat, Stat, StatChange, Trait, TraitGroup } from '@/types';
+import type { CodeBounds, PlayerStat, Stat, StatChange, Trait, TraitGroup } from '@/types';
 import { clamp } from './utils';
 import { exclusiveSiblings, inAuthoredOrder } from './traitEffects';
 
@@ -33,7 +33,7 @@ export interface TraitWorld {
 }
 
 /** The traits currently in force: everything in the player's list that isn't switched off. */
-export function activeTraits(traits: Trait[], disabledTraitIds: readonly string[]): Trait[] {
+export function activeTraits(traits: readonly Trait[], disabledTraitIds: readonly string[]): Trait[] {
   const off = new Set(disabledTraitIds);
   return traits.filter((t) => !off.has(t.id));
 }
@@ -65,22 +65,36 @@ function bases(stat: PlayerStat) {
 
 /**
  * Recompute every stat's min, max and regen from its bases, the active traits and the accumulated AI max
- * delta. Values are untouched — this is bounds only.
+ * delta, then let each code bound replace its field. Values are untouched — this is bounds only.
  *
  * A trait may raise a min and another may lower that raise back, but the floor never drops below the one the
  * author wrote: the summed min contribution only counts when it is positive. Max is floored at the effective
- * min so a lowering trait can never invert the range.
+ * min so neither a lowering trait nor a code bound can invert the range.
  */
 export function deriveEffectiveStats(stats: PlayerStat[], active: readonly Trait[]): PlayerStat[] {
   return stats.map((stat) => {
     const base = bases(stat);
     const contrib = traitContributions(stat.id, active);
-    const min = base.min + Math.max(0, contrib.min);
-    const max = Math.max(min, base.max + contrib.max + (stat.aiMaxDelta ?? 0));
-    const regen = base.regen + contrib.regen;
+    const code = stat.codeBounds;
+    const min = code?.min ?? base.min + Math.max(0, contrib.min);
+    const max = Math.max(min, code?.max ?? base.max + contrib.max + (stat.aiMaxDelta ?? 0));
+    const regen = code?.regen ?? base.regen + contrib.regen;
     if (min === stat.min && max === stat.max && regen === (stat.regen ?? 0)) return stat;
     return { ...stat, min, max, regen };
   });
+}
+
+/** `stat` holding exactly `bounds` as its code bounds, re-derived under `active`, with `value` clamped in. */
+export function withCodeBounds(
+  stat: PlayerStat,
+  bounds: CodeBounds,
+  value: number,
+  active: readonly Trait[],
+): PlayerStat {
+  const { codeBounds: _replaced, ...rest } = stat;
+  const next: PlayerStat = Object.keys(bounds).length ? { ...rest, value, codeBounds: bounds } : { ...rest, value };
+  const [derived] = deriveEffectiveStats([next], active);
+  return { ...derived, value: clamp(derived.value, derived.min, derived.max) };
 }
 
 /**
@@ -218,7 +232,7 @@ function withDisabled(ids: readonly string[], add: string | null, remove: string
  * what folds a clamp into the reversal: a switch-off that a shrinking cap forced further down than the
  * record asked records the larger movement, and the switch back on restores all of it.
  *
- * The exception is the first switch-on, and a trait held by a save that carries no record for it. Those have
+ * The exception is the first switch-on, and a trait acquired by a save that carries no record for it. Those have
  * nothing to reverse, so the authored changes apply — for a switch-off that means negating them, which a
  * bound can swallow and ratchet, for that one trait. That switch records properly, so a save without records
  * heals itself the first time the player touches the trait.
@@ -241,7 +255,7 @@ function switchTrait(state: TraitRuntimeState, trait: Trait, on: boolean): Trait
 }
 
 /**
- * First switch-on of a trait the player does not hold yet. Identical to choosing it at creation: the trait
+ * First switch-on of a trait the player has not acquired yet. Identical to choosing it at creation: the trait
  * joins the list with its stat changes frozen as the world defines them right now, and they apply.
  */
 export function acquireTrait(
@@ -257,7 +271,7 @@ export function acquireTrait(
 }
 
 /**
- * Switch a held trait on or off. Switching one on retires its active exclusive siblings first, each reversed
+ * Switch an acquired trait on or off. Switching one on retires its active exclusive siblings first, each reversed
  * exactly as an explicit switch-off would be. A group may be left with nothing active.
  *
  * `retired` names the siblings that were switched off, for the caller's log.
@@ -281,16 +295,62 @@ export function setTraitEnabled(
   return { state: switchTrait(next, trait, true), retired };
 }
 
+/** What one switch did to its trait, for the log. */
+export type TraitSwitchKind = 'on' | 'off' | 'acquired';
+
+/** The turn log lines for one switch: each retired sibling, then the switch. `by` names the stat whose code
+ *  made it; the player's own switch has none. */
+export function traitSwitchLog(name: string, kind: TraitSwitchKind, retired: readonly string[], by?: string): string[] {
+  const from = by === undefined ? '' : ` (by ${by})`;
+  return [
+    ...retired.map((sibling) => `Trait switched off: ${sibling}${from}`),
+    kind === 'acquired' ? `Acquired trait: ${name}${from}` : `Trait switched ${kind}: ${name}${from}`,
+  ];
+}
+
+/** One trait switch a stat's code made. `by` is that stat's name. */
+export interface CodeTraitSwitch {
+  traitId: string;
+  enabled: boolean;
+  by: string;
+}
+
 /**
- * Every trait the player can act on, in authored order: the ones they hold, plus every toggleable trait the
- * world offers that they don't. Once a trait can be taken at will, holding it is only a checkbox state.
+ * Apply stat code's trait switches in order, each through the player's own switch. Code ignores Player Can
+ * Toggle In-Game, so a switch-on of a trait the player lacks acquires it. A switch to the state a trait
+ * already holds does nothing: switching an off trait off again would reverse its record a second time.
+ */
+export function applyCodeTraitSwitches(
+  state: TraitRuntimeState,
+  switches: readonly CodeTraitSwitch[],
+  world: TraitWorld,
+  nameOf: (trait: Trait) => string = (trait) => trait.name,
+): { state: TraitRuntimeState; log: string[] } {
+  let next = state;
+  const log: string[] = [];
+  for (const { traitId, enabled, by } of switches) {
+    const acquired = next.traits.find((t) => t.id === traitId);
+    const trait = acquired ?? world.traits.find((t) => t.id === traitId);
+    if (!trait || (!!acquired && !next.disabledTraitIds.includes(traitId)) === enabled) continue;
+    const result = acquired ? setTraitEnabled(next, traitId, enabled, world) : acquireTrait(next, trait, world);
+    next = result.state;
+    const kind = !acquired ? 'acquired' : enabled ? 'on' : 'off';
+    log.push(...traitSwitchLog(nameOf(trait), kind, result.retired.map(nameOf), by));
+  }
+  return { state: next, log };
+}
+
+/**
+ * Every trait the player can act on, in authored order: the ones they have acquired, plus every toggleable
+ * trait the world offers that they haven't. Once a trait can be taken at will, being acquired is only a
+ * checkbox state.
  */
 export function listablePlayerTraits(
-  held: readonly Trait[],
+  acquiredTraits: readonly Trait[],
   authored: readonly Trait[],
   order: Map<string, number>,
 ): Trait[] {
-  const heldIds = new Set(held.map((t) => t.id));
-  const acquirable = authored.filter((t) => t.playerToggle && !heldIds.has(t.id));
-  return inAuthoredOrder([...held, ...acquirable], order);
+  const acquiredIds = new Set(acquiredTraits.map((t) => t.id));
+  const acquirable = authored.filter((t) => t.playerToggle && !acquiredIds.has(t.id));
+  return inAuthoredOrder([...acquiredTraits, ...acquirable], order);
 }

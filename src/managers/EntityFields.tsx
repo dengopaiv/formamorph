@@ -1,20 +1,23 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MultiSelect } from "@/components/ui/multi-select";
+import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
 import { KeywordChips } from "@/components/KeywordChips";
 import { HelpButton } from "@/components/HelpButton";
 import AiGenerateButton from "@/components/AiGenerateButton";
 import DescriptionCheckButton from "@/components/DescriptionCheckButton";
-import { draftSource } from "@/lib/authorBrief";
+import { AUTHOR_BRIEF_HINT, draftSource } from "@/lib/authorBrief";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { ModelUpload } from '../lib/UtilityComponents';
 import { IMAGE_CAPS } from '../lib/imageOptim';
-import { ENTITY_EMBEDDED_IMAGE_LIMIT, entityImages } from '../lib/entityImages';
-import ImageTagsField from './ImageTagsField';
+import { entityImages } from '../lib/entityImages';
+import { ImageGallery, ImageTags, ImageWidget } from './ImageTagsField';
 import { useEditorMode } from '@/lib/editorMode';
+import type { RenameFieldHandlers } from '@/lib/useCodeRename';
+import type { ReactNode } from 'react';
 import type { Entity, Placeholder } from '@/types';
 
-interface EntityFieldsProps {
+/** What every entity field group needs: the entity, a field writer, and the chip vocabulary to offer. */
+export interface EntityFieldGroupProps {
   value: Entity;
   onChange: (field: string, value: unknown) => void;
   /** The world's placeholders (World Editor only — a library character has no world to draw them from). */
@@ -22,20 +25,17 @@ interface EntityFieldsProps {
   /** The entity, as the owner of these fields: its own scoped placeholders read bare here and come first
    *  in every insert menu (World Editor only — a library character owns everything it carries). */
   ownerId?: string;
-  /** When provided, renders the Locations picker (World Editor only — a library character has no world locations). */
-  locationOptions?: { label: string; value: string; depth?: number }[];
-  selectedLocationIds?: string[];
-  onLocationsChange?: (ids: string[]) => void;
 }
 
-/**
- * The editable-field body for one entity, shared by the World Editor's `EntityManager` (locations picker on,
- * bound to the world store) and the library `EntityEditorModal` (locations hidden, bound to isolated state).
- */
-const EntityFields = ({ value, onChange, placeholders = [], ownerId, locationOptions, selectedLocationIds, onLocationsChange }: EntityFieldsProps) => {
+/** Name, Aliases, and Type: who the entity is. Aliases and Type are Advanced only. */
+export const EntityIdentityFields = ({ value, onChange, placeholders = [], ownerId, nameHandlers }: EntityFieldGroupProps & {
+  /** What reports a committed rename of this entity, so the code that reaches its placeholders by path can
+   *  follow. Absent outside the World Editor, where there is no world code to rewrite. */
+  nameHandlers?: RenameFieldHandlers;
+}) => {
   const { advanced } = useEditorMode();
   return (
-    <div className="space-y-4">
+    <>
       <div className="space-y-2">
         <Label>Name</Label>
         <PlaceholderNameField
@@ -44,6 +44,7 @@ const EntityFields = ({ value, onChange, placeholders = [], ownerId, locationOpt
           placeholders={placeholders}
           ownerId={ownerId}
           ariaLabel="Name"
+          {...nameHandlers}
         />
       </div>
       {advanced && (
@@ -57,17 +58,37 @@ const EntityFields = ({ value, onChange, placeholders = [], ownerId, locationOpt
           onChange={(aliases) => onChange('aliases', aliases)}
           placeholders={placeholders}
           ownerId={ownerId}
-          placeholder="press Enter after each · case-sensitive"
+          placeholder="Press Enter after each alias"
         />
       </div>
       )}
+      {advanced && (
+        <div className="space-y-2">
+          <Label>Type</Label>
+          <Input
+            value={value.type || ''}
+            onChange={(e) => onChange('type', e.target.value)}
+            placeholder="Enter entity type"
+          />
+        </div>
+      )}
+    </>
+  );
+};
+
+/** The three prose fields with their AI-generate controls. The summary is Advanced only. */
+export const EntityDescriptionFields = ({ value, onChange, placeholders = [], ownerId }: EntityFieldGroupProps) => {
+  const { advanced } = useEditorMode();
+  return (
+    <>
       <PlaceholderField
         label="Author's Brief"
         labelAside={<HelpButton topicId="worldEditor.authorBrief" className="h-6 w-6" />}
+        hint={AUTHOR_BRIEF_HINT}
         value={value.authorBrief || ''}
         onChange={(v) => onChange('authorBrief', v)}
         placeholders={placeholders}
-        placeholder="Notes, in any shape — a list is fine. Both descriptions are written from this."
+        ownerId={ownerId}
         resizable
       />
       <PlaceholderField
@@ -113,7 +134,6 @@ const EntityFields = ({ value, onChange, placeholders = [], ownerId, locationOpt
         resizable
       />
       {advanced && (
-      <div className="space-y-2">
         <PlaceholderField
           label="AI-Facing Summary"
           labelAside={(
@@ -124,67 +144,97 @@ const EntityFields = ({ value, onChange, placeholders = [], ownerId, locationOpt
               target={value.aiSummary}
             />
           )}
+          hint="A one-line version for where the full description is too long. Keep it brief."
           value={value.aiSummary || ''}
           onChange={(v) => onChange('aiSummary', v)}
           placeholders={placeholders}
           ownerId={ownerId}
           resizable
         />
-        <p className="text-helper text-muted-foreground">
-          A one-line version used where the full description is too long — keep it brief.
-        </p>
-      </div>
       )}
-      {advanced && (
-        <div className="space-y-2">
-          <Label>Type</Label>
-          <Input
-            value={value.type || ''}
-            onChange={(e) => onChange('type', e.target.value)}
-            placeholder="Enter entity type"
-          />
-        </div>
-      )}
-      {locationOptions && (
-        <div className="space-y-2">
-          <Label>Locations</Label>
-          <MultiSelect
-            key={value.id}
-            options={locationOptions}
-            defaultValue={selectedLocationIds}
-            onValueChange={(ids) => onLocationsChange?.(ids)}
-            placeholder="Select locations"
-            hideSelectAll
-          />
-        </div>
-      )}
-      <ImageTagsField
-        label="Image"
-        images={entityImages(value)}
-        onImagesChange={(list) => onChange('images', list)}
-        slots={Infinity}
-        embeddedLimit={ENTITY_EMBEDDED_IMAGE_LIMIT}
-        imageId={`entity-image-${value.id}`}
-        cap={IMAGE_CAPS.entity}
-        description={value.aiDescription || value.playerDescription}
-        kind="character"
-        tags={value.imageTags}
-        onTagsChange={(t) => onChange('imageTags', t)}
-        placeholders={placeholders}
-        ownerId={ownerId}
+    </>
+  );
+};
+
+/** The world's locations to pick from, and the entity's own membership in them. */
+export interface EntityLocationsFieldProps extends EntityFieldGroupProps {
+  options: MultiSelectOption[];
+  selectedIds?: string[];
+  onLocationsChange?: (ids: string[]) => void;
+}
+
+/** The locations the entity belongs to. World Editor only: a library character has no world locations. */
+export const EntityLocationsField = ({ value, options, selectedIds, onLocationsChange }: EntityLocationsFieldProps) => (
+  <div className="space-y-2">
+    <Label>Locations</Label>
+    <MultiSelect
+      key={value.id}
+      options={options}
+      defaultValue={selectedIds}
+      onValueChange={(ids) => onLocationsChange?.(ids)}
+      placeholder="Select locations"
+      hideSelectAll
+    />
+  </div>
+);
+
+/**
+ * The entity's picture widget with neither piece placed: a host draws `ImageGallery` and `ImageTags` where
+ * its own layout wants them and both still write this entity. `EntityGalleryField` is the one-box version.
+ */
+export const EntityImageWidget = ({ value, onChange, placeholders = [], ownerId, children }: EntityFieldGroupProps & { children: ReactNode }) => (
+  <ImageWidget
+    label="Image"
+    images={entityImages(value)}
+    onImagesChange={(list) => onChange('images', list)}
+    slots={Infinity}
+    imageId={`entity-image-${value.id}`}
+    cap={IMAGE_CAPS.entity}
+    description={value.aiDescription || value.playerDescription}
+    kind="character"
+    tags={value.imageTags}
+    onTagsChange={(t) => onChange('imageTags', t)}
+    placeholders={placeholders}
+    ownerId={ownerId}
+  >
+    {children}
+  </ImageWidget>
+);
+
+/** The picture gallery with its tags and generate controls, in one box. */
+export const EntityGalleryField = (props: EntityFieldGroupProps) => (
+  <EntityImageWidget {...props}>
+    <ImageGallery tagsSlot={<ImageTags />} />
+  </EntityImageWidget>
+);
+
+/** The 3D model slot. Advanced only. */
+export const EntityModelField = ({ value, onChange }: EntityFieldGroupProps) => {
+  const { advanced } = useEditorMode();
+  if (!advanced) return null;
+  return (
+    <div className="space-y-2">
+      <Label>3D Model</Label>
+      <ModelUpload
+        model={value.model}
+        onModelChange={(model) => onChange('model', model)}
+        uniqueId={`entity-${value.id}`}
       />
-      {advanced && (
-        <div className="space-y-2">
-          <Label>3D Model</Label>
-          <ModelUpload
-            model={value.model}
-            onModelChange={(model) => onChange('model', model)}
-            uniqueId={`entity-${value.id}`}
-          />
-        </div>
-      )}
     </div>
   );
 };
+
+/**
+ * The library `EntityEditorModal`'s stacked entity body: the same field groups the World Editor composes,
+ * in one column and without the locations picker, bound to isolated state rather than the world store.
+ */
+const EntityFields = (props: EntityFieldGroupProps) => (
+  <div className="space-y-4">
+    <EntityIdentityFields {...props} />
+    <EntityDescriptionFields {...props} />
+    <EntityGalleryField {...props} />
+    <EntityModelField {...props} />
+  </div>
+);
 
 export default EntityFields;

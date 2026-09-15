@@ -1,4 +1,4 @@
-import { EyeOff, Download, MessageSquare, Trash2, ShieldAlert, ShieldCheck, TicketX } from "lucide-react";
+import { EyeOff, Download, MessageSquare, Puzzle, Trash2, ShieldAlert, ShieldCheck, TicketX } from "lucide-react";
 import { ActionIcon } from "@/lib/actionIcons";
 import { Progress } from "@/components/ui/progress";
 import { Tip } from "@/components/ui/tooltip";
@@ -33,13 +33,17 @@ interface RemoteWorldCardProps {
   isAuthenticated: boolean;
   currentUser: WorldRecord | null;
   onView: (world: WorldRecord) => void;
-  onHideWorld: (worldId: string) => void;
-  onHideAuthor: (username: string) => void;
-  onHideTag: (tag: string) => void;
-  onContextualDownload: (world: WorldRecord, state: DownloadState) => void;
-  onDelete: (worldId: string) => void;
+  onHideWorld?: (worldId: string) => void;
+  onHideAuthor?: (username: string) => void;
+  onHideTag?: (tag: string) => void;
+  onContextualDownload?: (world: WorldRecord, state: DownloadState) => void;
+  /** Saves an importable file to the visitor's device rather than the local library. */
+  onDeviceDownload?: (world: WorldRecord) => void;
+  onDelete?: (worldId: string) => void;
   /** Records a like. Absent leaves the heart a plain count. */
   onLike?: (world: WorldRecord, liked: boolean) => Promise<void>;
+  /** Starts authentication for a guest Like without mutating the listing. */
+  onGuestLike?: (world: WorldRecord) => void;
   /** Opens the quarantine dialog. Admin surfaces only. */
   onQuarantine?: (world: WorldRecord) => void;
   /** Lifts a quarantine. Admin surfaces only. */
@@ -48,6 +52,9 @@ interface RemoteWorldCardProps {
   placements?: ContestPlacement[];
   /** Take this listing out of the contest it was entered in. Offered on the contest tab, to its author. */
   onWithdraw?: (world: WorldRecord) => void;
+  /** Opens the add-on review. On the author's own world listing only: a review is a world author's
+   *  answer about their own world. */
+  onManageAddons?: (world: WorldRecord) => void;
   /** The like tutorial, when this is the card chosen to anchor it. */
   likeTutorial?: TutorialEntry | null;
   likeTutorialNav?: TutorialNav;
@@ -57,8 +64,8 @@ interface RemoteWorldCardProps {
  *  description, author, counts, tags, and (for owners/admins) a delete control. */
 export function RemoteWorldCard({
   world, downloadState: dlState, downloadProgress, isAuthenticated, currentUser,
-  onView, onHideWorld, onHideAuthor, onHideTag, onContextualDownload, onDelete, onLike, onQuarantine, onRelease,
-  placements = [], onWithdraw, likeTutorial, likeTutorialNav,
+  onView, onHideWorld, onHideAuthor, onHideTag, onContextualDownload, onDeviceDownload, onDelete, onLike, onGuestLike, onQuarantine, onRelease,
+  placements = [], onWithdraw, onManageAddons, likeTutorial, likeTutorialNav,
 }: RemoteWorldCardProps) {
   // Get the world ID (server uses _id)
   const worldId = world._id || world.id;
@@ -87,13 +94,21 @@ export function RemoteWorldCard({
     (world.author.id === currentUser.id ||
      world.author.username === currentUser.username);
 
+  // Only a world has add-ons, and only its own author answers them. Staff moderate a listing; they do not
+  // write its author's recommendations.
+  const manageAddons = onManageAddons && isOwnedByUser && kindOf(world) === 'world'
+    ? onManageAddons
+    : undefined;
+
   const likeControl = (
     <LikeButton
       likes={world.likes || 0}
       liked={world.liked}
       // Static on your own listing, which the server refuses: liking it would make the count say how much
       // somebody has published rather than how many people liked it.
-      onToggle={onLike && isAuthenticated && !isOwnedByUser ? (next) => onLike(world, next) : undefined}
+      onToggle={onLike && isAuthenticated && !isOwnedByUser
+        ? (next) => onLike(world, next)
+        : !isAuthenticated && onGuestLike ? async () => { onGuestLike(world); } : undefined}
     />
   );
 
@@ -125,18 +140,18 @@ export function RemoteWorldCard({
            cluster with download — the primary action — in the corner, clear of names expanding at
            the bottom. Icon reflects whether the world is new, current (refresh), or has an update. */
         <div className="absolute top-1 right-1 z-10 flex gap-1">
-          <Tip tip="Hide this world">
+          {onHideWorld && <Tip tip="Hide this world">
             <button
               onClick={(e) => { e.stopPropagation(); onHideWorld(worldId); }}
-              className="p-1 rounded bg-overlay/50 text-white hover:bg-overlay/70 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto"
+              className="p-1 rounded bg-overlay/50 text-white hover:bg-overlay/70 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <EyeOff className="h-5 w-5" />
             </button>
-          </Tip>
-          <Tip tip={dlState === 'update' ? "Update available — download the newer version" : dlState === 'refresh' ? `Re-download this ${noun}` : `Download this ${noun}`}>
+          </Tip>}
+          {onContextualDownload && <Tip tip={dlState === 'update' ? "Update available — download the newer version" : dlState === 'refresh' ? `Re-download this ${noun}` : `Download this ${noun}`}>
             <button
-              onClick={(e) => { e.stopPropagation(); onContextualDownload(world, dlState); }}
-              className="p-1 rounded bg-overlay/50 text-white hover:bg-overlay/70 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto"
+              onClick={(e) => { e.stopPropagation(); onContextualDownload?.(world, dlState); }}
+              className="p-1 rounded bg-overlay/50 text-white hover:bg-overlay/70 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={dlState === 'update' ? "Update available" : dlState === 'refresh' ? `Re-download this ${noun}` : `Download this ${noun}`}
             >
               {dlState === 'update' ? (
@@ -147,7 +162,16 @@ export function RemoteWorldCard({
                 <ActionIcon.cloudDownload className="h-5 w-5" />
               )}
             </button>
-          </Tip>
+          </Tip>}
+          {!onContextualDownload && onDeviceDownload && <Tip tip={`Download this ${noun}`}>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeviceDownload(world); }}
+              className="p-1 rounded bg-overlay/50 text-white hover:bg-overlay/70 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Download ${noun}`}
+            >
+              <ActionIcon.cloudDownload className="h-5 w-5" />
+            </button>
+          </Tip>}
         </div>
       )}
       thumbnail={world.thumbnail_file ? (
@@ -170,12 +194,12 @@ export function RemoteWorldCard({
         <span className="inline-flex items-center gap-1.5 min-w-0">
           <UserAvatar username={world.author?.username} avatarUrl={world.author?.avatarUrl} size="xs" />
           <Tip
-            tip={world.author?.username ? `Hide all worlds by ${world.author.username}` : undefined}
+            tip={world.author?.username && onHideAuthor ? `Hide all worlds by ${world.author.username}` : undefined}
             labelsChild={false}
           >
             <span
-              onClick={(e) => { e.stopPropagation(); if (world.author?.username) onHideAuthor(world.author.username); }}
-              className={world.author?.username ? "cursor-pointer hover:line-through truncate" : "truncate"}
+              onClick={(e) => { e.stopPropagation(); if (world.author?.username) onHideAuthor?.(world.author.username); }}
+              className={world.author?.username && onHideAuthor ? "cursor-pointer hover:line-through truncate" : "truncate"}
             >
               By {world.author?.username || "Unknown"}
             </span>
@@ -233,8 +257,20 @@ export function RemoteWorldCard({
         </div>
       )}
 
-      {(isOwnedByUser || mayModerate) && (
+      {(manageAddons || (onDelete && (isOwnedByUser || mayModerate))) && (
         <div className="mt-auto pt-1 flex justify-end gap-1">
+          {/* First, because it is the only one of these that is not a removal. */}
+          {manageAddons && (
+            <Tip tip="Review the add-ons other authors offer for this world">
+              <button
+                className="p-1 text-muted-foreground hover:text-foreground"
+                onClick={(e) => { e.stopPropagation(); manageAddons(world); }}
+                aria-label={`Manage add-ons for ${world.name || noun}`}
+              >
+                <Puzzle className="h-5 w-5" />
+              </button>
+            </Tip>
+          )}
           {/* Leaving a contest is not deleting anything, so it reads as the trophy coming off rather than
               as a destructive control — and it is only ever on the author's own entry. */}
           {isOwnedByUser && onWithdraw && (
@@ -271,13 +307,15 @@ export function RemoteWorldCard({
               </button>
             </Tip>
           )}
-          <button
-            className="p-1 text-destructive hover:text-destructive/80"
-            onClick={(e) => { e.stopPropagation(); onDelete(worldId); }}
-            aria-label="Delete world"
-          >
-            <Trash2 className="h-5 w-5" />
-          </button>
+          {onDelete && (isOwnedByUser || mayModerate) && (
+            <button
+              className="p-1 text-destructive hover:text-destructive/80"
+              onClick={(e) => { e.stopPropagation(); onDelete(worldId); }}
+              aria-label="Delete world"
+            >
+              <Trash2 className="h-5 w-5" />
+            </button>
+          )}
         </div>
       )}
     </WorldCardShell>

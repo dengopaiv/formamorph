@@ -5,8 +5,9 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { useSettingsOpenRequest } from "@/lib/useSettingsOpenRequest";
 import { useGameplay } from "@/contexts/GameplayContext";
 import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
-import { processStatCode } from "@/contexts/GameplayContextUtils";
-import { usesStatClock, type StatClock } from "@/lib/statCodeExecutor";
+import { type StatClock } from "@/lib/statCodeExecutor";
+import { overlayStatCodeResult, runStatCodeTurn, withPinWrites, type StatCodeTurn } from "@/lib/statCodeTurn";
+import type { StatCodeTiming } from "@/lib/statCodeTiming";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -54,7 +55,7 @@ import { MenuModal } from "../components/modals/MenuModal";
 import LlmSetupGuide from "../components/modals/LlmSetupGuide";
 import { isLikelyConnectionError } from "../lib/connectionError";
 import WorldEditor from "./WorldEditor";
-import type { CharacterData, ChatMessage, ChatRole, AIRequestType, AITurnResult, GameLocation, MediaAsset, Dictionary, Entity, SaveRecord, World, PlayerStat } from "@/types";
+import type { CharacterData, ChatMessage, ChatRole, AIRequestType, AITurnResult, GameLocation, GameState, MediaAsset, Dictionary, Entity, SaveRecord, World, PlayerStat, Trait } from "@/types";
 import { UnsavedChangesDialog } from "../components/UnsavedChangesDialog";
 import { estimateHistoryChars, estimateTokens } from "../lib/memoryUtils";
 import { parseNarration, stripReasoning, stripReasoningLive, extractReasoning, extractReasoningLive } from "../lib/aiResponse";
@@ -135,8 +136,11 @@ import { revealActive } from "../lib/narrationRevealConfig";
 import { REVEAL_TEST_NARRATION, REVEAL_TEST_PROFILES } from "../lib/revealTestScripts";
 import { MARKDOWN_SAMPLE } from "../lib/markdownSample";
 import { parseSlashCommand } from "../lib/slashCommands";
-import { normalizeStatChanges, applyAiStatChanges, parseStatUpdates, applyAiMaxChanges, appliedStatDeltas } from "../lib/statChanges";
+import { normalizeStatChanges, appliedStatDeltas, applyRegen } from "../lib/statChanges";
+import { applyStatResponse, createStatRequest, readStatResponse, statResponseChanges, type StatRequestSnapshot, type StatResponse, type StatUpdateDiagnostic } from "../lib/statRequest";
+import { resolveStatNames, resolveStatText } from "../lib/resolveWorldNames";
 import { toDebugEndpoint, type DebugEndpointInfo } from "../lib/promptEndpoints";
+import { ReasoningChip } from "@/components/game/ReasoningChip";
 import { composeSceneTags, stripPlaces, splitTags, MAX_SCENE_CHARACTERS, type SceneCharacter } from "../lib/sceneTags";
 import { loadDanbooruTags } from "../lib/danbooruTags";
 import { addSceneImage, removeSceneImage, pruneSceneImages, setSceneTags as patchSceneTags } from "../lib/sceneImages";
@@ -147,13 +151,14 @@ import { rollbackState, regenerateState, canRegenerate, lastTurnAction, markRege
 import { useDeferredSnapshot } from "../lib/useDeferredSnapshot";
 import { statMorphMap } from "../lib/bodyMorphs";
 import {
-  inAuthoredOrder, refreshChosenTraits, activeStatEnabled, enabledStats,
+  inAuthoredOrder, refreshChosenTraits, refreshSavedStats, activeStatEnabled, enabledStats,
 } from "../lib/traitEffects";
 import { collectPins } from "../lib/placeholderPins";
 import { usePlaceholderSession } from "../contexts/PlaceholderSessionContext";
 import {
-  acquireTrait, seedNewGameStats, setTraitEnabled, type TraitRuntimeState,
+  acquireTrait, activeTraits as traitsInForce, seedNewGameStats, setTraitEnabled, traitSwitchLog, type TraitRuntimeState,
 } from "../lib/traitRuntime";
+import { savedTraits } from "../lib/statCodeTraits";
 import { parseKeywords, locateMatches, type EntryActivation, type MatchHit, type MatchRule } from "../lib/dictionaryUtils";
 import { highlightSegments, HIGHLIGHT_PALETTE, type HighlightRule, type HighlightSegment } from "../lib/highlightUtils";
 import { useIsMobile } from "../lib/useIsMobile";
@@ -188,6 +193,8 @@ interface GameViewerProps {
 // lets the AI-context viewer mark real matches — and only real matches — even on historical turns whose live
 // state has moved on.
 interface DebugRequest {
+  statRequestId?: string;
+  statDiagnostics?: StatUpdateDiagnostic[];
   type: string;
   messages: ChatMessage[];
   response?: string;
@@ -212,6 +219,35 @@ interface DebugTurn {
   aborted?: boolean; // this turn was stopped before any narration landed (its user message was dropped)
 }
 
+/** The pre-turn state a stat re-roll hands stat code, so code reads and switches as the turn it replaces did. */
+type PreTurnCodeState = Pick<GameState, 'codePins' | 'playerTraits' | 'disabledTraitIds' | 'appliedTraitValues'>;
+
+/** What one stat-code run left, in the shapes state holds. The before box hands this to the turn's own
+ *  passes, which run before React re-renders with it. */
+type TurnCodeState = Pick<GameState, 'playerStats'> & PreTurnCodeState;
+
+/** The world a turn's passes read under a before box's writes: the same three views `buildContextValues`
+ *  and the prompt builders take from state, rebuilt over what the box left. */
+interface TurnCodeView {
+  activeStats: PlayerStat[];
+  activeTraits: Trait[];
+  resolve: (text: string) => string;
+  resolveTrait: (trait: Trait, text: string) => string;
+}
+
+/** The traits in force on one slice of saved trait state, and the stats live under them. The live pair is
+ *  derived in two steps because `statEnabled` is read on its own; a paged-back turn and a turn's own
+ *  before-box pass both want the pair in one go. */
+const activeUnderTraits = (
+  stats: PlayerStat[],
+  acquired: readonly Trait[],
+  disabledTraitIds: readonly string[],
+  traitOrder: Parameters<typeof inAuthoredOrder>[1],
+): Pick<TurnCodeView, 'activeStats' | 'activeTraits'> => {
+  const inForce = inAuthoredOrder(traitsInForce(acquired, disabledTraitIds), traitOrder);
+  return { activeTraits: inForce, activeStats: enabledStats(stats, activeStatEnabled(stats, inForce)) };
+};
+
 // Each completed turn is digested as soon as it commits (same-turn), so a summary is always ready for
 // the next turn's context assembly. Per-pass caps and their sizing live with the pass records.
 const DIGEST_MAX_TOKENS = TURN_PASS_CAPS.summary;
@@ -231,6 +267,7 @@ const DISCOVER_MAX_TOKENS = TURN_PASS_CAPS.discoverEntity;
  * request adapter hands its request straight through with only the turn's signal added.
  */
 interface AiCallArgs {
+  statRequest?: StatRequestSnapshot;
   systemPrompt: string;
   messages: ChatMessage[];
   type: AIRequestType;
@@ -314,6 +351,7 @@ const GameViewer = ({
     connections,
     dictionaries,
     placeholders,
+    placeholderOwners,
     worldOverview,
     worldId,
     isWorldDirty,
@@ -396,6 +434,7 @@ const GameViewer = ({
     thinkingMode,
     reasoningEffort,
     reasoningEngaged,
+    noteReasoningReply,
     promptReasoning,
     promptReasoningBudget,
     thinkingPrompt,
@@ -461,12 +500,15 @@ const GameViewer = ({
     setVisibleEntities,
     setCurrentLocation,
     setPlayerStats,
+    playerStats: rawPlayerStats,
     playerTraits,
     setPlayerTraits,
     disabledTraitIds,
     setDisabledTraitIds,
     appliedTraitValues,
     setAppliedTraitValues,
+    codePins,
+    setCodePins,
     recentStatChanges,
     setRecentStatChanges,
     setRecentStatFading,
@@ -538,7 +580,8 @@ const GameViewer = ({
   // values above stay untouched for roll priming, which has to see the chips it is rolling for.
   const {
     entities, locations, stats, traits, traitGroups, dictionary, playerStats, viewStats,
-    currentLocation, traitOrder, resolvePH, resolveWith, resolveTraitText,
+    currentLocation, traitOrder, pins, pinsFor, resolvePH, resolveFor, resolveWith, resolveTraitText,
+    resolveTraitFor,
   } = useResolvedWorld();
   // The session's rolls, for the one pass that collects pins before they are in state (the init effect).
   const { rolls: sessionRolls } = usePlaceholderSession();
@@ -1152,14 +1195,10 @@ const GameViewer = ({
   const handleRegenerateStats = () => {
     const target = partialRegenTarget();
     if (!target || !statUpdatesEnabled || activeStats.length === 0) return;
-    const baseline = regenerateState(gameStates, initialStateRef.current, currentPage)?.playerStats;
-    if (!baseline) return;
+    const preTurn = regenerateState(gameStates, initialStateRef.current, currentPage);
+    if (!preTurn?.playerStats) return;
     const { prev, action } = target;
     void runPartialRegen(async (signal) => {
-      const response = await requestStats(buildContextValues(), action, prev.narration ?? "", signal);
-      if (signal.aborted) return;
-      const { values, maxes } = parseStatUpdates(response);
-      const statChanges = Object.entries(values).map(([k, v]) => ({ [k]: v }));
       // Mirror the live turn's stat commit: reset the per-turn bar deltas, apply max-cap + value deltas onto
       // the pre-turn baseline, then re-run the regen/starvation tick (thresholded on that baseline) WITHOUT
       // re-advancing game time. Not awaited, so regen stacks before stat code — the same order the live turn
@@ -1170,14 +1209,55 @@ const GameViewer = ({
       // `gameTime` already includes this turn — only the latest turn is ever re-rolled — so it is the
       // end-of-turn elapsed the live pass used, and code re-derives the same value instead of drifting.
       const turnHours = prev.timeDelta ?? FLAT_HOURS_PER_TURN;
-      applyStatChanges(statChanges, null, applyAiMaxChanges(baseline, liveStatChanges(baseline, maxes)), {
-        deltaHours: turnHours,
-        elapsedHours: gameTime,
-        calendar,
-      });
-      applyRegenTick(turnHours, baseline);
-      patchLatestTurn({ stat_changes: statChanges });
-      armTurnSnapshot();
+      // The turn's code writes go back to the pre-turn Code Pins and traits, so stat code re-makes them once.
+      const toPreTurn = () => {
+        setCodePins(preTurn.codePins ?? {});
+        setPlayerTraits(preTurn.playerTraits);
+        setDisabledTraitIds(preTurn.disabledTraitIds ?? []);
+        setAppliedTraitValues(preTurn.appliedTraitValues ?? {});
+      };
+      toPreTurn();
+      // A re-roll replays the whole turn, so the before box runs again first, on the clock as it read at
+      // turn start. Its writes are the baseline the asks then land on, and the request reads them.
+      beforeBoxDeltasRef.current = {};
+      const written = await runStatCode(
+        preTurn.playerStats ?? [], preTurn.playerStats ?? [], [],
+        { deltaHours: 0, elapsedHours: gameTime - turnHours, calendar }, preTurn, 'before',
+      );
+      // The box has written by the time the request can be stopped, so every exit that abandons the
+      // re-roll puts the pre-turn state back rather than leaving those writes over a turn with no asks.
+      let committed = false;
+      try {
+        if (signal.aborted) return;
+        const base = written ?? preTurn;
+        const snapshot = createStatRequest(enabledStats(
+          written ? resolveStatNames(written.playerStats ?? [], resolvePH) : playerStatsRef.current,
+          statEnabledRef.current,
+        ));
+        const response = await requestStats(
+          buildContextValues(null, turnCodeView(written)), snapshot, action, prev.narration ?? "", signal,
+        );
+        if (signal.aborted) return;
+        const parsed = readStatResponse(response, snapshot);
+        const statChanges = statResponseChanges(parsed);
+        const statCode = applyStatChanges(parsed, {
+          deltaHours: turnHours,
+          elapsedHours: gameTime,
+          calendar,
+        }, base);
+        applyRegenTick(turnHours, base.playerStats);
+        patchLatestTurn({ stat_changes: statChanges });
+        committed = true;
+        // Code writes land after the sandbox settles; the snapshot waits for them.
+        await statCode;
+        armTurnSnapshot();
+      } finally {
+        if (!committed && written) {
+          beforeBoxDeltasRef.current = {};
+          setPlayerStats(preTurn.playerStats ?? []);
+          toPreTurn();
+        }
+      }
     });
   };
 
@@ -1350,12 +1430,6 @@ const GameViewer = ({
   // their own inputs and must not re-create every time a trait switches something on or off.
   const statEnabledRef = useRef<Record<string, boolean>>({});
 
-  // Drop AI deltas (keyed by lowercased name) aimed at stats that aren't live.
-  const liveStatChanges = useCallback((base: PlayerStat[], deltas: Record<string, number>) => {
-    const live = new Set(enabledStats(base, statEnabledRef.current).map((st) => st.name.toLowerCase()));
-    return Object.fromEntries(Object.entries(deltas).filter(([name]) => live.has(name)));
-  }, []);
-
   // A stat is live unless its author started it off or an active trait switched it off. Disabled stats keep
   // their value in `playerStats` — they are filtered out of everything that reads or moves them instead, so
   // switching the trait back on resumes exactly where the stat left off.
@@ -1364,11 +1438,10 @@ const GameViewer = ({
   statEnabledRef.current = statEnabled;
 
   // The same derivation for a paged-back turn, so history shows the stats that were live on that turn.
-  const viewActiveStats = useMemo(() => {
-    const off = new Set(viewDisabledTraitIds);
-    const active = inAuthoredOrder(refreshChosenTraits(viewTraits, traits).filter((t) => !off.has(t.id)), traitOrder);
-    return enabledStats(viewStats, activeStatEnabled(viewStats, active));
-  }, [viewStats, viewTraits, viewDisabledTraitIds, traitOrder, traits]);
+  const viewActiveStats = useMemo(
+    () => activeUnderTraits(viewStats, refreshChosenTraits(viewTraits, traits), viewDisabledTraitIds, traitOrder).activeStats,
+    [viewStats, viewTraits, viewDisabledTraitIds, traitOrder, traits],
+  );
 
   useEffect(() => {
     // Authored stats anchor the morph scale, so a max the AI raised grows the shape key rather than
@@ -1397,27 +1470,14 @@ const GameViewer = ({
       // Track regen changes
       const regenChanges: Record<string, number> = {};
 
-      setPlayerStats((prevStats) =>
-        prevStats.map((stat) => {
-          if (stat.regen && statEnabledRef.current[stat.id] !== false) {
-            const baseRegenAmount = stat.regen * hours;
-            const newValue = Math.max(
-              stat.min,
-              Math.min(stat.max, stat.value + baseRegenAmount),
-            );
-
-            // Calculate the actual change that occurred
-            const actualRegenAmount = newValue - stat.value;
-
-            if (actualRegenAmount !== 0) {
-              regenChanges[stat.name.toLowerCase()] = actualRegenAmount;
-            }
-
-            return { ...stat, value: newValue };
-          }
-          return stat;
-        }),
-      );
+      // The same tick runStatCode folds into the pipeline it hands stat code, so both read one regen.
+      setPlayerStats((prevStats) => {
+        const { stats, applied } = applyRegen(prevStats, hours, statEnabledRef.current);
+        for (const stat of stats) {
+          if (applied[stat.id] !== undefined) regenChanges[stat.name.toLowerCase()] = applied[stat.id];
+        }
+        return stats;
+      });
 
       // Update recent (fading text) and held (persistent bar) stat changes with regen changes.
       const mergeRegen = (prev: Record<string, number>) => {
@@ -1469,18 +1529,37 @@ const GameViewer = ({
 
   const getEndpointUrl = () => endpointUrl;
 
-  const generateTraitDescriptions = useCallback((format: 'simple' | 'markdown' | 'xml' = 'simple') => {
-    if (!activeTraits.length) {
+  // The world as this turn's passes read it, over what a before box wrote and React has not rendered yet.
+  // Null for a box that moved nothing, which leaves every pass on the memoized state reads.
+  const turnCodeView = useCallback((over: TurnCodeState | null): TurnCodeView | null => {
+    if (!over) return null;
+    const overPins = pinsFor(over.codePins ?? {}, {
+      traits: over.playerTraits, disabledTraitIds: over.disabledTraitIds, stats: over.playerStats,
+    });
+    const resolve = (text: string) => resolveFor(overPins, text);
+    const held = savedTraits(over, traits);
+    return {
+      ...activeUnderTraits(resolveStatNames(over.playerStats, resolve), held.acquired, held.disabledTraitIds, traitOrder),
+      resolve,
+      resolveTrait: (trait, text) => resolveTraitFor(overPins, trait, text),
+    };
+  }, [pinsFor, resolveFor, resolveTraitFor, traits, traitOrder]);
+
+  const generateTraitDescriptions = useCallback((format: 'simple' | 'markdown' | 'xml' = 'simple', view?: TurnCodeView | null) => {
+    const inForce = view?.activeTraits ?? activeTraits;
+    const resolve = view?.resolve ?? resolvePH;
+    const resolveOwn = view?.resolveTrait ?? resolveTraitText;
+    if (!inForce.length) {
       return NONE_PLACEHOLDER;
     }
     // Group-aware: each selected trait's group emits its AI header above its traits (blank → omitted).
     // A trait's own description resolves with its own pins (names already did, via the collection), so the
     // AI reads the same words the player's card shows. The outer pass resolves the group headers; trait
     // text is token-free by then, so it passes through untouched.
-    const selfResolved = activeTraits.map((t) =>
-      t.aiDescription ? { ...t, aiDescription: resolveTraitText(t, t.aiDescription) } : t,
+    const selfResolved = inForce.map((t) =>
+      t.aiDescription ? { ...t, aiDescription: resolveOwn(t, t.aiDescription) } : t,
     );
-    return resolvePH(buildTraitContext(selfResolved.map((t) => t.id), selfResolved, traitGroups, format));
+    return resolve(buildTraitContext(selfResolved.map((t) => t.id), selfResolved, traitGroups, format));
   }, [activeTraits, traitGroups, resolvePH, resolveTraitText]);
 
 
@@ -1512,7 +1591,12 @@ const GameViewer = ({
   // forever, but `isGameStarted` is true by then, so it is never treated as pending.
   const openingHourPending = aiClock && startHour === null && !isGameStarted;
 
-  const buildContextValues = useCallback((locationOverride?: GameLocation | null): Record<string, string> => {
+  const buildContextValues = useCallback((
+    locationOverride?: GameLocation | null,
+    /** The world under a before box's writes; absent, every value reads live state. */
+    view?: TurnCodeView | null,
+  ): Record<string, string> => {
+    const resolve = view?.resolve ?? resolvePH;
     // The location this turn is scoped to — an override (e.g. a move auto-applied before the narration)
     // or the live current location.
     const loc = locationOverride ?? currentLocation;
@@ -1555,7 +1639,7 @@ const GameViewer = ({
       STATS_TOKENS.map((tok) => {
         const sel = decodeVariant(STATS_VARIABLE, tokenVariant(tok));
         return [tok, buildStatContext(
-          activeStats,
+          view?.activeStats ?? activeStats,
           { values: sel.numbers != null, status: sel.descriptions != null, meaning: sel.meaning != null },
           sel.format === 'markdown' ? 'markdown' : sel.format === 'xml' ? 'xml' : 'simple',
         )];
@@ -1564,9 +1648,9 @@ const GameViewer = ({
     const values: Record<string, string> = {
       "<WORLD DESCRIPTION>": worldOverview.systemPrompt || "",
       ...statsValues,
-      "<TRAITS DESCRIPTION>": generateTraitDescriptions('simple'),
-      "<TRAITS DESCRIPTION|markdown>": generateTraitDescriptions('markdown'),
-      "<TRAITS DESCRIPTION|xml>": generateTraitDescriptions('xml'),
+      "<TRAITS DESCRIPTION>": generateTraitDescriptions('simple', view),
+      "<TRAITS DESCRIPTION|markdown>": generateTraitDescriptions('markdown', view),
+      "<TRAITS DESCRIPTION|xml>": generateTraitDescriptions('xml', view),
       "<NOTES>": playerNotes || NONE_PLACEHOLDER,
       // The story clock as a plain inline value. Off ⇒ the uniform placeholder, so an affixed placement
       // (the now-line's) simply vanishes and the setting needs no special case anywhere else.
@@ -1582,7 +1666,7 @@ const GameViewer = ({
     Object.assign(values, expandScopedTokens("<ENTITIES>", entityScopes));
 
     // Resolve placeholder chips in every assembled value before it's folded into a prompt.
-    for (const k in values) values[k] = resolvePH(values[k]);
+    for (const k in values) values[k] = resolve(values[k]);
     return values;
   }, [
     worldOverview, activeStats, generateTraitDescriptions,
@@ -1724,12 +1808,6 @@ const GameViewer = ({
 
     setChoices(commit.turn.choices);
 
-    // Max changes re-clamp the current value into the new range (lib handles the guards). Restricted
-    // to live stats like the value deltas — a disabled stat's cap must not move off a name collision.
-    if (Object.keys(commit.statMaxChanges).length > 0) {
-      setPlayerStats((prevStats) => applyAiMaxChanges(prevStats, liveStatChanges(prevStats, commit.statMaxChanges)));
-    }
-
     // Seed the story's opening hour. Only ever written on the opening turn; null reads downstream as the
     // shipped DEFAULT_START_HOUR, so an unreadable answer plays exactly as before this pass existed.
     if (commit.isOpeningTurn) setStartHour(commit.openingHour);
@@ -1760,24 +1838,27 @@ const GameViewer = ({
       });
     }
 
-    // Reset the persistent bar deltas for this turn, then let stat changes + regen below re-fill them.
-    setHeldStatChanges({});
+    // Reset the persistent bar deltas for this turn, then let stat changes + regen below re-fill them. The
+    // before box already moved before the narration, so its share is laid straight back over the reset.
+    setHeldStatChanges(beforeBoxDeltasRef.current);
 
-    // Apply stat changes
-    if (commit.statChanges.length > 0) {
-      applyStatChanges(commit.statChanges, null, null, commit.clock);
-    } else if (anyStatUsesClock) {
-      // Nothing moved, but time still passed — clock-reading code runs on its own so a time-based stat
-      // ticks every turn instead of only on turns the AI happened to report a stat change.
-      void runStatCode(playerStatsRef.current, commit.clock);
-    }
+    // Apply stat changes. Stat code runs inside; it is awaited below, before the snapshot arms, so the
+    // snapshot holds its writes even when the sandbox first loads on this turn.
+    // A turn with no stat response still runs code, over zero asks: the request off, the request failed,
+    // or the opening turn.
+    const statCode = commit.statResponse
+      ? applyStatChanges(commit.statResponse, commit.clock)
+      : runStatCode(rawPlayerStatsRef.current, rawPlayerStatsRef.current, [], commit.clock);
 
     // Advance the clock by what this turn actually took (the flat hour when unmeasured).
     handleTimePassed(commit.turnHours);
 
     // Snapshot this turn once the updates above commit (deferred so the snapshot captures the finalized
-    // message, applied stat changes, and advanced time rather than a stale mid-batch read).
+    // message, applied stat changes, code writes, and advanced time rather than a stale mid-batch read).
+    await statCode;
     armTurnSnapshot();
+    // The turn committed, so the before box's writes stand.
+    beforeBoxUndoRef.current = null;
 
     // Only set game as started after a successful opening turn
     if (commit.isOpeningTurn) {
@@ -1889,6 +1970,20 @@ const GameViewer = ({
       // Open this turn in the Turn Pipeline parity recording (inert unless the harness armed it).
       recordParityTurn(effectiveAction, currentTurnIdRef.current);
 
+      // The before-the-AI box, on the turn's starting state: no asks and no regen yet, and the clock still
+      // reading turn start. Its writes reach live state at once and ride into every prompt below through
+      // `codeView`, which React has not re-rendered for.
+      beforeBoxDeltasRef.current = {};
+      const preBox: TurnCodeState = {
+        playerStats: rawPlayerStatsRef.current, codePins, playerTraits, disabledTraitIds, appliedTraitValues,
+      };
+      const beforeBox = await runStatCode(
+        rawPlayerStatsRef.current, rawPlayerStatsRef.current, [],
+        { deltaHours: 0, elapsedHours: gameTime, calendar }, undefined, 'before',
+      );
+      beforeBoxUndoRef.current = beforeBox ? preBox : null;
+      const codeView = turnCodeView(beforeBox);
+
       /**
        * Everything the narration rides on, assembled once the up-front router has settled where the turn
        * takes place: the context values, the dictionary scan, the system prompt, and the trimmed history
@@ -1897,7 +1992,7 @@ const GameViewer = ({
       const assembleNarration = async (): Promise<Partial<TurnMaterial>> => {
         // The shared context base (incl. all three Stats-chip variants), scoped to this turn's location;
         // every system-prompt render below spreads it and adds its own tokens.
-        const ctx = buildContextValues(turnLocation);
+        const ctx = buildContextValues(turnLocation, codeView);
         // One action embedding for every semantic consumer this turn (lore activation, band relevance,
         // diary retrieval). Null = all semantic features quietly off for this turn.
         actionVec = await embedActionVec(effectiveAction);
@@ -1916,7 +2011,7 @@ const GameViewer = ({
           maxTokens: narrationMaxTokens,
           markdownOutput,
           sectionStyle: activeSectionStyle,
-          resolvePH,
+          resolvePH: codeView?.resolve ?? resolvePH,
         });
         pendingDictionaryDebugRef.current = dictionaryDebug;
 
@@ -2069,7 +2164,10 @@ const GameViewer = ({
             // With no choices pass there is nothing to wait on, so the input unblocks right away.
             if (!planHasPass(plan, "choices")) setChoicesReady(true);
             const fanOut = splitParticipants(turnParticipants, allEntities, suppressedCharacterNames);
-            return { subjects: { ...material.subjects, ...fanOut } };
+            return {
+              subjects: { ...material.subjects, ...fanOut },
+              statRequest: createStatRequest(enabledStats(playerStatsRef.current, statEnabledRef.current)),
+            };
           }
           return;
         }
@@ -2152,7 +2250,7 @@ const GameViewer = ({
           turnId: currentTurnIdRef.current,
           // The location the turn began in: what the up-front router routes from, and what the digest and
           // diary passes record against.
-          baseCtx: buildContextValues(),
+          baseCtx: buildContextValues(null, codeView),
           destinations: destinations.map((loc) => loc.name),
         }),
         request,
@@ -2232,9 +2330,23 @@ const GameViewer = ({
   // Latest committed stats, so off-render derivations (below) don't rely on a stale closure.
   const playerStatsRef = useRef(playerStats);
   playerStatsRef.current = playerStats;
+  const rawPlayerStatsRef = useRef(rawPlayerStats);
+  rawPlayerStatsRef.current = rawPlayerStats;
   // Pending "clear recent changes" timer, tracked so a new turn or unmount can cancel it.
   const recentStatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drainStatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // What this turn's before box moved, kept because the commit clears the bar deltas before the AI's own
+  // land. Without it a value the box showed on the bar loses its color halfway through the turn.
+  const beforeBoxDeltasRef = useRef<Record<string, number>>({});
+  // The pin and trait state a run reads, by ref. A turn's after box runs out of the closure its render
+  // minted, which is older than the before box's writes — the same reason the stats ride in on a ref.
+  const liveCodeStateRef = useRef({ codePins, pins, chosenTraits, disabledTraitIds, appliedTraitValues, activeTraits });
+  liveCodeStateRef.current = { codePins, pins, chosenTraits, disabledTraitIds, appliedTraitValues, activeTraits };
+  // Stats, Code Pins and traits as they stood before this turn's before box, so a turn that never commits
+  // puts back exactly what the box moved. The last snapshot holds the same five fields — nothing else
+  // touches them between it and the box — and undoing the box alone spares a trait the player switched
+  // by hand while the AI was thinking. Null between turns and once a turn commits.
+  const beforeBoxUndoRef = useRef<TurnCodeState | null>(null);
   useEffect(
     () => () => {
       if (recentStatTimerRef.current) clearTimeout(recentStatTimerRef.current);
@@ -2265,74 +2377,112 @@ const GameViewer = ({
     }
   }, [heldStatChanges, recentStatChanges, setHeldStatChanges, setDrainingStatChanges, setRecentStatChanges, setRecentStatFading]);
 
-  // Re-derive every code-driven stat from `base` and this turn's `clock`, folding whatever moved into the
-  // live delta feedback. Split out of applyStatChanges because clock-reading code has to run once per turn
-  // even when the AI moved no stat at all — time passes regardless of what the narration said.
+  // Run one of a stat's two code boxes over this turn, regen included, and fold what it moved into the live
+  // delta feedback. Its own callback because a turn with no stat response runs it directly. A re-roll passes
+  // the pre-turn state, so code reads placeholders and traits as the turn it replaces did. Hands back what
+  // the run left, for the before box's caller: its passes run before React re-renders with these writes.
   const runStatCode = useCallback(
-    async (base: typeof playerStats, clock: StatClock) => {
+    async (
+      before: PlayerStat[], afterAsks: PlayerStat[], asks: StatCodeTurn["asks"], clock: StatClock,
+      preTurn?: PreTurnCodeState,
+      timing: StatCodeTiming = 'after',
+    ): Promise<TurnCodeState | null> => {
       try {
-        // processStatCode is typed over Stat[]; playerStats is the narrower PlayerStat[] (value: number).
-        // Disabled stats are inert: their own code never runs, and they aren't exposed to anyone else's.
-        const live = enabledStats(base, statEnabledRef.current);
-        const coded = (await processStatCode(live, clock)) as typeof playerStats;
-        const codeChanges = appliedStatDeltas(live, coded);
-        if (Object.keys(codeChanges).length === 0) return;
-        // Override only the stats the code actually moved, onto the LATEST stats — not a blanket
-        // `setPlayerStats(coded)`, whose `coded` is computed from the pre-`await` baseline and would clobber
-        // anything applied in the meantime (this turn's regen, or a re-generate that landed during the await).
-        const codedById = new Map(coded.map((s) => [s.id, s.value]));
-        setPlayerStats((prev) =>
-          prev.map((s) =>
-            codeChanges[s.name.toLowerCase()] !== undefined && codedById.has(s.id)
-              ? { ...s, value: codedById.get(s.id) as number }
-              : s,
-          ),
-        );
+        const enabled = statEnabledRef.current;
+        // The before box runs at the turn's start, so there is no regen yet for it to fold in.
+        const regen = timing === 'before'
+          ? { stats: afterAsks, applied: {} as Record<string, number> }
+          : applyRegen(afterAsks, clock.deltaHours ?? FLAT_HOURS_PER_TURN, enabled);
+        // A save runs the world's current stat code, not the copy frozen in the save. Descriptions resolve
+        // for the run; names do not — code reaches a stat by its code name, which the turn derives from the
+        // authored name, so a chip in a name reads the same in every playthrough.
+        const stats = resolveStatText(refreshSavedStats(regen.stats, authoredStats), resolvePH);
+        // The same slice the player's checkbox switches, so a code switch is that switch.
+        const live = liveCodeStateRef.current;
+        const held = preTurn ? savedTraits(preTurn, traits)
+          : { acquired: live.chosenTraits, disabledTraitIds: live.disabledTraitIds, appliedValues: live.appliedTraitValues };
+        const inForce = preTurn ? traitsInForce(held.acquired, held.disabledTraitIds) : live.activeTraits;
+        const basePins = preTurn ? preTurn.codePins ?? {} : live.codePins;
+        const result = await runStatCodeTurn({
+          timing,
+          stats, enabled, previous: before, asks, regenApplied: regen.applied, clock,
+          traits: { ...held, world: { traits: authoredTraits, groups: traitGroups } },
+          placeholders: {
+            placeholders, owners: placeholderOwners, rolls: sessionRolls,
+            pins: preTurn ? pinsFor(basePins) : live.pins,
+            // The stored shape too, so an Object pinned to a list reads that list back rather than its join.
+            codePins: basePins,
+          },
+          statNameOf: (stat) => resolvePH(stat.name),
+          traitNameOf: (trait) => resolveTraitText(trait, trait.name),
+        });
+        const nextPins = withPinWrites(basePins, result.pinWrites);
+        setCodePins((prev) => withPinWrites(prev, result.pinWrites));
+        if (result.traits) {
+          setPlayerTraits(result.traits.acquired);
+          setDisabledTraitIds(result.traits.disabledTraitIds);
+          setAppliedTraitValues(result.traits.appliedValues);
+          for (const line of result.traits.log) addLogEntry(line);
+        }
+        /** What this run left, in the shapes state holds. */
+        const stateAfterRun = (): TurnCodeState => ({
+          playerStats: overlayStatCodeResult(afterAsks, result, result.traits
+            ? traitsInForce(result.traits.acquired, result.traits.disabledTraitIds)
+            : inForce),
+          codePins: nextPins,
+          playerTraits: [...(result.traits?.acquired ?? held.acquired)],
+          disabledTraitIds: [...(result.traits?.disabledTraitIds ?? held.disabledTraitIds)],
+          appliedTraitValues: result.traits?.appliedValues ?? held.appliedValues,
+        });
+        if (!result.traits && result.moved.length === 0 && result.boundsChanged.length === 0) {
+          return nextPins === basePins ? null : stateAfterRun();
+        }
+        // The bars are keyed by the name the player reads, so the run's stats resolve theirs here.
+        const codeChanges = appliedStatDeltas(stats, resolveStatNames(result.stats, resolvePH));
+        // Onto the LATEST stats, not a blanket `setPlayerStats(result.stats)`: the run read the pre-`await`
+        // baseline, and anything applied in the meantime (starvation, a re-generate) must survive.
+        setPlayerStats((prev) => overlayStatCodeResult(prev, result, inForce));
         // Fold the code-derived movement into the live delta feedback, so a code stat's bar/text animates
         // live — matching the history view (pageStatDeltas diffs the final, post-code snapshot).
         setRecentStatChanges((prev) => normalizeStatChanges([prev, codeChanges]));
         setHeldStatChanges((prev) => normalizeStatChanges([prev, codeChanges]));
+        // The commit resets the bar deltas mid-turn, so the before box's own share is re-laid over that.
+        if (timing === 'before') beforeBoxDeltasRef.current = codeChanges;
+        return stateAfterRun();
       } catch (error) {
         console.error("Error processing stat code:", error);
+        return null;
       }
     },
-    [setPlayerStats, setRecentStatChanges, setHeldStatChanges],
+    [setPlayerStats, setRecentStatChanges, setHeldStatChanges, setCodePins, resolvePH, placeholders, placeholderOwners, sessionRolls, pinsFor,
+      traits, authoredTraits, authoredStats, traitGroups, resolveTraitText,
+      setPlayerTraits, setDisabledTraitIds, setAppliedTraitValues, addLogEntry],
   );
 
-  // Whether any stat's code reads the clock, and so needs a per-turn run of its own on turns the AI
-  // changed nothing. False for every world authored before these variables existed, which keeps those
-  // worlds on exactly the run schedule they have always had.
-  const anyStatUsesClock = useMemo(() => activeStats.some((s) => usesStatClock(s.code)), [activeStats]);
-
-  // Update the applyStatChanges function to handle specific stat updates
+  // Apply request identities to authored state; resolved names are only for code and display feedback.
   const applyStatChanges = useCallback(
-    // `base` overrides the starting stats (defaults to the live ref) — a stat re-generation applies the
-    // fresh deltas onto the pre-turn baseline so repeated re-rolls don't stack on already-applied changes.
+    // `base` is the pre-turn snapshot a stat re-generation starts from (defaults to the live state), so
+    // repeated re-rolls don't stack on already-applied changes or Code Pins.
     async (
-      changes: Record<string, number>[],
-      affectedStats: string[] | null = null,
-      base: typeof playerStats | null = null,
+      response: StatResponse,
       clock: StatClock = {},
+      base: (Pick<GameState, 'playerStats'> & PreTurnCodeState) | null = null,
     ) => {
-      // Merge the AI's change objects into one normalized (name→delta) map.
-      const normalizedChanges = normalizeStatChanges(changes);
-
-      // Apply the AI's direct changes, then derive any code-based stats from that result. Both run
-      // outside the state updater (updaters must stay pure), reading the latest stats via the ref.
-      const baseStats = base ?? playerStatsRef.current;
-      // A disabled stat isn't in the prompt, but a name collision could still land on it — restrict the
-      // apply to the live set rather than trusting that.
-      const live = enabledStats(baseStats, statEnabledRef.current).map((s) => s.name);
-      const directApplied = applyAiStatChanges(
-        baseStats,
-        normalizedChanges,
-        affectedStats ? affectedStats.filter((n) => live.includes(n)) : live,
-      );
+      const baseStats = base?.playerStats ?? rawPlayerStatsRef.current;
+      const live = new Set(enabledStats(rawPlayerStatsRef.current, statEnabledRef.current).map((s) => s.id));
+      const baseTraits = base ? savedTraits(base, traits) : null;
+      const inForce = baseTraits ? traitsInForce(baseTraits.acquired, baseTraits.disabledTraitIds) : activeTraits;
+      const applied = applyStatResponse(baseStats, response, live, inForce);
+      const directApplied = applied.stats;
+      setDebugTurns((turns) => turns.map((turn) => ({ ...turn, requests: turn.requests.map((request) =>
+        request.statRequestId === response.requestId ? { ...request, statDiagnostics: applied.diagnostics } : request,
+      ) })));
 
       // Show the *actual* applied change (clamped to min/max and honoring noIncrease/noDecrease), not the
       // raw request — so a stat pinned at its cap shows no delta, and the live bar/text match the history
       // view's value-diff deltas (`pageStatDeltas`) instead of diverging from them.
-      const actualChanges = appliedStatDeltas(baseStats, directApplied);
+      const resolvedApplied = resolveStatNames(directApplied, resolvePH);
+      const actualChanges = appliedStatDeltas(resolveStatNames(baseStats, resolvePH), resolvedApplied);
 
       // Surface the changes, then clear the highlight after 10s. Cancel any prior timer first so a
       // stale clear can't wipe a newer turn's changes.
@@ -2344,9 +2494,9 @@ const GameViewer = ({
       setHeldStatChanges((prev) => ({ ...prev, ...actualChanges }));
 
       setPlayerStats(directApplied);
-      await runStatCode(directApplied, clock);
+      await runStatCode(baseStats, directApplied, response.updates, clock, base ?? undefined);
     },
-    [runStatCode, setPlayerStats, setRecentStatChanges, setHeldStatChanges],
+    [runStatCode, setPlayerStats, setRecentStatChanges, setHeldStatChanges, resolvePH, activeTraits, traits],
   );
 
   // Discard a turn's dangling, unpaired user message. The failure exits (empty narration, request error)
@@ -2355,6 +2505,20 @@ const GameViewer = ({
   // every later turn from the model's context. Guarded on the tail actually being a lone user message, so a
   // partially-streamed assistant turn is kept intact. Also restores the choices cleared at turn start.
   const discardUnpairedUserTurn = () => {
+    // Half a turn leaves no trace: put back the stats, Code Pins and traits the before box moved. Clearing
+    // the bar deltas outright is the box's share alone — the turn drained the previous ones before it ran.
+    const undo = beforeBoxUndoRef.current;
+    if (undo) {
+      beforeBoxUndoRef.current = null;
+      beforeBoxDeltasRef.current = {};
+      setPlayerStats(undo.playerStats ?? []);
+      setCodePins(undo.codePins ?? {});
+      setPlayerTraits(undo.playerTraits ?? []);
+      setDisabledTraitIds(undo.disabledTraitIds ?? []);
+      setAppliedTraitValues(undo.appliedTraitValues ?? {});
+      setRecentStatChanges({});
+      setHeldStatChanges({});
+    }
     setFullMessageHistory((prev) =>
       prev[prev.length - 1]?.role === "user" ? prev.slice(0, -1) : prev,
     );
@@ -2402,6 +2566,8 @@ const GameViewer = ({
       // turn's user message is added, so the tail is still the *previous* turn's assistant) would land here
       // and overwrite that previous turn's snapshot with the current, choices-cleared state.
       setIsGameStarted(true);
+      // The turn is kept, so the before box's writes are kept with it.
+      beforeBoxUndoRef.current = null;
       // Event-handler context: saveCurrentGameState reads the latest committed state, and the kept
       // narration already landed during streaming — so a synchronous snapshot here is fresh. Index it by
       // its own history length to keep gameStates aligned (same rule as the normal post-turn save).
@@ -2435,6 +2601,7 @@ const GameViewer = ({
     attachTurnId,
     quiet: quietLabel = false,
     anatomy,
+    statRequest,
   }: AiCallArgs) => {
     // The parity recording observes the seam itself: exactly the arguments this call received, in
     // dispatch order, before anything downstream shapes them. Inert unless the harness armed it.
@@ -2490,11 +2657,12 @@ const GameViewer = ({
             // The wire messages, so the viewer shows exactly what was sent (the `/no_think` switch included).
             messages: spec.body.messages,
             id: captureId,
+            statRequestId: statRequest?.id,
             dictionary,
             // The sidecar indexes the messages the caller stated; the wire list prepends the system
             // message, which `toAnatomyBlocks` accounts for when the viewer lines the two up.
             anatomy,
-            endpoint: toDebugEndpoint(target),
+            endpoint: toDebugEndpoint(target, spec.body),
           },
         ],
       };
@@ -2676,6 +2844,9 @@ const GameViewer = ({
       // Show the raw output (including any <think> block) in the AI-context viewer, but return the
       // cleaned text so reasoning never reaches the narration, TTS, choices/stats/location, or history.
       const rawContent = content.trim();
+      // Teach the capability record what this reply showed. Every request type counts, so a model is judged
+      // on whatever it answered most recently rather than on narration alone.
+      noteReasoningReply(spec.target, reasoningText, rawContent, spec.body.reasoning_effort ?? null);
       let finalContent = stripReasoning(content).trim();
       // On a mid-sentence truncation (hit the token cap), trim back to the last complete sentence.
       if (requestType === "narration") {
@@ -2714,7 +2885,10 @@ const GameViewer = ({
         const next = prev.slice();
         const turn = { ...next[idx] };
         turn.requests = turn.requests.map((r) =>
-          r.id === captureId ? { ...r, response: rawContent } : r,
+          r.id === captureId ? {
+            ...r, response: rawContent,
+            statDiagnostics: statRequest ? readStatResponse(finalContent, statRequest).diagnostics : undefined,
+          } : r,
         );
         next[idx] = turn;
         return next;
@@ -3029,13 +3203,15 @@ const GameViewer = ({
     });
   const requestStats = (
     ctx: Record<string, string>,
+    snapshot: StatRequestSnapshot,
     action: string,
     narration: string,
     signal: AbortSignal,
     quiet = false,
   ): Promise<string> =>
     makeAIRequest({
-      systemPrompt: statUpdatesSystemPrompt(resolvedStatUpdatesPrompt, ctx),
+      systemPrompt: statUpdatesSystemPrompt(resolvedStatUpdatesPrompt, { ...ctx, ...snapshot.context }),
+      statRequest: snapshot,
       messages: [{ role: "user", content: renderPromptTemplate(statUpdatesUserPrompt, { "<PLAYER ACTION>": action, "<NARRATION>": narration }) }],
       type: "statUpdates",
       signal,
@@ -3467,22 +3643,22 @@ const GameViewer = ({
   );
 
   /**
-   * Switch a trait on or off mid-play, acquiring it first if the player doesn't hold it yet. Every trait the
+   * Switch a trait on or off mid-play, acquiring it first if the player doesn't have it yet. Every trait the
    * author marked switchable is available at any time; everything the trait does beyond its stat changes (AI
    * text, stat availability, placeholder pins) is derived from the active set and simply follows.
    */
   const toggleTrait = useCallback(
     (traitId: string, enabled: boolean) => {
       const world = { traits: authoredTraits, groups: traitGroups };
-      const held = chosenTraits.find((t) => t.id === traitId);
-      if (held) {
+      const acquiredTrait = chosenTraits.find((t) => t.id === traitId);
+      if (acquiredTrait) {
         const { state: next, retired } = setTraitEnabled(traitState, traitId, enabled, world);
         commitTraitState(next);
-        for (const sibling of retired) addLogEntry(`Trait switched off: ${sibling.name}`);
-        addLogEntry(`Trait switched ${enabled ? 'on' : 'off'}: ${held.name}`);
+        const siblings = retired.map((t) => t.name);
+        for (const line of traitSwitchLog(acquiredTrait.name, enabled ? 'on' : 'off', siblings)) addLogEntry(line);
         return;
       }
-      // Not held: only a switch-on of a trait the author marked switchable acquires one. It freezes the
+      // Not acquired yet: only a switch-on of a trait the author marked switchable acquires one. It freezes the
       // world's stat changes as they stand right now, exactly as a trait chosen at creation freezes them at
       // game start. Authored, chips intact, for the same reason seeding uses them: a resolved name written
       // into state stops being resolvable.
@@ -3490,8 +3666,8 @@ const GameViewer = ({
       if (!enabled || !authored?.playerToggle) return;
       const { state: next, retired } = acquireTrait(traitState, authored, world);
       commitTraitState(next);
-      for (const sibling of retired) addLogEntry(`Trait switched off: ${sibling.name}`);
-      addLogEntry(`Acquired trait: ${resolveTraitText(authored, authored.name)}`);
+      const siblings = retired.map((t) => t.name);
+      for (const line of traitSwitchLog(resolveTraitText(authored, authored.name), 'acquired', siblings)) addLogEntry(line);
     },
     [chosenTraits, authoredTraits, traitGroups, traitState, commitTraitState, addLogEntry, resolveTraitText],
   );
@@ -3575,8 +3751,9 @@ const GameViewer = ({
       // when the step was skipped. A loaded save overrides this later via loadGame.
       setRuntimeDictionaries(initialDictionaries ?? dictionaries);
 
-      // Fresh playthrough: no memory pins, selection or player overrides yet. loadGame overrides.
+      // Fresh playthrough: no memory pins, Code Pins, selection or player overrides yet. loadGame overrides.
       setMemoryPins({});
+      setCodePins({});
       setEntityVisualPreference({});
       setEntityImageIndex({});
       setMilestoneSelection(null);
@@ -3624,6 +3801,7 @@ const GameViewer = ({
     setDiscoveredEntities,
     setPlayerInput,
     setMemoryPins,
+    setCodePins,
     setEntityVisualPreference,
     setEntityImageIndex,
     setMilestoneSelection,
@@ -4666,6 +4844,7 @@ const GameViewer = ({
                                         </span>
                                       </Tip>
                                     )}
+                                    {req.endpoint && <ReasoningChip endpoint={req.endpoint} />}
                                   </span>
                                   {groupOpen ? (
                                     <ChevronDown className="h-4 w-4 flex-shrink-0" />
@@ -4734,6 +4913,11 @@ const GameViewer = ({
                                           <span className="text-muted-foreground">(empty output)</span>
                                         )}
                                       </p>
+                                      {!!req.statDiagnostics?.length && (
+                                        <p className="mt-2 whitespace-pre-wrap break-words text-helper text-muted-foreground">
+                                          Skipped stat updates: {req.statDiagnostics.map(({ name, reason }) => `${name} (${reason})`).join('; ')}
+                                        </p>
+                                      )}
                                     </CollapsibleContent>
                                   </Collapsible>
                                 )}

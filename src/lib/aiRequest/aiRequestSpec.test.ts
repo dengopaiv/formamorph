@@ -4,11 +4,18 @@ import {
   type AiCall, type AiEndpointTarget, type AiSettingsSnapshot,
 } from './aiRequestSpec';
 import { defaultEndpointSamplerOverrides } from '@/lib/endpointSamplers';
+import {
+  reasoningCapabilityFromLevels, UNKNOWN_REASONING_CAPABILITY,
+  type ReasoningCapability, type ReasoningEffortField,
+} from '@/lib/reasoningEffort';
 import { resolvePromptEndpoint, type ActiveEndpointState } from '@/lib/promptEndpoints';
 import { DEFAULT_TEXT_ENDPOINT_VALUES, type TextEndpointPresetStore } from '@/lib/textEndpointPresets';
 
+/** A capability record answering the levels question only, as a probe leaves it. */
+const accepts = (...levels: ReasoningEffortField[]): ReasoningCapability => reasoningCapabilityFromLevels(levels, 'probe');
+
 /** The engine kinds the body splits on. LM Studio differs from a generic OpenAI-compatible endpoint only in
- *  what it accepts, which the spec expresses as the probed effort list — two targets, not two code paths. */
+ *  what its capability record says — two targets, not two code paths. */
 const localEngine = (over: Partial<AiEndpointTarget> = {}): AiEndpointTarget => ({
   endpointId: 'builtin-engine',
   url: 'http://127.0.0.1:8080/v1/chat/completions',
@@ -17,7 +24,8 @@ const localEngine = (over: Partial<AiEndpointTarget> = {}): AiEndpointTarget => 
   maxTokens: 1000,
   localEngine: true,
   samplerOverrides: defaultEndpointSamplerOverrides(),
-  supportedReasoningEfforts: null,
+  // The bundled engine always takes a token budget; nothing has answered the other two questions.
+  reasoning: { ...UNKNOWN_REASONING_CAPABILITY, budget: true, sources: { budget: 'engine' } },
   ...over,
 });
 
@@ -29,13 +37,13 @@ const external = (over: Partial<AiEndpointTarget> = {}): AiEndpointTarget => ({
   maxTokens: 800,
   localEngine: false,
   samplerOverrides: defaultEndpointSamplerOverrides(),
-  supportedReasoningEfforts: ['none', 'low', 'medium', 'high'],
+  reasoning: accepts('none', 'low', 'medium', 'high'),
   ...over,
 });
 
-/** LM Studio: reachable, probed conclusively as non-reasoning, so it accepts no effort literal at all. */
+/** LM Studio: reachable, resolved conclusively as non-reasoning, so it accepts no effort literal at all. */
 const lmStudio = (over: Partial<AiEndpointTarget> = {}): AiEndpointTarget =>
-  external({ url: 'http://127.0.0.1:1234/v1/chat/completions', model: 'cydonia-24b', supportedReasoningEfforts: [], ...over });
+  external({ url: 'http://127.0.0.1:1234/v1/chat/completions', model: 'cydonia-24b', reasoning: accepts(), ...over });
 
 const snapshot = (target: AiEndpointTarget, over: Partial<AiSettingsSnapshot> = {}): AiSettingsSnapshot => ({
   resolveTarget: () => target,
@@ -203,7 +211,81 @@ describe('temperature and penalty — pinned, global, custom, omitted', () => {
   });
 });
 
-describe('reasoning split — budget on the engine, effort outside it', () => {
+/** LM Studio on a reasoning model: its native list answers the reasons and budget questions, and the probe
+ *  narrows the levels. Both the cap and the hint go out. */
+const lmStudioReasoning = (over: Partial<AiEndpointTarget> = {}): AiEndpointTarget =>
+  lmStudio({
+    model: 'meromero-31b',
+    reasoning: { ...accepts('none', 'low', 'medium', 'high'), reasons: true, budget: true },
+    ...over,
+  });
+
+describe('reasoning budget on LM Studio — the cap and the hint travel together', () => {
+  it('sends the token budget and the effort level in the same body', () => {
+    const snap = snapshot(lmStudioReasoning(), {
+      reasoningEngaged: true, reasoningEffort: 'high', promptReasoningBudget: { narration: 25 },
+    });
+    expect(buildRequestBody(snap, call())).toMatchObject({
+      thinking_budget_tokens: 200, reasoning_effort: 'high',
+    });
+  });
+
+  it('keeps the budget on a record whose reasons question is still open, as the engine record leaves it', () => {
+    // The bundled engine's record is budget-yes with reasons unanswered, so an unknown answer must not
+    // withhold the cap — only a record that rules reasoning out does.
+    const unknownReasons = external({ reasoning: { ...UNKNOWN_REASONING_CAPABILITY, budget: true } });
+    const snap = snapshot(unknownReasons, { promptReasoningBudget: { narration: 25 } });
+    expect(buildRequestBody(snap, call())).toMatchObject({ thinking_budget_tokens: 200 });
+  });
+
+  it('sends neither field to a model the record says does not reason, budget flag or not', () => {
+    const snap = snapshot(lmStudio({ reasoning: { ...accepts(), budget: true } }), {
+      reasoningEngaged: true, reasoningEffort: 'high', promptReasoningBudget: { narration: 25 },
+    });
+    const body = buildRequestBody(snap, call());
+    expect(body).not.toHaveProperty('thinking_budget_tokens');
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('zeroes the budget for a switched-off prompt, and says none beside it', () => {
+    const snap = snapshot(lmStudioReasoning(), {
+      reasoningEngaged: true, reasoningEffort: 'high',
+      promptReasoning: { narration: 'none' }, promptReasoningBudget: { narration: 40 },
+    });
+    expect(buildRequestBody(snap, call())).toMatchObject({
+      thinking_budget_tokens: 0, reasoning_effort: 'none',
+    });
+  });
+
+  it('zeroes the budget for a Global prompt under a switched-off Output row', () => {
+    const snap = snapshot(lmStudioReasoning(), {
+      reasoningEngaged: true, reasoningEffort: 'none',
+      promptReasoning: { narration: 'global' }, promptReasoningBudget: { narration: 40 },
+    });
+    expect(buildRequestBody(snap, call())).toMatchObject({
+      thinking_budget_tokens: 0, reasoning_effort: 'none',
+    });
+  });
+
+  it('zeroes the budget for Inline narration, which writes its own <think> block', () => {
+    const snap = snapshot(lmStudioReasoning(), {
+      thinkingMode: 'inline', reasoningEngaged: true, reasoningEffort: 'high',
+      promptReasoningBudget: { narration: 40 },
+    });
+    expect(buildRequestBody(snap, call())).toMatchObject({ thinking_budget_tokens: 0 });
+  });
+
+  it('caps each prompt from its own stored value or shipped tier', () => {
+    const snap = snapshot(lmStudioReasoning(), {
+      reasoningEngaged: true, promptReasoningBudget: { summary: 10 },
+    });
+    expect(buildRequestBody(snap, call({ requestType: 'summary' }))).toMatchObject({ thinking_budget_tokens: 80 });
+    expect(buildRequestBody(snap, call({ requestType: 'director' }))).toMatchObject({ thinking_budget_tokens: 200 });
+    expect(buildRequestBody(snap, call({ requestType: 'statUpdates' }))).toMatchObject({ thinking_budget_tokens: 0 });
+  });
+});
+
+describe('reasoning split — budget where the record says, effort everywhere else', () => {
   it('sends a token budget, never an effort, on the built-in engine', () => {
     const snap = snapshot(localEngine(), {
       reasoningEngaged: true, reasoningEffort: 'high', promptReasoningBudget: { narration: 40 },
@@ -213,23 +295,60 @@ describe('reasoning split — budget on the engine, effort outside it', () => {
     expect(body).not.toHaveProperty('reasoning_effort');
   });
 
+  it('never sends the engine an effort hint, even when its record lists accepted levels', () => {
+    // The engine shares the active endpoint's record, so a probe against that endpoint can fill in levels.
+    // The engine ignores the hint and caps by tokens, so the levels must not put one on the wire.
+    const engineWithLevels = localEngine({
+      reasoning: { ...accepts('none', 'low', 'high'), reasons: true, budget: true },
+    });
+    const snap = snapshot(engineWithLevels, {
+      reasoningEngaged: true, reasoningEffort: 'high', promptReasoningBudget: { narration: 40 },
+    });
+    const body = buildRequestBody(snap, call());
+    expect(body).toMatchObject({ thinking_budget_tokens: 400 });
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('sends the budget to any target whose record takes one, engine flag or not', () => {
+    const takesBudget = external({ reasoning: { ...accepts('none', 'low', 'high'), budget: true } });
+    const snap = snapshot(takesBudget, {
+      reasoningEngaged: true, reasoningEffort: 'high', promptReasoningBudget: { narration: 25 },
+    });
+    expect(buildRequestBody(snap, call())).toMatchObject({ thinking_budget_tokens: 200 });
+  });
+
+  it('sends the effort, not a budget, to a target whose record leaves the budget question open', () => {
+    const snap = snapshot(external(), { reasoningEngaged: true, reasoningEffort: 'high' });
+    const body = buildRequestBody(snap, call());
+    expect(body).toMatchObject({ reasoning_effort: 'high' });
+    expect(body).not.toHaveProperty('thinking_budget_tokens');
+  });
+
   it('scales the budget off a max-token override rather than the target cap', () => {
     const snap = snapshot(localEngine(), { promptReasoningBudget: { narration: 50 } });
     expect(buildRequestBody(snap, call({ maxTokensOverride: 200 }))).toMatchObject({ thinking_budget_tokens: 100 });
   });
 
-  it.each([
-    ['inline', 'inline'],
-    ['precall', 'precall'],
-    ['staged', 'staged'],
-  ] as const)('zeroes the engine budget under the guided %s mode, which drives its own thinking', (_n, thinkingMode) => {
-    const snap = snapshot(localEngine(), { thinkingMode, promptReasoningBudget: { narration: 40 } });
+  it('zeroes the engine budget for a Global prompt when the endpoint-wide switch is off', () => {
+    const snap = snapshot(localEngine(), { reasoningEffort: 'none', promptReasoning: { narration: 'global' }, promptReasoningBudget: { narration: 40 } });
     expect(buildRequestBody(snap, call())).toMatchObject({ thinking_budget_tokens: 0 });
   });
 
-  it('zeroes the budget for an uncontrolled prompt', () => {
-    const snap = snapshot(localEngine(), { promptReasoningBudget: { narration: 40 } });
-    expect(buildRequestBody(snap, call({ requestType: 'summary' }))).toMatchObject({ thinking_budget_tokens: 0 });
+  it('zeroes the engine budget for Inline narration, which writes its own <think> block', () => {
+    const snap = snapshot(localEngine(), { thinkingMode: 'inline', promptReasoningBudget: { narration: 40 } });
+    expect(buildRequestBody(snap, call())).toMatchObject({ thinking_budget_tokens: 0 });
+  });
+
+  it.each([['precall'], ['staged']] as const)('keeps narration its budget under the %s mode', (thinkingMode) => {
+    const snap = snapshot(localEngine(), { thinkingMode, promptReasoningBudget: { narration: 40 } });
+    expect(buildRequestBody(snap, call())).toMatchObject({ thinking_budget_tokens: 400 });
+  });
+
+  it('budgets every prompt from its stored value or shipped tier', () => {
+    const snap = snapshot(localEngine(), { promptReasoningBudget: { narration: 40, summary: 10 } });
+    expect(buildRequestBody(snap, call({ requestType: 'summary' }))).toMatchObject({ thinking_budget_tokens: 100 });
+    expect(buildRequestBody(snap, call({ requestType: 'director' }))).toMatchObject({ thinking_budget_tokens: 250 });
+    expect(buildRequestBody(snap, call({ requestType: 'statUpdates' }))).toMatchObject({ thinking_budget_tokens: 0 });
   });
 
   it('sends the global effort on an external endpoint that accepts it', () => {
@@ -258,13 +377,13 @@ describe('reasoning split — budget on the engine, effort outside it', () => {
     expect(buildRequestBody(snap, call())).toMatchObject({ reasoning_effort: 'none' });
   });
 
-  // A stored level for a prompt with no reasoning control (only narration and choices have one) is ignored
-  // rather than followed — otherwise a stale preference would quietly turn reasoning on for an extraction.
-  it('hardwires an uncontrolled prompt to none even when a level is stored for it', () => {
+  it('follows a stored level on any prompt, and the shipped tier where none is stored', () => {
     const snap = snapshot(external(), {
-      reasoningEngaged: true, reasoningEffort: 'high', promptReasoning: { summary: 'high' },
+      reasoningEngaged: true, reasoningEffort: 'high', promptReasoning: { summary: 'medium' },
     });
-    expect(buildRequestBody(snap, call({ requestType: 'summary' }))).toMatchObject({ reasoning_effort: 'none' });
+    expect(buildRequestBody(snap, call({ requestType: 'summary' }))).toMatchObject({ reasoning_effort: 'medium' });
+    expect(buildRequestBody(snap, call({ requestType: 'director' }))).toMatchObject({ reasoning_effort: 'low' });
+    expect(buildRequestBody(snap, call({ requestType: 'statUpdates' }))).toMatchObject({ reasoning_effort: 'none' });
   });
 
   it('omits the effort entirely when reasoning is engaged nowhere', () => {
@@ -272,24 +391,39 @@ describe('reasoning split — budget on the engine, effort outside it', () => {
     expect(buildRequestBody(snap, call())).not.toHaveProperty('reasoning_effort');
   });
 
-  it('omits the effort on LM Studio, probed as accepting no level at all', () => {
+  it('omits the effort on LM Studio, resolved as accepting no level at all', () => {
     const snap = snapshot(lmStudio(), { reasoningEngaged: true, reasoningEffort: 'high' });
     expect(buildRequestBody(snap, call())).not.toHaveProperty('reasoning_effort');
   });
 
-  it('omits the effort on an unprobed endpoint rather than guessing it is accepted', () => {
-    const snap = snapshot(external({ supportedReasoningEfforts: null }), { reasoningEngaged: true, reasoningEffort: 'high' });
+  it('omits the effort on an unresolved endpoint rather than guessing it is accepted', () => {
+    const snap = snapshot(external({ reasoning: UNKNOWN_REASONING_CAPABILITY }), { reasoningEngaged: true, reasoningEffort: 'high' });
     expect(buildRequestBody(snap, call())).not.toHaveProperty('reasoning_effort');
   });
 
   it('omits the effort for a level the routed target does not accept', () => {
-    const snap = snapshot(external({ supportedReasoningEfforts: ['none', 'low'] }), { reasoningEngaged: true, reasoningEffort: 'high' });
+    const snap = snapshot(external({ reasoning: accepts('none', 'low') }), { reasoningEngaged: true, reasoningEffort: 'high' });
     expect(buildRequestBody(snap, call())).not.toHaveProperty('reasoning_effort');
   });
 
-  it('forces none under a guided mode so a native model does not fight the guided step', () => {
-    const snap = snapshot(external(), { thinkingMode: 'precall', reasoningEngaged: true, reasoningEffort: 'high' });
+  it('omits the effort on a model the record says does not reason, even where levels are listed', () => {
+    const nonReasoning: ReasoningCapability = {
+      reasons: false, levels: ['none', 'low', 'high'], budget: null, sources: { reasons: 'native' },
+    };
+    const snap = snapshot(external({ reasoning: nonReasoning }), { reasoningEngaged: true, reasoningEffort: 'high' });
+    expect(buildRequestBody(snap, call())).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('forces none on Inline narration so the native scratchpad does not double the inline <think> block', () => {
+    const snap = snapshot(external(), { thinkingMode: 'inline', reasoningEngaged: true, reasoningEffort: 'high' });
     expect(buildRequestBody(snap, call())).toMatchObject({ reasoning_effort: 'none' });
+  });
+
+  it('keeps narration its level under the planning modes, which run separate passes', () => {
+    for (const thinkingMode of ['precall', 'staged'] as const) {
+      const snap = snapshot(external(), { thinkingMode, reasoningEngaged: true, reasoningEffort: 'high' });
+      expect(buildRequestBody(snap, call())).toMatchObject({ reasoning_effort: 'high' });
+    }
   });
 });
 

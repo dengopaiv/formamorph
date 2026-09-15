@@ -17,7 +17,8 @@ import {
   reconcilePlaceholderValues, prunePlaceholderWeights, pruneSharedWeights, mergePlaceholderWeights,
   lonePlaceholderToken, drawPlaceholderSpans, placeholderIsChoice, placeholderRandomizes, type PlaceholderSpan,
 } from '@/lib/placeholders';
-import { placeholderRowChance } from '@/lib/placeholderTree';
+import { holderOf, placeholderRowChance } from '@/lib/placeholderTree';
+import { isPlaceholderEntryMember } from '@/lib/statCodePaths';
 import { placeholderDisplayName } from '@/lib/placementLetters';
 import { accentAtChance, chanceChipStyle, relativeChance } from '@/lib/chanceColor';
 import { placeholderAccent, usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
@@ -28,6 +29,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { PinPopoverButton } from '@/components/editor/PinPopoverButton';
 import { PlaceholderPinsSection } from '@/components/editor/PlaceholderPinsSection';
 import { useGameDataOptional } from '@/contexts/GameDataContext';
+import { useRenameField } from '@/lib/useCodeRename';
 import { useEditorMode } from '@/lib/editorMode';
 
 /** Which of the two value-editing styles a placeholder is being edited in. Session-only — nothing about it
@@ -157,6 +159,18 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
   const kind: PlaceholderKind = (editing.roll ?? true) ? 'wildcard' : 'object';
   // Only a placeholder that draws has weights worth showing; an Object applies every value.
   const weighable = placeholderIsChoice(editing);
+  const rename = useRenameField({
+    root: 'placeholders',
+    value: editing.name,
+    siblings: placeholders,
+    ownId: editing.id,
+    subject: { kind: 'placeholder', id: editing.id },
+  });
+  // Stat code reaches a part as a member of its holder, and every placeholder already has six members of
+  // its own. A part named like one of those loses the name, so the author is told here rather than in a
+  // squiggle on the code that tried it.
+  const shadowsMember = isPlaceholderEntryMember(editing.name)
+    && holderOf(placeholders, editing) !== null;
   // A one-value Variable whose value holds wildcard chips still rolls — the chips do — so its chip offers
   // World | Unique like a Wildcard's. Read against the draft, so a chip just typed in flips the line at once.
   const rollingVariable = count === 1 && placeholderRandomizes(
@@ -345,7 +359,16 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
           onChange={(e) => apply({ name: e.target.value })}
           disabled={locked}
           placeholder="e.g. Eye Color"
+          onFocus={rename.onFocus}
+          onBlur={rename.onBlur}
+          onKeyDown={(e) => { if (e.key === 'Enter') rename.onSubmit(); }}
         />
+        {shadowsMember && (
+          <p role="status" className="text-meta text-warning">
+            Every placeholder has a <code>{editing.name}</code> of its own, so stat code can’t reach this part
+            by name. Rename it to reach it from code.
+          </p>
+        )}
       </div>
       <div className="space-y-2">
         <div className="flex items-center gap-2">

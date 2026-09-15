@@ -8,7 +8,6 @@ import { EditorModeProvider } from '@/components/EditorModeProvider';
 import { TutorialPopover } from '@/components/TutorialPopover';
 import { useTutorial } from '@/lib/tutorials';
 import { worldUsesAdvancedFeatures } from '@/lib/editorAdvancedData';
-import { withEntityLocations } from '@/lib/entityPresence';
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EmptyListHint } from '@/components/EmptyListHint';
 import { HelpButton } from '@/components/HelpButton';
@@ -22,6 +21,7 @@ import { Plus, ArrowLeft, Save, FolderPlus, FilePlus, ImageDown, BookPlus, UserP
 import { ActionIcon } from '@/lib/actionIcons';
 import { cn } from "@/lib/utils";
 import EditorFindBar from '@/components/editor/EditorFindBar';
+import { CodeRenameProvider } from '@/components/editor/CodeRenameOffer';
 import { TestBench, TestBenchButton } from '@/components/editor/TestBench';
 import { BenchPopover } from '@/components/editor/BenchPopover';
 import { Drawer, DrawerContent, DrawerTitle } from '@/components/ui/drawer';
@@ -48,6 +48,12 @@ import TraitTree from '../managers/TraitTree';
 import LocationTree from '../managers/LocationTree';
 import LocationCanvas from '../managers/LocationCanvas';
 import { LOCATION_VIEWS, type LocationView } from './locationViews';
+import { ENTITY_PANEL_TABS, entityPanelTabsFor, type EntityPanelTab } from './entityPanelTabs';
+import { LOCATION_PANEL_TABS, locationPanelTabsFor, type LocationPanelTab } from './locationPanelTabs';
+import { STAT_PANEL_TABS, statPanelTabsFor, type StatPanelTab } from './statPanelTabs';
+import { TRAIT_PANEL_TABS, traitPanelTabsFor, type TraitPanelTab } from './traitPanelTabs';
+import { DICTIONARY_PANEL_TABS, dictionaryPanelTabsFor, type DictionaryPanelTab } from './dictionaryPanelTabs';
+import { focusFieldForItem } from './findFocus';
 import EntityTree from '../managers/EntityTree';
 import { removeLocationPromotingChildren } from '@/lib/locationTree';
 import { duplicateTraitNode } from '@/lib/traitTree';
@@ -62,15 +68,18 @@ import PlaceholderManager from '../managers/PlaceholderManager';
 import PlaceholderList from '../managers/PlaceholderList';
 import DictionaryTree from '../managers/DictionaryTree';
 import DictionaryBookManager from '../managers/DictionaryBookManager';
+import { exportedComponentLinks } from '@/lib/componentExportLinks';
+import { resolveImportedWorld } from '@/lib/worldBundleRun';
 import { buildDictionaryFile } from '@/lib/dictionaryFile';
 import { downloadBlob } from '@/lib/downloadBlob';
 import { useWorldExport } from '@/lib/useWorldExport';
 import { parseJsonText, terminateWorker as terminateJsonWorker } from '@/lib/jsonFileWorkerUtils';
 import AddDictionaryModal from '@/components/modals/AddDictionaryModal';
 import AddEntityModal from '@/components/modals/AddEntityModal';
+import ReplaceSourceModal from '@/components/modals/ReplaceSourceModal';
 import { exportEntityCard } from '@/lib/entityFile';
 import { describePlaceholders, newPlaceholder } from '@/lib/placeholders';
-import { adoptBookPlaceholders, adoptEntityPlaceholders, placeholderOwnerRef } from '@/lib/placeholderHomes';
+import { placeholderOwnerRef } from '@/lib/placeholderHomes';
 import { ownerIdOfNode } from '@/lib/placeholderScopes';
 import { chipPlaceholderNames, labelPlaceholders } from '@/lib/placementLetters';
 import { placeholderSelection } from '@/lib/placeholderTree';
@@ -80,9 +89,12 @@ import { arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { UnsavedChangesDialog } from "@/components/UnsavedChangesDialog";
 import { APP_VERSION } from '@/lib/version';
-import type { Stat, Entity, GameLocation, StatUpdate, Dictionary, World } from '@/types';
+import type { Stat, Entity, GameLocation, StatUpdate, Dictionary, World, ContentLink, FocusFieldHint } from '@/types';
 import { useDownscalePrompt } from '@/lib/useDownscalePrompt';
 import { SortableRow, type SortableListItem } from '@/components/SortableList';
+import { ContentLinkIcon, SelectedContentActions } from '@/components/ContentLinkStatus';
+import { SplitButton } from '@/components/ui/split-button';
+import { useLibraryLinking } from '@/lib/useLibraryLinking';
 import { EditorRowList } from '@/components/EditorRow';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
 import { Tip } from '@/components/ui/tooltip';
@@ -108,8 +120,8 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
     updateStat, updateEntity, updateEntityGroup, updateLocation, updateTrait, updateTraitGroup,
     updateDictionary, updateDictionaryEntry, updatePlaceholder, updatePlaceholderGroup,
     removeStat, removeEntity, removeTrait, removeStatUpdate,
-    setStats, setLocations, setEntities, setTraits, setTraitGroups, setStatUpdates,
-    isWorldDirty, saveWorld: saveWorldCtx, discardChanges
+    setStats, setLocations, setEntities, setTraits, setTraitGroups, setStatUpdates, setDictionaries,
+    isWorldDirty, saveWorld: saveWorldCtx, discardChanges, setOwnedLibraryIds,
   } = useGameData();
   const { promptWorld, dialog: downscaleDialog } = useDownscalePrompt();
 
@@ -162,15 +174,84 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   }, [visibleTabs, activeTab]);
   // Which of the Locations tab's two views is showing — the tree, or the canvas of the same locations.
   const [locationView, setLocationView] = useState<LocationView>('list');
+  // Which of the entity panel's tabs is showing. Held here rather than in the panel, which remounts per
+  // entity, so an author reviewing every entity's descriptions stays on Descriptions down the list.
+  const [entityTab, setEntityTab] = useState<EntityPanelTab>('profile');
+  const entityTabs = useMemo(() => entityPanelTabsFor(advanced), [advanced]);
+  // Simple mode has no Placeholders tab. Derived rather than corrected in an effect, which would draw one
+  // frame of a strip with nothing selected over an empty body. The choice itself is kept, so returning to
+  // Advanced returns to the tab the author left.
+  const shownEntityTab = entityTabs.some((t) => t.value === entityTab) ? entityTab : 'profile';
+  // The location panel's own tabs, held here for the same reason and answered the same way.
+  const [locationTab, setLocationTab] = useState<LocationPanelTab>('details');
+  const locationTabs = useMemo(() => locationPanelTabsFor(advanced), [advanced]);
+  const shownLocationTab = locationTabs.some((t) => t.value === locationTab) ? locationTab : 'details';
+  // The stat panel's own tabs, held here for the same reason. Simple mode leaves it one tab, which the panel
+  // reads as no strip at all.
+  const [statTab, setStatTab] = useState<StatPanelTab>('details');
+  const statTabs = useMemo(() => statPanelTabsFor(advanced), [advanced]);
+  const shownStatTab = statTabs.some((t) => t.value === statTab) ? statTab : 'details';
+  // One tab means no strip, so the author is on Details for real rather than bounced off a tab they can see.
+  // Returning to Advanced opens there, which is where they were, not on the tab the strip last held. This is
+  // where the stat panel parts company with the entity and location ones, whose strips never go away.
+  useEffect(() => {
+    if (statTabs.length === 1) setStatTab('details');
+  }, [statTabs]);
+  // The trait panel's own tabs, held here for the same reason. Pins is the only Advanced-only one, so Simple
+  // mode keeps a strip of two.
+  const [traitTab, setTraitTab] = useState<TraitPanelTab>('details');
+  const traitTabs = useMemo(() => traitPanelTabsFor(advanced), [advanced]);
+  const shownTraitTab = traitTabs.some((t) => t.value === traitTab) ? traitTab : 'details';
+  // The dictionary entry panel's own tabs, held here for the same reason. Matching is Advanced only, so
+  // Simple mode leaves one tab and the panel reads that as no strip, as the stat panel does.
+  const [entryTab, setEntryTab] = useState<DictionaryPanelTab>('details');
+  const entryTabs = useMemo(() => dictionaryPanelTabsFor(advanced), [advanced]);
+  const shownEntryTab = entryTabs.some((t) => t.value === entryTab) ? entryTab : 'details';
+  useEffect(() => {
+    if (entryTabs.length === 1) setEntryTab('details');
+  }, [entryTabs]);
+
   // DEV dev-router: jump to a specific editor tab via `#dev?modal=worldEditor&tab=…`. Tree-shaken in prod.
   const devRoute = useDevRoute();
   useEffect(() => {
     if (import.meta.env.DEV && devRoute?.tab) setActiveTab(devRoute.tab);
   }, [devRoute?.tab]);
   const devSubtab = devRoute?.subtab;
+  const [devReplaceDone, setDevReplaceDone] = useState(false);
   useEffect(() => {
     if (import.meta.env.DEV && LOCATION_VIEWS.some((v) => v.value === devSubtab)) {
       setLocationView(devSubtab as LocationView);
+    }
+  }, [devSubtab]);
+  // The same `subtab=…` slot over the Entities tab, where it names one of the entity panel's own tabs.
+  useEffect(() => {
+    if (import.meta.env.DEV && ENTITY_PANEL_TABS.some((t) => t.value === devSubtab)) {
+      setEntityTab(devSubtab as EntityPanelTab);
+    }
+  }, [devSubtab]);
+  // And over the Locations tab, where the slot already names a view. The two value sets are disjoint, so
+  // one `subtab=…` reaches both the List/Canvas switch and the detail panel's own tabs.
+  useEffect(() => {
+    if (import.meta.env.DEV && LOCATION_PANEL_TABS.some((t) => t.value === devSubtab)) {
+      setLocationTab(devSubtab as LocationPanelTab);
+    }
+  }, [devSubtab]);
+  // And over the Stats tab, where the slot names one of the stat panel's own tabs.
+  useEffect(() => {
+    if (import.meta.env.DEV && STAT_PANEL_TABS.some((t) => t.value === devSubtab)) {
+      setStatTab(devSubtab as StatPanelTab);
+    }
+  }, [devSubtab]);
+  // And over the Traits tab, where the slot names one of the trait panel's own tabs.
+  useEffect(() => {
+    if (import.meta.env.DEV && TRAIT_PANEL_TABS.some((t) => t.value === devSubtab)) {
+      setTraitTab(devSubtab as TraitPanelTab);
+    }
+  }, [devSubtab]);
+  // And over the Dictionary tab, where the slot names one of the entry panel's own tabs.
+  useEffect(() => {
+    if (import.meta.env.DEV && DICTIONARY_PANEL_TABS.some((t) => t.value === devSubtab)) {
+      setEntryTab(devSubtab as DictionaryPanelTab);
     }
   }, [devSubtab]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -182,13 +263,29 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   // Overview's fields sit in the list pane and every other tab's in the detail pane, so the hit lookup
   // spans the whole editor and skips the two boxes that aren't world text (the find bar, the list filter).
   const editorRootRef = useRef<HTMLDivElement>(null);
+  // Where focus was when Find opened, so closing it puts the author back in the field they were typing in.
+  const findOpenerRef = useRef<HTMLElement | null>(null);
   const openFind = useCallback((withReplace: boolean) => {
+    // Only the first press records: Ctrl+H over an open bar would otherwise capture the bar's own field.
+    // The ref answers that, not `findOpen`, so the shortcut listener isn't re-bound on every open.
+    if (!findOpenerRef.current) {
+      const active = document.activeElement;
+      findOpenerRef.current = active instanceof HTMLElement ? active : null;
+    }
     setFindWithReplace(withReplace);
     setFindOpen(true);
   }, []);
   const closeFind = useCallback(() => {
     setFindOpen(false);
     clearEditorMatch();
+    // Dropped with the bar: a panel that opens the hit's own tab must not re-open it the next time the
+    // author selects that item themselves.
+    setFindField(null);
+    const opener = findOpenerRef.current;
+    findOpenerRef.current = null;
+    // Before the unmount, not after: focus has to leave the bar's field while that field still exists,
+    // or removing it drops focus on the body. A navigated hit can unmount the opener, hence the fallback.
+    (opener?.isConnected ? opener : editorRootRef.current)?.focus();
   }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -218,7 +315,8 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       updatePlaceholderGroup]);
   // A fresh object per navigation, not the bare key: a panel with its own tabs has to re-open the right one
   // even when two consecutive hits sit in the same field and the author flipped tabs between them.
-  const [findField, setFindField] = useState<{ fieldKey: string } | null>(null);
+  // `itemId` says which item the hit belongs to — null for Overview's own fields, which sit in no item.
+  const [findField, setFindField] = useState<FocusFieldHint | null>(null);
   const navigateToMatch = useCallback((match: SearchMatch | null) => {
     if (!match) { setFindField(null); clearEditorMatch(); return; }
     setActiveTab(match.target.tab);
@@ -227,7 +325,7 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
     setSelectedItemId(match.target.itemId);
     // A panel that hides some of its fields behind its own tabs (the Readme pair) needs telling which one
     // was asked for; text alone can't reach a field that isn't rendered.
-    setFindField({ fieldKey: match.target.fieldKey });
+    setFindField({ fieldKey: match.target.fieldKey, itemId: match.target.itemId });
     const hit = {
       value: match.target.value,
       matchText: match.target.value.slice(match.start, match.end),
@@ -259,14 +357,19 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [showAddDictionary, setShowAddDictionary] = useState(false);
   const [showAddEntity, setShowAddEntity] = useState(false);
+  // Back out of the connection step reopens the picker on the picks already made rather than a clean one.
+  const [resumePicker, setResumePicker] = useState(false);
 
   // ── Test Bench ────────────────────────────────────────────────────────────
   // A finding's item is a place in the editor: land on its tab with it selected, and scroll the list to it
   // the same way a search hit does. A filter left in the list box would hide the very row being navigated to.
-  const navigateToBenchItem = useCallback((section: FindingSection, itemId: string) => {
+  // `entityTab` is for a caller that means one of the entity panel's own tabs — the Placeholders tab's owner
+  // node opens the entity where its placeholders are. A finding names none and keeps the author's tab.
+  const navigateToBenchItem = useCallback((section: FindingSection, itemId: string, entityTab?: EntityPanelTab) => {
     setActiveTab(section);
     setSearchTerm('');
     setSelectedItemId(itemId);
+    if (entityTab) setEntityTab(entityTab);
     setTimeout(() => revealSelectedRow(editorRootRef.current), 0);
   }, []);
   const bench = useTestBench({
@@ -282,41 +385,62 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   const exportCurrentWorld = () => exportWorld(buildCurrentWorld());
 
   // Export one book to its own standalone `.json` (no image downscale — dictionaries are text only).
-  const exportDictionary = (book: Dictionary) => {
-    // The book's own placeholders go as they are; the shared ones its entries use ride along so its chips
-    // resolve after import elsewhere.
-    const jsonData = JSON.stringify(buildDictionaryFile(book, placeholders), null, 2);
-    // A chip in the name would otherwise put a raw placement id in the filename.
-    downloadBlob(new Blob([jsonData], { type: 'application/json' }), `${labelPlaceholders(book.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || 'Dictionary'}.json`);
+  const exportDictionary = async (book: Dictionary) => {
+    try {
+      // The book's own placeholders go as they are; the shared ones its entries use ride along so its chips
+      // resolve after import elsewhere. The link record travels as file relationships, never as a world.
+      const links = await exportedComponentLinks(book.link);
+      const jsonData = JSON.stringify(buildDictionaryFile(book, placeholders, links), null, 2);
+      // A chip in the name would otherwise put a raw placement id in the filename.
+      downloadBlob(new Blob([jsonData], { type: 'application/json' }), `${labelPlaceholders(book.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || 'Dictionary'}.json`);
+    } catch (error) {
+      toast.error((error as Error).message);
+    }
   };
 
   // Export one entity as a shareable WebP character card (its portrait carrying the text fields).
   const exportEntity = async (entity: Entity) => {
     try {
       // The card's own data keeps the chips; only the filename is flattened, since a placement id is not a name.
-      downloadBlob(await exportEntityCard(entity, placeholders), `${labelPlaceholders(entity.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || 'Character'}.webp`);
+      const links = await exportedComponentLinks(entity.link);
+      downloadBlob(await exportEntityCard(entity, placeholders, links), `${labelPlaceholders(entity.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) || 'Character'}.webp`);
     } catch (error) {
       toast.error((error as Error).message);
     }
   };
 
-  // Bring an imported item's placeholders into the world: its own stay its own under fresh ids, and the
-  // shared ones it carries merge with the world's shared list by name and values or join it.
-  const adoptEntity = (entity: Entity): Entity => {
-    const { entity: adopted, toAdd } = adoptEntityPlaceholders(entity, worldPlaceholders);
-    toAdd.forEach((p) => addPlaceholder(p));
-    return adopted;
+  // Arriving content lands ungrouped at the root — the folder id it carried names one this world lacks.
+  // Its placeholders and its location membership are already resolved by the reference step above it.
+  const addEntityToWorld = (entity: Entity) => {
+    const placed = { ...entity, groupId: null, order: entityRootSiblingCount() };
+    addEntity(placed);
+    setSelectedItemId(placed.id);
   };
-  const adoptBook = (book: Dictionary): Dictionary => {
-    const { book: adopted, toAdd } = adoptBookPlaceholders(book, worldPlaceholders);
-    toAdd.forEach((p) => addPlaceholder(p));
-    return adopted;
+  const addBookToWorld = (book: Dictionary) => {
+    addDictionary(book);
+    setSelectedItemId(book.id);
   };
+
+  const linking = useLibraryLinking({
+    worldId: worldId ?? '',
+    worldName: worldOverview?.name || 'This world',
+    entities, dictionaries, placeholders, worldPlaceholders, locations,
+    updateEntity, updateDictionary, setEntities, setDictionaries,
+    addEntityToWorld, addBookToWorld, addPlaceholder, addLocation, setOwnedLibraryIds,
+    reopenPicker: (kind) => {
+      setResumePicker(true);
+      if (kind === 'dictionary') setShowAddDictionary(true); else setShowAddEntity(true);
+    },
+    exportEntity: (entity) => { void exportEntity(entity); },
+    exportDictionary: (book) => { void exportDictionary(book); },
+  });
 
   const saveWorld = async () => {
     const ok = await saveWorldCtx();
     if (ok) {
       toast.success('World saved successfully!');
+      // The links made this session are now on disk, so they stop reading as pending.
+      linking.clearPendingLinks();
     } else {
       toast.error('Error saving world. Please try again.');
     }
@@ -329,7 +453,9 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
     try {
       // Parsed off-thread — an image-heavy world file is multi-MB and JSON.parse can't be chunked.
       const loadedWorld = await parseJsonText(await file.text());
-      loadWorldData(loadedWorld as World, false);
+      // The same import boundary the main menu uses: what the file's copies follow is settled here, or
+      // the editor would show links to a library this machine has not got.
+      loadWorldData(await resolveImportedWorld(loadedWorld as World), false);
     } catch (error) {
       console.error('Error parsing JSON:', error);
       toast.error('Error loading world data. Please check the file format.');
@@ -476,6 +602,14 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       || hit(describePlaceholders(item.name, placeholders)));
   }, [activeTab, stats, entities, locations, traits, statUpdates, searchTerm, placeholders, placementLetters, placeholderOwners]);
 
+  // The search results reuse one row for every tab, and entities are the only kind here that follows a
+  // source — a row from any other tab misses this lookup and draws no marker. A record, not a `Map`: the
+  // lucide `Map` icon is imported above and shadows the global.
+  const entityLinks = useMemo(
+    () => Object.fromEntries(entities.map((e) => [e.id, e.link])) as Record<string, ContentLink | undefined>,
+    [entities],
+  );
+
   const selectedItem = filteredItems.find(item => item.id === selectedItemId);
   // Traits tab can select either a trait or a group (the right panel branches on which).
   const selectedTrait = traits.find(t => t.id === selectedItemId);
@@ -507,13 +641,14 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
       ? selectedPlaceholderOwner?.id ?? (selectedPlaceholder ? placeholderOwners.get(selectedPlaceholder.row.placeholder.id)?.id : undefined)
     : undefined;
 
-  // Contextual footer actions. Simple authoring is bringing a character or lorebook in from your library;
-  // handing one out is an Advanced move, so Entities/Dictionary offer Add in both modes, Export in Advanced.
+  // Contextual footer actions. The whole world is the only thing still exported by a button of its own;
+  // an entity's or a book's Export is one item in the selected-content split button below.
   const exportContext =
-    activeTab === 'overview' ? { label: 'Export World', disabled: false, onClick: () => { exportCurrentWorld(); } }
-    : activeTab === 'entities' && advanced ? { label: `Export ${selectedItem ? labelPlaceholders(selectedItem.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) : 'Entity'}`, disabled: !selectedItem, onClick: () => { if (selectedItem) exportEntity(selectedItem as Entity); } }
-    : activeTab === 'dictionary' && advanced
-      ? { label: `Export ${(selectedBook && labelPlaceholders(selectedBook.name, placeholders, { letters: placementLetters, owners: placeholderOwners })) || 'Dictionary'}`, disabled: !selectedBook, onClick: () => { if (selectedBook) exportDictionary(selectedBook); } }
+    activeTab === 'overview' ? { label: 'Export World', disabled: false, onClick: () => { exportCurrentWorld(); } } : null;
+  // What the selected-content split button acts on, on the two tabs that have one.
+  const selectedLinkable =
+    activeTab === 'entities' ? (selectedEntityGroup ? null : selectedEntity)
+    : activeTab === 'dictionary' ? selectedBook
     : null;
   // "Add" opens the add-from-library picker (characters on Entities, books on Dictionary).
   const showImport = activeTab === 'entities' || activeTab === 'dictionary';
@@ -598,6 +733,7 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
             <SortableRow
               key={item.id}
               item={item}
+              icon={<ContentLinkIcon link={entityLinks[item.id]} />}
               label={<PlaceholderText text={item.name} placeholders={placeholders} />}
               selected={selectedItemId === item.id}
               onSelect={setSelectedItemId}
@@ -645,16 +781,34 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         <WorldDetailsManager focusField={findField} />
       )}
       {activeTab === "stats" && selectedItem && (
-        <StatManager key={selectedItem.id} stat={selectedItem as Stat} />
+        <StatManager
+          key={selectedItem.id}
+          stat={selectedItem as Stat}
+          tab={shownStatTab}
+          onTabChange={setStatTab}
+          focusField={focusFieldForItem(findField, selectedItem.id)}
+        />
       )}
       {activeTab === "entities" && selectedEntityGroup && (
         <EntityGroupManager key={selectedEntityGroup.id} group={selectedEntityGroup} />
       )}
       {activeTab === "entities" && !selectedEntityGroup && selectedEntity && (
-        <EntityManager key={selectedEntity.id} entity={selectedEntity} />
+        <EntityManager
+          key={selectedEntity.id}
+          entity={selectedEntity}
+          tab={shownEntityTab}
+          onTabChange={setEntityTab}
+          focusField={focusFieldForItem(findField, selectedEntity.id)}
+        />
       )}
       {activeTab === "locations" && selectedItem && (
-        <LocationManager key={selectedItem.id} location={selectedItem as GameLocation} />
+        <LocationManager
+          key={selectedItem.id}
+          location={selectedItem as GameLocation}
+          tab={shownLocationTab}
+          onTabChange={setLocationTab}
+          focusField={focusFieldForItem(findField, selectedItem.id)}
+        />
       )}
       {activeTab === "traits" && selectedGroup && (
         <GroupManager key={selectedGroup.id} group={selectedGroup} />
@@ -665,13 +819,24 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
           trait={selectedTrait}
           // A conflict note names a rival trait; clicking the name lands on it like a Bench finding does.
           onOpenTrait={(id) => navigateToBenchItem('traits', id)}
+          tab={shownTraitTab}
+          onTabChange={setTraitTab}
+          focusField={focusFieldForItem(findField, selectedTrait.id)}
         />
       )}
       {activeTab === "dictionary" && selectedBook && (
         <DictionaryBookManager key={selectedBook.id} book={selectedBook} />
       )}
       {activeTab === "dictionary" && !selectedBook && selectedEntry && (
-        <DictionaryManager key={selectedEntry.id} entry={selectedEntry} placeholders={placeholders} ownerId={selectedEntryBook?.id} />
+        <DictionaryManager
+          key={selectedEntry.id}
+          entry={selectedEntry}
+          placeholders={placeholders}
+          ownerId={selectedEntryBook?.id}
+          tab={shownEntryTab}
+          onTabChange={setEntryTab}
+          focusField={focusFieldForItem(findField, selectedEntry.id)}
+        />
       )}
       {activeTab === "statUpdates" && selectedItem && (
         <StatUpdatesManager key={selectedItem.id} statUpdate={selectedItem as StatUpdate} />
@@ -683,7 +848,9 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         <PlaceholderOwnerPanel
           owner={selectedPlaceholderOwner}
           placeholders={placeholders}
-          onOpen={() => navigateToBenchItem(selectedPlaceholderOwner.kind === 'entity' ? 'entities' : 'dictionary', selectedPlaceholderOwner.id)}
+          onOpen={() => (selectedPlaceholderOwner.kind === 'entity'
+            ? navigateToBenchItem('entities', selectedPlaceholderOwner.id, 'placeholders')
+            : navigateToBenchItem('dictionary', selectedPlaceholderOwner.id))}
         />
       )}
       {activeTab === "placeholders" && !selectedPlaceholderGroup && selectedPlaceholder && (
@@ -857,20 +1024,38 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
   const footerBar = (
     <div className="p-3 border-t flex flex-wrap gap-2 justify-between">
       {downscaleDialog}
-      <div className="flex gap-2">
-        {exportContext && (
+      {/* Wraps: two split buttons are wider than a phone, and each one has to stay joined. */}
+      <div className="flex flex-wrap gap-2">
+        {showImport ? (
+          // Export moves into this button's menu: what an author does with the selected entity or book is
+          // one control, and saving it to the library is the everyday half of it.
+          <SelectedContentActions
+            disabled={!selectedLinkable}
+            {...(selectedLinkable
+              ? linking.controlFor(selectedLinkable, advanced)
+              : { faceLabel: 'Save to Library', faceTip: 'Select an entity or a dictionary first', onFace: () => {}, menu: [] })}
+          />
+        ) : exportContext && (
           <Button variant="outline" size="sm" onClick={exportContext.onClick} disabled={exportContext.disabled}>
             <ActionIcon.export className="h-4 w-4 mr-2 shrink-0" />
             <span className="truncate max-w-[14rem]">{exportContext.label}</span>
           </Button>
         )}
         {showImport && (
-          <Button variant="outline" size="sm" onClick={() => { if (activeTab === "dictionary") setShowAddDictionary(true); else if (activeTab === "entities") setShowAddEntity(true); }} disabled={importDisabled}>
-            {activeTab === "dictionary"
+          // The face opens the library picker; the chevron holds the file route into the same review.
+          <SplitButton
+            icon={activeTab === "dictionary"
               ? <BookPlus className="h-4 w-4 mr-2 shrink-0" />
               : <UserPlus className="h-4 w-4 mr-2 shrink-0" />}
-            <span className="truncate max-w-[14rem]">{importLabel}</span>
-          </Button>
+            label={importLabel}
+            onClick={() => { if (activeTab === "dictionary") setShowAddDictionary(true); else setShowAddEntity(true); }}
+            disabled={importDisabled}
+            menuLabel="More add options"
+            menu={[{
+              label: activeTab === "dictionary" ? 'Import Dictionary…' : 'Import Entity…',
+              onClick: () => linking.openImportFile(activeTab === "dictionary" ? 'dictionary' : 'entity'),
+            }]}
+          />
         )}
       </div>
       <div className="flex gap-2">
@@ -917,7 +1102,13 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
           pauseOnHover
         />
       )}
-      <div className="relative flex-grow flex overflow-hidden" ref={editorRootRef}>
+      <div
+        className="relative flex-grow flex overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        ref={editorRootRef}
+        // Focusable only as Find's fallback landing spot, never in the tab order — and it shows a ring there,
+        // so a keyboard author who closed Find can see where focus went.
+        tabIndex={-1}
+      >
         {findOpen && (
           <EditorFindBar
             targets={searchTargets}
@@ -1032,30 +1223,45 @@ const WorldEditorInner = ({ onClose, embedded = false, backButton }: {
         onOpenChange={setShowExitPrompt}
         onSave={async () => { if (await saveWorld()) onClose(); }}
         // The managers write edits straight into the store as you type, so leaving has to actively roll them
-        // back — closing alone would keep them live for the next time this world is opened.
-        onExit={() => { discardChanges(); onClose(); }}
+        // back — closing alone would keep them live for the next time this world is opened. The links made
+        // this session roll back with them; the library items they named stay.
+        onExit={() => { discardChanges(); linking.clearPendingLinks(); onClose(); }}
       />
       {worldExportDialog}
       <AddDictionaryModal
         open={showAddDictionary}
-        onOpenChange={setShowAddDictionary}
-        onAdd={(book) => { const b = adoptBook(book); addDictionary(b); setSelectedItemId(b.id); }}
+        resume={resumePicker}
+        onOpenChange={(open) => { setShowAddDictionary(open); if (!open) setResumePicker(false); }}
+        onAdd={(picks) => linking.beginAdd(picks.map((pick) => ({ kind: 'dictionary', ...pick })))}
       />
       <AddEntityModal
         open={showAddEntity}
-        onOpenChange={setShowAddEntity}
-        // Imported/card entities land ungrouped at the root and in no location — ids carried over from the
-        // world they were exported from name a folder and places that don't exist here.
-        onAdd={(entity) => {
-          const placed = {
-            ...withEntityLocations(adoptEntity(entity), []),
-            groupId: null,
-            order: entityRootSiblingCount(),
-          };
-          addEntity(placed);
-          setSelectedItemId(placed.id);
-        }}
+        resume={resumePicker}
+        onOpenChange={(open) => { setShowAddEntity(open); if (!open) setResumePicker(false); }}
+        onAdd={(picks) => linking.beginAdd(picks.map((pick) => ({ kind: 'entity', ...pick })))}
       />
+      {/* The Bench's Replace From Library repair. It lives here because the Bench is a hook and the picker
+          is a modal; the Bench only says which copy is being repaired. */}
+      {bench.replaceSource && (
+        <ReplaceSourceModal
+          open
+          onOpenChange={(open) => { if (!open) bench.onReplaceCancel(); }}
+          kind={bench.replaceSource.kind}
+          name={bench.replaceSource.name}
+          onReplace={bench.onReplacePicked}
+        />
+      )}
+      {/* DEV: the picker over a canned copy, since in the app it opens only from an Issues row. */}
+      {import.meta.env.DEV && devRoute?.modal === 'replaceSource' && !devReplaceDone && (
+        <ReplaceSourceModal
+          open
+          onOpenChange={(open) => { if (!open) setDevReplaceDone(true); }}
+          kind="entity"
+          name="Sedge"
+          onReplace={() => setDevReplaceDone(true)}
+        />
+      )}
+      {linking.dialogs}
     </div>
   );
 };
@@ -1080,7 +1286,10 @@ const WorldEditor = (props: Parameters<typeof WorldEditorInner>[0]) => {
       {/* One set of preview rolls for the whole editor, so every field's Preview shows one value per
           placeholder until a Reroll draws again. Editor state only — a save never sees it. */}
       <EditorPreviewRollsProvider>
-        <WorldEditorInner {...props} />
+        {/* Above the panels, so a rename committed on any of them reaches the one offer and its dialog. */}
+        <CodeRenameProvider>
+          <WorldEditorInner {...props} />
+        </CodeRenameProvider>
       </EditorPreviewRollsProvider>
     </EditorModeProvider>
   );

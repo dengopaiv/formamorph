@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { toast } from "react-toastify";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import IndeterminateProgress from "@/components/ui/indeterminate-progress";
-import { Globe, Columns2, RectangleVertical, Pencil, Trash2, X, Flag } from "lucide-react";
+import { Globe, Columns2, RectangleVertical, Pencil, Trash2, X, Flag, EyeOff } from "lucide-react";
 import { ActionIcon } from "@/lib/actionIcons";
 import { THUMB_FRAME, thumbFit } from "@/lib/thumbAspect";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -18,7 +18,10 @@ import { useCachedThumbnail } from "@/lib/useCachedThumbnail";
 import { WorldDetailsColumn, DateTimeText, splitColumnClasses, type WorldRecord } from "@/components/WorldDetails";
 import { formatServerDateTime } from "@/lib/serverDate";
 import { type DownloadState } from "@/lib/downloadState";
-import { KIND_LABELS, kindOf } from "@/lib/catalogKinds";
+import { KIND_LABELS, kindOf, type CatalogKind } from "@/lib/catalogKinds";
+import { componentKind } from "@/lib/worldDependencies";
+import { associationGroups } from "@/lib/listingAssociations";
+import { ListingCompatibleWorlds } from "@/components/community/ListingCompatibleWorlds";
 import WorldStorageService from "@/services/WorldStorageService";
 import { UserAvatar } from "@/components/UserAvatar";
 import { UserName } from "@/components/UserName";
@@ -29,10 +32,17 @@ import { useReportsEnabled } from "@/lib/useReportsEnabled";
 import { ChangelogPanel } from "@/components/community/ChangelogPanel";
 import { defaultChangelogTab, type ChangelogEntry, type ChangelogTab } from "@/lib/listingChangelog";
 import { WorldActionButton } from "@/components/WorldActionButton";
+import { DownloadLinkedContent } from "@/components/community/DownloadLinkedContent";
+import { useWorldDownloadPlan } from "@/lib/useWorldDownloadPlan";
+import type { DownloadPlan } from "@/lib/useDownloadCoordinator";
 import { PlaceBadges } from "@/components/PlaceBadges";
 import { placementsBy } from "@/lib/contests";
 import { Tip } from "@/components/ui/tooltip";
-import type { ServerEvent } from "@/types";
+import { VrmFileDetails } from "@/components/VrmFileDetails";
+import type { ListingVisibility } from "@/lib/publishLinks";
+import type { WorldAssociation } from "@/lib/compatibleWorlds";
+import type { ServerEvent, VrmLicense } from "@/types";
+import type { CommunityBrowserCapabilities } from '@/lib/communityBrowserCapabilities';
 
 interface RemoteWorldDetailsModalProps {
   open: boolean;
@@ -45,17 +55,27 @@ interface RemoteWorldDetailsModalProps {
   openImageViewer: (src: string | undefined, alt: string | undefined) => void;
   downloadStateForWorld: (world: WorldRecord) => DownloadState;
   downloadProgress: Record<string, number>;
-  onContextualDownload: (world: WorldRecord, state: DownloadState) => void;
+  onContextualDownload?: (world: WorldRecord, state: DownloadState, plan?: DownloadPlan) => void;
+  onDeviceDownload?: (world: WorldRecord) => void;
+  /** Which mutable app actions this shell exposes. */
+  capabilities?: Pick<CommunityBrowserCapabilities, 'localLibrary' | 'deviceDownloads' | 'likes' | 'comments' | 'moderation' | 'reports'>;
   /** Who is reading, so the heart is a control only for somebody who could press it. */
   currentUser?: WorldRecord | null;
   /** Records a like. Absent leaves the heart a plain count. */
   onLike?: (world: WorldRecord, liked: boolean) => Promise<void>;
+  /** Starts authentication for a guest Like without mutating the listing. */
+  onGuestLike?: (world: WorldRecord) => void;
   /** The contest archive the browser already fetched, so a placement is badged here as on its card. */
   contests?: ServerEvent[];
   /** Records a new like count after a staff removal, so the card behind this modal agrees. */
   onLikesChanged?: (world: WorldRecord, likes: number) => void;
   /** DEV only: raise the likers dialog as soon as the modal opens, for the dev route. */
   openLikersOnMount?: boolean;
+  /** A read-only action supplied by the surface that opened this listing. */
+  detailsAction?: ReactNode;
+  /** Opens another listing in place of this one, for the worlds a component names. Absent leaves those
+   *  worlds plain names, which is what a surface with only one listing to show wants. */
+  onOpenListing?: (listing: { id: string; kind: CatalogKind }) => void;
 }
 
 /** The same cap a feedback comment carries, so the two comment boxes hold the same amount. */
@@ -64,12 +84,18 @@ const COMMENT_MAX = 4000;
 /** How many more comments each "Load more" adds to the window on screen. */
 const COMMENTS_PAGE = 20;
 
+const APP_DETAILS_CAPABILITIES: Pick<CommunityBrowserCapabilities, 'localLibrary' | 'deviceDownloads' | 'likes' | 'comments' | 'moderation' | 'reports'> = {
+  localLibrary: true, deviceDownloads: false, likes: true, comments: true, moderation: true, reports: true,
+};
+
 /** The remote-world details modal: metadata + download action (left) and comments (right). Owns its own
  *  comment state/paging; download state is supplied by the parent's download coordinator via props. */
 export function RemoteWorldDetailsModal({
   open, onOpenChange, world, collapsed, onToggleCollapsed,
-  isAuthenticated, openImageViewer, downloadStateForWorld, downloadProgress, onContextualDownload,
-  currentUser, onLike, contests = [], onLikesChanged, openLikersOnMount = false,
+  isAuthenticated, openImageViewer, downloadStateForWorld, downloadProgress, onContextualDownload, onDeviceDownload,
+  currentUser, onLike, onGuestLike, contests = [], onLikesChanged, openLikersOnMount = false,
+  capabilities = APP_DETAILS_CAPABILITIES,
+  detailsAction, onOpenListing,
 }: RemoteWorldDetailsModalProps) {
   const [comments, setComments] = useState<WorldRecord[]>([]);
   const [commentsTotal, setCommentsTotal] = useState(0);
@@ -86,6 +112,13 @@ export function RemoteWorldDetailsModal({
   // Null until the listing has been read, and null forever against a server that has never heard of
   // changelogs — which is what keeps the whole feature invisible rather than broken on an old deploy.
   const [changelog, setChangelog] = useState<ChangelogEntry[] | null>(null);
+  // An Avatar's own license terms, read from the file at publish. Undefined for every other kind, and
+  // against a server that predates the field.
+  const [modelLicense, setModelLicense] = useState<VrmLicense | undefined>(undefined);
+  // What worlds this component is offered for, and whether it is in the catalog at all. Both are absent
+  // against a server that predates them, which leaves their surfaces off rather than wrong.
+  const [associations, setAssociations] = useState<WorldAssociation[] | undefined>(undefined);
+  const [listingVisibility, setListingVisibility] = useState<ListingVisibility | undefined>(undefined);
   const [tab, setTab] = useState<ChangelogTab>('comments');
   // What the report dialog is aimed at, or null when it is closed. One dialog for both the listing and
   // any comment on it — they differ only in what they point at.
@@ -93,9 +126,21 @@ export function RemoteWorldDetailsModal({
   // Whether the likers list is up. Staff only; nothing else can raise it.
   const [showLikers, setShowLikers] = useState(false);
 
+  // What this world requires and what it is offered as an add-on, read only while the listing is open.
+  const downloadPlan = useWorldDownloadPlan(world, open && capabilities.localLibrary);
+
+  // Only a component is offered for worlds, so a world's own listing never draws the section — whatever
+  // an older payload happens to carry under the field.
+  const listingComponentKind = world ? componentKind(world) : null;
+
+  // The catalog row answers at once and the listing read corrects it, so the marker does not appear a
+  // beat after the rest of the window.
+  const unlisted = (listingVisibility ?? world?.visibility) === 'unlisted';
+
   // Off entirely for a signed-out reader and against a server without the feature, so no surface here
   // ever offers an action that would be refused.
-  const reportsEnabled = useReportsEnabled(isAuthenticated);
+  const reportFeatureEnabled = useReportsEnabled(isAuthenticated && open);
+  const reportsEnabled = capabilities.reports && reportFeatureEnabled;
 
   const plainVocab = useMemo(() => plainVocabulary(), []);
 
@@ -176,17 +221,22 @@ export function RemoteWorldDetailsModal({
   };
 
   /**
-   * Read the listing's changelog, and decide which panel this reader arrives on.
+   * Read what only an open listing shows — its changelog and, for an Avatar, its license terms — and
+   * decide which panel this reader arrives on.
    *
    * Tokened like the comments fetch, and for the same reason: a slow answer for a since-closed world must
    * not land in a different world's modal.
    */
-  const loadChangelog = async (worldId: string, forWorld: WorldRecord) => {
+  const loadListingDetails = async (worldId: string, forWorld: WorldRecord) => {
     const reqId = ++changelogReqRef.current;
-    const entries = await WorldStorageService.fetchChangelog(worldId);
+    const details = await WorldStorageService.fetchListingDetails(worldId);
     if (reqId !== changelogReqRef.current) return;
 
+    const entries = details?.changelog ?? null;
     setChangelog(entries);
+    setModelLicense(details?.modelLicense);
+    setAssociations(details?.compatibleWorlds);
+    setListingVisibility(details?.visibility);
     setTab(defaultChangelogTab(entries, downloadStateForWorld(forWorld)));
   };
 
@@ -200,10 +250,13 @@ export function RemoteWorldDetailsModal({
       // Cleared rather than left standing: the previous world's history must not show under this one's
       // name for the frames before the fetch answers.
       setChangelog(null);
+      setModelLicense(undefined);
+      setAssociations(undefined);
+      setListingVisibility(undefined);
       setTab('comments');
       setReportTarget(null);
       loadComments(world._id || world.id, COMMENTS_PAGE);
-      void loadChangelog(world._id || world.id, world);
+      void loadListingDetails(world._id || world.id, world);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, world?._id, world?.id]);
@@ -225,7 +278,15 @@ export function RemoteWorldDetailsModal({
 
   // Who liked something is a moderation surface, not a social one: an author does not get it on their
   // own listing, and nothing on screen tells anybody else it exists.
-  const canSeeLikers = isStaff(currentUser);
+  const canSeeLikers = capabilities.moderation && isStaff(currentUser);
+
+  // An offer the world's author turned away is the component author's business and the staff's. The
+  // server already withholds it from everybody else; this decides it again rather than trusting a row
+  // that arrived.
+  const worldGroups = useMemo(
+    () => associationGroups(associations, isOwnListing || isStaff(currentUser)),
+    [associations, isOwnListing, currentUser],
+  );
 
   // The modal outlives the listing it is showing — it stays mounted while the catalog is browsed — so a
   // likers list left open would reopen itself over whichever listing came next, unasked.
@@ -258,21 +319,24 @@ export function RemoteWorldDetailsModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className={cn("h-[85dvh] flex flex-col", collapsed ? "sm:max-w-[600px]" : "sm:max-w-[1200px]")}>
         <DialogHeader className="shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            {/* `leading-normal` overrides DialogTitle's `leading-none`, whose one-em line box crops
-                descenders under `truncate`'s overflow clip. Fits the row's existing height. */}
-            <span className="truncate leading-normal">{world?.name || 'World Details'}</span>
+          <div className="flex items-center gap-2">
+            <DialogTitle className="min-w-0 flex-1">
+              {/* `leading-normal` overrides DialogTitle's `leading-none`, whose one-em line box crops
+                  descenders under `truncate`'s overflow clip. Fits the row's existing height. */}
+              <span className="truncate leading-normal">{world?.name || 'World Details'}</span>
+            </DialogTitle>
+            {detailsAction && <div className="shrink-0">{detailsAction}</div>}
             <Tip tip={collapsed ? "Expand to two columns" : "Collapse to single column"}>
               <Button
                 variant="ghost"
                 size="icon"
-                className="ml-auto mr-8 shrink-0 hidden md:inline-flex"
+                className="mr-8 shrink-0 hidden md:inline-flex"
                 onClick={onToggleCollapsed}
               >
                 {collapsed ? <Columns2 className="h-4 w-4" /> : <RectangleVertical className="h-4 w-4" />}
               </Button>
             </Tip>
-          </DialogTitle>
+          </div>
           {/* Under the title, as on the card: opening a winning card must not lose what the card said. */}
           {world && <PlaceBadges placements={placementsBy(world, contests)} className="mr-8" />}
         </DialogHeader>
@@ -320,7 +384,7 @@ export function RemoteWorldDetailsModal({
                   const dlState = downloadStateForWorld(world);
                   const progress = downloadProgress[world._id || world.id];
                   // While downloading, swap the button for a status bar (-1 ⇒ size unknown).
-                  if (progress !== undefined) {
+                  if ((capabilities.localLibrary || capabilities.deviceDownloads) && progress !== undefined) {
                     return progress < 0
                       ? <IndeterminateProgress />
                       : <Progress value={progress * 100} className="h-2" />;
@@ -331,17 +395,40 @@ export function RemoteWorldDetailsModal({
                     : dlState === 'refresh'
                       ? [ActionIcon.cloudRefresh, `Re-download ${noun}`] as const
                       : [ActionIcon.cloudDownload, `Download ${noun}`] as const;
-                  return (
+                  // What this press installs beyond the world itself, so the count answers the review
+                  // above it rather than making the player add it up.
+                  const extras = downloadPlan.count
+                    ? ` + ${downloadPlan.count} ${downloadPlan.count === 1 ? 'Item' : 'Items'}`
+                    : '';
+                  return capabilities.localLibrary && onContextualDownload ? (
                     <WorldActionButton
                       tone="sky"
-                      onClick={() => onContextualDownload(world, dlState)}
+                      onClick={() => onContextualDownload(world, dlState, downloadPlan.plan)}
                     >
-                      <Icon className="mr-2 h-4 w-4" /> {label}
+                      <Icon className="mr-2 h-4 w-4" /> {label}{extras}
                     </WorldActionButton>
-                  );
+                  ) : capabilities.deviceDownloads && onDeviceDownload ? (
+                    <WorldActionButton tone="sky" onClick={() => onDeviceDownload(world)}>
+                      <ActionIcon.cloudDownload className="mr-2 h-4 w-4" /> Download {noun}
+                    </WorldActionButton>
+                  ) : null;
                 })()}
                 meta={
                   <div className="grid grid-cols-2 gap-4">
+                    {/* Only its author and the staff ever open an unlisted listing, so it says plainly
+                        what unlisted costs rather than badging a state nobody can act on. */}
+                    {unlisted && (
+                      <div className="col-span-2 rounded-md border border-warning/40 bg-warning/10 px-2 py-1 text-meta">
+                        <p className="flex items-center gap-1 font-medium text-warning">
+                          <EyeOff className="h-3 w-3 shrink-0" /> Unlisted
+                        </p>
+                        <p className="text-muted-foreground">
+                          This {KIND_LABELS[kindOf(world)].one.toLowerCase()} is unlisted.
+                          Other players receive it only inside a world that requires it.
+                        </p>
+                      </div>
+                    )}
+
                     {/* Full width so the two counts below pair off on a row of their own — they are the
                         comparison the pair exists to make. */}
                     <div className="col-span-2">
@@ -351,6 +438,22 @@ export function RemoteWorldDetailsModal({
                         <UserName userId={world.author?.id} username={world.author?.username} role={world.author?.role} />
                       </p>
                     </div>
+
+                    {/* What the download installs beside the world, and what the player may add to it.
+                        Absent for a world that follows nothing, and against a server without the routes. */}
+                    {capabilities.localLibrary && <DownloadLinkedContent review={downloadPlan} />}
+
+                    {/* Where a component fits, for a player deciding whether to take it. Each world is a
+                        download of its own; this one installs the component and nothing else. */}
+                    {listingComponentKind && (
+                      <ListingCompatibleWorlds
+                        groups={worldGroups}
+                        kind={listingComponentKind}
+                        {...(onOpenListing
+                          ? { onOpenWorld: (worldId: string) => onOpenListing({ id: worldId, kind: 'world' }) }
+                          : {})}
+                      />
+                    )}
 
                     <div>
                       <h3 className="text-helper font-semibold text-muted-foreground">Downloads</h3>
@@ -364,7 +467,9 @@ export function RemoteWorldDetailsModal({
                         liked={world.liked}
                         size="md"
                         // Static on your own listing, which the server refuses.
-                        onToggle={onLike && isAuthenticated && !isOwnListing ? (next) => onLike(world, next) : undefined}
+                        onToggle={capabilities.likes && onLike && isAuthenticated && !isOwnListing
+                          ? (next) => onLike(world, next)
+                          : capabilities.likes && !isAuthenticated && onGuestLike ? async () => { onGuestLike(world); } : undefined}
                         // Staff read the count as a way into who is behind it; everybody else keeps the
                         // heart, and nothing on screen says a list exists.
                         onOpenLikers={canSeeLikers ? () => setShowLikers(true) : undefined}
@@ -380,6 +485,16 @@ export function RemoteWorldDetailsModal({
                       <h3 className="text-helper font-semibold text-muted-foreground">Updated</h3>
                       <p>{world.updated_at ? <DateTimeText value={world.updated_at} /> : "Unknown"}</p>
                     </div>
+
+                    {/* What the file itself permits, read from it at publish. A downloader decides here
+                        what they may do with an Avatar, before they take it. */}
+                    {modelLicense && (
+                      <div className="col-span-2">
+                        <h3 className="text-helper font-semibold text-muted-foreground">Avatar File</h3>
+                        {modelLicense.title && <p className="text-meta">{modelLicense.title}</p>}
+                        <VrmFileDetails license={modelLicense} />
+                      </div>
+                    )}
 
                     {/* Quiet and at the bottom, under everything the page is actually for. Never on your
                         own listing — reporting yourself is a way into the queue, not moderation. */}
@@ -436,7 +551,7 @@ export function RemoteWorldDetailsModal({
                 <>
               <h3 className="text-helper font-semibold text-muted-foreground">Comments ({commentsTotal})</h3>
 
-              {isAuthenticated ? (
+              {capabilities.comments && isAuthenticated ? (
                 <div className="space-y-2 min-w-0">
                   <PromptField
                     value={commentText}
@@ -460,7 +575,9 @@ export function RemoteWorldDetailsModal({
                   </div>
                 </div>
               ) : (
-                <p className="text-helper text-muted-foreground">Log in to leave a comment.</p>
+                <p className="text-helper text-muted-foreground">
+                  {capabilities.comments ? 'Log in to leave a comment.' : 'Comments are read-only on the website.'}
+                </p>
               )}
 
               <div className="space-y-3">
@@ -475,7 +592,7 @@ export function RemoteWorldDetailsModal({
                         {c.created_at ? formatServerDateTime(c.created_at) : ''}
                         {/* Said plainly, so a reader can tell a comment changed after the replies to it. */}
                         {c.edited_at && <span className="italic">· edited</span>}
-                        {editingId !== c.id && (isOwnComment(c) || mayDelete(c) || (reportsEnabled && !isOwnComment(c))) && (
+                        {capabilities.comments && editingId !== c.id && (isOwnComment(c) || mayDelete(c) || (reportsEnabled && !isOwnComment(c))) && (
                           <span className="flex items-center">
                             {/* Per comment rather than per thread: an abusive reply under a listing that
                                 is otherwise fine is the case this exists for. */}
@@ -524,7 +641,7 @@ export function RemoteWorldDetailsModal({
                       </span>
                     </div>
 
-                    {editingId === c.id ? (
+                    {capabilities.comments && editingId === c.id ? (
                       <div className="mt-2 space-y-2 min-w-0">
                         <PromptField
                           value={editDraft}
@@ -570,11 +687,11 @@ export function RemoteWorldDetailsModal({
           </div>
         )}
 
-        <ReportDialog
+        {capabilities.reports && <ReportDialog
           open={reportTarget !== null}
           onOpenChange={(isOpen) => { if (!isOpen) setReportTarget(null); }}
           target={reportTarget}
-        />
+        />}
 
         {canSeeLikers && (
           <LikersDialog
@@ -587,7 +704,7 @@ export function RemoteWorldDetailsModal({
           />
         )}
 
-        <ConfirmDialog
+        {capabilities.comments && <ConfirmDialog
           open={!!pendingDelete}
           onOpenChange={(isOpen) => { if (!isOpen) setPendingDelete(null); }}
           title="Delete this comment?"
@@ -598,7 +715,7 @@ export function RemoteWorldDetailsModal({
             if (commentId) void handleDeleteComment(commentId);
           }}
           onCancel={() => setPendingDelete(null)}
-        />
+        />}
       </DialogContent>
     </Dialog>
   );

@@ -8,7 +8,8 @@
  * caught by the drift guard beside this file.
  */
 
-import { STAT_CLOCK_VARS } from '@/lib/statCodeExecutor';
+import { CODE_BOUND_FIELDS, DELTA_SOURCES, STAT_CLOCK_VARS, type DeltaSource } from '@/lib/statCodeExecutor';
+import type { PlaceholderKindNoun } from '@/lib/placeholders';
 
 /** One reachable name and what an author needs to know about it. */
 export interface SurfaceEntry {
@@ -32,23 +33,101 @@ const CLOCK_INFO: Record<(typeof STAT_CLOCK_VARS)[number], SurfaceEntry> = {
 
 /** Every name the sandbox injects into the program, in the order an author meets them. */
 export const SANDBOX_GLOBALS: readonly SurfaceEntry[] = [
-  { name: 'stats', detail: 'Stat[]', info: 'Every stat in the world, as plain data. Look one up by name or id.' },
-  { name: 'currentStatId', detail: 'string', info: 'The id of the stat this code belongs to.' },
+  { name: 'self', detail: 'Stat', info: 'The stat this code belongs to. Write self.value to set its value.' },
+  { name: 'stats', detail: 'object', info: 'Every stat in the world by name. Use stats["Two Words"] for a name with a space.' },
   ...STAT_CLOCK_VARS.map((name) => CLOCK_INFO[name]),
+  { name: 'placeholders', detail: 'object', info: 'Every placeholder in the world. A bare name reaches the world’s own; write the path for an owned one, as in placeholders.Molly.Hair. Use placeholders["Two Words"] for a name with a space.' },
+  { name: 'traits', detail: 'object', info: 'Every trait in the world by name. Use traits["Two Words"] for a name with a space.' },
   { name: 'console', detail: 'object', info: 'Only console.log — output shows up in the browser console.' },
 ];
 
-/** The eight fields on a stat object inside `stats`. Anything else is `undefined`. */
+/** Names the sandbox injects for older code but never offers or documents. */
+export const SANDBOX_UNDOCUMENTED_GLOBALS: readonly string[] = ['currentStatId'];
+
+/** An object's members as its completion detail: `{ a, b }`. */
+const shapeOf = (entries: readonly SurfaceEntry[]) => `{ ${entries.map((entry) => entry.name).join(', ')} }`;
+
+/** The fields on every member of `delta`. */
+export const DELTA_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'value', detail: 'number', info: 'The change to the value.' },
+  { name: 'min', detail: 'number', info: 'The change to the lower bound.' },
+  { name: 'max', detail: 'number', info: 'The change to the upper bound.' },
+  { name: 'regen', detail: 'number', info: 'The change to regen per story hour.' },
+];
+
+/** What each change source means. Keyed off the executor's own list, as the clock is. */
+const DELTA_SOURCE_INFO: Record<DeltaSource, SurfaceEntry> = {
+  ai: { name: 'ai', detail: shapeOf(DELTA_FIELDS), info: 'The change the AI asked for this turn, raw: before flags and the range.' },
+  regen: { name: 'regen', detail: shapeOf(DELTA_FIELDS), info: 'What regen did this turn, after clamping. Only value moves.' },
+};
+
+/** The members of a stat's `delta`: one per change source, then their sum and what landed. */
+export const DELTA_MEMBERS: readonly SurfaceEntry[] = [
+  ...DELTA_SOURCES.map((source) => DELTA_SOURCE_INFO[source]),
+  { name: 'total', detail: shapeOf(DELTA_FIELDS), info: 'Every source added up: what this turn asked of the stat, before flags and the range.' },
+  { name: 'actual', detail: shapeOf(DELTA_FIELDS), info: 'Current values minus previous.' },
+];
+
+/** The fields on a stat object inside `stats`, `self` included. Anything else is `undefined`. */
 export const STAT_FIELDS: readonly SurfaceEntry[] = [
-  { name: 'id', detail: 'string', info: 'Unique id. Compare against currentStatId to find this stat.' },
-  { name: 'name', detail: 'string', info: 'The stat’s display name, as the author typed it.' },
+  { name: 'id', detail: 'string', info: 'The stat’s unique id.' },
+  { name: 'name', detail: 'string', info: 'The stat’s code name: the authored name, with each placeholder chip read as that placeholder’s own name.' },
   { name: 'type', detail: 'string', info: 'number, percentage, or whichever type the stat was given.' },
   { name: 'description', detail: 'string', info: 'The stat’s description text.' },
-  { name: 'min', detail: 'number', info: 'Lower bound. Results are clamped to it.' },
-  { name: 'max', detail: 'number', info: 'Upper bound. Results are clamped to it.' },
-  { name: 'value', detail: 'number', info: 'Current value.' },
-  { name: 'regen', detail: 'number', info: 'Per-turn regen amount configured on the stat.' },
+  { name: 'min', detail: 'number', info: 'Lower bound. Results are clamped to it. Write self.min to set it.' },
+  { name: 'max', detail: 'number', info: 'Upper bound. Results are clamped to it. Write self.max to set it.' },
+  { name: 'value', detail: 'number', info: 'Current value, with this turn’s AI change and regen applied. Write self.value to set it.' },
+  { name: 'regen', detail: 'number', info: 'Regen per story hour, with traits applied. Write self.regen to set it.' },
+  { name: 'previous', detail: 'Stat', info: 'The whole stat as it stood at the start of this turn. Read-only.' },
+  { name: 'delta', detail: shapeOf(DELTA_MEMBERS), info: 'Every change this turn made to the stat, by source. Read-only.' },
 ];
+
+/** The fields on `self` that a write reaches. The host reads these back after the run; writes to any other
+ *  field, or to another stat's entry, do nothing. A bound write holds until the code next runs. */
+export const SELF_WRITABLE_FIELDS: readonly string[] = ['value', ...CODE_BOUND_FIELDS];
+
+/** The fields on a stat's `previous` — the whole stat as it stood at the start of this turn. Frozen, so
+ *  a write reaches none of them. */
+export const PREVIOUS_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'id', detail: 'string', info: 'Unique id, at the start of this turn.' },
+  { name: 'name', detail: 'string', info: 'The stat’s code name, at the start of this turn.' },
+  { name: 'type', detail: 'string', info: 'number, percentage, or whichever type the stat was given, at the start of this turn.' },
+  { name: 'description', detail: 'string', info: 'The stat’s description text, at the start of this turn.' },
+  { name: 'min', detail: 'number', info: 'Lower bound at the start of this turn, traits and code bounds included.' },
+  { name: 'max', detail: 'number', info: 'Upper bound at the start of this turn, traits and code bounds included.' },
+  { name: 'value', detail: 'number', info: 'The value at the start of this turn.' },
+  { name: 'regen', detail: 'number', info: 'Regen per story hour at the start of this turn, traits included.' },
+];
+
+/**
+ * The members of one entry in `placeholders`. An Object's `value` holds every value in force rather than
+ * one text, and its `pin` therefore takes a list. The kind is authored, so completions can state the type
+ * per entry.
+ */
+export function placeholderEntryFields(kind: PlaceholderKindNoun): readonly SurfaceEntry[] {
+  const list = kind === 'Object';
+  return [
+    list
+      ? { name: 'value', detail: 'string[]', info: 'The current values as a list. Pins are applied.' }
+      : { name: 'value', detail: 'string', info: 'The text the placeholder reads as now, with pins applied.' },
+    { name: 'values', detail: 'string[]', info: 'Every value the author wrote, in order, as text. Values with weight 0 are included.' },
+    { name: 'text', detail: 'string', info: 'What the prompt sees for this placeholder. A list joins with ", ". Read-only.' },
+    { name: 'roll', detail: '() => string', info: 'Draw one value with the author’s weights. The draw is not kept.' },
+    list
+      ? { name: 'pin', detail: '(list) => void', info: 'Pin the placeholder to a list of text, after this run. One text pins a one-item list.' }
+      : { name: 'pin', detail: '(text) => void', info: 'Pin the placeholder to any text, after this run.' },
+    { name: 'unpin', detail: '() => void', info: 'Remove the pin that code set, after this run. The rolled value shows again.' },
+  ];
+}
+
+/** The members of one entry in `traits`. */
+export const TRAIT_ENTRY_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'enabled', detail: 'boolean', info: 'Whether the player has the trait and it is on. Write it to switch the trait on or off, after this run.' },
+  { name: 'acquired', detail: 'boolean', info: 'True when the player has the trait, on or off. Read-only.' },
+];
+
+/** The one field on a `traits` entry that a write reaches. */
+export const TRAIT_WRITABLE_FIELD = 'enabled';
 
 /** Built-ins the VM already has. Listed so a reference to one isn't flagged, and so completions offer the
  *  handful that stat code actually reaches for rather than everything a JS engine defines. */
@@ -68,19 +147,6 @@ export const SANDBOX_BUILTINS: readonly SurfaceEntry[] = [
   { name: 'NaN', detail: 'number', info: 'The not-a-number value.' },
   { name: 'Infinity', detail: 'number', info: 'Positive infinity.' },
   { name: 'undefined', detail: 'undefined', info: 'The absent value.' },
-];
-
-/** The members offered after `stats.` — what the one array in the sandbox is actually used for, rather
- *  than everything `Array.prototype` defines. */
-export const STATS_MEMBERS: readonly SurfaceEntry[] = [
-  { name: 'find', detail: '(fn) => Stat', info: 'The first stat the test returns true for, or undefined.' },
-  { name: 'filter', detail: '(fn) => Stat[]', info: 'Every stat the test returns true for, as a new array.' },
-  { name: 'map', detail: '(fn) => any[]', info: 'One result per stat, in order.' },
-  { name: 'some', detail: '(fn) => boolean', info: 'Whether any stat passes the test.' },
-  { name: 'every', detail: '(fn) => boolean', info: 'Whether every stat passes the test.' },
-  { name: 'reduce', detail: '(fn, start) => any', info: 'Fold the stats down to a single value.' },
-  { name: 'at', detail: '(index) => Stat', info: 'The stat at an index. Negative counts from the end.' },
-  { name: 'length', detail: 'number', info: 'How many stats the world has.' },
 ];
 
 /**
@@ -163,6 +229,7 @@ export const LANGUAGE_NAMES: readonly string[] = [
 /** Every name a reference is allowed to resolve to without the author having declared it. */
 export const SANDBOX_KNOWN_NAMES: ReadonlySet<string> = new Set([
   ...SANDBOX_GLOBALS.map((entry) => entry.name),
+  ...SANDBOX_UNDOCUMENTED_GLOBALS,
   ...SANDBOX_BUILTINS.map((entry) => entry.name),
   ...LANGUAGE_NAMES,
 ]);
@@ -171,21 +238,25 @@ export const SANDBOX_KNOWN_NAMES: ReadonlySet<string> = new Set([
  *  names don't suggest each other and long ones tolerate a slip. */
 const suggestionDistance = (name: string): number => (name.length <= 4 ? 1 : name.length <= 8 ? 2 : 3);
 
-/** Levenshtein distance, capped implicitly by the short strings involved. */
+/** Levenshtein distance with transposition, capped implicitly by the short strings involved. Two letters
+ *  swapped counts as one slip rather than two, because that is the typo an author actually makes. */
 function editDistance(a: string, b: string): number {
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  const rows: number[][] = [Array.from({ length: b.length + 1 }, (_, index) => index)];
   for (let i = 1; i <= a.length; i += 1) {
     const row = [i];
     for (let j = 1; j <= b.length; j += 1) {
       row[j] = Math.min(
-        previous[j] + 1,
+        rows[i - 1][j] + 1,
         row[j - 1] + 1,
-        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
       );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        row[j] = Math.min(row[j], rows[i - 2][j - 2] + 1);
+      }
     }
-    previous = row;
+    rows.push(row);
   }
-  return previous[b.length];
+  return rows[a.length][b.length];
 }
 
 /**
@@ -193,7 +264,11 @@ function editDistance(a: string, b: string): number {
  * enough to be worth suggesting. Case-insensitive, so `Stats` still points at `stats`.
  */
 export function nearestSurfaceName(name: string, extra: readonly string[] = []): string | null {
-  const candidates = [...SANDBOX_KNOWN_NAMES, ...extra];
+  return nearestName(name, [...SANDBOX_KNOWN_NAMES, ...extra]);
+}
+
+/** The candidate `name` was most likely meant to be, or null when nothing is close enough. */
+export function nearestName(name: string, candidates: readonly string[]): string | null {
   const limit = suggestionDistance(name);
   let best: string | null = null;
   let bestDistance = Infinity;

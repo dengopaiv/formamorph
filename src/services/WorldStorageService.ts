@@ -2,6 +2,7 @@ import AuthService from './AuthService';
 import type { CatalogKindQuery } from '@/lib/catalogKinds';
 import { API_BASE_URL } from '@/lib/apiBase';
 import type { PublishPayload } from '@/lib/publishPayload';
+import { PUBLISH_LIMITS, measurePublishBytes, publishLimitRefusal } from '@/lib/publishLimits';
 import { openDatabase, promisifyRequest } from '@/lib/idb';
 import { migrateCarriedPlaceholders, migrateWorld } from '@/lib/version';
 import { contentHash } from '@/lib/contentHash';
@@ -9,7 +10,11 @@ import { describePlaceholders } from '@/lib/placeholders';
 import { allPlaceholders } from '@/lib/placeholderHomes';
 import { readDeletedDefaultWorlds, tombstoneDefaultWorld, type DefaultWorldSeed } from '@/lib/defaultWorlds';
 import { changelogOf, type ChangelogDraft, type ChangelogEntry } from '@/lib/listingChangelog';
-import type { LikerAuditRow, LikerRow, WorldMetadata } from '@/types';
+import type { ReviewState, WorldAssociation } from '@/lib/compatibleWorlds';
+import type { ListingVisibility } from '@/lib/publishLinks';
+import type { AddonRow, DependencyRow } from '@/lib/worldDependencies';
+import type { SourceCheckStatus } from '@/lib/sourceChecks';
+import type { ContentLink, LikerAuditRow, LikerRow, VrmLicense, WorldMetadata } from '@/types';
 
 /**
  * What a conditional catalog fetch answers with: a fresh snapshot and the tag to store beside it, the
@@ -19,6 +24,21 @@ export type CatalogFetch =
   | { status: 'fresh'; data: unknown[]; tag: string | null }
   | { status: 'unchanged' }
   | { status: 'error'; error: string };
+
+/**
+ * What one listing says about itself beyond its row: its history, an Avatar's license, and the
+ * relationships a publish over it has to preserve. Every field past `changelog` is absent against a
+ * server that predates it.
+ */
+export interface ListingDetails {
+  changelog: ChangelogEntry[] | null;
+  modelLicense?: VrmLicense;
+  visibility?: ListingVisibility;
+  /** The listing ids a world requires today, resolved or not. */
+  requiredDependencies?: string[];
+  /** The worlds a component is offered for today, with the world author's answer to each. */
+  compatibleWorlds?: WorldAssociation[];
+}
 
 /** The publish refused because this author already has an entry in the contest. */
 export const CONTEST_ALREADY_ENTERED = 'CONTEST_ALREADY_ENTERED';
@@ -171,6 +191,120 @@ class WorldStorageService {
       createdAt: world.createdAt,
       lastAccessed: world.lastAccessed
     }));
+  }
+
+  /**
+   * The local worlds holding a copy that follows `libraryId`.
+   *
+   * This is what a component's Compatible Worlds section is derived from, so it reads the whole stored
+   * record rather than the metadata projection: the links live inside each world's content. `sourceId` is
+   * the world's own listing, and a world without one has no published identity to offer the component for.
+   *
+   * @param libraryId - The library item the copies follow
+   * @returns One entry per world, in stored order
+   */
+  async worldsLinking(libraryId: string): Promise<{ id: string; name: string; sourceId?: string }[]> {
+    await this.ensureInitialized();
+    if (!libraryId) return [];
+
+    const transaction = this.db!.transaction([this.storeName], 'readonly');
+    const worlds = await promisifyRequest<{
+      id: string; name: string; sourceId?: string;
+      data?: { entities?: { link?: ContentLink }[]; dictionaries?: { link?: ContentLink }[] };
+    }[]>(transaction.objectStore(this.storeName).getAll());
+
+    return worlds
+      .filter((world) => [...(world.data?.entities ?? []), ...(world.data?.dictionaries ?? [])]
+        .some((item) => item.link?.libraryId === libraryId))
+      .map((world) => ({
+        id: world.id,
+        name: world.name,
+        ...(world.sourceId ? { sourceId: world.sourceId } : {}),
+      }));
+  }
+
+  /**
+   * Every stored copy that follows `libraryId`, with the world holding it.
+   *
+   * One row per copy rather than per world: a world may hold the same library item twice, and two copies
+   * can be in different states. The copy's own content is not read — the update review asks for that per
+   * world, only for the worlds the player acts on.
+   *
+   * @param libraryId - The library item the copies follow
+   * @returns One row per copy, in stored world order
+   */
+  async linkedCopies(libraryId: string): Promise<{
+    worldId: string; worldName: string; itemId: string; itemName: string;
+    kind: 'entity' | 'dictionary'; link: ContentLink;
+  }[]> {
+    await this.ensureInitialized();
+    if (!libraryId) return [];
+
+    type Copy = { id?: string; name?: string; link?: ContentLink };
+    const transaction = this.db!.transaction([this.storeName], 'readonly');
+    const worlds = await promisifyRequest<{
+      id: string; name: string; data?: { entities?: Copy[]; dictionaries?: Copy[] };
+    }[]>(transaction.objectStore(this.storeName).getAll());
+
+    return worlds.flatMap((world) => [
+      ...(world.data?.entities ?? []).map((item) => ({ item, kind: 'entity' as const })),
+      ...(world.data?.dictionaries ?? []).map((item) => ({ item, kind: 'dictionary' as const })),
+    ]
+      .filter(({ item }) => item.link?.libraryId === libraryId)
+      .map(({ item, kind }) => ({
+        worldId: world.id,
+        worldName: world.name,
+        itemId: item.id ?? '',
+        itemName: item.name ?? '',
+        kind,
+        link: item.link as ContentLink,
+      })));
+  }
+
+  /**
+   * Rewrite one stored world's content in place.
+   *
+   * `revise` receives the world's `data` and returns what replaces it. Everything outside `data` is left
+   * exactly as it stands — the download link, the edited stamp, the record's own name and thumbnail, and
+   * `lastAccessed` too, because a write the player never opened the world for is not an access. That is
+   * what `storeWorld` cannot do: it takes a whole record and writes every wrapper field from it.
+   *
+   * `revise` runs inside the write transaction, so it must be synchronous. Returning the same reference
+   * writes nothing.
+   *
+   * @param worldId - The world to rewrite
+   * @param revise - The new content, from the stored content
+   */
+  async updateWorldContent(
+    worldId: string, revise: (data: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void> {
+    await this.ensureInitialized();
+    if (!worldId) throw new Error('World ID is required');
+
+    return new Promise<void>((resolve, reject) => {
+      const transaction = this.db!.transaction([this.storeName], 'readwrite');
+      const store = transaction.objectStore(this.storeName);
+      const read = store.get(worldId);
+      read.onsuccess = () => {
+        const record = read.result;
+        if (!record?.data || typeof record.data !== 'object') {
+          reject(new Error('World not found'));
+          return;
+        }
+        let revised: Record<string, unknown>;
+        try {
+          revised = revise(record.data as Record<string, unknown>);
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+          return;
+        }
+        if (revised === record.data) { resolve(); return; }
+        const write = store.put({ ...record, data: revised });
+        write.onsuccess = () => resolve();
+        write.onerror = () => reject(new Error('Failed to store world'));
+      };
+      read.onerror = () => reject(new Error('Failed to read world'));
+    });
   }
 
   /** Load one world's full `data` (with `id` injected); rejects if missing, malformed, or lacking any
@@ -675,17 +809,17 @@ class WorldStorageService {
   }
 
   /**
-   * Read a listing's changelog, or learn that this server has none.
+   * Read what a listing shows only when it is opened on its own: its changelog, and an Avatar's license.
    *
-   * Fetched as part of the listing behind the opt-in flag rather than from a route of its own, which is
-   * how the server serves it. Null means the deploy predates the feature — see `changelogOf`, which is
-   * what every surface reads the answer through, so the feature can be simply invisible against an older
-   * server rather than broken. A failed request is null for the same reason: nothing is worth an error
-   * toast over a panel the reader did not ask for.
+   * One request for both, because the server serves both as part of the listing row rather than from
+   * routes of their own. A null changelog means the deploy predates that feature — see `changelogOf`,
+   * which every surface reads the answer through, so the feature is invisible against an older server
+   * rather than broken. A failed request is null throughout for the same reason: nothing here is worth an
+   * error toast over a panel the reader did not ask for.
    *
    * @param worldId - The listing's server id
    */
-  async fetchChangelog(worldId: string): Promise<ChangelogEntry[] | null> {
+  async fetchListingDetails(worldId: string): Promise<ListingDetails | null> {
     try {
       const headers: Record<string, string> = {};
       if (AuthService.isAuthenticated()) {
@@ -696,10 +830,140 @@ class WorldStorageService {
 
       const body = await response.json();
 
-      return changelogOf(body.data);
+      // The relationship fields are absent against a server that has never heard of them, which is what
+      // keeps the Linked Content and Compatible Worlds sections empty there rather than wrong.
+      return {
+        changelog: changelogOf(body.data),
+        modelLicense: body.data?.modelLicense,
+        visibility: body.data?.visibility,
+        requiredDependencies: (body.data?.requiredDependencies ?? []).map(
+          (row: { id?: string } | string) => (typeof row === 'string' ? row : String(row?.id ?? '')),
+        ).filter(Boolean),
+        compatibleWorlds: body.data?.compatibleWorlds ?? [],
+      };
     } catch (error) {
-      console.error('Error fetching the changelog:', error);
+      console.error('Error fetching the listing:', error);
       return null;
+    }
+  }
+
+  /**
+   * Ask whether one source listing is still there.
+   *
+   * The two answers are worth very different things, so this reads the response itself rather than going
+   * through a helper that reports every refusal the same way. A 404 is the server saying the listing is
+   * gone. Everything else — a refusal, a timeout, no connection at all — says only that this attempt
+   * failed, which is never evidence that anything was deleted.
+   *
+   * The reader's own token goes with it, so a source only its author can see answers for its author.
+   *
+   * @param listingId - The source listing's server id
+   * @returns What the answer was worth
+   */
+  async checkSource(listingId: string): Promise<SourceCheckStatus> {
+    try {
+      const headers: Record<string, string> = {};
+      if (AuthService.isAuthenticated()) {
+        headers['Authorization'] = `Bearer ${AuthService.token}`;
+      }
+      const response = await fetch(`${this.API_URL}/worlds/${listingId}`, { headers });
+      if (response.status === 404) return 'not_found';
+      return response.ok ? 'ok' : 'unavailable';
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  /**
+   * Read one relationship route for a world, with the reader's own token so an unlisted source and a
+   * declined offering are answered by the rules that apply to them.
+   *
+   * Every refusal but one throws. A download that could not read these must stop and say so rather than
+   * install a world with nothing following anything, and an add-on the reader picked must not vanish
+   * because a request failed. The exception is `absent`, answered on a 404: a server that predates the
+   * route has no relationships to report, which is what it answered before the routes existed.
+   *
+   * @param path - The route, from the API root
+   * @param fallback - What to say when the refusal carries no message of its own
+   * @param absent - What a 404 means here. Omitted, a 404 throws like any other refusal
+   */
+  private async fetchRelationship<T>(path: string, fallback: string, absent?: T): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (AuthService.isAuthenticated()) {
+      headers['Authorization'] = `Bearer ${AuthService.token}`;
+    }
+    const response = await fetch(`${this.API_URL}${path}`, { headers });
+    if (response.status === 404 && absent !== undefined) return absent;
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || body.message || fallback);
+    }
+    return (await response.json()).data as T;
+  }
+
+  /**
+   * What a world requires, each source resolved to its listing or reported gone.
+   *
+   * @param worldId - The world listing's server id
+   * @returns One row per required source, in the order the world declares them
+   */
+  async fetchDependencies(worldId: string): Promise<DependencyRow[]> {
+    const body = await this.fetchRelationship<{ dependencies?: DependencyRow[] } | null>(
+      `/worlds/${worldId}/dependencies`, 'Failed to read what this world requires', null,
+    );
+    return body?.dependencies ?? [];
+  }
+
+  /**
+   * One required source's content. This is the only route that hands out an unlisted component, and only
+   * to a reader who can already open the world that requires it.
+   *
+   * @param worldId - The world listing the source is required by
+   * @param sourceId - The required source's listing id
+   */
+  async fetchDependencyContent(worldId: string, sourceId: string): Promise<unknown> {
+    const body = await this.fetchRelationship<{ contentData?: unknown }>(
+      `/worlds/${worldId}/dependencies/${sourceId}/content`, 'Failed to download this source',
+    );
+    return body?.contentData;
+  }
+
+  /**
+   * The components offered as add-ons for a world, each with the world author's review state.
+   *
+   * @param worldId - The world listing's server id
+   * @returns The offerings, or none against a server that predates the route
+   */
+  async fetchAddons(worldId: string): Promise<AddonRow[]> {
+    return this.fetchRelationship<AddonRow[]>(
+      `/worlds/${worldId}/addons`, 'Failed to read this world\'s add-ons', [],
+    );
+  }
+
+  /**
+   * Answer one offer made for your world.
+   *
+   * The world's author alone writes this. Sending the state the offer already holds acknowledges a source
+   * that changed since the answer: the decision persists and the reviewed revision is set to the source's
+   * current one.
+   *
+   * @param worldId - The world listing's server id
+   * @param componentId - The offered component's listing id
+   * @param reviewState - The answer to record
+   */
+  async setAddonReview(worldId: string, componentId: string, reviewState: ReviewState): Promise<void> {
+    const response = await fetch(`${this.API_URL}/worlds/${worldId}/addons/${componentId}/review`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${AuthService.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ reviewState }),
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || body.message || 'Failed to save this decision');
     }
   }
 
@@ -806,11 +1070,19 @@ class WorldStorageService {
    * listings, else `POST` creates. Requires auth; rethrows on failure. Build `payload` with the per-kind
    * helpers in `lib/publishPayload`, which own where each kind's fields come from.
    *
+   * Refuses before authenticating or sending anything when the content is over its kind's limit. The
+   * limit comes from `lib/publishLimits`, the one place the client states one.
+   *
    * `contestEventId` enters the new listing into a contest. It rides top-level beside the tags and is
    * omitted when absent: it is intent about this upload rather than part of the content, so it never
    * reaches the world's own shape, and a server without an events layer is sent nothing new.
    */
   async publishItem(payload: PublishPayload, targetId: string | null = null, contestEventId: string | null = null) {
+    const bytes = measurePublishBytes(payload.contentData);
+    if (bytes > PUBLISH_LIMITS[payload.kind]) {
+      throw new Error(publishLimitRefusal(payload.kind, bytes));
+    }
+
     if (!AuthService.isAuthenticated()) {
       throw new Error('You must be logged in to publish');
     }
@@ -837,7 +1109,12 @@ class WorldStorageService {
           // Sent top-level because only a world keeps a copy inside its content, where the server looks
           // first. A character or a book has nowhere in its own shape to hide these.
           tags: payload.tags ?? [],
-          ...(contestEventId ? { contestEventId } : {})
+          ...(contestEventId ? { contestEventId } : {}),
+          // Each omitted unless this publish has something to declare, so a publish that says nothing
+          // about relationships leaves the listing's own exactly as they are.
+          ...(payload.visibility ? { visibility: payload.visibility } : {}),
+          ...(payload.requiredDependencies ? { requiredDependencies: payload.requiredDependencies } : {}),
+          ...(payload.compatibleWorlds ? { compatibleWorlds: payload.compatibleWorlds } : {})
         })
       });
 

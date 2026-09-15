@@ -2,6 +2,7 @@ import { randomUUID } from "@/lib/uuid";
 import { DEFAULT_WORLDS, isDefaultWorldId } from "@/lib/defaultWorlds";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useGameData } from '../contexts/GameDataContext';
+import { useLingeringMount } from '@/lib/useLingeringMount';
 import { usePlaceholderSession } from '../contexts/PlaceholderSessionContext';
 import { useResolvedAuthoredWorld } from '@/lib/useResolvedWorld';
 import { inAuthoredOrder, traitOrderIndex } from '@/lib/traitEffects';
@@ -45,19 +46,29 @@ import { LoadGameDialog } from '../components/modals/LoadGameDialog';
 import WorldEditor from './WorldEditor';
 import { LibraryTileGrid } from '@/components/library/LibraryTileGrid';
 import { useLibraryTiles } from '@/lib/useLibraryTiles';
-import TraitSelectionModal from './TraitSelectionModal';
-import StartingLocationModal from './StartingLocationModal';
-import DictionarySelectionModal from './DictionarySelectionModal';
-import CharacterSelectionModal from './CharacterSelectionModal';
+import { useComponentUpdates } from '@/lib/useComponentUpdates';
+import { UpdateAvailableDialog } from '@/components/modals/UpdateAvailableDialog';
+import { WorldUpdateReviewDialog } from '@/components/modals/WorldUpdateReviewDialog';
+import type { WorldUpdateReview } from '@/lib/useDownloadCoordinator';
+import type { LiveWorld } from '@/lib/componentUpdateRun';
+import type { UpdateRow } from '@/lib/componentUpdates';
+import type { LibrarySource, LinkableContent } from '@/lib/linkedContent';
+import EnterWorldWorkspace from './EnterWorldWorkspace';
 import { startingLocations } from '@/lib/startingLocation';
 import { exclusiveSiblings, collapseExclusiveDefaults } from '@/lib/traitEffects';
-import { shouldShowDictionaryStep } from '@/lib/dictionarySelection';
-import { shouldShowCharacterStep } from '@/lib/characterSelection';
+import { buildInitialSelection, finalizeSelection, shouldShowDictionaryChoices } from '@/lib/dictionarySelection';
+import { libraryLines } from '@/lib/librarySources';
+import { followedLibraryId } from '@/lib/publishLinks';
+import { emptyEntryDraft, type EntryDraft } from '@/lib/entryDraft';
+import { hasWorldAdditionDefaults, restoreWorldAdditionDefaults, saveWorldAdditionDefaults } from '@/lib/worldAdditionDefaults';
 import WorldStorageService from '../services/WorldStorageService';
 import DictionaryStorageService from '../services/DictionaryStorageService';
 import EntityStorageService from '../services/EntityStorageService';
+import { LibraryRecordNotFoundError } from '../services/LibraryStore';
 import ModelStorageService from '../services/ModelStorageService';
 import AuthService from '../services/AuthService';
+import ConnectReferencesModal from '@/components/modals/ConnectReferencesModal';
+import type { ReferenceChoices, ReferenceRow } from '@/lib/worldReferences';
 import type { World, Stat, CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, ServerEvent, WorldOverview } from '@/types';
 import { migrateWorld } from '@/lib/version';
 import { updateBridge } from '@/lib/updates/updateBridge';
@@ -111,13 +122,24 @@ import { FeedbackHubDialog } from "@/components/menu/FeedbackHubDialog";
 import { AuthModals } from "@/components/menu/AuthModals";
 import { PublishModal } from "@/components/menu/PublishModal";
 import { worldPublishPayload, entityPublishPayload, dictionaryPublishPayload, type PublishPayload } from "@/lib/publishPayload";
+import { linkedSourceCopies, sourceBlockReason } from "@/lib/sourceChecks";
+import { readSourceCheck } from "@/lib/sourceCheckStore";
+import { buildAvatarPublish, avatarPublishRefusal } from "@/lib/avatarPublish";
 import { BackupRestoreDialog } from "@/components/menu/BackupRestoreDialog";
 import { COMMUNITY_ENABLED } from "@/lib/featureFlags";
 import { useAgeGate } from "@/contexts/AgeGateContext";
 import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
 import { isAgeAttested } from "@/lib/ageGate";
+import {
+  consumeCommunityListingHandoff,
+  readCommunityListingHandoff,
+} from '@/lib/communityListingHandoff';
 import { isStaff } from "@/lib/roles";
 import { Checkbox } from "@/components/ui/checkbox";
+import { BundledContentChoice } from "@/components/BundledContentChoice";
+import { hasComponentLinks, readComponentFileLinks, type ComponentFileLinks } from "@/lib/componentFileLinks";
+import { useComponentFileImport } from "@/lib/useComponentFileImport";
+import { resolveImportedWorld } from "@/lib/worldBundleRun";
 import { useReadmeVisibility } from "@/lib/useReadmeVisibility";
 import ReadmeModal from "@/components/game/ReadmeModal";
 import { buildEnterFlow, navigableSteps, type EnterMode, type EnterStep, type NavigableStep } from "@/lib/enterFlow";
@@ -216,9 +238,14 @@ const WorldNotice = ({ tone, icon: Icon, children, actionLabel, actionIcon: Acti
 );
 
 const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = false }: MainMenuProps) => {
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
   const {
     traits: rawTraits, traitGroups: rawTraitGroups, stats: rawStats, locations: rawLocations, placeholders,
-    loadWorldData, dictionaries: worldBooks, getWorldData,
+    loadWorldData, dictionaries: worldBooks, entities: worldEntities, getWorldData,
   } = useGameData();
   const { beginSession, endSession, rolls } = usePlaceholderSession();
   const { showReadme, setShowReadme } = useReadmeVisibility();
@@ -239,6 +266,17 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // library holding no world that rewrites a prompt. Never set in prod.
   const [devPromptSample, setDevPromptSample] = useState<WorldOverview | null>(null);
   const promptOverview = selectedWorld?.data?.worldOverview ?? devPromptSample ?? undefined;
+  // DEV only: canned rows for the Connect World References step, which in the app only opens mid-add inside
+  // the World Editor. Never set in prod.
+  const [devReferences, setDevReferences] = useState<ReferenceRow[] | null>(null);
+  // DEV only: a canned world update review. Never set in prod.
+  const [devWorldUpdate, setDevWorldUpdate] = useState<WorldUpdateReview | null>(null);
+  // DEV only: a canned component update review. Never set in prod.
+  const [devUpdates, setDevUpdates] = useState<{
+    source: LibrarySource; sourceData: LinkableContent; rows: UpdateRow[];
+    copies: Record<string, LinkableContent>;
+  } | null>(null);
+  const [devReferenceAnswers, setDevReferenceAnswers] = useState<ReferenceChoices>({});
   // Which passes the selected world rewrites — what the details notice names, what the viewer tabs, and
   // what the single opt-out declines. A world that stores a prompt but switched it off customizes nothing.
   const customPromptKinds = useMemo(() => customizedPromptKinds(promptOverview), [promptOverview]);
@@ -279,22 +317,44 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // World Editor as an in-place modal (keeps MainMenu mounted so it animates and only the world grid
   // refreshes on close). The editor's own back arrow + unsaved-changes prompt handle the dirty guard.
   const [showWorldEditor, setShowWorldEditor] = useState(false);
+  // A required source the world's last check found removed. Read from that recorded answer alone: a check
+  // runs only when the author asks for one in the World Editor, so opening this menu makes no request and
+  // an installed world stays playable offline. Editing and loading a save are never gated — repair lives in
+  // the editor, and a game already under way keeps the content it started with.
+  // Re-read on the editor closing as well as on the world changing: a check run in there writes the record
+  // without touching the world, so keying on the world alone would hold a stale answer.
+  const sourceBlock = useMemo(() => {
+    if (!selectedWorld || showWorldEditor) return null;
+    const record = readSourceCheck(selectedWorld.id);
+    return sourceBlockReason(linkedSourceCopies(selectedWorld.data, record.required), record.results);
+  }, [selectedWorld, showWorldEditor]);
   const [worldToDelete, setWorldToDelete] = useState<string | null>(null);
   const [warmingOffline, setWarmingOffline] = useState(false);
   const [showCharacterCustomization, setShowCharacterCustomization] = useState(false);
-  const [showTraitSelection, setShowTraitSelection] = useState(false);
-  const [showLocationSelection, setShowLocationSelection] = useState(false);
-  const [showDictionarySelection, setShowDictionarySelection] = useState(false);
-  const [showCharacterSelection, setShowCharacterSelection] = useState(false);
+  const [showSetupWorkspace, setShowSetupWorkspace] = useState(false);
+  // The workspace stays mounted for one exit animation after it closes, so the dialog can fade out.
+  const workspaceMounted = useLingeringMount(showSetupWorkspace, 250);
   const [showIntroReadme, setShowIntroReadme] = useState(false);
   // Set only when the Introduction has no setup screen to sit over: the traits to start with once the
   // player closes it. A world with nothing to choose would otherwise flash the overlay and enter anyway.
-  const [enterAfterIntro, setEnterAfterIntro] = useState<string[] | null>(null);
-  const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
-  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
-  // The dictionary set chosen at the entry step; null = step skipped (GameViewer falls back to authored books).
+  const [enterAfterIntro, setEnterAfterIntro] = useState<EntryDraft | null>(null);
+  const [entryDraft, setEntryDraft] = useState<EntryDraft>(emptyEntryDraft);
+  const { traitIds: selectedTraits, locationId: selectedLocationId } = entryDraft;
+  const [resolvingEntry, setResolvingEntry] = useState(false);
+  const entryRequest = useRef<object | null>(null);
+  const entryStarted = useRef(false);
+  const cancelEntryResolution = () => {
+    entryRequest.current = null;
+    setResolvingEntry(false);
+  };
+  const updateDraft = <K extends keyof EntryDraft>(key: K, value: React.SetStateAction<EntryDraft[K]>) => {
+    cancelEntryResolution();
+    setEntryDraft(prev => ({ ...prev, [key]: typeof value === 'function' ? value(prev[key]) : value }));
+  };
+  useEffect(() => () => { entryRequest.current = null; }, []);
+  // Finalized dictionaries for normal entry; null keeps Quick Start and saves on authored defaults.
   const [selectedDictionaries, setSelectedDictionaries] = useState<Dictionary[] | null>(null);
-  // The library characters chosen at the entry step to place in the starting location; null = none/skipped.
+  // Independent entity copies finalized for normal entry; null means this path did not configure entities.
   const [selectedCharacters, setSelectedCharacters] = useState<Entity[] | null>(null);
 
   // The pins the *draft* selection would impose: the traits ticked so far, the starting location picked, and
@@ -364,11 +424,13 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     if (devRoute?.modal === 'community') openCommunityBrowser();
     // The likers list hangs off a listing's details, so this route opens the catalog and lands there.
     if (devRoute?.modal === 'likers') openCommunityBrowser();
+    // The add-on review hangs off a published world, so this route opens the catalog and lands there too.
+    if (devRoute?.modal === 'manageAddons') openCommunityBrowser();
     if (devRoute?.modal === 'profile') setShowProfileDialog(true);
     if (devRoute?.modal === 'auth') setShowAuthDialog(true);
     if (devRoute?.modal === 'feedbackHub') setShowFeedback(true);
     if (devRoute?.modal === 'adminPanel') setShowAdminPanel(true);
-    if (devRoute?.modal === 'worldEditor') setShowWorldEditor(true);
+    if (devRoute?.modal === 'worldEditor' || devRoute?.modal === 'replaceSource') setShowWorldEditor(true);
     if (devRoute?.modal === 'avatar') setShowCharacterCustomization(true);
     if (devRoute?.modal === 'aiSetup') setGate({ reason: 'firstRun' });
     // The prompt viewer reads a world's overrides, so it opens on a canned one rather than on whatever the
@@ -385,6 +447,30 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     // whatever the library happens to hold — it is reachable on an empty profile that way.
     if (devRoute?.modal === 'publish') {
       void import('@/lib/devPublishSample').then(({ devPublishPayload }) => openPublish(devPublishPayload()));
+    }
+    // The connection step only opens partway through an add in the World Editor, so its dev route builds the
+    // rows rather than the library item and the world that would raise them.
+    if (devRoute?.modal === 'connectReferences') {
+      void import('@/lib/devConnectReferencesSample').then(({ devReferenceRows, devReferenceChoices }) => {
+        const rows = devReferenceRows();
+        setDevReferences(rows);
+        setDevReferenceAnswers(devReferenceChoices(rows));
+      });
+    }
+    // The update review only opens behind a real library item and the worlds following it, so its dev
+    // route builds the source, the copies, and the rows instead.
+    if (devRoute?.modal === 'componentUpdates') {
+      void import('@/lib/devComponentUpdateSample').then((sample) => setDevUpdates({
+        source: sample.devUpdateSource(),
+        sourceData: sample.devUpdateSourceData(),
+        rows: sample.devUpdateRows(),
+        copies: sample.devUpdateCopies(),
+      }));
+    }
+    // The world update review only opens partway through updating an installed copy, so its dev route
+    // builds the rows instead.
+    if (devRoute?.modal === 'worldUpdate') {
+      void import('@/lib/devWorldUpdateSample').then((sample) => setDevWorldUpdate(sample.devWorldUpdateReview()));
     }
     // Unlike the editors above, a model preview needs a real model — open the first one, if the library has any.
     if (devRoute?.modal === 'modelDetails') {
@@ -496,8 +582,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // What the publish modal is publishing. Deliberately not cleared on close: the modal names itself from
   // the payload's kind, so dropping it would flash the title back to "World" during the fade-out.
   const [publishPayload, setPublishPayload] = useState<PublishPayload | null>(null);
-  // Which local world the open payload came from, so a successful publish can link the two. Only worlds
-  // pass one; the other kinds publish without a local record to point at a listing.
+  // Which local record the open payload came from. A world uses it to link itself to the listing it
+  // becomes; a character or a dictionary uses it to name the library item its Compatible Worlds are
+  // derived from. An Avatar has neither and passes none.
   const [publishLocalId, setPublishLocalId] = useState<string | undefined>(undefined);
   const openPublish = (payload: PublishPayload, localId?: string) => {
     setPublishPayload(payload);
@@ -513,7 +600,22 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
    * side already offers this choice; the publish side is where the big image actually comes from.
    */
   const publishEntity = async (entity: Entity) => {
-    openPublish(entityPublishPayload(await promptEntity(entity)));
+    openPublish(entityPublishPayload(await promptEntity(entity)), entity.id);
+  };
+
+  /**
+   * Publish an Avatar, once its own file has been read and found to grant every right the catalog needs.
+   *
+   * A file that does not is refused here rather than by the server: the dialog would otherwise open on a
+   * payload that could only be rejected, and the reason would arrive after the upload instead of before it.
+   */
+  const publishModel = async (model: { id: string; name: string }) => {
+    const attempt = await buildAvatarPublish(model);
+    if (!attempt.allowed) {
+      toast.error(avatarPublishRefusal(attempt.failedRequirements));
+      return;
+    }
+    openPublish(attempt.payload);
   };
   const [showBackup, setShowBackup] = useState(false);
 
@@ -658,7 +760,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         isLoading: false,
         defaultName: DEFAULT_WORLDS.find(dw => dw.id === world.id)?.defaultName || world.name
       }));
-      setWorlds(mapped);
+      if (isMountedRef.current) setWorlds(mapped);
       // Returned as well as set: a caller that has to re-derive something from the fresh list can't read it
       // back out of state in the same tick.
       return mapped;
@@ -666,7 +768,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       console.error('Error loading worlds:', error);
       return [];
     } finally {
-      setIsLoadingWorlds(false);
+      if (isMountedRef.current) setIsLoadingWorlds(false);
     }
   }, []);
 
@@ -711,9 +813,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         // Ids alone: this read only ever answered "is the library empty", and asking for the metadata
         // deserialized every stored world to count them. It also arrives early enough to draw the grid.
         const existingIds = await WorldStorageService.getWorldIds();
+        if (!isMountedRef.current) return;
         setSkeletonWorlds(existingIds.map((id) => ({ id, isLoading: true })));
         const firstRun = existingIds.length === 0;
         const { failed, updated } = await WorldStorageService.loadDefaultWorlds(DEFAULT_WORLDS);
+        if (!isMountedRef.current) return;
         if (firstRun) {
           if (failed.length === 0) toast.success("Loaded default worlds");
           else if (failed.length < DEFAULT_WORLDS.length) toast.error(`Some default worlds failed to load: ${failed.join(", ")}`);
@@ -822,23 +926,47 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     void refreshDictionaries();
   }, [refreshWorlds, refreshEntities, refreshDictionaries]);
 
+  // Importing a component file: the worlds it says it suits, and the update review a file whose source is
+  // already in the library opens instead.
+  const findAssociatedWorld = useCallback((listingId: string) => {
+    setPendingListing({ id: listingId, kind: 'world' });
+    setShowCommunityBrowser(true);
+  }, []);
+  const componentImported = useCallback((kind: 'entity' | 'dictionary') => {
+    void (kind === 'dictionary' ? refreshDictionaries() : refreshEntities());
+  }, [refreshDictionaries, refreshEntities]);
+  const {
+    reviewFile: reviewComponentFile, storeFile: storeComponentFile, dialogs: componentImportDialogs,
+  } = useComponentFileImport({
+    onFindWorld: findAssociatedWorld,
+    onImported: componentImported,
+  });
+
+  // DEV: the import review only opens for a chosen file that names worlds, so its dev route supplies one.
+  // Its own effect rather than the main dev-route one, which runs before this hook is declared.
+  useEffect(() => {
+    if (!import.meta.env.DEV || devRoute?.modal !== 'importComponent') return;
+    void import('@/lib/devImportComponentSample').then(async (sample) => {
+      await reviewComponentFile('entity', sample.devImportContent(), await sample.devImportLinks());
+    });
+  }, [devRoute?.modal, reviewComponentFile]);
+
+  // A stat's two boxes, each named by its timing, in the order the turn runs them.
+  const statCodeBoxes = (stat: Stat) => ([
+    ['Before the AI', stat.beforeCode] as const,
+    ['After the AI', stat.code] as const,
+  ].filter(([, code]) => code && code.trim() !== ''));
+
   // Check if any stat has code
   const hasStatWithCode = (statsArray: Stat[]) => {
-    return statsArray.some(stat => stat.code && stat.code.trim() !== '');
-  };
-
-  // Get all stats with code
-  const getStatsWithCode = (statsArray: Stat[]) => {
-    return statsArray.filter(stat => stat.code && stat.code.trim() !== '');
+    return statsArray.some(stat => statCodeBoxes(stat).length > 0);
   };
 
   // Generate concatenated code from all stats with code
   const generateConcatenatedCode = (statsArray: Stat[]) => {
-    const statsWithCode = getStatsWithCode(statsArray);
-
-    return statsWithCode.map(stat => (
-      `# ${describePlaceholders(stat.name, placeholders) || 'Unnamed Stat'}\n${stat.code}`
-    )).join('\n\n----\n\n');
+    return statsArray.flatMap(stat => statCodeBoxes(stat).map(([timing, code]) => (
+      `# ${describePlaceholders(stat.name, placeholders) || 'Unnamed Stat'} — ${timing}\n${code}`
+    ))).join('\n\n----\n\n');
   };
 
   const handleWorldSelection = async (worldId: string) => {
@@ -880,8 +1008,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     let stored = 0;
     for (const file of files) {
       try {
-        // Sanitize at the import boundary: migrate any legacy/v1.2 shape to the current version.
-        const world = migrateWorld(JSON.parse(await file.text())) as World;
+        // Sanitize at the import boundary: migrate any legacy/v1.2 shape to the current version, then
+        // settle what the file's bundled content follows on this machine.
+        const world = await resolveImportedWorld(migrateWorld(JSON.parse(await file.text())) as World);
         const id = `uploaded-${randomUUID()}`;
         world.id = id;
         parsed.push({ world, id });
@@ -938,18 +1067,36 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const importDictionaryFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = filesFrom(event);
     if (!files.length) return;
+    const parsed: { book: Dictionary; links: ComponentFileLinks }[] = [];
     let ok = 0, skipped = 0;
     for (const file of files) {
       try {
         // Foreign lorebooks (ST / character cards) carry no internal name — fall back to the filename.
         const fallbackName = file.name.replace(/\.[^.]+$/, '');
-        await addDictionaryToLibrary(parseDictionaryImport(JSON.parse(await file.text()), fallbackName));
-        ok++;
+        const raw = JSON.parse(await file.text());
+        parsed.push({ book: parseDictionaryImport(raw, fallbackName), links: readComponentFileLinks(raw) });
       } catch (err) {
         console.error('Error importing dictionary:', file.name, err);
         skipped++;
       }
     }
+
+    // A lone file that carries relationships is reviewed; everything else lands straight in the library.
+    if (parsed.length === 1 && !skipped && hasComponentLinks(parsed[0].links)) {
+      await reviewComponentFile('dictionary', parsed[0].book, parsed[0].links);
+      return;
+    }
+
+    for (const { book, links } of parsed) {
+      try {
+        // Through the same store either way: a file naming a listing refreshes the copy of it the player
+        // already holds, rather than leaving a batch import with two rows of one name.
+        if (links.source?.sourceId) await storeComponentFile('dictionary', book, links);
+        else await addDictionaryToLibrary(book);
+        ok++;
+      } catch (err) { console.error('Error importing dictionary:', book.name, err); skipped++; }
+    }
+    await refreshDictionaries();
     if (ok || skipped) importSummaryToast(ok, skipped, { one: 'dictionary', many: 'dictionaries' });
   };
 
@@ -959,11 +1106,20 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     const files = filesFrom(event);
     if (!files.length) return;
 
-    const parsed: { entity: Entity; book: Dictionary | null }[] = [];
+    const parsed: { entity: Entity; book: Dictionary | null; links: ComponentFileLinks }[] = [];
     let skipped = 0;
     for (const file of files) {
       try { parsed.push(await importCharacterFile(file)); }
       catch (err) { console.error('Error importing character:', file.name, err); skipped++; }
+    }
+
+    // A lone card that carries relationships is reviewed. Its portrait still goes through the downscale
+    // offer first, so the review stores the same picture an ordinary import would.
+    if (parsed.length === 1 && !skipped && hasComponentLinks(parsed[0].links)) {
+      const mode = await promptImagesBatch(entityImages(parsed[0].entity), IMAGE_CAPS.entity);
+      const record = await applyEntityImagesOptimize(parsed[0].entity, mode, () => {});
+      await reviewComponentFile('entity', record, parsed[0].links);
+      return;
     }
 
     if (parsed.length) {
@@ -974,12 +1130,19 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       const total = mode === 'off' ? 0 : parsed.reduce((n, p) => n + entityImages(p.entity).length, 0);
       const storeAll = async (tick: (done: number) => void) => {
         let done = 0;
-        for (const { entity, book } of parsed) {
+        for (const { entity, book, links } of parsed) {
           // Guarded per card: a portrait can blow the storage quota mid-batch, and that must not drop the rest.
           try {
             const record = await applyEntityImagesOptimize(entity, mode, () => tick(++done));
-            await EntityStorageService.storeEntity({ id: record.id, name: record.name, createdAt: now, lastAccessed: now, data: record });
-            setEntities(prev => [...prev, { id: record.id, name: record.name, image: primaryImage(record), createdAt: now, lastAccessed: now }]);
+            // A card naming a listing goes through the same store a reviewed one does, so a batch import
+            // refreshes the copy the player already holds rather than adding a second row of one name.
+            if (links.source?.sourceId) {
+              await storeComponentFile('entity', record, links);
+              await refreshEntities();
+            } else {
+              await EntityStorageService.storeEntity({ id: record.id, name: record.name, createdAt: now, lastAccessed: now, data: record });
+              setEntities(prev => [...prev, { id: record.id, name: record.name, image: primaryImage(record), createdAt: now, lastAccessed: now }]);
+            }
             stored++;
           } catch (err) {
             console.error('Error storing character:', entity.name, err);
@@ -1041,90 +1204,100 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // which is what makes that group read (and behave) as a set of radio buttons.
   const handleTraitSelection = (traitId: string) => {
     const trait = traits.find(t => t.id === traitId);
-    setSelectedTraits(prev => {
+    updateDraft('traitIds', prev => {
       if (prev.includes(traitId)) return prev.filter(id => id !== traitId);
       const retire = trait ? new Set(exclusiveSiblings(trait, traits, traitGroups)) : new Set<string>();
       return [...prev.filter(id => !retire.has(id)), traitId];
     });
   };
 
-  // Start the world: the custom-character step first for 3D worlds, otherwise straight into the game. The
-  // chosen characters + dictionary set are stashed for the 3D path and passed directly otherwise.
-  const enterWorld = (traitIds: string[], locationId: string | null, chars: Entity[] | null, dicts: Dictionary[] | null) => {
-    setSelectedCharacters(chars);
-    setSelectedDictionaries(dicts);
-    if (selectedWorld!.data.worldOverview?.use3DModel) {
-      setShowCharacterCustomization(true);
-    } else {
-      onStartGame(traitIds, null, true, locationId, dicts, chars);
+  /** The signed-in account, for the author line that tells two same-named library items apart. */
+  const signedInId = String(currentUser?.id ?? '') || undefined;
+  /**
+   * The library characters this world does not already hold a copy of, each with its author and source
+   * lines. Offering one the world already holds would put the same character in the run twice.
+   *
+   * A hidden character gets no Linked row the way a hidden dictionary does. The step lists dictionaries
+   * from both the world and the library, so a world dictionary has a row to mark; the world's own
+   * characters are always in play and were never rows here.
+   */
+  const additionEntities = useMemo(() => {
+    const followed = new Set(worldEntities
+      .map(followedLibraryId)
+      .filter((id): id is string => !!id));
+    return entities
+      .filter((meta) => !followed.has(meta.id))
+      .map((meta) => ({ ...meta, ...libraryLines(meta, signedInId) }));
+  }, [entities, signedInId, worldEntities]);
+
+  const hasLibraryAdditions = additionEntities.length > 0 || shouldShowDictionaryChoices(worldBooks, dictionaries)
+    || (worldBooks.length > 0 && !!selectedWorld && hasWorldAdditionDefaults(selectedWorld.id));
+
+  // Resolve one snapshot; navigation or cancellation invalidates its pending handoff.
+  const enterWorld = async (draft: EntryDraft = entryDraft) => {
+    if (entryRequest.current || entryStarted.current) return;
+    const request = {};
+    entryRequest.current = request;
+    setResolvingEntry(true);
+    try {
+      const loaded = await Promise.all(additionEntities.filter(m => draft.entityIds.has(m.id))
+        .map(async (metadata) => {
+          try {
+            return await EntityStorageService.getEntityData(metadata.id);
+          } catch (error) {
+            if (error instanceof LibraryRecordNotFoundError) return null;
+            throw error;
+          }
+        }));
+      const chars = loaded.filter((e): e is Entity => e !== null)
+        .map(e => ({ ...e, id: randomUUID() }));
+      const books = new Map<string, Dictionary>();
+      for (const item of draft.dictionaryItems) {
+        if (item.enabled && item.source === 'library') {
+          try {
+            books.set(item.book.id, await DictionaryStorageService.getDictionaryData(item.book.id));
+          } catch (error) {
+            if (!(error instanceof LibraryRecordNotFoundError)) throw error;
+          }
+        }
+      }
+      if (entryRequest.current !== request) return;
+      const dicts = finalizeSelection(draft.dictionaryItems, books);
+      setSelectedCharacters(chars);
+      setSelectedDictionaries(dicts);
+      if (selectedWorld!.data.worldOverview?.use3DModel) {
+        showEnterStep('avatar');
+      } else {
+        entryStarted.current = true;
+        onStartGame(draft.traitIds, null, true, draft.locationId, dicts, chars);
+      }
+    } catch (error) {
+      if (entryRequest.current === request) {
+        entryStarted.current = false;
+        console.error('Could not finalize enter-world library additions', error);
+        toast.error('Formamorph could not prepare those library additions. Try again.');
+      }
+    } finally {
+      if (entryRequest.current === request) cancelEntryResolution();
     }
   };
 
-  // Whether each entry step is worth showing for the selected world + current library.
-  const dictStepVisible = shouldShowDictionaryStep(worldBooks, dictionaries);
-  const charStepVisible = shouldShowCharacterStep(entities);
-
-  // After location + characters, offer the dictionary step when there's a real choice; otherwise enter.
-  const proceedToDictOrEnter = (traitIds: string[], locationId: string | null, chars: Entity[] | null) => {
-    setSelectedCharacters(chars); // committed for the 3D path + proceedFromDictionaries
-    if (dictStepVisible) {
-      setShowDictionarySelection(true);
-    } else {
-      enterWorld(traitIds, locationId, chars, null);
-    }
+  const advanceEntry = (step: NavigableStep) => {
+    const steps = navigableSteps(enterFlowSteps());
+    const next = steps[steps.indexOf(step) + 1];
+    if (next && next !== 'avatar') showEnterStep(next);
+    else void enterWorld();
   };
 
-  // After location, offer the character step when the library has characters; otherwise go to dictionaries.
-  const proceedToCharsOrDict = (traitIds: string[], locationId: string | null) => {
-    if (charStepVisible) {
-      setShowCharacterSelection(true);
-    } else {
-      proceedToDictOrEnter(traitIds, locationId, null);
-    }
-  };
-
-  // Leave the trait step. Offer a location choice when the world has more than one starting location;
-  // otherwise fall through to the character/dictionary steps (or straight into the world).
-  const proceedFromTraits = (traitIds: string[]) => {
-    setShowTraitSelection(false);
-    setSelectedLocationId(null);
-    setSelectedDictionaries(null);
-    setSelectedCharacters(null);
-    if (startingLocations(locations).length > 1) {
-      setShowLocationSelection(true);
-    } else {
-      proceedToCharsOrDict(traitIds, null);
-    }
-  };
-
-  // Leave the location step with the player's choice (null = Random) and continue the flow.
-  const proceedFromLocation = (locationId: string | null) => {
-    setShowLocationSelection(false);
-    setSelectedLocationId(locationId);
-    proceedToCharsOrDict(selectedTraits, locationId);
-  };
-
-  // Leave the character step: carry the chosen characters forward into the dictionary step (or the world).
-  const proceedFromCharacters = (chars: Entity[]) => {
-    setShowCharacterSelection(false);
-    proceedToDictOrEnter(selectedTraits, selectedLocationId, chars);
-  };
-
-  // Leave the dictionary step: carry the chosen sets into the session (via enterWorld → onStartGame), then enter.
-  const proceedFromDictionaries = (finalDicts: Dictionary[]) => {
-    setShowDictionarySelection(false);
-    enterWorld(selectedTraits, selectedLocationId, selectedCharacters, finalDicts);
-  };
-
-  // Back out of the enter-world flow entirely: drop the draft choices and close the world session, so the
-  // next entry rolls its placeholders fresh rather than reusing the values these screens were showing.
   const abandonEnterFlow = () => {
-    setSelectedTraits([]);
-    setSelectedLocationId(null);
+    cancelEntryResolution();
+    setEntryDraft(emptyEntryDraft());
     setSelectedCharacters(null);
     setSelectedDictionaries(null);
     setShowIntroReadme(false);
     setEnterAfterIntro(null);
+    setShowSetupWorkspace(false);
+    setShowCharacterCustomization(false);
     endSession();
   };
 
@@ -1134,15 +1307,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     introReadme: selectedWorld?.data.worldOverview?.introReadme,
     traitCount: traits.length,
     startingLocationCount: startingLocations(locations).length,
-    hasCharacterStep: charStepVisible,
-    hasDictionaryStep: dictStepVisible,
+    hasLibraryAdditions,
     use3DModel: !!selectedWorld?.data.worldOverview?.use3DModel,
   }, mode);
   const showEnterStep = (step: NavigableStep) => {
-    setShowTraitSelection(step === 'traits');
-    setShowLocationSelection(step === 'location');
-    setShowCharacterSelection(step === 'characters');
-    setShowDictionarySelection(step === 'dictionaries');
+    cancelEntryResolution();
+    setShowSetupWorkspace(step === 'workspace');
     setShowCharacterCustomization(step === 'avatar');
   };
   // Back handler for a given step: goes to the previous shown step, or undefined on the first (button fades).
@@ -1152,22 +1322,59 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     return idx > 0 ? () => showEnterStep(steps[idx - 1]) : undefined;
   };
 
-  // Open the flow's first setup screen, read off the step list rather than re-deriving which steps exist.
-  // `defaults` are the author's pre-ticked traits, which a world with no trait step still carries in.
-  const openFirstEnterStep = (steps: NavigableStep[], defaults: string[]) => {
-    if (steps[0] === 'traits') setShowTraitSelection(true);
-    else proceedFromTraits(defaults);
+  const openFirstEnterStep = (steps: NavigableStep[], draft: EntryDraft) => {
+    if (steps[0] && steps[0] !== 'avatar') showEnterStep(steps[0]);
+    else void enterWorld(draft);
   };
 
-  // Leave the Introduction. It overlays the first setup screen, so closing it usually just reveals what is
-  // already there; a world whose only step *was* the Introduction starts the game instead.
   const closeIntroReadme = () => {
     setShowIntroReadme(false);
     if (!enterAfterIntro) return;
-    const defaults = enterAfterIntro;
+    const draft = enterAfterIntro;
     setEnterAfterIntro(null);
-    proceedFromTraits(defaults);
+    void enterWorld(draft);
   };
+
+  const startEntry = () => {
+    const defaults = collapseExclusiveDefaults(
+      rawTraits.filter(t => t.isDefault).map(t => t.id), rawTraits, rawTraitGroups);
+    const draft: EntryDraft = {
+      ...emptyEntryDraft(), traitIds: defaults,
+      ...restoreWorldAdditionDefaults(
+        selectedWorld!.id, buildInitialSelection(worldBooks, dictionaries, signedInId), additionEntities),
+    };
+    cancelEntryResolution();
+    entryStarted.current = false;
+    setEntryDraft(draft);
+    setShowWorldModal(false);
+    beginSession();
+    const steps = enterFlowSteps();
+    const rest = navigableSteps(steps);
+    if (steps[0] === 'intro' && showReadme(selectedWorld!.id)) {
+      setShowIntroReadme(true);
+      if (rest.length === 0) {
+        setEnterAfterIntro(draft);
+        return;
+      }
+    }
+    openFirstEnterStep(rest, draft);
+  };
+
+  const devEntryActions = useRef({ select: handleWorldSelection, start: startEntry });
+  useEffect(() => { devEntryActions.current = { select: handleWorldSelection, start: startEntry }; });
+  const [devEntryPending, setDevEntryPending] = useState(false);
+  const devEntryRoute = useRef<typeof devRoute>(null);
+  useEffect(() => {
+    if (!import.meta.env.DEV || devRoute?.modal !== 'enterWorld' || !worlds.length) return;
+    if (devEntryRoute.current === devRoute) return;
+    devEntryRoute.current = devRoute;
+    void devEntryActions.current.select(devRoute.tab ?? worlds[0].id).then(() => setDevEntryPending(true));
+  }, [devRoute, worlds]);
+  useEffect(() => {
+    if (!import.meta.env.DEV || !devEntryPending || !selectedWorld) return;
+    setDevEntryPending(false);
+    devEntryActions.current.start();
+  }, [devEntryPending, selectedWorld]);
 
   /**
    * Download this world's linked pictures into the on-device cache so it stays viewable without a connection.
@@ -1353,6 +1560,24 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // Which Community Creations tab to open on. Set when an event banner sends the player to its content;
   // cleared as the browser closes, so the next plain visit lands on the catalog again.
   const [communityTab, setCommunityTab] = useState<BrowseTab | undefined>(undefined);
+  // Read once: after an accepted deep link has opened, ordinary browser visits must not replay it.
+  const [externalListing, setExternalListing] = useState(() => readCommunityListingHandoff(window.location.search));
+
+  useEffect(() => {
+    if (!externalListing) return;
+
+    requireAttestation({
+      onAccept: () => {
+        setCommunityTab(externalListing.kind);
+        setPendingListing(externalListing);
+        setShowCommunityBrowser(true);
+        setExternalListing(null);
+        consumeCommunityListingHandoff();
+      },
+      // The address remains shareable after a decline, while this visit returns to the ordinary menu.
+      onDecline: () => setExternalListing(null),
+    });
+  }, [externalListing, requireAttestation]);
 
   /** Take the player to where an event's content lives — the contest tab, for a contest. */
   const openEvent = useCallback((event: ServerEvent) => {
@@ -1448,6 +1673,22 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const dictionaryTiles = useLibraryTiles('dictionaries', dictionaryIds, !isLoadingDictionaries);
   const modelTiles = useLibraryTiles('models', modelIds, !isLoadingModels);
 
+  // Check for Updates on an entity or dictionary tile. No world is open here, so every copy the review
+  // touches is read and written in storage.
+  const { checkForUpdates, updateDialog } = useComponentUpdates();
+
+  // DEV only: the sample review's worlds, held in memory so its rows read their canned copies. Writing is
+  // a no-op — there is no world behind them to write to.
+  const devUpdateWorlds: LiveWorld[] | undefined = devUpdates?.rows.map((row) => ({
+    id: row.worldId,
+    name: row.worldName,
+    entities: [],
+    dictionaries: [devUpdates.copies[row.itemId] as Dictionary],
+    placeholders: [],
+    writeItem: () => {},
+    addPlaceholder: () => {},
+  }));
+
   // A world in a folder can take the folder's preset. The details popup names it, because the dropdown
   // there shows the world's own pin and an unpinned world would otherwise read as following the global
   // selection. A setting naming a deleted preset resolves to nothing, exactly as a stale world pin does.
@@ -1527,10 +1768,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     </>
   );
 
-  if (showCharacterCustomization) {
+  if (showCharacterCustomization && !showIntroReadme) {
     return (
       <CharacterCustomization
         onCharacterCustomized={(customizedData) => {
+          if (entryStarted.current) return;
+          entryStarted.current = true;
           setShowCharacterCustomization(false);
           onStartGame(selectedTraits, customizedData, true, selectedLocationId, selectedDictionaries, selectedCharacters);
         }}
@@ -1546,6 +1789,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   return (
     <div className="pt-[calc(5rem+env(safe-area-inset-top))] relative flex flex-col app-viewport overflow-hidden">
       {downscaleDialog}
+      {updateDialog}
       {worldExportDialog}
       <ThemedToastContainer />
 
@@ -1694,6 +1938,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       />
       <BackupRestoreDialog open={showBackup} onOpenChange={setShowBackup} />
 
+      {/* The component-file import review, and the update review a file of a source you already hold
+          opens in its place. */}
+      {componentImportDialogs}
+
       {/* Main-menu Load Game: no current world (root view), cold-loads the chosen save into its own world. */}
       <LoadGameDialog open={showLoadDialog} onOpenChange={setShowLoadDialog} onLoad={handleColdLoad} />
 
@@ -1735,6 +1983,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         <LibraryTileGrid
           items={models}
           idOf={(model) => model.id}
+          nameOf={(model) => model.name}
           tiles={modelTiles}
           layout="grid"
           aspect="portrait"
@@ -1770,12 +2019,17 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               onSelect={setPreviewModelId}
             />
           )}
+          onPublish={isAuthenticated ? (id) => {
+            const target = models.find((m) => m.id === id);
+            if (target) void publishModel(target);
+          } : undefined}
           onDelete={setModelToDelete}
         />
       ) : cardType === 'entities' ? (
         <LibraryTileGrid
           items={entities}
           idOf={(entity) => entity.id}
+          nameOf={(entity) => entity.name}
           tiles={entityTiles}
           layout={layoutMode}
           aspect="portrait"
@@ -1799,12 +2053,14 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               onSelect={setEditingEntityId}
             />
           )}
+          onCheckUpdates={(id) => { void checkForUpdates('entity', id); }}
           onDelete={setEntityToDelete}
         />
       ) : cardType === 'dictionaries' ? (
         <LibraryTileGrid
           items={dictionaries}
           idOf={(dictionary) => dictionary.id}
+          nameOf={(dictionary) => dictionary.name}
           tiles={dictionaryTiles}
           layout={layoutMode}
           aspect="landscape"
@@ -1827,6 +2083,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               onSelect={setEditingDictionaryId}
             />
           )}
+          onCheckUpdates={(id) => { void checkForUpdates('dictionary', id); }}
           onDelete={setDictionaryToDelete}
         />
       ) : (
@@ -1836,6 +2093,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         <LibraryTileGrid
           items={shownWorlds}
           idOf={(world) => world.id as string}
+          nameOf={(world) => String(world.name ?? '')}
           tiles={worldTiles}
           layout={layoutMode}
           aspect="landscape"
@@ -2170,34 +2428,26 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               }
               actions={
                 <div className="space-y-2">
+                  {/* The blocked action's own way to the repair, which lives in the editor's issue list. */}
+                  {sourceBlock && (
+                    <div role="alert" className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-2">
+                      <p className="text-meta text-destructive">{sourceBlock}</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-meta"
+                        onClick={() => setShowWorldEditor(true)}
+                      >
+                        Repair Sources
+                      </Button>
+                    </div>
+                  )}
                   <div className="flex">
                     <WorldActionButton
                       tone="sky"
                       className="w-2/3 rounded-r-none"
-                      onClick={() => {
-                        // Pre-check "Enabled by Default" traits for the selection screen (one per
-                        // exclusive group — the radio can only show one anyway).
-                        const defaults = collapseExclusiveDefaults(
-                          traits.filter((t) => t.isDefault).map((t) => t.id), traits, traitGroups);
-                        setSelectedTraits(defaults);
-                        setShowWorldModal(false);
-                        // Roll this playthrough's placeholders now, so the picker screens show the names the
-                        // game will actually use instead of every option they could have taken.
-                        beginSession();
-                        const steps = enterFlowSteps();
-                        const rest = navigableSteps(steps);
-                        // The Introduction rides on top of the first setup screen, under the same per-world
-                        // flag as the Gameplay readme.
-                        if (steps[0] === 'intro' && showReadme(selectedWorld!.id)) {
-                          setShowIntroReadme(true);
-                          // Nothing to overlay: hold the entry until the player closes it.
-                          if (rest.length === 0) {
-                            setEnterAfterIntro(defaults);
-                            return;
-                          }
-                        }
-                        openFirstEnterStep(rest, defaults);
-                      }}
+                      disabled={!!sourceBlock}
+                      onClick={startEntry}
                     >
                       <DoorOpen className="mr-2 h-4 w-4" /> Enter World
                     </WorldActionButton>
@@ -2205,13 +2455,20 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                     <WorldActionButton
                       tone="amberSoft"
                       className="w-1/3 rounded-l-none"
+                      disabled={!!sourceBlock}
                       onClick={() => {
                         // For uploaded worlds, use the worldData from context
                         const currentWorldData = selectedWorld!.data;
                         // Skip the setup steps but honor the author's default trait choices.
                         const defaults = collapseExclusiveDefaults(
                           traits.filter((t) => t.isDefault).map((t) => t.id), traits, traitGroups);
-                        setSelectedTraits(defaults);
+                        const draft: EntryDraft = {
+                          ...emptyEntryDraft(), traitIds: defaults,
+                          dictionaryItems: buildInitialSelection(worldBooks, dictionaries, signedInId),
+                        };
+                        cancelEntryResolution();
+                        entryStarted.current = false;
+                        setEntryDraft(draft);
                         onStartGame(defaults, currentWorldData.worldOverview?.use3DModel ? defaultCharacterData : null, true);
                       }}
                     >
@@ -2256,6 +2513,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                   {isAuthenticated && (
                     <WorldActionButton
                       tone="redSoft"
+                      disabled={!!sourceBlock}
                       onClick={() => selectedWorld && openPublish(worldPublishPayload(selectedWorld.data), selectedWorld.id)}
                     >
                       <ActionIcon.publish className="mr-2 h-4 w-4" /> Publish World
@@ -2328,6 +2586,20 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
             {/* Entry options sit opposite the pin so the two kinds of control stay visually separate. */}
             <div className="ml-auto flex flex-wrap items-center gap-x-6 gap-y-2">
+              {/* Unlike its neighbors this one rewrites the stored world, so it draws only for an
+                  imported world that still has bundled content to decide about. */}
+              {selectedWorld && (
+                <BundledContentChoice
+                  worldId={selectedWorld.id}
+                  data={selectedWorld.data}
+                  onApplied={(data) => {
+                    setSelectedWorld((held) => (held ? { ...held, data } : held));
+                    // The editor opens on the store, so it has to hold what was just written.
+                    loadWorldData(data, true);
+                  }}
+                />
+              )}
+
               {customPromptKinds.length > 0 && selectedWorld && (
                 <div className="flex items-center gap-2">
                   <Checkbox
@@ -2395,7 +2667,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         dictionaryId={editingDictionaryId}
         draft={draftDictionary}
         onClose={() => { setEditingDictionaryId(null); setDraftDictionary(null); refreshDictionaries(); }}
-        onPublish={isAuthenticated ? (book) => openPublish(dictionaryPublishPayload(book)) : undefined}
+        onPublish={isAuthenticated ? (book) => openPublish(dictionaryPublishPayload(book), book.id) : undefined}
       />
 
       <ConfirmDialog
@@ -2440,6 +2712,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
       <ModelDetailsModal
         model={models.find((m) => m.id === previewModelId) ?? null}
+        onPublish={isAuthenticated ? publishModel : undefined}
         onClose={() => setPreviewModelId(null)}
       />
 
@@ -2475,6 +2748,36 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* DEV only: the component update review on canned worlds. Its worlds are in memory, so Apply writes
+          nothing; `devUpdates` is never set in prod. */}
+      <UpdateAvailableDialog
+        source={devUpdates?.source ?? null}
+        sourceData={devUpdates?.sourceData ?? null}
+        rows={devUpdates?.rows ?? []}
+        live={devUpdateWorlds}
+        onClose={() => setDevUpdates(null)}
+      />
+
+      {/* DEV only: the world update review on canned rows. Apply closes it and writes nothing;
+          `devWorldUpdate` is never set in prod. */}
+      <WorldUpdateReviewDialog
+        open={!!devWorldUpdate}
+        review={devWorldUpdate}
+        onApply={() => setDevWorldUpdate(null)}
+        onCancel={() => setDevWorldUpdate(null)}
+      />
+
+      {/* DEV only: the Connect World References step on canned rows. `devReferences` is never set in prod. */}
+      <ConnectReferencesModal
+        rows={devReferences}
+        choices={devReferenceAnswers}
+        confirmLabel="Connect & Add"
+        onChoose={(key, value) => setDevReferenceAnswers((prev) => ({ ...prev, [key]: value }))}
+        onBack={() => setDevReferences(null)}
+        onCancel={() => setDevReferences(null)}
+        onConfirm={() => setDevReferences(null)}
+      />
 
       {/* Read-only view of the world's authored prompts, one tab per pass it rewrites, opening on what the
           author changed against the prompt Formamorph ships for that pass — the whole text says little about
@@ -2531,12 +2834,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         </DialogContent>
       </Dialog>
 
-      {/* Dimming scrim behind the enter-world flow popups (they're bare fixed cards, not Radix dialogs, so
-          they don't bring their own overlay). z-40 sits under the cards' z-50. */}
-      {(showTraitSelection || showLocationSelection || showCharacterSelection || showDictionarySelection) && (
-        <div className="fixed inset-0 z-40 bg-black/80" aria-hidden />
-      )}
-
       {/* The world's Introduction, over whichever setup screen is behind it. Placeholders resolve because
           `beginSession` rolls them on the Enter World click, before this opens. */}
       {selectedWorld && (
@@ -2550,87 +2847,48 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         />
       )}
 
-      {showTraitSelection && (
-        <TraitSelectionModal
+      {workspaceMounted && selectedWorld && (
+        <EnterWorldWorkspace
+          open={showSetupWorkspace}
+          worldName={selectedWorld.name}
           traits={traits}
           traitGroups={traitGroups}
           stats={rawStats}
+          locations={startingLocations(locations)}
           resolveText={resolvePH}
           resolveTraitText={resolveTraitText}
           selectedTraits={selectedTraits}
+          selectedLocationId={selectedLocationId}
+          worldAuthor={selectedWorld?.author}
+          libraryEntities={additionEntities}
+          selectedEntityIds={entryDraft.entityIds}
+          dictionaryItems={entryDraft.dictionaryItems}
+          categoryIndex={entryDraft.traitSection}
+          onCategoryChange={(index) => updateDraft('traitSection', index)}
           onTraitSelect={handleTraitSelection}
-          onAbort={() => {
-            setShowTraitSelection(false);
-            abandonEnterFlow();
+          onLocationChange={(id) => updateDraft('locationId', id)}
+          onEntityToggle={(id, selected) => updateDraft('entityIds', (current) => {
+            const next = new Set(current);
+            if (selected) next.add(id); else next.delete(id);
+            return next;
+          })}
+          onDictionaryItemsChange={(items) => updateDraft('dictionaryItems', items)}
+          onSaveAdditions={() => {
+            try {
+              saveWorldAdditionDefaults(selectedWorld.id, entryDraft);
+              return true;
+            } catch {
+              toast.error('Formamorph could not save these additions. Try again.');
+              return false;
+            }
           }}
-          onConfirm={() => proceedFromTraits(selectedTraits)}
-          onBack={backFrom('traits')}
-          confirmLabel={
-            startingLocations(locations).length > 1
-              ? 'Location'
-              : charStepVisible
-                ? 'Characters'
-                : dictStepVisible
-                  ? 'Dictionaries'
-                  : selectedWorld?.data.worldOverview?.use3DModel
-                    ? 'Avatar'
-                    : 'Start'
-          }
-        />
-      )}
-
-      {showLocationSelection && (
-        <StartingLocationModal
-          locations={startingLocations(locations)}
-          resolveText={resolvePH}
-          onConfirm={proceedFromLocation}
-          onBack={backFrom('location')}
-          onAbort={() => {
-            setShowLocationSelection(false);
-            abandonEnterFlow();
-          }}
-          confirmLabel={
-            charStepVisible
-              ? 'Characters'
-              : dictStepVisible
-                ? 'Dictionaries'
-                : selectedWorld?.data.worldOverview?.use3DModel
-                  ? 'Avatar'
-                  : 'Start'
-          }
-        />
-      )}
-
-      {showCharacterSelection && (
-        <CharacterSelectionModal
-          libraryMeta={entities}
-          onConfirm={proceedFromCharacters}
-          onBack={backFrom('characters')}
-          onAbort={() => {
-            setShowCharacterSelection(false);
-            abandonEnterFlow();
-          }}
-          confirmLabel={
-            dictStepVisible
-              ? 'Dictionaries'
-              : selectedWorld?.data.worldOverview?.use3DModel
-                ? 'Avatar'
-                : 'Start'
-          }
-        />
-      )}
-
-      {showDictionarySelection && (
-        <DictionarySelectionModal
-          worldBooks={worldBooks}
-          libraryMeta={dictionaries}
-          onConfirm={proceedFromDictionaries}
-          onBack={backFrom('dictionaries')}
-          onAbort={() => {
-            setShowDictionarySelection(false);
-            abandonEnterFlow();
-          }}
-          confirmLabel={selectedWorld?.data.worldOverview?.use3DModel ? 'Avatar' : 'Start'}
+          onIntroduction={selectedWorld.data.worldOverview?.introReadme?.trim()
+            ? () => setShowIntroReadme(true)
+            : undefined}
+          onCancel={abandonEnterFlow}
+          onContinue={() => advanceEntry('workspace')}
+          continueLabel={selectedWorld.data.worldOverview?.use3DModel ? 'Continue to Avatar' : 'Start game'}
+          resolving={resolvingEntry}
         />
       )}
 
@@ -2683,6 +2941,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
             openListing={pendingListing}
             onListingOpened={handleListingOpened}
             openLikersOnMount={devRoute?.modal === 'likers'}
+            openManageAddonsOnMount={devRoute?.modal === 'manageAddons'}
           />
         </>
       )}

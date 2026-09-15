@@ -1,4 +1,4 @@
-import type { Stat, Trait, Entity, Dictionary } from './world';
+import type { Stat, Trait, Entity, Dictionary, CommunityLink } from './world';
 import type { ChatMessage } from './ai';
 
 /** A director-invented character promoted to a persisted, per-playthrough entity (runtime characters,
@@ -11,12 +11,16 @@ export interface DiscoveredEntity {
   sourceTurnId: string;
 }
 
+/** The bounds a stat's own code set on it. Each is absolute; a field the code never set is absent. */
+export type CodeBounds = { min?: number; max?: number; regen?: number };
+
 /** A stat during gameplay — a definition Stat whose live `value` is always a number.
  *
  *  `min`, `max` and `regen` are *effective* bounds, derived from the `base*` fields plus the active traits'
- *  contributions plus `aiMaxDelta`. Everything outside the trait runtime — the panel, stat code, morph
- *  bindings — reads only the effective numbers; the bases are bookkeeping. All four are optional so a save
- *  written before bounds were derived still loads, its bases reconstructed at load time. */
+ *  contributions plus `aiMaxDelta`, with each `codeBounds` field replacing its bound last. Everything outside
+ *  the trait runtime — the panel, stat code, morph bindings — reads only the effective numbers; the rest is
+ *  bookkeeping. All of it is optional so a save written before bounds were derived still loads, its bases
+ *  reconstructed at load time. */
 export type PlayerStat = Omit<Stat, 'value'> & {
   value: number;
   /** The author's own floor, which no trait may dig below. */
@@ -26,6 +30,8 @@ export type PlayerStat = Omit<Stat, 'value'> & {
   /** How far the AI has moved this stat's maximum over the playthrough, kept apart from the trait
    *  contributions so the maximum stays fully derived. */
   aiMaxDelta?: number;
+  /** What the stat's code last set, held until the code runs again. Absent when it set nothing. */
+  codeBounds?: CodeBounds;
 };
 
 /** One row of the live scene list (the Entities tab): who is physically present this turn. `name` is the
@@ -115,11 +121,16 @@ export interface VrmLicense {
   allowRedistribution?: boolean;
   commercialUse?: 'allow' | 'disallow' | 'personalNonProfit' | 'personalProfit' | 'corporation';
   creditRequired?: boolean;
+  /** VRM 1.0 only, read from `avatarPermission`. Always present (even as `undefined`) once normalized by
+   *  current code, so a record missing the key entirely predates these fields — see `avatarLicenseGate.ts`. */
+  avatarPermission?: 'onlyAuthor' | 'explicitlyLicensedPerson' | 'everyone';
+  /** VRM 1.0 only, read from `modification`. Unset for VRM 0.0, which has no equivalent concept. */
+  modification?: 'prohibited' | 'allowModification' | 'allowModificationRedistribution';
 }
 
 /** Lightweight preview record for the model library grid and the character-model picker. Carries no blob, so
  *  the grid can render without holding every model's bytes. */
-export interface ModelMetadata {
+export interface ModelMetadata extends CommunityLink {
   id: string;
   name: string;
   type: string;
@@ -128,6 +139,17 @@ export interface ModelMetadata {
   license?: VrmLicense;
   createdAt?: string;
   lastAccessed?: string;
+}
+
+/** An Avatar listing's stored content, fetched back on download. Matches the server's `contentData` shape
+ *  exactly (see the community-avatar-uploads spec) — the `license` field is informational, never trusted
+ *  for enforcement, which already happened at publish time. `id` is never sent by the server; it's here
+ *  only so the download flow's `{ ...content, id }` fits `useLibraryDownload`'s generic constraint. */
+export interface AvatarListingContent {
+  id?: string;
+  vrm: string;
+  license?: VrmLicense;
+  hash?: string;
 }
 
 /** One saved snapshot of a play session (see GameplayContext.saveCurrentGameState). */
@@ -142,6 +164,8 @@ export interface GameState {
    *  clamp is undone as fully as it was applied. Absent on saves written before it, which reverse by negating
    *  the authored change as they always did. */
   appliedTraitValues?: Record<string, Record<string, number>>;
+  /** Absent ⇒ none. */
+  codePins?: CodePins;
   /** The live scene list — who is physically present this turn, with alias/reveal state for the tab. Legacy
    *  saves stored a bare `string[]` of names; those are normalized to `{ name, revealed: true }` on load. */
   visibleEntities: SceneEntity[];
@@ -251,6 +275,10 @@ export interface SaveObject {
    *  a player-written memory rides until deleted. Absent (or empty) on older saves ⇒ none. */
   memoryNotes?: Array<{ id: string; text: string; anchorTurn: number }>;
 }
+
+/** Placeholder id → what stat code pinned it to: one text, or the list an Object pin holds. Masks the roll
+ *  and every authored pin until code unpins it. */
+export type CodePins = Readonly<Record<string, string | readonly string[]>>;
 
 /** Per-playthrough Wildcard rolls, frozen in the save. */
 export interface PlaceholderRolls {

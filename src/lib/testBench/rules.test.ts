@@ -7,7 +7,7 @@ import { IMAGE_CAPS } from '@/lib/imageOptim';
 import { phValueId, phValues } from '@/test/placeholderValues';
 import {
   applyRuleFix, runRules, groupFindings, isAdvancedRule, isRuleFixable, selectMatchingFindings,
-  MATCHING_RULES, RULES, STAT_CODE_EXECUTION, type RuleWorld,
+  MATCHING_RULES, RULES, STAT_CODE_EXECUTION, STAT_CODE_UNKNOWN_NAME, type RuleWorld,
 } from './rules';
 
 /** A described entity at the starting location — what keeps the completeness rules quiet about a fixture
@@ -238,6 +238,35 @@ describe('reference-integrity rules', () => {
     expect(runRules(world([{ id: 'e1', name: 'Maren' }]))).toEqual([]);
   });
 
+  it('flags a linked copy connected to a Placeholder the world has deleted', () => {
+    const found = only(base({
+      dictionaries: [{
+        id: 'b1', name: 'Court Terms', enabled: true, entries: [],
+        link: { libraryId: 'lib-1', connections: { 'src-cap': 'deleted-placeholder' } },
+      }],
+    }), 'link-connection-broken');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].items.map((i) => i.id)).toEqual(['b1']);
+    // The way in is the copy's own tab, where Save Connections lives.
+    expect(found[0].items[0].section).toBe('dictionary');
+  });
+
+  it('is silent once the connection names something the world still holds', () => {
+    const connected = base({
+      placeholders: [{ id: 'w-cap', name: 'Capital', values: phValues(['Sedge']) }],
+      entities: [{ ...resident, link: { libraryId: 'lib-1', connections: { 'src-cap': 'w-cap' } } }],
+    });
+    expect(only(connected, 'link-connection-broken')).toEqual([]);
+  });
+
+  it('flags a linked copy whose connected location is gone', () => {
+    const found = only(base({
+      entities: [{ ...resident, link: { libraryId: 'lib-1', connections: { 'src-inn': 'gone-location' } } }],
+    }), 'link-connection-broken');
+    expect(found.map((f) => f.items[0].id)).toEqual(['resident']);
+  });
+
   it('flags a trait toggling a stat that doesn’t exist, and quiets when it points at a real one', () => {
     const toggled = (statId: string) => base({
       stats: [stat({ id: 's1', name: 'Mana' })],
@@ -389,6 +418,100 @@ describe('reference-integrity rules', () => {
       stats: [stat({ id: 's1', name: 'Mana', code: 'const n = "Ma";\nconst a = stats.find(s => s.name === `${n}na`);\nreturn a?.value ?? 0;' })],
     });
     expect(only(w, 'stat-code-unknown-stat')).toEqual([]);
+  });
+
+  it('flags a stat name that doesn’t exist in the map form too, dot and bracket alike', () => {
+    const coded = (code: string) => base({
+      stats: [
+        stat({ id: 's1', name: 'Mana', code }),
+        stat({ id: 's2', name: 'Vigor' }),
+      ],
+    });
+    const dotTypo = only(coded('return stats.Vigro.value;'), 'stat-code-unknown-stat');
+    expect(dotTypo).toHaveLength(1);
+    expect(dotTypo[0].message).toContain('Vigro');
+
+    const bracketTypo = only(coded('return stats["Vigro"].value;'), 'stat-code-unknown-stat');
+    expect(bracketTypo).toHaveLength(1);
+    expect(bracketTypo[0].message).toContain('Vigro');
+
+    expect(only(coded('return stats.Vigor.value;'), 'stat-code-unknown-stat')).toEqual([]);
+    expect(only(coded('return stats["Vigor"].value;'), 'stat-code-unknown-stat')).toEqual([]);
+  });
+
+  it('leaves a computed map key alone — there is no literal to check', () => {
+    const w = base({
+      stats: [stat({ id: 's1', name: 'Mana', code: 'const key = "Vigor";\nreturn stats[key].value;' })],
+    });
+    expect(only(w, 'stat-code-unknown-stat')).toEqual([]);
+  });
+
+  it('knows a chip-bearing stat by its code name, and not by what the chip rolled', () => {
+    const coded = (code: string) => base({
+      placeholders: [{ id: 'ph-beast', name: 'Beast', values: phValues(['Wolf', 'Bear']) }],
+      stats: [
+        stat({ id: 's1', name: 'Mana', code }),
+        stat({ id: 's2', name: '{{ph:ph-beast:world:p1}} Power' }),
+      ],
+    });
+    expect(only(coded('return stats["Beast Power"].value;'), 'stat-code-unknown-stat')).toEqual([]);
+    const rolled = only(coded('return stats["Wolf Power"].value;'), 'stat-code-unknown-stat');
+    expect(rolled).toHaveLength(1);
+    expect(rolled[0].message).toContain('Wolf Power');
+  });
+
+  it('reports the miss in either box, and names the box it read it in', () => {
+    const boxed = (over: Partial<Stat>) => base({
+      stats: [stat({ id: 's1', name: 'Mana', ...over }), stat({ id: 's2', name: 'Vigor' })],
+    });
+    const miss = 'return stats["Vigour"].value;';
+    const hit = 'return stats["Vigor"].value;';
+
+    const beforeOnly = only(boxed({ beforeCode: miss, code: hit }), 'stat-code-unknown-stat');
+    expect(beforeOnly).toHaveLength(1);
+    expect(beforeOnly[0].message).toBe(
+      'Before the AI code on “Mana” looks up a stat named “Vigour”, which does not exist',
+    );
+
+    const afterOnly = only(boxed({ beforeCode: hit, code: miss }), 'stat-code-unknown-stat');
+    expect(afterOnly).toHaveLength(1);
+    expect(afterOnly[0].message).toBe(
+      'After the AI code on “Mana” looks up a stat named “Vigour”, which does not exist',
+    );
+
+    // One miss per box, so an author who typed it twice is told twice rather than once.
+    expect(only(boxed({ beforeCode: miss, code: miss }), 'stat-code-unknown-stat').map((f) => f.message)).toEqual([
+      'Before the AI code on “Mana” looks up a stat named “Vigour”, which does not exist',
+      'After the AI code on “Mana” looks up a stat named “Vigour”, which does not exist',
+    ]);
+  });
+
+  it('warns that delta reads zero in the before box, and stays silent about the after box', () => {
+    const boxed = (over: Partial<Stat>) => base({ stats: [stat({ id: 's1', name: 'Mana', ...over })] });
+    const reads = 'return self.value + self.delta.ai.value;';
+
+    const found = only(boxed({ beforeCode: reads }), 'stat-code-before-reads-delta');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].message).toBe(
+      'Before the AI code on “Mana” reads delta, but that box runs before the AI asks and before regen — '
+      + 'every delta reads zero there',
+    );
+    expect(found[0].items.map((i) => i.id)).toEqual(['s1']);
+
+    // The after box is where delta means something, so the same text there raises nothing.
+    expect(only(boxed({ code: reads }), 'stat-code-before-reads-delta')).toEqual([]);
+  });
+
+  it('reads delta through the bracket form too, and leaves a variable of that name alone', () => {
+    const before = (beforeCode: string) => only(
+      base({ stats: [stat({ id: 's1', name: 'Mana', beforeCode })] }),
+      'stat-code-before-reads-delta',
+    );
+    expect(before('return stats.Mana["delta"].total.value;')).toHaveLength(1);
+    expect(before('return self?.delta.regen.value;')).toHaveLength(1);
+    // An author's own `delta` is not the sandbox's: nothing injects a bare one, so nothing is stranded.
+    expect(before('const delta = 3;\nreturn self.value + delta;')).toEqual([]);
   });
 });
 
@@ -700,53 +823,6 @@ describe('stat sanity rules', () => {
     expect(runRules(oneStat({ min: 10, max: 50, starting: 20 }))).toEqual([]);
   });
 
-  it('flags coded stats when nothing in the world reads the clock, once per coded stat', () => {
-    const coded = base({
-      stats: [
-        stat({ id: 's1', name: 'Fertility', code: 'return 25;' }),
-        stat({ id: 's2', name: 'Weave', code: 'return Math.round(Math.random() * 100);' }),
-        stat({ id: 's3', name: 'Vigor' }),
-      ],
-    });
-    const found = only(coded, 'stat-code-never-ticks');
-    expect(found).toHaveLength(2);
-    expect(found.map((f) => f.items[0].id)).toEqual(['s1', 's2']);
-    expect(found[0].severity).toBe('warning');
-    expect(groupFindings(found)[0].headline).toContain('2');
-  });
-
-  it('quiets the clock rule as soon as any one stat’s code names a clock variable', () => {
-    // The gate is world-wide (GameViewer's anyStatUsesClock), so one reference puts every coded stat on
-    // the every-turn schedule.
-    expect(only(base({
-      stats: [
-        stat({ id: 's1', name: 'Fertility', code: 'return 25;' }),
-        stat({ id: 's2', name: 'Weave', code: 'return elapsedHours % 2;' }),
-      ],
-    }), 'stat-code-never-ticks')).toEqual([]);
-  });
-
-  it('doesn’t count a stat no trait ever switches on as reading the clock, or as coded', () => {
-    // The gate reads the enabled stats, so a clock reference parked on a stat that is never live grants the
-    // rest of the world nothing — and that stat's own code never runs, so it isn't a finding of its own.
-    const found = only(base({
-      stats: [
-        stat({ id: 's1', name: 'Fertility', code: 'return 25;' }),
-        stat({ id: 's2', name: 'Dust', code: 'return elapsedHours;', enabled: false }),
-      ],
-    }), 'stat-code-never-ticks');
-    expect(found.map((f) => f.items[0].id)).toEqual(['s1']);
-
-    // A trait that switches it on puts it back in play, clock reference and all.
-    expect(only(base({
-      stats: [
-        stat({ id: 's1', name: 'Fertility', code: 'return 25;' }),
-        stat({ id: 's2', name: 'Dust', code: 'return elapsedHours;', enabled: false }),
-      ],
-      traits: [trait({ id: 't1', name: 'Cursed', statToggles: [{ statId: 's2', enabled: true }] })],
-    }), 'stat-code-never-ticks')).toEqual([]);
-  });
-
   it('flags a trait’s negative starting delta on a stat already resting at its floor', () => {
     // The Centaur Breeder shape: a race penalty written against a stat that opens at zero, so the clamp
     // eats the whole thing and every race starts identical.
@@ -793,6 +869,30 @@ describe('stat sanity rules', () => {
     expect(found[0].items[1].section).toBe('traits');
   });
 
+  it('judges each box on its own and names the one that recomputes', () => {
+    const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
+    const reads = 'return self.value + 1;';
+    const recomputes = 'return 25;';
+    // The after box reads the stat, so only the before box erases what the trait set.
+    const beforeOnly = only(oneStat({ starting: 40, beforeCode: recomputes, code: reads }, [ashen]), 'stat-code-overrides-trait');
+    expect(beforeOnly.map((f) => f.message)).toEqual([
+      '“Ashen” lowers “Fertility” by 10, but that stat’s Before the AI code recomputes its value without '
+      + 'reading it — the change is gone by the next run',
+    ]);
+    const afterOnly = only(oneStat({ starting: 40, beforeCode: reads, code: recomputes }, [ashen]), 'stat-code-overrides-trait');
+    expect(afterOnly.map((f) => f.message)).toEqual([
+      '“Ashen” lowers “Fertility” by 10, but that stat’s After the AI code recomputes its value without '
+      + 'reading it — the change is gone by the next run',
+    ]);
+    // Both boxes recompute. One trait change is still one finding, so the collapsed row's count stays a
+    // count of trait changes; the message names both boxes instead.
+    const both = only(oneStat({ starting: 40, beforeCode: recomputes, code: recomputes }, [ashen]), 'stat-code-overrides-trait');
+    expect(both.map((f) => f.message)).toEqual([
+      '“Ashen” lowers “Fertility” by 10, but that stat’s Before the AI and After the AI code recompute its '
+      + 'value without reading it — the change is gone by the next run',
+    ]);
+  });
+
   it('says nothing when the code builds on the stat’s own value, which is what the trait moved', () => {
     const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
     // Both ways code can find itself: the injected id, and its own name as a literal.
@@ -800,6 +900,39 @@ describe('stat sanity rules', () => {
     const byName = 'const me = stats.find(s => s.name === "Fertility"); return me.value + 1;';
     expect(only(oneStat({ starting: 40, code: byId }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
     expect(only(oneStat({ starting: 40, code: byName }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
+  });
+
+  it('says nothing when the code reads the self map entry, by bare self or by its own name', () => {
+    const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
+    const bareSelf = 'return Math.min(self.value + 1, self.max);';
+    const dotName = 'return stats.Fertility.value + 1;';
+    const bracketName = 'return stats["Fertility"].value + 1;';
+    expect(only(oneStat({ starting: 40, code: bareSelf }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
+    expect(only(oneStat({ starting: 40, code: dotName }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
+    expect(only(oneStat({ starting: 40, code: bracketName }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
+  });
+
+  it('reads a chip-bearing stat’s own name as its code name, not as what the chip rolled', () => {
+    const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
+    const chipped = (code: string) => base({
+      placeholders: [{ id: 'ph-beast', name: 'Beast', values: phValues(['Wolf', 'Bear']) }],
+      stats: [stat({ id: 's1', name: '{{ph:ph-beast:world:p1}} Power', starting: 40, code })],
+      traits: [ashen],
+    });
+    expect(only(chipped('return stats["Beast Power"].value + 1;'), 'stat-code-overrides-trait')).toEqual([]);
+    expect(only(chipped('return stats["Wolf Power"].value + 1;'), 'stat-code-overrides-trait')).toHaveLength(1);
+  });
+
+  it('still flags code that only reads another stat through the map', () => {
+    const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
+    const other = base({
+      stats: [
+        stat({ id: 's1', name: 'Fertility', starting: 40, code: 'return stats.Vigor.value;' }),
+        stat({ id: 's2', name: 'Vigor' }),
+      ],
+      traits: [ashen],
+    });
+    expect(only(other, 'stat-code-overrides-trait')).toHaveLength(1);
   });
 
   it('reads a stat’s own id as a lookup only where it is quoted', () => {
@@ -830,6 +963,8 @@ describe('stat sanity rules', () => {
     // Each of the three movers on its own is enough.
     expect(runRules(oneStat({ ...locks, regen: 2 }))).toEqual([]);
     expect(only(oneStat({ ...locks, code: 'return 25;', starting: 25 }), 'stat-ai-lock-frozen')).toEqual([]);
+    // Either box counts as code: a stat moved only before the AI is not frozen.
+    expect(only(oneStat({ ...locks, beforeCode: 'return 25;', starting: 25 }), 'stat-ai-lock-frozen')).toEqual([]);
     expect(runRules(oneStat(
       { ...locks, starting: 40 },
       [trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] })],
@@ -2699,9 +2834,10 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'placeholder-weight-unknown-value': 'advanced',
   'stat-ai-lock-frozen': 'advanced',
   'stat-code-execution': 'advanced',
-  'stat-code-never-ticks': 'advanced',
+  'stat-code-unknown-name': 'advanced',
   'stat-code-overrides-trait': 'advanced',
   'stat-code-unknown-stat': 'advanced',
+  'stat-code-before-reads-delta': 'advanced',
   'stat-descriptor-coverage-gap': 'advanced',
   'stat-descriptor-duplicate-threshold': 'advanced',
   'stat-descriptor-out-of-range': 'advanced',
@@ -2725,6 +2861,8 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'image-not-webp': 'simple',
   // Its field is invisible in both modes, and the repair is the row's own one-click fix.
   'legacy-start-location': 'simple',
+  // Save Connections sits in the selected copy's menu, which Simple mode shows.
+  'link-connection-broken': 'simple',
   'location-no-entities': 'simple',
   'location-parent-orphan': 'simple',
   'no-starting-location': 'simple',
@@ -2745,7 +2883,7 @@ describe('the rule registry', () => {
   });
 
   it('makes every rule decide whether Simple mode can act on it', () => {
-    const heads = [...RULES, STAT_CODE_EXECUTION].map((r) => r.id);
+    const heads = [...RULES, STAT_CODE_EXECUTION, STAT_CODE_UNKNOWN_NAME].map((r) => r.id);
     expect(heads.slice().sort()).toEqual(Object.keys(RULE_SCOPE).sort());
   });
 

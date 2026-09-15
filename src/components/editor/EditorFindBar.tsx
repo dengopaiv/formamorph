@@ -15,6 +15,8 @@ import { placeholderVocabulary } from '@/lib/chipVocabulary';
 import { decodePlaceholderToken, encodePlaceholderToken, newPlaceholder } from '@/lib/placeholders';
 import { randomUUID } from '@/lib/uuid';
 import { findMatches, replaceAll, spliceText } from '@/lib/worldSearch';
+import { codeNameReader, codeRenameTarget } from '@/lib/statCodeRename';
+import { useCodeRenameOffer } from '@/lib/useCodeRename';
 import type { SearchMatch, SearchTarget } from '@/lib/worldSearch';
 import type { PlacementLetters } from '@/lib/placementLetters';
 import type { PlaceholderOwners } from '@/lib/placeholderHomes';
@@ -133,6 +135,7 @@ export default function EditorFindBar({
   const [replaceText, setReplaceText] = useState('');
   const [chipId, setChipId] = useState<string | null>(null);
   const [confirmAll, setConfirmAll] = useState(false);
+  const offerCodeRename = useCodeRenameOffer();
   const [notice, setNotice] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
@@ -197,6 +200,28 @@ export default function EditorFindBar({
     return encodePlaceholderToken({ id: chip.id, mode: 'world', placementId: randomUUID() });
   }, [placeholderMode, replaceText, chip]);
 
+  /**
+   * A replace that rewrote a name is a rename, and the code that named it deserves the same offer a rename
+   * typed into the panel gets. The names of the other entries come from the targets themselves, since every
+   * one of them carries its item's name field.
+   */
+  const nameTargets = useMemo(
+    () => targets.filter((target) => codeRenameTarget(target.itemKey, target.fieldKey)),
+    [targets],
+  );
+  const noteRename = useCallback((target: SearchTarget, next: string) => {
+    const renamed = codeRenameTarget(target.itemKey, target.fieldKey);
+    if (!renamed) return;
+    const read = codeNameReader(renamed, placeholders);
+    // Only the entries of the same kind can be the duplicate the warning covers: an entity and a
+    // placeholder both open a `placeholders` path, but neither takes the other's name.
+    const kind = target.itemKey.slice(0, target.itemKey.indexOf(':'));
+    const otherNames = nameTargets
+      .filter((other) => other.itemKey !== target.itemKey && other.itemKey.startsWith(`${kind}:`))
+      .map((other) => read(other.value));
+    offerCodeRename({ ...renamed, oldName: read(target.value), newName: read(next), otherNames });
+  }, [offerCodeRename, placeholders, nameTargets]);
+
   const replaceCurrent = () => {
     if (!current) return;
     if (current.chip) {
@@ -212,12 +237,14 @@ export default function EditorFindBar({
       step(1);
       return;
     }
-    current.target.write(spliceText(current.target.value, current.start, current.end, insert));
+    const next = spliceText(current.target.value, current.start, current.end, insert);
+    current.target.write(next);
+    noteRename(current.target, next);
     // The rescan runs off the rewritten world; holding the index leaves the cursor on what is now next.
   };
 
   const runReplaceAll = () => {
-    const summary = replaceAll(matches, insertFor);
+    const summary = replaceAll(matches, insertFor, noteRename);
     setConfirmAll(false);
     const skipped = summary.skipped
       ? ` ${summary.skipped} skipped in ${summary.skippedFields.length} field${summary.skippedFields.length === 1 ? '' : 's'} that can't hold a chip.`
@@ -269,6 +296,7 @@ export default function EditorFindBar({
             ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            aria-label="Find"
             placeholder="Find"
             className="h-8 pr-[4.25rem] focus-visible:ring-0"
           />
@@ -340,6 +368,7 @@ export default function EditorFindBar({
                 <Input
                   value={replaceText}
                   onChange={(e) => setReplaceText(e.target.value)}
+                  aria-label="Replace with"
                   placeholder="Replace"
                   className={cn('h-8 focus-visible:ring-0', allowPlaceholderReplace && 'pr-10')}
                 />

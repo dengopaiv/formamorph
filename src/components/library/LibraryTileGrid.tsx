@@ -16,21 +16,11 @@ import { arrayMove, type SortingStrategy } from '@dnd-kit/sortable';
 import { getEventCoordinates } from '@dnd-kit/utilities';
 import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { sameIds } from '@/lib/useSortableIds';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu';
 import {
   readGesture,
   resolvePlacements,
@@ -38,7 +28,6 @@ import {
   spanAt,
   SLICE_SHARE,
   type GestureReading,
-  type LibraryTileSize,
   type PackedTile,
   type PlacementMap,
   type TilePlacement,
@@ -46,6 +35,7 @@ import {
 import type { LibraryTiles } from '@/lib/useLibraryTiles';
 import { THUMB_RATIO, thumbFit, type ThumbAspect } from '@/lib/thumbAspect';
 import { LibraryGroupTile } from '@/components/library/LibraryGroupTile';
+import { LibraryTileContextMenu } from '@/components/library/LibraryTileContextMenu';
 
 /** The scroll-viewport clamp alone; a grid drag moves in both axes, so no vertical-list clamp. */
 const GRID_MODIFIERS = [restrictToFirstScrollableAncestor];
@@ -55,12 +45,6 @@ const GAP = 16;
 
 /** Tiles hold their real grid slots at all times; reorders change the slots, never a transform. */
 const NULL_STRATEGY: SortingStrategy = () => null;
-
-const SIZE_LABELS: { size: LibraryTileSize; label: string }[] = [
-  { size: 'small', label: 'Small' },
-  { size: 'medium', label: 'Medium' },
-  { size: 'large', label: 'Large' },
-];
 
 /**
  * As many medium columns as the measured width fits, never fewer than one.
@@ -212,11 +196,14 @@ function FolderHeader({ name, settings, onBack, onRename }: {
  * @param tiles - This tab's arrangement and the actions the grid dispatches against it
  * @param renderCard - The tab's own card for one item, told how to fill and label its tile
  * @param groupSettings - Settings shown in the folder header; omit on tabs that carry none
+ * @param onCheckUpdates - Checks one item for source updates, offered on the tabs worlds can follow
+ * @param onPublish - Publishes one item, offered in the context menu on the tabs that can publish
  * @param onDelete - Deletes one item, offered as the context menu's last entry
  */
 export function LibraryTileGrid<T>({
   items,
   idOf,
+  nameOf,
   tiles,
   layout,
   aspect,
@@ -227,10 +214,13 @@ export function LibraryTileGrid<T>({
   groupSettings,
   groupPresetName,
   emptyState,
+  onCheckUpdates,
+  onPublish,
   onDelete,
 }: {
   items: T[];
   idOf: (item: T) => string;
+  nameOf: (item: T) => string;
   tiles: LibraryTiles;
   layout: 'grid' | 'detailed';
   aspect: ThumbAspect;
@@ -246,6 +236,8 @@ export function LibraryTileGrid<T>({
   groupSettings?: (groupId: string) => React.ReactNode;
   groupPresetName?: (groupId: string) => string | undefined;
   emptyState?: React.ReactNode;
+  onCheckUpdates?: (id: string) => void;
+  onPublish?: (id: string) => void;
   onDelete?: (id: string) => void;
 }) {
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
@@ -661,74 +653,6 @@ export function LibraryTileGrid<T>({
     setClaim({ ...home, span });
   };
 
-  /** The context menu for one tile: its size, then whatever grouping applies to it. */
-  const tileMenu = (id: string) => {
-    const group = tiles.group(id);
-    const inFolder = tiles.groupOfItem(id);
-
-    return (
-      <>
-        {/* Sizes only shape the packed grid; the detailed layout draws uniform cards, so offering
-            them there would be a menu that does nothing. A size set in grid still persists. */}
-        {layout === 'grid' && (
-          <>
-            <ContextMenuLabel>Tile Size</ContextMenuLabel>
-            <ContextMenuRadioGroup
-              value={tiles.size(id)}
-              onValueChange={(value) => tiles.setSize(id, value as LibraryTileSize, renderedIds, baseCols)}
-            >
-              {/* The shared radio item only draws its check when told: it takes `checked` itself
-                  rather than reading the group. */}
-              {SIZE_LABELS.map(({ size, label }) => (
-                <ContextMenuRadioItem key={size} value={size} checked={tiles.size(id) === size}>
-                  {label}
-                </ContextMenuRadioItem>
-              ))}
-            </ContextMenuRadioGroup>
-            <ContextMenuSeparator />
-          </>
-        )}
-
-        {group ? (
-          <>
-            <ContextMenuItem onSelect={() => setOpenGroupId(group.id)}>Open Group</ContextMenuItem>
-            <ContextMenuItem onSelect={() => tiles.disband(group.id)}>Delete Group</ContextMenuItem>
-          </>
-        ) : (
-          <>
-            <ContextMenuLabel>Add To Group</ContextMenuLabel>
-            {tiles.groups
-              .filter((candidate) => candidate.id !== inFolder?.id)
-              .map((candidate) => (
-                <ContextMenuItem key={candidate.id} onSelect={() => tiles.addTo(id, candidate.id)}>
-                  {candidate.name}
-                </ContextMenuItem>
-              ))}
-            {/* Named apart from the folders listed above it: a fresh folder is called "New Group", and
-                two identical labels in one menu would not say which one acts. */}
-            <ContextMenuItem onSelect={() => tiles.groupWithNew(id)}>Create New Group</ContextMenuItem>
-            {inFolder && (
-              <ContextMenuItem onSelect={() => tiles.removeFrom(id)}>Remove From Group</ContextMenuItem>
-            )}
-          </>
-        )}
-
-        {/* The card draws no delete control anymore, so the menu is where an item is deleted. */}
-        {!group && onDelete && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => onDelete(id)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" /> Delete
-            </ContextMenuItem>
-          </>
-        )}
-      </>
-    );
-  };
-
   const renderTile = (id: string) => {
     const group = tiles.group(id);
     const item = byId.get(id);
@@ -747,8 +671,19 @@ export function LibraryTileGrid<T>({
       : undefined;
 
     return (
-      <ContextMenu key={id}>
-        <ContextMenuTrigger asChild>
+      <LibraryTileContextMenu
+        key={id}
+        id={id}
+        name={group?.name ?? (item ? nameOf(item) : '')}
+        tiles={tiles}
+        layout={layout}
+        renderedIds={renderedIds}
+        baseCols={baseCols}
+        onOpenGroup={setOpenGroupId}
+        onCheckUpdates={onCheckUpdates}
+        onPublish={onPublish}
+        onDelete={onDelete}
+      >
           <div
             ref={(node) => {
               if (node) tileNodes.current.set(id, node);
@@ -788,9 +723,7 @@ export function LibraryTileGrid<T>({
               renderCard(item as T, { layout, fill: layout === 'grid', compact })
             )}
           </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="max-h-[60vh] overflow-y-auto">{tileMenu(id)}</ContextMenuContent>
-      </ContextMenu>
+      </LibraryTileContextMenu>
     );
   };
 
@@ -865,6 +798,8 @@ export function LibraryTileGrid<T>({
         {renderedIds.length === 0 && !openGroup ? emptyState : (
           <div
             ref={measureGrid}
+            data-library-focus-root
+            tabIndex={-1}
             style={gridStyle}
             className={cn('grid gap-4', layout === 'detailed' && detailedColumnsClass)}
           >

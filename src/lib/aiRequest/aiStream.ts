@@ -35,7 +35,7 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 }
 
 /** Read a structured OpenAI-compatible error body without turning malformed or empty failure bodies into errors. */
-async function readServerError(response: Response): Promise<AiServerError | undefined> {
+export async function readServerError(response: Response): Promise<AiServerError | undefined> {
   if (typeof response.text !== 'function') return undefined;
   try {
     const raw = await response.text();

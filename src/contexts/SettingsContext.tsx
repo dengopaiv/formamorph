@@ -51,7 +51,7 @@ import {
   activeSamplers, activeReasoning, activeReasoningBudget, activeVerbatim, activePromptEndpoints, activeDescTokens,
   updateSamplers, updateReasoning, updateReasoningBudget, updateVerbatim, updatePromptEndpoints, updateDescTokens, foldTuningIntoUserPresets,
   addFullPreset, replacePreset,
-  type PromptPresetStore, type PromptValues, type VerbatimMap, type PromptPreset, type DescPromptKind,
+  type PromptPresetStore, type PromptValues, type VerbatimMap, type PromptPreset, type ReasoningMap, type DescPromptKind,
 } from '../lib/promptPresets';
 import { buildSharedPreset, type SharedPreset, type ImportedPreset } from '../lib/promptPresetShare';
 import { resolvePinnedPreset } from '../lib/worldPromptPreset';
@@ -64,7 +64,16 @@ import {
 } from '../lib/promptEndpoints';
 import type { AIRequestType } from '../types';
 import type { ParagraphLimit } from '../lib/outputLength';
-import { detectSupportedReasoningEfforts, detectReasoningCapability, isReasoningEngaged, type ReasoningEffortField, type PromptReasoning } from '../lib/reasoningEffort';
+import {
+  resolveReasoningCapability, mergeReasoningCapability, isReasoningEngaged, parseReasoningSetting,
+  parsePromptReasoningSetting, resolveReasoningSetting, resolvePromptReasoningSetting, DEFAULT_REASONING_SETTING,
+  parseReasoningCapability, reasoningNeedsResolve, UNKNOWN_REASONING_CAPABILITY,
+  type PromptReasoning, type ReasoningSetting, type PromptReasoningSetting, type ReasoningCapability,
+  type ReasoningEffortField,
+} from '../lib/reasoningEffort';
+import {
+  observeReply, observationAnswer, observationMayCorrect, type ReasoningObservation,
+} from '../lib/reasoningObservation';
 import type { SettingsTabId } from '@/components/modals/settingsTabs';
 
 /** A request to open the Settings modal at a given tab (and, for `endpoints`, a given sub-tab). The nonce
@@ -233,7 +242,12 @@ function migratePromptTuning() {
   const rawStore = localStorage.getItem(`${APP_ID}_promptPresets`);
   const store = rawStore ? presetStoreCodec.parse(rawStore) : emptyStore;
   const samplers = readJson<PromptSamplerMap>('promptSamplers', {});
-  const reasoning = readJson<Record<string, PromptReasoning>>('promptReasoning', {});
+  // Written as plain strings before the switch existed; each folds into the switch-plus-level shape.
+  const reasoning: ReasoningMap = {};
+  for (const [kind, raw] of Object.entries(readJson<Record<string, unknown>>('promptReasoning', {}))) {
+    const setting = parsePromptReasoningSetting(raw);
+    if (setting) reasoning[kind] = setting;
+  }
   // Only carry verbatim values the user actually changed from the shipped default.
   const verbatimDefs: [string, AIRequestType, number][] = [
     ['narrationVerbatimTurns', 'narration', 3], ['thinkingVerbatimTurns', 'thinking', 1],
@@ -554,8 +568,8 @@ function useProvideSettings() {
   // Live engine state, so a request to the engine names the GGUF actually loaded rather than a nominal
   // placeholder — which is what a `/models` probe compares against.
   const engineState = useLocalLlmStatus();
-  // Honor the desktop local engine's own cap when it's active; otherwise the active endpoint preset's cap
-  // (the Default preset holds DEFAULT_MAX_TOKENS, so a Default selection matches the shared-endpoint cap).
+  // Honor the desktop local engine's own cap when it's active; otherwise the active endpoint preset's cap.
+  // (The shared Default fixes DEFAULT_MAX_TOKENS; user endpoints may omit theirs.)
   const activeMaxTokens = localModelActive ? localMaxTokens : maxOutputOverride.enabled ? maxTokens : undefined;
 
   // Generation sampling for the local model — sent while the local engine is active.
@@ -600,43 +614,106 @@ function useProvideSettings() {
     return () => clearTimeout(id);
   }, [onUserEndpoint, detectContextWindow]);
 
-  // Which reasoning_effort levels each endpoint+model accepts, probed once and remembered per `endpoint|model`
-  // so flipping between endpoints (or swapping the model on one) doesn't re-probe. A missing key means "not yet
-  // known" — the UI falls back to the universally-accepted levels until detected. Bounded so heavy testers don't
-  // grow it without limit; the oldest entry is dropped past the cap.
+  // What each endpoint+model answered about its native reasoning, resolved once and remembered per
+  // `endpoint|model` so flipping between endpoints (or swapping the model on one) doesn't re-detect. A missing
+  // key means "nothing asked yet" — the UI falls back to the universally-accepted levels until an answer lands.
+  // An entry may also be a bare effort list, which `parseReasoningCapability` loads as a record with those
+  // levels. Bounded so heavy testers don't grow it without limit; the oldest entry is dropped past the cap.
   const REASONING_CACHE_CAP = 30;
-  const reasoningSupportSig = `${activeEndpointUrl}|${activeModelName}`;
-  const [reasoningSupportCache, setReasoningSupportCache] = usePersistentState<Record<string, ReasoningEffortField[]>>(
+  const reasoningCapabilitySig = `${activeEndpointUrl}|${activeModelName}`;
+  const [reasoningCapabilityCache, setReasoningCapabilityCache] = usePersistentState<Record<string, ReasoningCapability>>(
     `${APP_ID}_reasoningSupport`, {}, {
-      parse: (r) => { try { const o = JSON.parse(r); return o && typeof o === 'object' && !Array.isArray(o) && Object.values(o).every((v) => Array.isArray(v)) ? o : {}; } catch { return {}; } },
+      parse: (r) => {
+        try {
+          const o: unknown = JSON.parse(r);
+          if (!o || typeof o !== 'object' || Array.isArray(o)) return {};
+          const out: Record<string, ReasoningCapability> = {};
+          for (const [sig, raw] of Object.entries(o as Record<string, unknown>)) {
+            const record = parseReasoningCapability(raw);
+            if (record) out[sig] = record;
+          }
+          return out;
+        } catch { return {}; }
+      },
       serialize: (v) => JSON.stringify(v),
     });
-  const supportedReasoningEfforts = reasoningSupportCache[reasoningSupportSig] ?? null;
+  const reasoningCapability = reasoningCapabilityCache[reasoningCapabilitySig] ?? null;
 
-  const detectReasoningEfforts = useCallback(async () => {
-    const sig = `${activeEndpointUrl}|${activeModelName}`;
-    // `detectSupportedReasoningEfforts` first consults LM Studio's native capability list, so a non-reasoning
-    // model resolves to `[]` (→ hide the control, send no reasoning_effort) without a warning-triggering probe.
-    const efforts = await detectSupportedReasoningEfforts(activeEndpointUrl, activeApiToken, activeModelName);
-    if (!efforts) return;
-    setReasoningSupportCache((prev) => {
-      const next = { ...prev, [sig]: efforts };
+  /** One record into the cache, dropping the oldest entry once the cache is over its cap. */
+  const storeCapability = useCallback(
+    (cache: Record<string, ReasoningCapability>, sig: string, record: ReasoningCapability) => {
+      const next = { ...cache, [sig]: record };
       const keys = Object.keys(next);
       if (keys.length > REASONING_CACHE_CAP) delete next[keys[0]];
       return next;
-    });
-  }, [activeEndpointUrl, activeApiToken, activeModelName, setReasoningSupportCache]);
+    }, []);
+
+  /** Folds a fresh record onto whatever the cache held, so a source that just answered outranks it. */
+  const cacheReasoningCapability = useCallback((sig: string, record: ReasoningCapability) => {
+    setReasoningCapabilityCache((prev) => storeCapability(prev, sig, mergeReasoningCapability(prev[sig] ?? null, record)));
+  }, [setReasoningCapabilityCache, storeCapability]);
+
+  // Which endpoint-and-model pairs this session has already resolved. A resolve that answers nothing, or
+  // answers only some questions, must not re-run on every render — the record it stores would otherwise
+  // keep the effect's own dependency changing.
+  const resolvedSignatures = useRef(new Set<string>());
+
+  // What each endpoint-and-model pair's last answering reply showed. A ref, so recording one re-renders nothing.
+  const reasoningObservationsRef = useRef<Record<string, ReasoningObservation>>({});
+  const [reasoningObserved, setReasoningObserved] = useState(0);
+
+  /**
+   * Records what one reply showed about its model's reasoning, keyed by the endpoint and model that answered.
+   * Both shapes count: the stream's own reasoning field, and an inline think block in the content.
+   */
+  const noteReasoningReply = useCallback((
+    target: { url: string; model: string },
+    reasoningText: string,
+    content: string,
+    effort: ReasoningEffortField | null,
+  ) => {
+    const sig = endpointSignature(target.url, target.model);
+    const observation = observeReply(reasoningText, content, effort);
+    const before = observationAnswer(reasoningObservationsRef.current[sig]);
+    const answer = observationAnswer(observation);
+    // A reply that settles nothing never erases one that did. A turn fires several calls at once and the
+    // bookkeeping ones ship switched off, so the last reply in is routinely the least informative one.
+    if (answer === null && before !== null) return;
+    reasoningObservationsRef.current[sig] = observation;
+    if (answer !== before) setReasoningObserved((n) => n + 1);
+  }, []);
+
+  const resolveActiveCapability = useCallback(async () => {
+    const sig = `${activeEndpointUrl}|${activeModelName}`;
+    if (resolvedSignatures.current.has(sig)) return;
+    resolvedSignatures.current.add(sig);
+    const record = await resolveReasoningCapability(
+      { url: activeEndpointUrl, token: activeApiToken, model: activeModelName },
+      fetch,
+      { observation: reasoningObservationsRef.current[sig] },
+    );
+    // A resolve that answered nothing is not an answer. Release the signature so a server that was down
+    // during the debounce is asked again, rather than staying unresolved for the rest of the session.
+    if (!record) { resolvedSignatures.current.delete(sig); return; }
+    cacheReasoningCapability(sig, record);
+  }, [activeEndpointUrl, activeApiToken, activeModelName, cacheReasoningCapability]);
 
 
   const [thinkingMode, setThinkingMode] = usePersistentState<ThinkingMode>(`${APP_ID}_thinkingMode`, 'off', {
     parse: (r) => (r === 'precall' || r === 'inline' || r === 'staged' ? r : 'off'),
     serialize: (v) => v,
   });
-  const REASONING_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-  const [reasoningEffort, setReasoningEffort] = usePersistentState<ReasoningEffort>(`${APP_ID}_reasoningEffort`, 'auto', {
-    parse: (r) => (REASONING_VALUES.includes(r) ? (r as ReasoningEffort) : 'auto'),
-    serialize: (v) => v,
+  // Same key as the plain-string form it replaces; the parser reads both, so the value migrates on first write.
+  const [nativeReasoning, setNativeReasoning] = usePersistentState<ReasoningSetting>(`${APP_ID}_reasoningEffort`, DEFAULT_REASONING_SETTING, {
+    parse: (r) => {
+      let raw: unknown = r;
+      try { raw = JSON.parse(r); } catch { /* a plain level string, read as-is */ }
+      return parseReasoningSetting(raw) ?? DEFAULT_REASONING_SETTING;
+    },
+    serialize: (v) => JSON.stringify(v),
   });
+  /** The request layer's view of the switch: the level while on, `none` while off. */
+  const reasoningEffort: ReasoningEffort = resolveReasoningSetting(nativeReasoning);
   // The 15 editable prompt strings live in named presets (one localStorage key). Each keeps its original
   // context field + setter name; values derive from the active preset (Default = read-only shipped text),
   // and setters patch the active preset (a no-op under Default). See src/lib/promptPresets.ts.
@@ -717,7 +794,12 @@ function useProvideSettings() {
   // Preset-scoped tuning derives from the active preset (built-ins → empty → defaults); setters patch the
   // active preset and no-op under a built-in, mirroring the text setters above.
   const promptSamplers = useMemo(() => activeSamplers(effectiveStore), [effectiveStore]);
-  const promptReasoning = useMemo(() => activeReasoning(effectiveStore), [effectiveStore]);
+  const promptReasoningSettings = useMemo(() => activeReasoning(effectiveStore), [effectiveStore]);
+  /** Each stored prompt setting resolved for the request layer (`none` while switched off). */
+  const promptReasoning = useMemo(
+    () => Object.fromEntries(Object.entries(promptReasoningSettings).map(([k, s]) => [k, resolvePromptReasoningSetting(s)])) as Record<string, PromptReasoning>,
+    [promptReasoningSettings],
+  );
   const promptReasoningBudget = useMemo(() => activeReasoningBudget(effectiveStore), [effectiveStore]);
   const promptEndpoints = useMemo(() => activePromptEndpoints(effectiveStore), [effectiveStore]);
 
@@ -749,42 +831,42 @@ function useProvideSettings() {
     [thinkingMode, reasoningEffort, promptReasoning],
   );
 
-  // Probe the endpoint's accepted reasoning levels only once reasoning is actually engaged and we have no
-  // cached list yet; debounced so editing the URL doesn't fire per keystroke.
+  // Resolve the endpoint's capability record once reasoning is actually engaged, and only when the cache
+  // has nothing better: no record at all, or one whose answers only the cache vouches for (a record stored
+  // before this session's sources existed). Debounced so editing the URL doesn't fire per keystroke.
   useEffect(() => {
-    if (!reasoningEngaged || supportedReasoningEfforts !== null) return;
-    const id = setTimeout(() => { void detectReasoningEfforts(); }, 1200);
+    if (!reasoningEngaged || !reasoningNeedsResolve(reasoningCapability)) return;
+    const id = setTimeout(() => { void resolveActiveCapability(); }, 1200);
     return () => clearTimeout(id);
-  }, [reasoningEngaged, supportedReasoningEfforts, detectReasoningEfforts]);
+  }, [reasoningEngaged, reasoningCapability, resolveActiveCapability]);
 
-  // The reasoning-capability check hits LM Studio's native model list — a side-effect-free GET that logs no
-  // warning — so unlike the effort probe it runs eagerly on every endpoint/model change AND overrides the
-  // write-once cache: a model the backend lists as non-reasoning is forced to `[]` (hide the control, send no
-  // reasoning_effort) even if an earlier probe cached levels for it; a model listed as reasoning clears a
-  // wrongly-cached `[]` so levels re-probe. Inconclusive (non-LM-Studio / unlisted / unreachable) leaves the
-  // cache untouched, so plain OpenAI endpoints keep the effort-probe behavior.
+  // A reply that settled the reasons question re-runs the chain with that observation in hand, so the Native
+  // Reasoning controls follow what the player can see happening without a reload. Once per signature and
+  // answer, and only where a reply is allowed to correct the source that answered.
+  const observedSignatures = useRef(new Set<string>());
   useEffect(() => {
-    const sig = `${activeEndpointUrl}|${activeModelName}`;
-    let cancelled = false;
-    const id = setTimeout(async () => {
-      const capable = await detectReasoningCapability(activeEndpointUrl, activeApiToken, activeModelName);
-      if (cancelled || capable === null) return;
-      setReasoningSupportCache((prev) => {
-        const current = prev[sig];
-        const cachedEmpty = Array.isArray(current) && current.length === 0;
-        if (!capable) {
-          if (cachedEmpty) return prev; // already marked non-reasoning
-          const next = { ...prev, [sig]: [] as ReasoningEffortField[] };
-          const keys = Object.keys(next);
-          if (keys.length > REASONING_CACHE_CAP) delete next[keys[0]];
-          return next;
-        }
-        if (cachedEmpty) { const next = { ...prev }; delete next[sig]; return next; } // reasoning after all → re-probe levels
-        return prev;
-      });
-    }, 1200);
-    return () => { cancelled = true; clearTimeout(id); };
-  }, [activeEndpointUrl, activeApiToken, activeModelName, setReasoningSupportCache]);
+    if (!reasoningEngaged) return;
+    const sig = reasoningCapabilitySig;
+    const observation = reasoningObservationsRef.current[sig];
+    const answer = observationAnswer(observation);
+    if (answer === null || !observationMayCorrect(reasoningCapability)) return;
+    const key = `${sig}|${answer}`;
+    if (observedSignatures.current.has(key)) return;
+    observedSignatures.current.add(key);
+    const controller = new AbortController();
+    void resolveReasoningCapability(
+      { url: activeEndpointUrl, token: activeApiToken, model: activeModelName },
+      fetch,
+      { observation, signal: controller.signal },
+    ).then((record) => {
+      if (record && !controller.signal.aborted) cacheReasoningCapability(sig, record);
+    }).catch(() => { /* an unreachable endpoint surfaces as a request failure, not here */ });
+    return () => controller.abort();
+  }, [
+    reasoningObserved, reasoningEngaged, reasoningCapabilitySig, reasoningCapability,
+    activeEndpointUrl, activeApiToken, activeModelName, cacheReasoningCapability,
+  ]);
+
   const verbatimMap = useMemo(() => activeVerbatim(effectiveStore), [effectiveStore]);
   const globalForSampler = useCallback(
     (sampler: PromptSampler) => (sampler === 'temperature' ? genTemperature : genRepetitionPenalty),
@@ -803,7 +885,7 @@ function useProvideSettings() {
       [kind]: { ...prev[kind], [sampler]: { custom: prev[kind]?.[sampler]?.custom ?? true, value } },
     })));
   }, [setPresetStore]);
-  const setPromptReasoning = useCallback((kind: AIRequestType, value: PromptReasoning) => {
+  const setPromptReasoning = useCallback((kind: AIRequestType, value: PromptReasoningSetting) => {
     setPresetStore((s) => updateReasoning(s, kind, value));
   }, [setPresetStore]);
   const setPromptReasoningBudget = useCallback((kind: AIRequestType, value: number) => {
@@ -852,7 +934,7 @@ function useProvideSettings() {
   const activePresetName = BUILTIN_PRESETS.find((b) => b.id === effectiveStore.activeId)?.name
     ?? effectiveStore.presets.find((p) => p.id === effectiveStore.activeId)?.name ?? 'Preset';
   const exportActivePreset = (appVersion: string): SharedPreset =>
-    buildSharedPreset({ name: activePresetName, style: activeSectionStyle, values: promptValues, samplers: promptSamplers, reasoning: promptReasoning, reasoningBudget: promptReasoningBudget, verbatim: verbatimMap }, appVersion);
+    buildSharedPreset({ name: activePresetName, style: activeSectionStyle, values: promptValues, samplers: promptSamplers, reasoning: promptReasoningSettings, reasoningBudget: promptReasoningBudget, verbatim: verbatimMap }, appVersion);
   const importPreset = (imported: ImportedPreset, opts: { includeTuning: boolean; name: string; overwriteId?: string }): string => {
     const style = imported.style;
     const values = { ...buildStyledValues(PROMPT_TEXT_DEFAULTS, style), ...imported.values };
@@ -1037,7 +1119,7 @@ function useProvideSettings() {
     /** Display name of the preset this resolved to, whether pinned or followed. */
     presetName: string;
     contextWindow: number;
-    supportedReasoningEfforts: ReasoningEffortField[] | null;
+    reasoning: ReasoningCapability;
   } => {
     const resolved = resolvePromptEndpoint(kind, promptEndpoints, textPresetStore, {
       activeId: textPresetStore.activeId,
@@ -1050,8 +1132,14 @@ function useProvideSettings() {
       : resolved.presetId === DEFAULT_TEXT_PRESET_ID
         ? 'Default'
         : textPresetStore.presets.find((p) => p.id === resolved.presetId)?.name ?? 'Default';
+    // The bundled engine always takes a token budget, whatever detection says about the rest of the record.
+    const withEngineBudget = (record: ReasoningCapability | null): ReasoningCapability => {
+      const base = record ?? UNKNOWN_REASONING_CAPABILITY;
+      if (!resolved.localEngine) return base;
+      return { ...base, budget: true, sources: { ...base.sources, budget: 'engine' } };
+    };
     if (resolved.presetId === null) {
-      return { ...resolved, url, presetName, contextWindow, supportedReasoningEfforts };
+      return { ...resolved, url, presetName, contextWindow, reasoning: withEngineBudget(reasoningCapability) };
     }
     const sig = endpointSignature(url, resolved.model);
     // Probe a routed target's real window once per signature. Fire-and-forget: this turn uses the preset's
@@ -1069,16 +1157,20 @@ function useProvideSettings() {
           });
         }).catch(() => { /* an unreachable routed endpoint surfaces as a request failure, not here */ });
       }
-      if (reasoningSupportCache[sig] === undefined) {
-        void detectSupportedReasoningEfforts(url, resolved.apiToken, resolved.model).then((efforts) => {
-          if (!efforts) return;
-          setReasoningSupportCache((prev) => {
-            const next = { ...prev, [sig]: efforts };
-            const keys = Object.keys(next);
-            if (keys.length > REASONING_CACHE_CAP) delete next[keys[0]];
-            return next;
-          });
-        }).catch(() => { /* same: capability probes fail quietly, the request itself reports */ });
+      if (reasoningNeedsResolve(reasoningCapabilityCache[sig]) && !resolvedSignatures.current.has(sig)) {
+        resolvedSignatures.current.add(sig);
+        void resolveReasoningCapability(
+          { url, token: resolved.apiToken, model: resolved.model },
+          fetch,
+          { observation: reasoningObservationsRef.current[sig] },
+        ).then((record) => {
+          if (!record) { resolvedSignatures.current.delete(sig); return; }
+          cacheReasoningCapability(sig, record);
+        }).catch(() => {
+          // Same: capability resolves fail quietly, the request itself reports. Release the signature so
+          // the next resolve for this target tries again.
+          resolvedSignatures.current.delete(sig);
+        });
       }
     }
     return {
@@ -1089,12 +1181,12 @@ function useProvideSettings() {
       contextWindow: resolved.localEngine
         ? localContextSize
         : resolved.contextWindowOverride ?? routedContextCache[sig] ?? DEFAULT_CONTEXT_WINDOW,
-      supportedReasoningEfforts: reasoningSupportCache[sig] ?? null,
+      reasoning: withEngineBudget(reasoningCapabilityCache[sig] ?? null),
     };
   }, [
     promptEndpoints, textPresetStore, textValues, textIsBuiltInActive, localModelActive, activeMaxTokens,
-    contextWindow, supportedReasoningEfforts, routedContextCache, reasoningSupportCache, localContextSize,
-    localMaxTokens, engineState.modelId, activeTextEndpointPresetName, setRoutedContextCache, setReasoningSupportCache,
+    contextWindow, reasoningCapability, routedContextCache, reasoningCapabilityCache, localContextSize,
+    localMaxTokens, engineState.modelId, activeTextEndpointPresetName, setRoutedContextCache, cacheReasoningCapability,
   ]);
 
   /**
@@ -1424,10 +1516,13 @@ function useProvideSettings() {
     thinkingMode,
     setThinkingMode,
     reasoningEffort,
-    setReasoningEffort,
-    supportedReasoningEfforts,
+    nativeReasoning,
+    setNativeReasoning,
+    reasoningCapability,
     reasoningEngaged,
+    noteReasoningReply,
     promptReasoning,
+    promptReasoningSettings,
     setPromptReasoning,
     promptReasoningBudget,
     setPromptReasoningBudget,

@@ -19,6 +19,10 @@
 // **The invariant this rests on: no generator writes to `authorBrief`.** There is no ✨ button on it and
 // there must never be one. The moment anything drafts into it, it stops being a root and the cycle is back.
 
+/** The help line between the brief's label and its editor. A line and not placeholder text, because
+ *  placeholder text is gone the moment the author types, and screen readers read it unreliably. */
+export const AUTHOR_BRIEF_HINT = 'Your own notes. A list is fine. The ✨ buttons write both descriptions from it.';
+
 /** Whether a brief holds anything. Whitespace is not a brief — the same emptiness rule the overwrite
  *  warning uses, so "has the author written here?" answers the same way everywhere. */
 export function hasBrief(brief: string | undefined | null): boolean {

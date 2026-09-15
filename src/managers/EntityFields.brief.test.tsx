@@ -17,7 +17,9 @@ vi.mock('@/components/AiGenerateButton', () => ({
   ),
 }));
 vi.mock('@/components/DescriptionCheckButton', () => ({ default: () => <div /> }));
-vi.mock('./ImageTagsField', () => ({ default: () => <div /> }));
+vi.mock('./ImageTagsField', () => ({
+  default: () => <div />, ImageGallery: () => <div />, ImageTags: () => <div />, ImageWidget: () => <div />,
+}));
 vi.mock('../lib/UtilityComponents', () => ({ ModelUpload: () => <div /> }));
 
 const BRIEF = '- classroom, second floor\n- windows face east';

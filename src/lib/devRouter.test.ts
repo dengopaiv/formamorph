@@ -7,6 +7,11 @@ import { PROMPT_SURFACE_ROUTES } from './promptGroups';
 import { WORLD_EDITOR_TABS } from '@/views/worldEditorTabs';
 import { BUILT_BENCH_TABS } from '@/lib/testBench/benchTabs';
 import { LOCATION_VIEWS } from '@/views/locationViews';
+import { ENTITY_PANEL_TABS } from '@/views/entityPanelTabs';
+import { LOCATION_PANEL_TABS } from '@/views/locationPanelTabs';
+import { STAT_PANEL_TABS } from '@/views/statPanelTabs';
+import { TRAIT_PANEL_TABS } from '@/views/traitPanelTabs';
+import { DICTIONARY_PANEL_TABS } from '@/views/dictionaryPanelTabs';
 import { MAIN_MENU_CARD_TABS } from '@/views/mainMenuTabs';
 import { GAME_LEFT_PANEL_TABS } from '@/components/game/leftPanelTabs';
 import { PROFILE_TABS } from '@/components/menu/profileTabs';
@@ -112,6 +117,34 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.worldEditorLocations]).toEqual(LOCATION_VIEWS.map((v) => v.value));
   });
 
+  it('ledger lists exactly the tabs the entity panel switches between', () => {
+    // Advanced-only tabs are listed too: the ledger says what the router can target, not what one mode shows.
+    expect([...DEV_MODAL_TABS.worldEditorEntity]).toEqual(ENTITY_PANEL_TABS.map((t) => t.value));
+  });
+
+  it('ledger lists exactly the tabs the location panel switches between', () => {
+    expect([...DEV_MODAL_TABS.worldEditorLocation]).toEqual(LOCATION_PANEL_TABS.map((t) => t.value));
+  });
+
+  it('ledger lists exactly the tabs the stat panel switches between', () => {
+    expect([...DEV_MODAL_TABS.worldEditorStat]).toEqual(STAT_PANEL_TABS.map((t) => t.value));
+  });
+
+  it('ledger lists exactly the tabs the trait panel switches between', () => {
+    expect([...DEV_MODAL_TABS.worldEditorTrait]).toEqual(TRAIT_PANEL_TABS.map((t) => t.value));
+  });
+
+  it('ledger lists exactly the tabs the dictionary entry panel switches between', () => {
+    expect([...DEV_MODAL_TABS.worldEditorEntry]).toEqual(DICTIONARY_PANEL_TABS.map((t) => t.value));
+  });
+
+  // The Locations tab spends one `subtab=…` slot on both switches, so a value landing in both would make
+  // the router move the panel and the view at once and neither call site could tell which was meant.
+  it('keeps the Locations tab’s two subtab meanings apart', () => {
+    const views = new Set<string>(LOCATION_VIEWS.map((v) => v.value));
+    expect(LOCATION_PANEL_TABS.map((t) => t.value).filter((v) => views.has(v))).toEqual([]);
+  });
+
   it('ledger lists exactly the tabs the Community browser switches between', () => {
     // The browser renders one tab per catalog kind plus Contest, so a new one must be consciously
     // covered here too.
@@ -158,7 +191,7 @@ describe('dev-router coverage guard', () => {
     // localModel is deliberately excluded (it lives inside Settings, not as a standalone modal). worldEditor
     // is an in-place MainMenu modal (no longer a top-level view).
     expect(DEV_MODALS).toEqual([
-      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'exitApp',
+      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'exitApp', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource',
     ]);
   });
 });

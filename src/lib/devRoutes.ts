@@ -50,25 +50,45 @@ export type DevView = (typeof DEV_VIEWS)[number];
  *  otherwise. `privacyPolicy` raises the sign-in privacy prompt on canned text
  *  (`devPrivacySample.ts`), because the real policy is a server row that ships switched off —
  *  without the sample the prompt would have nothing to render before the cutover.
- *  `auth` opens the signed-out login/register dialog directly.
+ *  `auth` opens the signed-out login/register dialog directly. `designSystem` opens the live reference
+ *  showcase without mounting it in production. `enterWorld` starts normal entry for the stored world
+ *  named by `tab` (or the first installed world).
  *  `deleteAccount` opens the account-deletion flow at its first step, and `deletionCancelled` the notice
  *  a sign-in raises when it calls a pending deletion off. Neither is reachable by clicking without an
  *  account in the matching state — one needs a real password, the other a request already standing.
  *  `updateRequired` raises the Update Dialog on a canned refusal, since the real one needs a server route
  *  whose minimum version is above the running build. `exitApp` raises the Android exit prompt, which on a
- *  phone only the hardware back button reaches. */
-export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'exitApp'] as const;
+ *  phone only the hardware back button reaches. `connectReferences` raises the Connect World References step
+ *  on canned rows (`devConnectReferencesSample.ts`), because in the app it opens only partway through an add
+ *  in the World Editor, and only for a library item expecting something that world lacks. `manageAddons`
+ *  opens Community Creations and raises the add-on review over the first world listing, the same trick
+ *  `likers` uses: the dialog reads a real listing's offers, so it has nothing to show without one.
+ *  `componentUpdates` raises the component update review on a canned source and two canned worlds
+ *  (`devComponentUpdateSample.ts`), because in the app it opens only for a library item whose revision two
+ *  installed worlds are actually behind. Its worlds are held in memory, so Apply Updates writes nothing.
+ *  `worldUpdate` raises the world update review on canned rows (`devWorldUpdateSample.ts`), because in the
+ *  app it opens only between "update an existing copy" and the write, for a republished world whose
+ *  required set has actually moved. Apply closes it and writes nothing.
+ *  `importComponent` raises the component-file import review on a canned file
+ *  (`devImportComponentSample.ts`), because in the app it opens only for a chosen file that names worlds.
+ *  Importing from it does write: the character lands in the library, and a world you tick gets a copy.
+ *  `replaceSource` opens the World Editor and raises the Bench's Replace From Library picker over a canned
+ *  missing copy, because in the app it opens only from an Issues row whose source is gone. Replace
+ *  closes it and writes nothing. */
+export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'exitApp', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource'] as const;
 export type DevModal = (typeof DEV_MODALS)[number];
 
 /** Coverage ledger: tabbed surface → the sub-tabs the router can target (via `tab=…`). Kept in lockstep
  *  with each surface's own exported tab list by `devRouter.test.ts`. Add a surface's tabs here when wired. */
 export const DEV_MODAL_TABS = {
+  // The Context Menu reference exposes both production group dialogs with isolated data.
+  designSystemGroupPicker: ['picker', 'create'],
   settings: ['display', 'output', 'prompts', 'endpoints', 'data'],
   worldEditor: ['overview', 'stats', 'entities', 'locations', 'traits', 'dictionary', 'placeholders'],
   // Community Creations browses one kind per tab, plus Contest — a view over the worlds already in the
   // catalog rather than a fourth kind (see lib/browseTabs). `tab=contest` serves canned contests, so the
   // tab is reachable whether or not one is really running.
-  community: ['world', 'entity', 'dictionary', 'contest'],
+  community: ['world', 'entity', 'dictionary', 'model', 'contest'],
   // The account dialog: admin messages, the follow feed, and the terms. Password and logout are header
   // buttons rather than tabs, so neither is routable.
   profile: ['messages', 'notifications', 'terms'],
@@ -86,6 +106,26 @@ export const DEV_MODAL_TABS = {
   // (`#dev?modal=worldEditor&tab=locations&subtab=canvas`). Adding `fullscreen=1` opens the canvas in its
   // full-screen window on arrival — the same canvas, so it is not a third view and not listed as one.
   worldEditorLocations: ['list', 'canvas'],
+  // The World Editor's entity panel splits its fields across its own tabs, reached with the same `subtab=…`
+  // slot over the Entities tab (`#dev?modal=worldEditor&tab=entities&subtab=descriptions`). It lands on the
+  // panel, so pair it with a world that has an entity to select. `placeholders` is Advanced only.
+  worldEditorEntity: ['profile', 'descriptions', 'placeholders'],
+  // The World Editor's location panel does the same over the Locations tab
+  // (`#dev?modal=worldEditor&tab=locations&subtab=presence`). It shares that tab's `subtab=…` slot with the
+  // List/Canvas switch above, which is why no value may appear in both lists. `pins` is Advanced only.
+  worldEditorLocation: ['details', 'presence', 'media', 'pins'],
+  // The World Editor's stat panel does the same over the Stats tab
+  // (`#dev?modal=worldEditor&tab=stats&subtab=code`). `descriptors` and `code` are Advanced only, and
+  // Simple mode leaves one tab and no strip, so land those on an Advanced editor.
+  worldEditorStat: ['details', 'descriptors', 'code'],
+  // The World Editor's trait panel does the same over the Traits tab
+  // (`#dev?modal=worldEditor&tab=traits&subtab=stats`). `pins` is Advanced only.
+  worldEditorTrait: ['details', 'stats', 'pins'],
+  // The World Editor's dictionary entry panel does the same over the Dictionary tab
+  // (`#dev?modal=worldEditor&tab=dictionary&subtab=matching`). It lands on the entry panel, so pair it with
+  // a book that has an entry to select. `matching` is Advanced only, and Simple mode leaves one tab and no
+  // strip, so land it on an Advanced editor.
+  worldEditorEntry: ['details', 'matching'],
   // The World Editor's Test Bench: `bench=…` opens the full panel — at whichever placement is remembered —
   // on the instrument it names (`#dev?modal=worldEditor&bench=issues`). Only built instruments are listed,
   // since an unbuilt tab renders

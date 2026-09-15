@@ -1,7 +1,7 @@
 # 10 — Device checklist before the first public APK
 
 Status: ready-for-human
-Status note: Run sheet written 2026-09-04. Needs a phone and two pre-release tags; every blocker is done.
+Status note: GitHub signing, an ADB update, and phone import passed September 7. The tested APK opens a share sheet with no save-to-storage action on the Pixel. The Save As replacement needs a new signed build and phone verification before release. Gameplay and published update checks remain pending.
 Type: task
 Blocked by: 01, 02, 03, 05, 06, 07, 08, 09
 Spec: ../spec.md (Testing Decisions › Native plugin, install, CI)
@@ -20,18 +20,38 @@ Run on a real phone against a pre-release tag. Tick every line before the first 
 - [ ] First apply opens the unknown-sources setting; second apply opens the install sheet.
 - [ ] Relaunch on the new version with saves, worlds, and settings intact.
 - [ ] Version Requirement: a staff-set minimum on one route shows the Update Dialog naming that feature; everything else works; Update runs the download.
-- [ ] Share sheet: world, save, character card each arrive intact in Files.
+- [ ] Save As: world, save, character card each save to Downloads and reimport intact; cancel closes quietly.
 - [ ] Back: closes a modal, returns to the main menu, asks before exit.
 - [ ] itch android channel updated on a stable tag; skipped on the pre-release.
 
 ## Run sheet
 
-Every blocker is done as of 2026-09-04. The lines above need a phone, so this section prepares the run. Each step names the checklist lines it ticks. The order matters: the tamper test must come before the good download, and the Version Requirement test needs a newer release to hand to Update.
+### Verified GitHub build and install
+
+[Android-only run 34141651709](https://github.com/JakeJamesDev/formamorph/actions/runs/34141651709) succeeded on September 7 at commit `e34eb163`.
+
+- All four CI gates passed: 8,443 tests passed, 3 skipped; test step 322 seconds (Vitest 320.56 seconds).
+- Android release compiled and signed; APK signature verification passed in GitHub and locally, and its SHA-512 matched the downloaded sidecar.
+- The signing certificate matched the installed app. `adb install -r` returned `Success` on the Pixel 6 Pro without clearing app data; installed version remains `2.16.0` / `2016000`.
+- GitHub publication, desktop/web builds, and all deployment jobs were skipped.
+- This verifies signing and an ADB update, not browser installation prompts, saved-data integrity, gameplay, or the in-app updater. Those require the device checks above.
+- Phone feedback: importing works. Export opens the share sheet, but the available targets do not include saving to storage. Export needs a direct file-save flow before release; the existing share-sheet acceptance item does not cover that requirement.
+
+The lines above need a phone. The tamper test must come before the good download, and the Version Requirement test needs a newer release to hand to Update.
+
+### Local setup verified September 7
+
+- Release key: [formamorph-release.p12](C:/Users/benny/formamorph-android-signing/formamorph-release.p12). Password and backup are in LastPass; see [signing setup](01-developer-verification-and-signing-key.md#comments).
+- Saved signing directory and alias: [.formamorph-android-signing.env](C:/Users/benny/.formamorph-android-signing.env). This file does not contain the password.
+- Android SDK: [Sdk](C:/Users/benny/AppData/Local/Android/Sdk), including build-tools and [adb.exe](C:/Users/benny/AppData/Local/Android/Sdk/platform-tools/adb.exe).
+- Java 21: [Temurin JDK](<C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot>).
+- Device: Pixel 6 Pro, visible and authorized through wireless ADB.
+- After pushing the workflow changes, **Actions → Release → Run workflow → android_only** builds and verifies the signed APK as the `android` artifact without publishing. Leave the other inputs off. Use that APK for installation and gameplay checks; it does not replace the published update tests below.
 
 ### Before the phone
 
 1. **Secrets.** The four `ANDROID_*` secrets are set by hand (ticket 01). A missing one fails the Android job at "Decode the signing keystore", not on the phone.
-2. **First pre-release.** Set `package.json` `version` to `2.17.0-beta.1`, commit, tag `v2.17.0-beta.1`, push the tag in GitHub Desktop. The tag must equal `v<version>` or the build fails fast. The notes step has no released section for a beta and falls back to the In-Progress bucket; that is expected.
+2. **First pre-release.** Set `package.json` `version` to `2.17.0-beta.1`, commit, tag `v2.17.0-beta.1`, push the tag in GitHub Desktop. The tag must equal `v<version>` or the build fails fast. Prepare the matching released changelog section if the beta needs detailed notes; without it, the extractor emits only the maintenance fallback.
 3. **Confirm the pre-release.** The GitHub release is marked pre-release and carries `Formamorph-android.apk` and `Formamorph-android.apk.sha512`. In the Actions run, `itch-web` and `itch-desktop` show as skipped. That is the pre-release half of the last checklist line.
 
 ### On the phone, first install
@@ -65,7 +85,7 @@ Every blocker is done as of 2026-09-04. The lines above need a phone, so this se
 
 ### Remaining lines
 
-16. Export a world, a save, and a character card. Each opens the share sheet; save each to Files and reopen it there. Also try the VRM picker once: `accept=".vrm,.glb"` may offer nothing selectable in the system picker (ticket 06 comment). → **Share sheet**.
+16. Export a world, a save, and a character card. Each opens Save As; choose Downloads, save, then reimport and verify the content. Cancel another export and confirm no error appears. Also try the VRM picker once: `accept=".vrm,.glb"` may offer nothing selectable in the system picker (ticket 06 comment). → **Save As**.
 17. Back with a dialog open closes the dialog. Back in a game asks before leaving. Back on the main menu asks before exit. → **Back**.
 18. The stable half of the last line is ticked on the first stable tag: `itch-desktop` runs only on a tag ending in `.0`, so `v2.17.0` updates the itch android channel and a patch tag does not.
 

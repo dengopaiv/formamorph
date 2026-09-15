@@ -510,11 +510,16 @@ function inReferenceOrder(carried: Placeholder[]): Placeholder[] {
  * A carried def's values are remapped before they are compared, so a structured def matches the world's copy
  * on what its chips *mean* rather than on the ids the exporting world happened to give them. Value ids ride
  * along untouched: they are scoped to their own placeholder, so no host id can collide with one.
+ *
+ * `connections` names the world def a carried def resolves to whatever it looks like — the author's own
+ * answer, from the Connect World References step. `unmatched` reports the carried defs that neither a
+ * connection nor a perfect match settled, which is the set that step asks about.
  */
 export function absorbPlaceholders(
   carried: Placeholder[],
   worldPlaceholders: Placeholder[],
-): { toAdd: Placeholder[]; idMap: Record<string, string> } {
+  connections?: Record<string, string>,
+): { toAdd: Placeholder[]; idMap: Record<string, string>; unmatched: string[] } {
   const sameValues = (a: PlaceholderValue[], b: PlaceholderValue[]) =>
     a.length === b.length && a.every((v, i) => v.text === b[i].text);
   // Two defs sharing a name and values but weighted differently are different defs — matching on values
@@ -535,10 +540,18 @@ export function absorbPlaceholders(
   };
   const toAdd: Placeholder[] = [];
   const idMap: Record<string, string> = {};
+  const unmatched: string[] = [];
   // Match against the world's list plus anything added so far this pass (so two carried copies of the same def
   // collapse to one).
   const pool = [...worldPlaceholders];
   for (const c of inReferenceOrder(carried)) {
+    // A connection the author made outranks any comparison. One whose target is gone is ignored, so the
+    // repair flow gets to ask about it again rather than aiming chips at nothing.
+    const connected = connections?.[c.id];
+    if (connected && pool.some((p) => p.id === connected)) {
+      idMap[c.id] = connected;
+      continue;
+    }
     const values = (c.values ?? []).map((v) => ({ ...v, text: remapPlaceholderIds(v.text, idMap) }));
     // Weights key by value id, which the remap leaves alone, so the map carries across as written. An
     // override key opens on a value id too, but every segment below it names a placeholder, which the
@@ -574,9 +587,10 @@ export function absorbPlaceholders(
       toAdd.push(fresh);
       pool.push(fresh);
       idMap[c.id] = fresh.id;
+      unmatched.push(c.id);
     }
   }
-  return { toAdd, idMap };
+  return { toAdd, idMap, unmatched };
 }
 
 /**
@@ -773,7 +787,7 @@ function describePh(ph: Placeholder, segs: PlaceholderSegment[], ctx: DescribeCt
     // A pin names one value, so the placeholder reads as that value whatever its roll flag says.
     return pinned == null && placeholderIsChoice(ph)
       ? describeChoice(described)
-      : described.filter((s) => s !== '').join(', ');
+      : described.filter((s) => s !== '').join(VALUE_JOIN);
   }
 
   const [seg, ...rest] = segs;
@@ -925,6 +939,10 @@ export const weightedPick = (values: PlaceholderValue[], weights?: Record<string
 
 /** How many levels the walk descends before it gives up and reports a `depth` finding. */
 export const PLACEHOLDER_DEPTH_CAP = 16;
+
+/** What joins the several values an Object holds at once. Stat code's `text` reads the same join, so the
+ *  two must agree; the sandbox prelude inlines this rather than restating it. */
+export const VALUE_JOIN = ', ';
 
 /** True if a placeholder draws one of its values rather than joining all of them. `roll` decides when the
  *  author set it; otherwise the value count does, exactly as it always has. */
@@ -1280,7 +1298,7 @@ function phSpans(ph: Placeholder, ctx: ResolveCtx): PlaceholderSpan[] {
     layDrawPins(ph, v.text, inner);
     const spans = valueSpans(v.text, inner, { holder: ph, value: v });
     if (!spans.length) continue;
-    if (out.length) out.push({ text: ', ' });
+    if (out.length) out.push({ text: VALUE_JOIN });
     out.push(...spans);
   }
   return out;
@@ -1413,6 +1431,33 @@ function walkSegs(ph: Placeholder, segs: WalkSegment[], ctx: ResolveCtx): string
 export function resolvePlaceholders(text: string, opts: ResolveOptions): string {
   if (!text || !hasPlaceholders(text)) return text;
   return resolveText(text, createResolveCtx(opts));
+}
+
+/** One placeholder as play reads it right now: what it resolves to, and each authored value resolved. */
+export interface PlaceholderReading {
+  id: string;
+  name: string;
+  value: string;
+  /** Every authored value in order, benched ones included, each resolved to text. */
+  values: string[];
+}
+
+/**
+ * Every placeholder resolved at world scope under `rolls` and `pins`, in authored order. One context
+ * serves the whole read, so a placeholder with no roll draws once and every chip of it agrees. The read
+ * mints nothing: any `setRoll` in `opts` is dropped, and the draws go with the pass.
+ */
+export function readPlaceholders(opts: ResolveOptions): PlaceholderReading[] {
+  const ctx = createResolveCtx({ ...opts, setRoll: undefined });
+  return opts.placeholders.map((ph) => {
+    const inner: ResolveCtx = { ...ctx, seen: new Set([ph.id]), depth: 1 };
+    return {
+      id: ph.id,
+      name: ph.name,
+      value: resolveChip({ id: ph.id, mode: 'world', placementId: ph.id }, ctx, [], false),
+      values: (ph.values ?? []).map((v) => resolveValue(v.text, inner, { holder: ph, value: v })),
+    };
+  });
 }
 
 /** A fresh root context. Held across several texts by the priming and preview passes, so their `minted` rolls

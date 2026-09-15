@@ -1,6 +1,6 @@
 # Bringing upstream v2.17–v2.19 into the fork
 
-**State:** Filed, 2026-09-16. Nothing in this document has been done yet.
+**State:** Phases 0–3 built on 2026-09-16, not yet pushed. Progress is logged under I1 in `TODO.md`.
 
 Upstream moved from `46ea181c` (2026-09-07) to `685b4152` (2026-09-15) with **237 commits across 676 files**,
 tagging v2.17.0, v2.18.0 and v2.19.0 along the way, plus unreleased Native Reasoning work. All four of our
@@ -212,6 +212,7 @@ rather than start from nothing. Findings go to `TODO.md` → **A**, one id each.
 | 6.8 | **Native Reasoning row** | The checkbox's label, and whether the dropdown is announced as tied to it | A switch beside a dropdown is a common spot for an orphaned label. |
 | 6.9 | **Community section rail / dropdown** | The current section | The changelog says it is announced (`aria-current`). Confirm it and move on. |
 | 6.10 | **Publish Size meter** | Value and state (green/amber/red) | It has `role="meter"`. Check the colour state has words as well. |
+| 6.12 | **Field help lines** (every panel) | Whether the help is read when you Tab into the field, not only when you browse past it | `PromptField` renders `hint` as text before the editor, with no `aria-describedby`. |
 | 6.11 | **Library tile board** (A1) | Unchanged since 2026-09-07? | Re-check that it is still pointer-only before A1 is discussed again. |
 
 ## Phase 7 · Memory and notes

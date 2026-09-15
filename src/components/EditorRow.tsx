@@ -26,6 +26,7 @@ export interface EditorRowAction {
   /** Tooltip and accessible name. */
   title: string;
   onClick: () => void;
+  disabled?: boolean;
 }
 
 export interface EditorRowProps {
@@ -44,6 +45,8 @@ export interface EditorRowProps {
 
   selected: boolean;
   onSelect: () => void;
+  /** Adds a keyboard-operable selection target around the row label. */
+  selectionLabel?: string;
 
   /** 'chevron' for a collapsible row, 'spacer' to reserve the slot so siblings stay aligned. */
   lead?: 'chevron' | 'spacer';
@@ -53,7 +56,7 @@ export interface EditorRowProps {
   collapseLabels?: [string, string];
 
   /** The enabled toggle, where the surface offers one. */
-  checkbox?: { checked: boolean; onChange: (checked: boolean) => void };
+  checkbox?: { checked: boolean; onChange: (checked: boolean) => void; ariaLabel?: string };
   /** Between the grip and the label (e.g. a folder glyph on group rows). */
   icon?: ReactNode;
   label: ReactNode;
@@ -85,6 +88,7 @@ export function EditorRow({
   grip = true,
   selected,
   onSelect,
+  selectionLabel,
   lead,
   collapsed,
   onToggleCollapse,
@@ -135,7 +139,10 @@ export function EditorRow({
           <span
             {...gripProps}
             onClick={(e) => e.stopPropagation()}
-            className={cn('shrink-0 cursor-grab touch-none px-1', chrome)}
+            className={cn(
+              'shrink-0 cursor-grab touch-none rounded-sm px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+              chrome,
+            )}
           >
             <GripVertical className="h-4 w-4" />
           </span>
@@ -149,13 +156,31 @@ export function EditorRow({
             checked={checkbox.checked}
             onCheckedChange={(v) => checkbox.onChange(v === true)}
             onClick={(e) => e.stopPropagation()}
-            className="mx-1 shrink-0"
+            aria-label={checkbox.ariaLabel}
+            className={cn(
+              'mx-1 shrink-0',
+              selected && 'border-primary-foreground data-[state=checked]:border-primary-foreground data-[state=checked]:bg-primary-foreground data-[state=checked]:text-primary',
+            )}
           />
         </Tip>
       )}
       {icon}
       {/* Truncates rather than wrapping: a long name must never push the actions off the row. */}
-      <span className={cn('min-w-0 flex-grow truncate', labelClass)}>{label}</span>
+      {selectionLabel ? (
+        <button
+          type="button"
+          aria-label={selectionLabel}
+          onClick={(e) => { e.stopPropagation(); onSelect(); }}
+          className={cn(
+            'min-w-0 flex-grow truncate rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+            labelClass,
+          )}
+        >
+          {label}
+        </button>
+      ) : (
+        <span className={cn('min-w-0 flex-grow truncate', labelClass)}>{label}</span>
+      )}
       {meta !== undefined && (
         // The meta is the one place a row says something only a tip spells out, so it takes a tab stop of
         // its own — and only while it has a tip to give.
@@ -175,6 +200,8 @@ export function EditorRow({
             size="icon"
             className={cn('shrink-0', chrome)}
             onClick={(e) => { e.stopPropagation(); action.onClick(); }}
+            disabled={action.disabled}
+            aria-label={action.title}
           >
             {action.icon}
           </Button>

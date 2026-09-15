@@ -23,7 +23,9 @@ vi.mock('@/services/WorldStorageService', () => ({
     fetchComments: vi.fn(async () => ({ data: [], total: 0, pagination: {} })),
     // The details modal fetches these on open; a missing one rejects in an effect and fails the run
     // as an unhandled error even while every assertion passes.
-    fetchChangelog: vi.fn(async () => []),
+    fetchListingDetails: vi.fn(async () => null),
+    fetchDependencies: vi.fn(async () => []),
+    fetchAddons: vi.fn(async () => []),
   },
   CONTEST_PLACED: 'CONTEST_PLACED',
 }));
@@ -99,8 +101,10 @@ const renderBrowser = (props: Record<string, unknown> = {}) =>
       setWorlds={() => {}}
       entities={[]}
       dictionaries={[]}
+      models={[]}
       refreshEntities={() => {}}
       refreshDictionaries={() => {}}
+      refreshModels={() => {}}
       isAuthenticated
       currentUser={reader}
       openImageViewer={() => {}}
@@ -108,13 +112,13 @@ const renderBrowser = (props: Record<string, unknown> = {}) =>
     />
   );
 
-/** Land on the Contest tab the way a reader does — by pressing its trigger. */
+/** Land on the Contest tab the way a reader does — by pressing its row in the section switcher. */
 const openContestTab = async () => {
-  const trigger = await screen.findByRole('tab', { name: 'Contest' });
+  const trigger = await screen.findByRole('button', { name: 'Contest' });
   await userEvent.click(trigger);
   // Asserted here rather than in each case: a click that quietly failed to switch would otherwise leave
   // every grid assertion below reading the Worlds tab, which shows most of the same listings.
-  expect(trigger).toHaveAttribute('data-state', 'active');
+  expect(trigger).toHaveAttribute('aria-current', 'true');
 };
 
 /** The listing names the grid is showing, in the order it is showing them. */
@@ -140,43 +144,43 @@ describe('whether the Contest tab is there at all', () => {
   it('stays away on a server running no contests, where it could only ever be empty', async () => {
     renderBrowser();
 
-    expect(await screen.findByRole('tab', { name: 'Worlds' })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Contest' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Worlds' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Contest' })).not.toBeInTheDocument();
   });
 
   it('appears while a contest is running', async () => {
     server.events = [contest()];
     renderBrowser();
 
-    expect(await screen.findByRole('tab', { name: 'Contest' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Contest' })).toBeInTheDocument();
   });
 
   it('stays for the archives once every contest has ended', async () => {
     server.events = [decided(contest({ startsAt: at(-40), endsAt: at(-30) }), [['w9', 'The Long Thaw']])];
     renderBrowser();
 
-    expect(await screen.findByRole('tab', { name: 'Contest' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Contest' })).toBeInTheDocument();
   });
 
   it('drops an announcement, which has no entries to browse', async () => {
     server.events = [contest({ type: 'announcement' })];
     renderBrowser();
 
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Worlds' })).toBeInTheDocument());
-    expect(screen.queryByRole('tab', { name: 'Contest' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Worlds' })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Contest' })).not.toBeInTheDocument();
   });
 
   it('lands the reader back on the catalog when the tab it was aimed at has nothing behind it', async () => {
     renderBrowser({ initialTab: 'contest' });
 
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Worlds' })).toHaveAttribute('data-state', 'active'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Worlds' })).toHaveAttribute('aria-current', 'true'));
   });
 
   it('opens straight onto the contest when an event banner sent the reader here', async () => {
     server.events = [contest()];
     renderBrowser({ initialTab: 'contest' });
 
-    expect(await screen.findByRole('tab', { name: 'Contest' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByRole('button', { name: 'Contest' })).toHaveAttribute('aria-current', 'true');
   });
 });
 
@@ -266,7 +270,7 @@ describe('what the contest grid shows in each of its three states', () => {
 
     // Still on the ordinary catalog: the badge is on the card, not on the tab it was won in — and it
     // names the step, so a runner-up is not shown as the winner.
-    expect(screen.getByRole('tab', { name: 'Worlds' })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('button', { name: 'Worlds' })).toHaveAttribute('aria-current', 'true');
     const badge = (await screen.findByText('Winter World-Building Contest')).closest('p') as HTMLElement;
     expect(badge).toHaveTextContent('2nd Place — Winter World-Building Contest');
   });
@@ -442,8 +446,10 @@ describe('reaching the rules and the archives', () => {
         setWorlds={() => {}}
         entities={[]}
         dictionaries={[]}
+        models={[]}
         refreshEntities={() => {}}
         refreshDictionaries={() => {}}
+        refreshModels={() => {}}
         isAuthenticated
         currentUser={reader}
         openImageViewer={() => {}}
@@ -458,8 +464,10 @@ describe('reaching the rules and the archives', () => {
         setWorlds={() => {}}
         entities={[]}
         dictionaries={[]}
+        models={[]}
         refreshEntities={() => {}}
         refreshDictionaries={() => {}}
+        refreshModels={() => {}}
         isAuthenticated
         currentUser={reader}
         openImageViewer={() => {}}
@@ -622,7 +630,7 @@ describe('the banner stack on the contest tab', () => {
     renderBrowser({ events: [contest()], onOpenEvent: vi.fn() });
 
     await openContestTab();
-    await userEvent.click(screen.getByRole('tab', { name: 'Worlds' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Worlds' }));
 
     expect(await screen.findByRole('button', { name: 'View Entries' })).toBeInTheDocument();
   });

@@ -1,6 +1,8 @@
 // One-shot, non-streaming summarizer for the world editor's "generate AI-Facing Summary" button.
 // Mirrors the OpenAI-compatible request shape the game uses, minus the streaming/turn machinery.
 
+import { authoringReasoningBody, authoringRequestError, type AuthoringReasoning } from './authoringRequest';
+
 /**
  * The default, user-editable summary prompt. Persisted per prompt preset and overridable in
  * Settings → Prompts → Authoring.
@@ -38,6 +40,8 @@ export async function summarizeDescription(
     template?: string;
     maxTokens?: number;
     signal?: AbortSignal;
+    /** The active endpoint's reasoning record; the request sends reasoning off (see `lib/authoringRequest`). */
+    reasoning?: AuthoringReasoning;
   },
 ): Promise<string> {
   const res = await fetch(opts.endpointUrl, {
@@ -53,11 +57,12 @@ export async function summarizeDescription(
         { role: 'user', content: text },
       ],
       max_tokens: opts.maxTokens ?? DEFAULT_SUMMARY_MAX_TOKENS,
+      ...authoringReasoningBody(opts.reasoning),
       stream: false,
     }),
     signal: opts.signal,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await authoringRequestError(res);
 
   const json = (await res.json()) as ChatCompletion;
   const content = json?.choices?.[0]?.message?.content;

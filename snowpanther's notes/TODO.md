@@ -71,7 +71,7 @@ is about.
 
 ### I1 · Bring 237 upstream commits into every branch
 
-**State:** Filed, 2026-09-16. **This comes before K1 and D1.** Both of those would otherwise be tested on
+**State:** Started, 2026-09-16. Phases 0–3 built; gates, pushes and the audit remain. **This comes before K1 and D1.** Both of those would otherwise be tested on
 a base three releases old.
 
 The plan is `upstream-2.19-integration-plan.md`. In short: rebuild the keyboard branch clean (which also
@@ -80,6 +80,28 @@ off from the authoring calls, then do a keyboard and NVDA audit of what upstream
 
 **Decided 2026-09-16:** Q1 rebuild the keyboard branch, yes · Q2 the Author's Brief is per world, and
 no library update writes it · Q3 reasoning is off for ✨ and 🔍.
+
+**Notes**
+
+- 2026-09-16 · claude · **Phases 0–3 built, not pushed.** Every tip is tagged `pre-2.19/<branch>`.
+  `main` fast-forwarded to `685b4152`. `keyboard-tree-nesting-2.19` is upstream plus one commit, the
+  feature alone: code applied with no conflicts, and nothing of the authoring or notes work on it. That
+  is K2 done. `description-consistency` merged, with 4 textual conflicts (not the 10 expected). Beyond
+  the plan's list it needed three more things:
+  - **Find never searched the brief at all**, so a tab entry alone would have done nothing.
+    `worldSearch` now indexes it.
+  - **Editing the brief would have made another author's copy a Local replacement**, because any edit
+    marked it. It now marks only when authored content changed (`markEditedFrom`).
+  - **A copy with no brief would have picked up the source's brief** on update.
+
+  Also true and older than this sync: **no trait panel has ever shown the brief**, though the fork
+  changelog said traits have one. The changelog is corrected; the field is not built.
+- 2026-09-16 · claude · **D4's cheap half is done** as part of this: the server's message now reaches the
+  toast. The proper half, routing through the shared request layer, is still not started.
+- 2026-09-16 · claude · **One more for Phase 6.** Upstream's field help lines (`hint` on `PromptField`)
+  are plain text placed before the editor. They are **not** tied to it with `aria-describedby`, so NVDA
+  reads the help when you browse past it but not when you Tab straight into the field. The brief's new
+  help line has the same limitation. Worth hearing before calling it a gap.
 
 ---
 
@@ -119,7 +141,8 @@ arrow on a leaf is correct behaviour rather than a bug.
 
 ### K2 · Lift the unrelated commits off the branch
 
-**State:** chore, and it gates the PR.
+**State:** Done 2026-09-16, by the rebuild in I1. `keyboard-tree-nesting-2.19` carries the feature
+and nothing else. The old line is kept as `pre-2.19/keyboard-tree-nesting`.
 
 In the branch's own order:
 
@@ -280,8 +303,7 @@ is unknown, and it is the number that decides whether this is usable.
 
 Not blocked by size: the $25 Premium tier has no model-size cap (only the $10 Basic tier is capped, at
 15B). What gates it is the 100-download auto-onboarding threshold and, more seriously, whether their
-stack serves that base at all. See `docs-internal/behemoth-128b.md` on
-`Colossally-expensive-curiosities`.
+stack serves that base at all. See `behemoth-128b.md` in this directory.
 
 ### P5 · Endpoint presets still cannot be exported
 
@@ -294,17 +316,17 @@ endpoint notes documents the procedure by hand. Nothing has been built, and noth
 
 # C · Chores that will cost something if they are left
 
-### C1 · Move `docs-internal/behemoth-128b.md` out of `docs-internal/`
+### C1 · ~~Move `docs-internal/behemoth-128b.md` out of `docs-internal/`~~ — **Done, 2026-09-16**
 
-It is ours, and `docs-internal/` is **upstream's** — a note filed there lands in the diff of every PR
+Now `snowpanther's notes/behemoth-128b.md`, copied unchanged. It was ours, and `docs-internal/` is **upstream's** — a note filed there lands in the diff of every PR
 made from this fork. Upstream has since sorted that directory into `designs/`, `notes/` and `specs/`,
 so a loose file at its root is doubly out of place. It belongs in `snowpanther's notes/` beside
 `model-recommendations.md`.
 
-### C2 · Decide what `Colossally-expensive-curiosities` is for
+### C2 · ~~Decide what `Colossally-expensive-curiosities` is for~~ — **folded in, 2026-09-16**
 
-It is one doc on its own branch. Either fold it into `snowpanther's notes/` on a working branch, or
-keep it and write down why here.
+Its one doc now lives here (C1). The local branch and `origin` still exist; deleting them is yours to
+say, and `pre-2.19/Colossally-expensive-curiosities` keeps the tip either way.
 
 ### C3 · ~~Push the synced branches~~ — **Done, 2026-09-07**
 

@@ -28,7 +28,8 @@ import {
   describeInThresholdUnits, describeThreshold, descriptorSpans, isThresholdOutOfRange, sortedDescriptors,
   statStartValue, thresholdValue, uncoveredSpan, valueThreshold,
 } from '@/lib/statDescriptorGeometry';
-import { usesStatClock } from '@/lib/statCodeExecutor';
+import { statCodeName } from '@/lib/statCodeNames';
+import { boxCode, filledCodeBoxes, noBoxes, TIMING_LABEL } from '@/lib/statCodeTiming';
 import { estimateTokens } from '@/lib/memoryUtils';
 import { entityImages } from '@/lib/entityImages';
 import {
@@ -111,7 +112,7 @@ export interface Rule extends RuleHead {
 const quote = (text: string) => `“${text}”`;
 
 /** A finding for `rule` — the boilerplate trio copied from the rule itself. */
-const finding = (rule: RuleHead, message: string, items: FindingItem[]): Finding => ({
+export const finding = (rule: RuleHead, message: string, items: FindingItem[]): Finding => ({
   ruleId: rule.id, severity: rule.severity, section: rule.section, message, items,
 });
 
@@ -339,6 +340,38 @@ const primaryKeys = (entry: DictionaryEntry): string[] => (entry.key ?? []).filt
 const secondaryKeys = (entry: DictionaryEntry): string[] => (entry.secondaryKeys ?? []).filter(Boolean);
 
 // ── Reference integrity: everything that points at nothing ────────────────────────────────────────────────
+
+/**
+ * A linked copy whose stored connection names something this world has since deleted. The copy still plays;
+ * what breaks is the next update from its source, which would resolve that reference to a new placeholder
+ * of its own instead of the one the author meant. Save Connections, in the selected copy's menu, is the
+ * repair — it needs the author to say what the reference means now, so no `fix` can stand in for it.
+ */
+const linkConnectionBroken: Rule = {
+  id: 'link-connection-broken',
+  severity: 'warning',
+  section: 'entities',
+  summary: (count) => `${count} linked copies are connected to things this world no longer has`,
+  check: (world) => {
+    const known = new Set([
+      ...allPlaceholders(world).map((p) => p.id),
+      ...(world.locations ?? []).map((l) => l.id),
+    ]);
+    const copies = [
+      ...(world.entities ?? []).map((e) => ({ link: e.link, item: asItem(e, world) })),
+      ...(world.dictionaries ?? []).map((b) => ({
+        link: b.link, item: namedItem(b.id, b.name, world, 'dictionary' as const),
+      })),
+    ];
+    return copies
+      .filter(({ link }) => Object.values(link?.connections ?? {}).some((id) => !known.has(id)))
+      .map(({ item }) => finding(
+        linkConnectionBroken,
+        `${quote(item.name)} is connected to something this world no longer has — use Save Connections to point it at one it does`,
+        [item],
+      ));
+  },
+};
 
 const entityLocationOrphan: Rule = {
   id: 'entity-location-orphan',
@@ -829,18 +862,23 @@ const placeholderPinnedUnused: Rule = {
 // `==`/`!=` forms — any comparison against `.name` names a stat.
 const NAME_THEN_LITERAL = /\.name\s*[!=]==?\s*(["'`])((?:\\.|(?!\1).)*)\1/g;
 const LITERAL_THEN_NAME = /(["'`])((?:\\.|(?!\1).)*)\1\s*[!=]==?\s*[\w$]+(?:\??\.[\w$]+)*\??\.name\b/g;
+// The map form: `stats.Vigor` names the stat by identifier, `stats["Vigor"]` (any quote style) by bracket
+// key; a computed bracket key or an array-method call like `stats.find(` matches neither, as intended.
+const MAP_DOT = /\bstats\.([A-Za-z_$][\w$]*)\b(?!\s*\()/g;
+const MAP_BRACKET = /\bstats\[\s*(["'`])((?:\\.|(?!\1).)*)\1\s*\]/g;
 
-/** Every stat name a piece of code compares against, unescaped. Template literals with `${}` are dynamic
- *  and skipped — there is no literal name to check. */
+/** Every stat name a piece of code names, unescaped — by `.name` comparison or by map lookup. Template
+ *  literals with `${}` are dynamic and skipped — there is no literal name to check. */
 const statNamesInCode = (code: string): string[] => {
   const names: string[] = [];
-  for (const re of [NAME_THEN_LITERAL, LITERAL_THEN_NAME]) {
+  for (const re of [NAME_THEN_LITERAL, LITERAL_THEN_NAME, MAP_BRACKET]) {
     for (const m of code.matchAll(re)) {
       const literal = m[2];
       if (!literal || literal.includes('${')) continue;
       names.push(literal.replace(/\\(.)/g, '$1'));
     }
   }
+  for (const m of code.matchAll(MAP_DOT)) names.push(m[1]);
   return names;
 };
 
@@ -851,21 +889,43 @@ const statCodeUnknownStat: Rule = {
   advanced: true,
   summary: (count) => `${count} stats’ code looks up stat names that don’t exist`,
   check: (world) => {
-    // Code compares against runtime names, where chips have resolved — so both spellings are valid targets.
+    // Code reaches a stat by its code name, which is the same in every playthrough.
     const stats = world.stats ?? [];
-    const known = new Set(stats.flatMap((s) => [s.name, describePlaceholders(s.name ?? '', allPlaceholders(world))]));
+    const known = new Set(stats.map((s) => statCodeName(s.name, allPlaceholders(world))));
     return stats.flatMap((stat) => {
-      if (!stat.code) return [];
       const item = namedItem(stat.id, stat.name, world);
-      return [...new Set(statNamesInCode(stat.code))]
+      return filledCodeBoxes(stat).flatMap((box) => [...new Set(statNamesInCode(box.code))]
         .filter((name) => !known.has(name))
         .map((name) => finding(
           statCodeUnknownStat,
-          `Code on ${quote(item.name)} looks up a stat named ${quote(name)}, which doesn’t exist`,
+          `${TIMING_LABEL[box.timing]} code on ${quote(item.name)} looks up a stat named ${quote(name)}, which does not exist`,
           [item],
-        ));
+        )));
     });
   },
+};
+
+// A read of a stat's `delta`, in either lookup form. A bare `delta` is nothing the sandbox injects, so only
+// a member read counts — which also leaves an author's own variable of that name alone.
+const DELTA_READ = /\??\.\s*delta\b|\[\s*(["'`])delta\1\s*\]/;
+
+const statCodeBeforeReadsDelta: Rule = {
+  id: 'stat-code-before-reads-delta',
+  severity: 'warning',
+  section: 'stats',
+  advanced: true,
+  summary: (count) => `${count} stats read delta in their ${TIMING_LABEL.before} box, where every source is zero`,
+  check: (world) => (world.stats ?? [])
+    .filter((stat) => DELTA_READ.test(boxCode(stat, 'before')))
+    .map((stat) => {
+      const item = namedItem(stat.id, stat.name, world);
+      return finding(
+        statCodeBeforeReadsDelta,
+        `${TIMING_LABEL.before} code on ${quote(item.name)} reads delta, but that box runs before the AI `
+        + 'asks and before regen — every delta reads zero there',
+        [item],
+      );
+    }),
 };
 
 // ── Dictionary: entries that can never fire ───────────────────────────────────────────────────────────────
@@ -1185,30 +1245,6 @@ const statPercentageBounds: Rule = {
     isOffRangePercentage(stat) ? pinnedToPercent(stat) : stat)),
 };
 
-const statCodeNeverTicks: Rule = {
-  id: 'stat-code-never-ticks',
-  severity: 'warning',
-  section: 'stats',
-  advanced: true,
-  summary: (count) =>
-    `${count} stats have code that runs only on turns the AI changed a stat — nothing in this world reads a clock variable`,
-  check: (world) => {
-    // The gate reads the *enabled* stats (GameViewer's `anyStatUsesClock` over `activeStats`), so a clock
-    // reference on a stat no trait ever switches on grants nothing — and that stat's own code never runs.
-    const coded = everActiveStats(world).filter((stat) => stat.code?.trim());
-    // One clock reference among them puts every coded stat on the every-turn schedule.
-    if (coded.some((stat) => usesStatClock(stat.code))) return [];
-    return coded.map((stat) => {
-      const item = namedItem(stat.id, stat.name, world);
-      return finding(
-        statCodeNeverTicks,
-        `Code on ${quote(item.name)} runs only on turns the AI reported a stat change — no stat in this world reads a clock variable, which is what puts code on the every-turn schedule`,
-        [item],
-      );
-    });
-  },
-};
-
 /** A trait's summed contribution to one stat on one axis. Traits are chosen one at a time, so a rule about a
  *  single trait reads only that trait's own numbers. */
 const traitContribution = (stat: Stat, trait: Trait, type: 'starting' | 'min'): number => {
@@ -1256,18 +1292,17 @@ const statTraitDeltaClamped: Rule = {
 };
 
 /** Whether a stat's code builds on the stat's own current value, which is the one thing that lets a trait's
- *  starting change survive the first recompute. Both ways code can find itself count: the injected
- *  `currentStatId`, and its own name written as a literal. */
-const codeReadsSelf = (stat: Stat, world: RuleWorld): boolean => {
-  const code = stat.code ?? '';
+ *  starting change survive the first recompute. Three ways code can find itself count: the injected
+ *  `currentStatId`, the `self` map entry, and its own name written as a literal or a map lookup. */
+const codeReadsSelf = (code: string, stat: Stat, world: RuleWorld): boolean => {
   // The id has to be quoted to be a lookup: bare containment would read a stat whose id is "1" out of
   // `return 100;` and silently quiet the rule. An idless stat has no lookup to find, rather than an empty one.
   const quotedId = stat.id
     ? new RegExp(`["'\`]${stat.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'\`]`)
     : undefined;
-  if (/\bcurrentStatId\b/.test(code) || quotedId?.test(code)) return true;
-  const names = new Set([stat.name, describePlaceholders(stat.name ?? '', allPlaceholders(world))]);
-  return statNamesInCode(code).some((name) => names.has(name));
+  if (/\bcurrentStatId\b/.test(code) || /\bself\b/.test(code) || quotedId?.test(code)) return true;
+  const own = statCodeName(stat.name, allPlaceholders(world));
+  return statNamesInCode(code).some((name) => name === own);
 };
 
 const statCodeOverridesTrait: Rule = {
@@ -1276,16 +1311,22 @@ const statCodeOverridesTrait: Rule = {
   section: 'stats',
   advanced: true,
   summary: (count) => `${count} trait stat changes target stats whose code recomputes them from scratch, which erases the change`,
-  check: (world) => traitValueChanges(world)
-    .filter(({ stat }) => stat.code?.trim() && !codeReadsSelf(stat, world))
-    .map(({ stat, trait, delta }) => {
-      const items = statAndTrait(stat, trait, world);
-      return finding(
-        statCodeOverridesTrait,
-        `${quote(items[1].name)} ${delta < 0 ? 'lowers' : 'raises'} ${quote(items[0].name)} by ${Math.abs(delta)}, but that stat’s code recomputes its value without reading it — the change is gone by the next run`,
-        items,
-      );
-    }),
+  // Judged per box, because a stat can read itself in one box and recompute from scratch in the other, and
+  // only a box that recomputes erases the change. Reported per trait change, so the count stays a count of
+  // changes: the message names every box at fault rather than raising the same change twice.
+  check: (world) => traitValueChanges(world).flatMap(({ stat, trait, delta }) => {
+    const guilty = filledCodeBoxes(stat).filter((box) => !codeReadsSelf(box.code, stat, world));
+    if (!guilty.length) return [];
+    const items = statAndTrait(stat, trait, world);
+    const boxes = listNames(guilty.map((box) => TIMING_LABEL[box.timing]));
+    return [finding(
+      statCodeOverridesTrait,
+      `${quote(items[1].name)} ${delta < 0 ? 'lowers' : 'raises'} ${quote(items[0].name)} by ${Math.abs(delta)}, `
+      + `but that stat’s ${boxes} code ${guilty.length > 1 ? 'recompute' : 'recomputes'} its value `
+      + 'without reading it — the change is gone by the next run',
+      items,
+    )];
+  }),
 };
 
 const statAiLockFrozen: Rule = {
@@ -1299,7 +1340,7 @@ const statAiLockFrozen: Rule = {
       (trait.statChanges ?? []).filter((change) => change.type === 'starting').map((change) => change.statId),
     ));
     return (world.stats ?? [])
-      .filter((stat) => stat.noIncrease && stat.noDecrease && !stat.code?.trim() && !stat.regen
+      .filter((stat) => stat.noIncrease && stat.noDecrease && noBoxes(stat) && !stat.regen
         && !movedByTrait.has(stat.id))
       .map((stat) => {
         const item = namedItem(stat.id, stat.name, world);
@@ -2125,7 +2166,7 @@ const dictionaryDisabled: Rule = {
 // ── The world itself ──────────────────────────────────────────────────────────────────────────────────────
 
 /** The world as a finding names it — for rules whose subject has no list row of its own. */
-const worldItem = (world: RuleWorld): FindingItem => ({
+export const worldItem = (world: RuleWorld): FindingItem => ({
   id: 'overview',
   name: describePlaceholders(world.worldOverview?.name ?? '', allPlaceholders(world)).trim() || 'This World',
 });
@@ -2247,13 +2288,14 @@ const imageMislabeled: Rule = {
 /** Every rule the Bench runs, in catalog order. Display order comes from severity, not this list. */
 export const RULES: readonly Rule[] = [
   aliasLeadingArticle, entityMatchCollision, aliasSelfDuplicate,
-  entityLocationOrphan, traitToggleMissingStat, placeholderPinBroken,
+  entityLocationOrphan, linkConnectionBroken, traitToggleMissingStat, placeholderPinBroken,
   chipUnknownPlaceholder, placeholderUnused, placeholderPinnedUnused, statCodeUnknownStat,
+  statCodeBeforeReadsDelta,
   entrySecondaryWithoutPrimary, entryInert, entryRegexInvalid,
   noStartingLocation, legacyStartLocation, entityNowhere, statDisabledForever,
   statStartingOutOfRange, statStartNoDescriptor, statDescriptorDuplicateThreshold, statDescriptorOutOfRange,
   statDescriptorCoverageGap, statPercentageBounds,
-  statCodeNeverTicks, statTraitDeltaClamped, statCodeOverridesTrait, statAiLockFrozen,
+  statTraitDeltaClamped, statCodeOverridesTrait, statAiLockFrozen,
   locationParentOrphan, connectionEndpointOrphan, statUpdateUnknownStat,
   aliasLowercaseNoTwin, entityNameInWildcardPool,
   entityMissingPlayerDescription, entityMissingAiDescription, entityMissingBothDescriptions,
@@ -2281,8 +2323,60 @@ export const STAT_CODE_EXECUTION: RuleHead = {
   summary: (count) => `${count} stats’ code fails when it actually runs`,
 };
 
-/** Everything that can put a row in the Issues list — the live rules plus the on-demand check. */
-const RULE_HEADS: readonly RuleHead[] = [...RULES, STAT_CODE_EXECUTION];
+/**
+ * The stat-code unknown-name row: a run wrote a placeholder or trait the world lacks, so the write was
+ * dropped. Raised from the same explicit action as {@link STAT_CODE_EXECUTION}; a warning, because the code
+ * still runs and the stat still gets its value.
+ */
+export const STAT_CODE_UNKNOWN_NAME: RuleHead = {
+  id: 'stat-code-unknown-name',
+  severity: 'warning',
+  section: 'stats',
+  advanced: true,
+  summary: (count) => `${count} stats’ code writes names the world doesn’t have`,
+};
+
+/**
+ * The publish-size check's row. It is a head without a `check` because the byte count comes from the
+ * debounced worker measure, not the synchronous pure pass: `lib/testBench/worldTooLarge` raises its finding
+ * from the measured size; it groups and sorts here like any other row.
+ */
+export const WORLD_TOO_LARGE: RuleHead = {
+  id: 'world-too-large',
+  severity: 'warning',
+  section: 'overview',
+  summary: () => 'The world is over the publish limit',
+};
+
+/**
+ * The removed-source row: the server gave a definite not-found answer for a source one of this world's
+ * copies follows, so the author of that source deleted it. A head without a `check` because the answer
+ * comes from a request the author asks for; `lib/testBench/missingSources` raises its findings.
+ */
+export const SOURCE_NOT_FOUND: RuleHead = {
+  id: 'source-not-found',
+  severity: 'error',
+  section: 'entities',
+  summary: (count) => `${count} linked copies follow a source the author removed`,
+};
+
+/**
+ * The unreachable-source row: the check failed on something other than a not-found answer, so it says only
+ * that this attempt could not reach the source. A warning, because installed content stays playable and
+ * nothing here is evidence that anything was deleted.
+ */
+export const SOURCE_UNAVAILABLE: RuleHead = {
+  id: 'source-unavailable',
+  severity: 'warning',
+  section: 'entities',
+  summary: (count) => `${count} linked copies’ sources could not be checked`,
+};
+
+/** Everything that can put a row in the Issues list — the live rules plus the on-demand checks. */
+const RULE_HEADS: readonly RuleHead[] = [
+  ...RULES, STAT_CODE_EXECUTION, STAT_CODE_UNKNOWN_NAME, WORLD_TOO_LARGE,
+  SOURCE_NOT_FOUND, SOURCE_UNAVAILABLE,
+];
 
 /** The one lookup from a finding's rule id back to what raised it. */
 const HEAD_BY_ID = new Map(RULE_HEADS.map((rule) => [rule.id, rule]));

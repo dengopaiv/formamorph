@@ -10,8 +10,9 @@ import {
 import '@xyflow/react/dist/base.css';
 import {
   AlertTriangle, AlignHorizontalDistributeCenter, AlignStartHorizontal, AlignStartVertical,
-  AlignVerticalDistributeCenter, ArrowLeft, ArrowLeftRight, ArrowRight, Check, CornerDownRight, Grid2x2,
-  LayoutGrid, Magnet, Maximize2, Minimize2, Minus, Redo2, Search, Spline, Star, Trash2, Undo2, X,
+  AlignVerticalDistributeCenter, ArrowLeft, ArrowLeftRight, ArrowRight, CornerDownRight, Grid2x2,
+  LayoutGrid, Magnet, Maximize2, Minimize2, Minus, Pencil, Redo2, Search, Spline, SquareCheck, Star, Trash2,
+  Undo2, X,
 } from 'lucide-react';
 import { useGameData } from '@/contexts/GameDataContext';
 import FullscreenShell from '@/components/FullscreenShell';
@@ -25,8 +26,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import {
-  ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuRadioGroup,
-  ContextMenuRadioItem, ContextMenuSeparator, ContextMenuTrigger,
+  ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGroup, ContextMenuItem,
+  ContextMenuLabel, ContextMenuRadioGroup, ContextMenuRadioItem, ContextMenuSeparator, ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { labelPlaceholders } from '@/lib/placementLetters';
@@ -331,39 +332,62 @@ type MenuTarget =
  * Radix owns the placement: portaled above the panels the canvas sits inside, flipped back into view at a
  * viewport edge, and dismissed, focused and walked by the arrows the way every other menu in the app is.
  */
-const CanvasMenu = ({ sections, menuRef }: {
+const CanvasMenu = ({ sections, menuRef, frameRef }: {
   sections: CanvasMenuSection[];
   /** Lets the keydown scope count the portaled menu as the canvas (see `trackPointer`). */
   menuRef: RefObject<HTMLDivElement>;
+  /** Where focus goes back to on close — the pane takes none of its own, so nothing else is left holding it. */
+  frameRef: RefObject<HTMLDivElement>;
 }) => (
-  <ContextMenuContent ref={menuRef} aria-label="Canvas Options" className="min-w-44">
+  <ContextMenuContent
+    ref={menuRef}
+    aria-label="Canvas Options"
+    className="min-w-44"
+    onCloseAutoFocus={(event) => {
+      event.preventDefault();
+      frameRef.current?.focus({ preventScroll: true });
+    }}
+  >
     {sections.map((section, index) => (
-      <Fragment key={section.map((item) => item.label).join('|')}>
+      <Fragment key={section.items.map((item) => item.label).join('|')}>
         {index > 0 && <ContextMenuSeparator />}
-        {section[0]?.exclusive
-          // One choice between each other, so the group is what carries which one is taken.
+        {section.items[0]?.exclusive
+          // One choice between each other, so the group is what carries which one is taken. The title is the
+          // group's accessible name as well as its printed label, so a screen reader hears which set a radio
+          // belongs to.
           ? (
-            <ContextMenuRadioGroup value={section.find((item) => item.checked)?.label ?? ''}>
-              {section.map((item) => (
+            <ContextMenuRadioGroup
+              aria-label={section.title}
+              value={section.items.find((item) => item.checked)?.label ?? ''}
+            >
+              {section.title && <ContextMenuLabel>{section.title}</ContextMenuLabel>}
+              {section.items.map((item) => (
                 <ContextMenuRadioItem key={item.label} value={item.label} checked={item.checked} onSelect={item.onSelect}>
                   {item.label}
                 </ContextMenuRadioItem>
               ))}
             </ContextMenuRadioGroup>
           )
-          : section.map((item) => (item.checked === undefined
-            ? (
-              <ContextMenuItem key={item.label} disabled={item.disabled} onSelect={item.onSelect}>
-                {/* The tick's column is held even by an action, so every label in the menu starts on one line. */}
-                <Check className="h-4 w-4 shrink-0 opacity-0" />
-                {item.label}
-              </ContextMenuItem>
-            )
-            : (
-              <ContextMenuCheckboxItem key={item.label} checked={item.checked} onSelect={item.onSelect}>
-                {item.label}
-              </ContextMenuCheckboxItem>
-            )))}
+          : section.title
+          // The grammar the section builder follows: a titled, non-exclusive set is a set of checkboxes — a
+          // row that answers "which one?" on its own rather than against the rest of the set.
+          ? (
+            <ContextMenuGroup aria-label={section.title}>
+              <ContextMenuLabel>{section.title}</ContextMenuLabel>
+              {section.items.map((item) => (
+                <ContextMenuCheckboxItem key={item.label} checked={item.checked} onSelect={item.onSelect}>
+                  {item.label}
+                </ContextMenuCheckboxItem>
+              ))}
+            </ContextMenuGroup>
+          )
+          : section.items.map((item) => (
+            <ContextMenuItem key={item.label} disabled={item.disabled} onSelect={item.onSelect}>
+              {/* Every action row carries an icon; labels align on it, as the Main Menu menu's do. */}
+              {item.icon && <item.icon className="h-4 w-4 shrink-0" />}
+              {item.label}
+            </ContextMenuItem>
+          ))}
       </Fragment>
     ))}
   </ContextMenuContent>
@@ -667,14 +691,28 @@ interface CanvasSession {
   setSelectedConnectionId: (id: string | null) => void;
 }
 
-const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullscreen }: {
+type CanvasData = Pick<ReturnType<typeof useGameData>,
+  'locations' | 'setLocations' | 'connections' | 'setConnections' | 'placeholders' |
+  'placementLetters' | 'placeholderOwners'>;
+
+export interface LocationCanvasInputs {
+  data: CanvasData;
+  preferences: {
+    snap: ReturnType<typeof useCanvasSnap>;
+    grid: ReturnType<typeof useCanvasGridVisible>;
+    connectionStyle: ReturnType<typeof useCanvasConnectionStyle>;
+  };
+  historyRef: React.MutableRefObject<CanvasHistory>;
+}
+
+const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullscreen, data, preferences }: {
   selectedId: string | null;
   onSelect: (id: string) => void;
   session: CanvasSession;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
-}) => {
-  const { locations, setLocations, connections, setConnections, placeholders, placementLetters, placeholderOwners } = useGameData();
+} & Pick<LocationCanvasInputs, 'data' | 'preferences'>) => {
+  const { locations, setLocations, connections, setConnections, placeholders, placementLetters, placeholderOwners } = data;
   const {
     selectedIdsRef, lastSyncedRef, reportSelection, wake, historyRef, selectedConnectionId,
     setSelectedConnectionId,
@@ -682,9 +720,9 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   const store = useStoreApi();
   const { fitView, setCenter, getInternalNode, getZoom } = useReactFlow();
   const reduceMotion = usePrefersReducedMotion();
-  const [snap, setSnap] = useCanvasSnap();
-  const [gridVisible, setGridVisible] = useCanvasGridVisible();
-  const [connectionStyle, setConnectionStyle] = useCanvasConnectionStyle();
+  const [snap, setSnap] = preferences.snap;
+  const [gridVisible, setGridVisible] = preferences.grid;
+  const [connectionStyle, setConnectionStyle] = preferences.connectionStyle;
   // What the next menu will be a menu of. Radix owns whether one is open and where; all this holds is which
   // target the right-click that is about to open it landed on.
   const [menuTarget, setMenuTarget] = useState<MenuTarget>({ kind: 'pane' });
@@ -1155,6 +1193,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     if (target.kind === 'node') {
       const items: CanvasMenuItem[] = [{
         label: 'Edit Location',
+        icon: Pencil,
         onSelect: () => {
           setSelection((id) => id === target.id);
           lastSyncedRef.current = target.id;
@@ -1164,6 +1203,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       if (locations.some((l) => holderOf(locations, l) === target.id)) {
         items.push({
           label: 'Auto Arrange',
+          // Both Auto Arrange rows share the toolbar's own arrangement icon.
+          icon: LayoutGrid,
           onSelect: () => commitLocations(autoArrange(locations, connections, target.id)),
         });
       }
@@ -1173,16 +1214,22 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       // The same finishing moves the toolbar carries, offered where the selection itself was right-clicked.
       // An even spacing needs three boxes to mean anything, so below that it is not offered at all.
       return [
-        ...ALIGN_TOOLS.map(({ label, edge }) => ({ label, onSelect: () => alignSelection(edge) })),
+        ...ALIGN_TOOLS.map(({ label, edge, Icon }) => ({ label, icon: Icon, onSelect: () => alignSelection(edge) })),
         ...(selectedIds.length > 2
-          ? DISTRIBUTE_TOOLS.map(({ label, axis }) => ({ label, onSelect: () => distributeSelection(axis) }))
+          ? DISTRIBUTE_TOOLS.map(({ label, axis, Icon }) => (
+            { label, icon: Icon, onSelect: () => distributeSelection(axis) }
+          ))
           : []),
-        { label: 'Clear Selection', onSelect: () => setSelection(() => false) },
+        { label: 'Clear Selection', icon: X, onSelect: () => setSelection(() => false) },
       ];
     }
     return [
-      { label: 'Select All Locations', onSelect: () => setSelection(() => true) },
-      { label: 'Auto Arrange All', onSelect: () => commitLocations(autoArrangeAll(locations, connections)) },
+      { label: 'Select All Locations', icon: SquareCheck, onSelect: () => setSelection(() => true) },
+      {
+        label: 'Auto Arrange All',
+        icon: LayoutGrid,
+        onSelect: () => commitLocations(autoArrangeAll(locations, connections)),
+      },
     ];
   };
 
@@ -1193,6 +1240,9 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     <ContextMenuTrigger asChild>
     <div
       ref={frameRef}
+      // Programmatically focusable but out of the Tab order, exactly as the pane itself is: the map takes no
+      // focus of its own, but the frame is somewhere real for the menu to hand focus back to on close.
+      tabIndex={-1}
       className="relative h-full w-full"
       onPointerDownCapture={handlePointerDown}
       onContextMenu={reraiseForTrigger}
@@ -1301,6 +1351,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     </ContextMenuTrigger>
     <CanvasMenu
       menuRef={menuRef}
+      frameRef={frameRef}
       sections={canvasMenuSections(
         { ...history, snap, gridVisible, connectionStyle },
         {
@@ -1317,24 +1368,15 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   );
 };
 
-/**
- * The Locations tab's canvas view — the list's spatial twin, editing the same authored world.
- *
- * Embedded and full screen are one canvas wearing different chrome, not two surfaces: the same component is
- * mounted in the pane or in the shared full-screen window, and what the author was in the middle of — the
- * picked nodes, the open Connection — is held here so the trip between them carries it. World edits need no
- * carrying: both are writing to the same authored world through GameDataContext.
- */
-const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: string) => void }) => {
-  const { worldId } = useGameData();
+/** Embedded and fullscreen canvas with caller-owned data, preferences, and history. */
+export const LocationCanvasWorkspace = (props: LocationCanvasInputs & {
+  selectedId: string | null; onSelect: (id: string) => void;
+}) => {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const morph = useMorphFullscreen(hostRef);
   const selectedIdsRef = useRef<string[]>(props.selectedId ? [props.selectedId] : []);
   const lastSyncedRef = useRef<string | null>(props.selectedId);
-  // Session-only, and nothing clears it: a save is not the end of what the author may still take back, so
-  // undoing past one simply makes the world dirty again. Held for the open world rather than by this
-  // component, which the trip to the list panel unmounts.
-  const historyRef = canvasHistoryFor(worldId);
+  const { historyRef } = props;
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
 
   // Set while the canvas is moving between the pane and the window. The old one reports an empty selection as
@@ -1400,6 +1442,16 @@ const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: strin
       )}
     </div>
   );
+};
+
+const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: string) => void }) => {
+  const data = useGameData();
+  const snap = useCanvasSnap();
+  const grid = useCanvasGridVisible();
+  const connectionStyle = useCanvasConnectionStyle();
+  // The authored world's history survives switching between its canvas and list views.
+  return <LocationCanvasWorkspace {...props} data={data}
+    preferences={{ snap, grid, connectionStyle }} historyRef={canvasHistoryFor(data.worldId)} />;
 };
 
 export default LocationCanvas;

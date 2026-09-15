@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { toast } from 'react-toastify';
 import CommunityCreationsBrowser from './CommunityCreationsBrowser';
 import type { WorldRecord } from '@/components/WorldDetails';
+import type { CommunityListing } from './CommunityCreationsBrowser';
 
 vi.mock('react-toastify', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
@@ -58,7 +59,12 @@ const listing = (over: Record<string, unknown> = {}) => ({
 
 const reader = { id: 'u1', username: 'reader', accountType: 'normal' } as unknown as WorldRecord;
 
-const renderBrowser = (over: { open?: boolean; onListingOpened?: () => void } = {}) => {
+const renderBrowser = (over: {
+  open?: boolean;
+  listing?: CommunityListing | null;
+  onListingChange?: (listing: { id: string; kind: string } | null) => void;
+  onListingOpened?: () => void;
+} = {}) => {
   const onListingOpened = over.onListingOpened ?? vi.fn();
   const view = (open: boolean) => (
     <CommunityCreationsBrowser
@@ -68,12 +74,16 @@ const renderBrowser = (over: { open?: boolean; onListingOpened?: () => void } = 
       setWorlds={() => {}}
       entities={[]}
       dictionaries={[]}
+      models={[]}
       refreshEntities={() => {}}
       refreshDictionaries={() => {}}
+      refreshModels={() => {}}
       isAuthenticated
       currentUser={reader}
       openImageViewer={() => {}}
-      openListing={{ id: 'w1', kind: 'world' }}
+      openListing={over.listing === undefined ? { id: 'w1', kind: 'world' } : undefined}
+      listing={over.listing}
+      onListingChange={over.onListingChange}
       onListingOpened={onListingOpened}
     />
   );
@@ -145,5 +155,82 @@ describe('a listing named from outside, against a catalog still refreshing', () 
     // Cleared on close: without this, the listing would pop its modal on a later, unrelated open.
     expect(onListingOpened).toHaveBeenCalled();
     expect(screen.queryByTestId('details-modal')).toBeNull();
+  });
+
+  it('lets a website caller close a resolved destination when browser Back returns to the catalog', () => {
+    sync.initial = { worlds: [listing()], settled: true };
+    const onListingChange = vi.fn();
+    const { rerender } = render(
+      <CommunityCreationsBrowser
+        open
+        onOpenChange={() => {}}
+        worlds={[]}
+        setWorlds={() => {}}
+        entities={[]}
+        dictionaries={[]}
+        models={[]}
+        refreshEntities={() => {}}
+        refreshDictionaries={() => {}}
+        refreshModels={() => {}}
+        isAuthenticated
+        currentUser={reader}
+        openImageViewer={() => {}}
+        listing={{ id: 'w1', kind: 'world' }}
+        onListingChange={onListingChange}
+      />,
+    );
+
+    expect(screen.getByTestId('details-modal')).toHaveTextContent('Sedge Landing');
+    expect(onListingChange).toHaveBeenCalledWith({ id: 'w1', kind: 'world' });
+
+    rerender(
+      <CommunityCreationsBrowser
+        open
+        onOpenChange={() => {}}
+        worlds={[]}
+        setWorlds={() => {}}
+        entities={[]}
+        dictionaries={[]}
+        models={[]}
+        refreshEntities={() => {}}
+        refreshDictionaries={() => {}}
+        refreshModels={() => {}}
+        isAuthenticated
+        currentUser={reader}
+        openImageViewer={() => {}}
+        listing={null}
+        onListingChange={onListingChange}
+      />,
+    );
+
+    expect(screen.queryByTestId('details-modal')).toBeNull();
+  });
+
+  it('does not open a same-id listing from a different category', () => {
+    sync.initial = { worlds: [listing()], settled: true };
+    const onListingUnavailable = vi.fn();
+
+    render(
+      <CommunityCreationsBrowser
+        open
+        onOpenChange={() => {}}
+        worlds={[]}
+        setWorlds={() => {}}
+        entities={[]}
+        dictionaries={[]}
+        models={[]}
+        refreshEntities={() => {}}
+        refreshDictionaries={() => {}}
+        refreshModels={() => {}}
+        isAuthenticated
+        currentUser={reader}
+        openImageViewer={() => {}}
+        listing={{ id: 'w1', kind: 'entity' }}
+        onListingUnavailable={onListingUnavailable}
+      />,
+    );
+
+    expect(screen.queryByTestId('details-modal')).toBeNull();
+    expect(onListingUnavailable).toHaveBeenCalledWith({ id: 'w1', kind: 'entity' });
   });
 });

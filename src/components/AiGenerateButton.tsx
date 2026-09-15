@@ -9,6 +9,7 @@ import { TOOLBAR_BTN } from '@/components/prompt/toolbarStyles';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { overwriteWarning } from '@/lib/descriptionOverwrite';
 import { Tip } from '@/components/ui/tooltip';
+import { authoringFailureMessage } from '@/lib/authoringRequest';
 
 type GenerateMode = 'summary' | 'tags' | 'playerDesc' | 'aiDesc';
 
@@ -55,7 +56,7 @@ const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
 }) => {
   const {
     activeEndpointUrl, activeApiToken, activeModelName, imageTagPrompt,
-    playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens,
+    playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens, reasoningCapability, localModelActive,
   } = useSettings();
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -74,22 +75,24 @@ const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
     setLoading(true);
     try {
       const opts = { endpointUrl: activeEndpointUrl, apiToken: activeApiToken, modelName: activeModelName, signal: controller.signal };
+      const reasoning = { capability: reasoningCapability, localEngine: localModelActive };
       const bridgeKind: BridgeKind = kind === 'location' ? 'location' : 'character';
       const result = mode === 'tags'
         // The subject's name is deliberately not sent: models answer with it as a tag, and no image model
         // knows a person's name. An author who wants one in the tags can type it.
         ? await buildImagePrompt({ description: text, kind: kind ?? 'character' }, { ...opts, tagPrompt: imageTagPrompt })
         : mode === 'summary'
-          ? await summarizeDescription(text, { ...opts, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
+          ? await summarizeDescription(text, { ...opts, reasoning, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
           : await bridgeDescription(text, mode, bridgeKind, {
             ...opts,
+            reasoning,
             template: mode === 'playerDesc' ? playerDescPrompt : aiDescPrompt,
             maxTokens: mode === 'playerDesc' ? descMaxTokens.playerdesc : descMaxTokens.aidesc,
           });
       onChange(result);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
-      toast.error(`Failed to generate ${noun}.`);
+      toast.error(authoringFailureMessage(`Failed to generate ${noun}.`, error));
     } finally {
       setLoading(false);
     }

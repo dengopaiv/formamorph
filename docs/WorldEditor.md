@@ -10,7 +10,28 @@ Sections land here as each tab's help is written, so a tab missing below simply 
 
 ## Overview
 
-The world's own tab: its name, description, thumbnail and the AI-facing text that frames every turn.
+The world's own tab: its name, description, thumbnail and the AI-facing text that frames every turn. It is two columns rather than a list and a panel. On a phone they stack, left column first.
+
+### The left column — how your world is listed
+
+| Field | What it does |
+|---|---|
+| **World Name** | The title on the library card and in every menu. |
+| **Author** | Your name on the card. |
+| **Tags** | The words the community browser filters on. |
+| **Thumbnail** | The card's picture. **Generate with AI** sits under the frame and writes one from your description. |
+| **3D Player Avatar** | Gives this world a 3D avatar. The player can customize it before they start. |
+| **Custom Player Avatar** | **Advanced mode only.** Your own `.vrm` or `.glb` in place of the bundled model. **Preview** opens it; **Remove** returns to the default. |
+| **Background Music** | The track the world plays. Drop a file on the box, or click it to pick one. |
+
+### The right column — what you write
+
+| Field | What it does |
+|---|---|
+| **World Description** | The blurb on the library card. Players read it before they play, so placeholders stay as plain text here. |
+| **Readme** | Two tabs. **Introduction** shows before the player makes any setup choices; **Gameplay** shows when they enter the world. Both take markdown. |
+| **System Prompt Addition** | Text added to the narrator's prompt on every turn of this world. |
+| **Custom Prompts** | **Advanced mode only.** Replaces the player's own narration, choices or stats prompt, plus the Opening Cue below. |
 
 ### Opening Cue
 
@@ -78,14 +99,14 @@ Each has a **threshold** and a **Description**. A coverage bar above the rows dr
 
 > ⚠️ **A threshold is the *top* of its band, and the lowest band the value fits in wins.** Descriptors are read low to high whatever order you list them in, so `30 → Barren` covers Min–30 and a `60` above it covers everything up to 60. Give your highest descriptor a threshold of your **Max**, or a value above it gets no descriptor at all.
 
-**Thresholds in: Raw Unit | % of Max**
+**Thresholds in: Raw | % of Max**
 
 | Setting | A threshold of `3` on a 0–10 stat means | Raise Max to 20 and… |
 |---|---|---|
-| **Raw Unit** (default) | the value 3 | the band still ends at 3 |
+| **Raw** (default) | the value 3 | the band still ends at 3 |
 | **% of Max** | 3% of the way from Min to Max — the value 0.3 | the band rescales to 0.6 |
 
-Pick **Raw Unit** for counters ("3 rockets is low") and **% of Max** for proportions ("the bottom 30% is low"). Switching converts your existing numbers, so no band moves at the moment you switch — the choice only decides what happens the next time you change the range. A **Percentage** stat is pinned to 0–100, where both readings are the same number, so it has no switch.
+Pick **Raw** for counters ("3 rockets is low") and **% of Max** for proportions ("the bottom 30% is low"). Switching converts your existing numbers, so no band moves at the moment you switch — the choice only decides what happens the next time you change the range. A **Percentage** stat is pinned to 0–100, where both readings are the same number, so it has no switch.
 
 ### Prevent AI Changes
 
@@ -93,10 +114,10 @@ Four checkboxes stop the AI moving a stat in one direction, while your world's o
 
 | Checkbox | Blocks |
 |---|---|
-| **Don't increase** | AI raising the value |
-| **Don't decrease** | AI lowering the value |
-| **Don't increase max** | AI raising the ceiling |
-| **Don't decrease Max** | AI lowering the ceiling |
+| **Don't Increase** | AI raising the value |
+| **Don't Decrease** | AI lowering the value |
+| **Don't Increase Max** | AI raising the ceiling |
+| **Don't Decrease Max** | AI lowering the ceiling |
 
 Percentage stats show only the first two — their ceiling is pinned at 100, so the AI can never move it.
 
@@ -154,7 +175,7 @@ The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing De
 
 > 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds the drafting prompts — Player-Facing, AI-Facing, Summary and Description Check — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
 
-> ✍️ **The Author's Brief is yours, and nothing generates into it.** It sits above both descriptions and holds your own notes in whatever shape suits you — a list is expected, not prose. Both ✨ buttons draft from it when it holds anything, so you can regenerate either description as many times as you like and your facts stay exactly as you wrote them. Mark a line *SECRET:* and the Player-Facing draft leaves it out while the AI-Facing draft keeps it.
+> ✍️ **The Author's Brief is yours, and nothing generates into it.** It sits above both descriptions, on the **Descriptions** tab for an entity and the **Details** tab for a location, and holds your own notes in whatever shape suits you — a list is expected, not prose. Both ✨ buttons draft from it when it holds anything, so you can regenerate either description as many times as you like and your facts stay exactly as you wrote them. Mark a line *SECRET:* and the Player-Facing draft leaves it out while the AI-Facing draft keeps it. The brief belongs to the world it is written in: a copy that follows a library item keeps its own brief through every update, and **Save to Library** leaves it behind.
 >
 > Without a brief the two descriptions write into each other and neither is a base: drafting Player-Facing from AI-Facing and then AI-Facing back from it does not return you to where you started, because the player-facing prompt is meant to leave private material out and the AI-facing prompt is meant to fill in what a blurb implies — so a round trip strips your secrets and replaces them with what the model inferred. Filling in the brief removes that path entirely. Leave it empty and the buttons behave exactly as they always did, with a ✨ that replaces existing text asking first and naming how much goes.
 
@@ -166,9 +187,9 @@ Other names the entity goes by — a title, a nickname, an epithet. They do two 
 
 | | |
 |---|---|
-| **Case-sensitive** | `Matron` matches "the Matron" and misses "the matron". Add every casing narration is likely to write. |
+| **Case-Sensitive** | `Matron` matches "the Matron" and misses "the matron". Add every casing narration is likely to write. |
 | **Plural-aware** | `wolf` also matches "wolves", the same as names. |
-| **Whole words** | `Em` won't fire inside "System". |
+| **Whole Words** | `Em` won't fire inside "System". |
 
 > ⚠️ **Never start an alias with "the".** Narration puts a title at the start of a sentence constantly, and "The alpha…" won't match an alias written `the alpha`. Drop the article — `alpha` matches both positions.
 
@@ -274,7 +295,7 @@ The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing De
 
 > 💡 **The wording behind the ✨ buttons is yours to change.** Settings → **Prompts** → **Authoring** (Advanced mode) holds the drafting prompts — Player-Facing, AI-Facing, Summary and Description Check — each with its own **Max Output Tokens**. Raise the cap if a draft keeps stopping mid-sentence, and lower it to keep summaries to a line. Like every prompt in that panel they are edited on a preset of your own; the built-ins are read-only.
 
-> ✍️ **The Author's Brief is yours, and nothing generates into it.** It sits above both descriptions and holds your own notes in whatever shape suits you — a list is expected, not prose. Both ✨ buttons draft from it when it holds anything, so you can regenerate either description as many times as you like and your facts stay exactly as you wrote them. Mark a line *SECRET:* and the Player-Facing draft leaves it out while the AI-Facing draft keeps it.
+> ✍️ **The Author's Brief is yours, and nothing generates into it.** It sits above both descriptions, on the **Descriptions** tab for an entity and the **Details** tab for a location, and holds your own notes in whatever shape suits you — a list is expected, not prose. Both ✨ buttons draft from it when it holds anything, so you can regenerate either description as many times as you like and your facts stay exactly as you wrote them. Mark a line *SECRET:* and the Player-Facing draft leaves it out while the AI-Facing draft keeps it. The brief belongs to the world it is written in: a copy that follows a library item keeps its own brief through every update, and **Save to Library** leaves it behind.
 >
 > Without a brief the two descriptions write into each other and neither is a base: drafting Player-Facing from AI-Facing and then AI-Facing back from it does not return you to where you started, because the player-facing prompt is meant to leave private material out and the AI-facing prompt is meant to fill in what a blurb implies — so a round trip strips your secrets and replaces them with what the model inferred. Filling in the brief removes that path entirely. Leave it empty and the buttons behave exactly as they always did, with a ✨ that replaces existing text asking first and naming how much goes.
 
@@ -396,7 +417,7 @@ The rule: **if the AI is told it, it can fire a trigger.** A **turn** is one act
 |---|---|
 | **The scene as the AI receives it** — your location and the characters present, plus any nearby / sub-location detail your prompt sends | Always |
 | **Your notes** and the **action** you just took | Always |
-| **Earlier turns** — your actions and the AI's replies | Up to the entry's **Scan depth** |
+| **Earlier turns** — your actions and the AI's replies | Up to the entry's **Scan Depth** |
 
 > 💡 Keywords match **the exact wording the AI is given**. Where a block is sent as a *summary*, the summary is what's matched — so a keyword that appears only in an entity's full description won't fire if the AI was sent the short version. Check which form your prompt sends in **Settings → Output → Turn Extras**.
 
@@ -406,26 +427,26 @@ Lore doesn't trigger other lore unless you ask it to: that's what **Recursive** 
 
 ### The entry editor
 
-Select an entry to open it. **Trigger Keywords (Key)** and **Value (injected on keyword match)** are the whole feature — everything else is there for a specific problem, and is safe to ignore until you hit one.
+Select an entry to open it. **Trigger Keywords** and **Value** are the whole feature — everything else is there for a specific problem, and is safe to ignore until you hit one.
 
 **Options**
 
 | Checkbox | What it does |
 |---|---|
-| **Always inject** | Skip the scan; send this entry every turn. Costs context every turn, so use sparingly. |
+| **Always Inject** | Skip the scan; send this entry every turn. Costs context every turn, so use sparingly. |
 | **Regex** | Treat keywords as regular expressions instead of plain text. |
-| **Whole words** | Match on word boundaries, so *art* stops firing inside *cart*. |
-| **Case-sensitive** | Off by default. |
+| **Whole Words** | Match on word boundaries, so *art* stops firing inside *cart*. |
+| **Case-Sensitive** | Off by default. |
 | **Recursive** | Lets the entry be fired by the content of entries that already activated, not just by the scene. |
 
-**Scan depth (messages)** — how many earlier messages to search. Leave it blank (*all history*) to search everything; `0` searches only the current scene.
+**Scan Depth** — how many earlier messages to search. Leave it blank (*all history*) to search everything; `0` searches only the current scene.
 
 **Secondary Keywords** — an extra condition on top of the trigger. *bridge* fires only if *toll* also appears in the scanned text.
 
 | Checkbox | What it does |
 |---|---|
-| **Require all** | Every secondary keyword must appear, not just one of them. |
-| **Exclude (activate when absent)** | Inverts the test — the entry fires only when the secondary keywords are **missing**. |
+| **Require All** | Every secondary keyword must appear, not just one of them. |
+| **Exclude** | Inverts the test — the entry fires only when the secondary keywords are **missing**. |
 
 ### Background and Foreground
 

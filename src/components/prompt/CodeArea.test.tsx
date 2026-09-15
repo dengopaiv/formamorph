@@ -119,7 +119,7 @@ describe('CodeArea', () => {
     await user.click(screen.getByLabelText('Variable'));
     await user.click(screen.getByText('This stat’s value'));
 
-    expect(owned()).toBe('return stats.find(s => s.id === currentStatId)?.value ?? 0 + 1;');
+    expect(owned()).toBe('return self.value + 1;');
   });
 
   it('leaves the part of a slot the author should rename selected, ready to type over', async () => {
@@ -142,7 +142,7 @@ describe('CodeArea', () => {
     await type(user, 'return ');
     await user.click(screen.getByLabelText('Variable'));
     await user.click(screen.getByText('This stat’s value'));
-    expect(owned()).toBe('return stats.find(s => s.id === currentStatId)?.value ?? 0');
+    expect(owned()).toBe('return self.value');
 
     await user.click(screen.getByLabelText('Undo'));
     expect(owned()).toBe('return ');
@@ -514,6 +514,15 @@ describe('CodeArea', () => {
     const [sound, flawed] = fields();
     await waitFor(() => expect(flawed.querySelector('.cm-lintRange-error')).toBeTruthy(), { timeout: 3000 });
     expect(sound.querySelectorAll('[class*="cm-lintRange"]')).toHaveLength(0);
+  });
+
+  it('re-lints a stat name when the world’s names change, with no edit to the code', async () => {
+    const { rerender } = render(<Harness initial="return stats.Helth.value;" statNames={['Health']} />);
+    const field = await editor();
+    const marks = () => [...field.querySelectorAll('.cm-lintRange-error')].map(mark => mark.textContent);
+    await waitFor(() => expect(marks()).toEqual(['Helth']), { timeout: 3000 });
+    rerender(<Harness initial="return stats.Helth.value;" statNames={['Health', 'Helth']} />);
+    await waitFor(() => expect(marks()).toEqual([]), { timeout: 3000 });
   });
 
   it('puts history and the view control together on the right, after what gets inserted', async () => {

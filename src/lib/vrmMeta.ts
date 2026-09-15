@@ -60,6 +60,8 @@ interface Vrm1MetaRaw {
   allowRedistribution?: boolean;
   commercialUsage?: string;
   creditNotation?: string;
+  avatarPermission?: string;
+  modification?: string;
 }
 
 interface GltfJson {
@@ -90,6 +92,15 @@ function redistributionFromLicenseName(licenseName?: string): boolean | undefine
   return undefined;
 }
 
+/** Narrows a raw enum string to one of its known values, or `undefined` if it's missing or unrecognized. */
+function pickKnown<T extends string>(value: string | undefined, allowed: readonly T[]): T | undefined {
+  return allowed.includes(value as T) ? (value as T) : undefined;
+}
+
+const COMMERCIAL_USES = ['personalNonProfit', 'personalProfit', 'corporation'] as const;
+const AVATAR_PERMISSIONS = ['onlyAuthor', 'explicitlyLicensedPerson', 'everyone'] as const;
+const MODIFICATIONS = ['prohibited', 'allowModification', 'allowModificationRedistribution'] as const;
+
 function normalizeV0(meta: Vrm0MetaRaw): VrmLicense {
   const commercial = meta.commercialUssageName;
   return {
@@ -102,12 +113,14 @@ function normalizeV0(meta: Vrm0MetaRaw): VrmLicense {
     commercialUse: commercial === 'Allow' ? 'allow' : commercial === 'Disallow' ? 'disallow' : undefined,
     // VRM 0.0 has no credit-notation field; CC_BY implies attribution but saying so would be our inference.
     creditRequired: undefined,
+    // VRM 0.0 has no equivalent concept; the keys are still set (to `undefined`) so a license this function
+    // produced reads as current-shape, not as a pre-license-gate record needing a re-read — see `avatarLicenseGate.ts`.
+    avatarPermission: undefined,
+    modification: undefined,
   };
 }
 
 function normalizeV1(meta: Vrm1MetaRaw): VrmLicense {
-  const commercial = meta.commercialUsage;
-  const known = commercial === 'personalNonProfit' || commercial === 'personalProfit' || commercial === 'corporation';
   return {
     metaVersion: '1',
     title: meta.name || undefined,
@@ -116,8 +129,10 @@ function normalizeV1(meta: Vrm1MetaRaw): VrmLicense {
     licenseName: undefined,
     licenseUrl: meta.licenseUrl || undefined,
     allowRedistribution: meta.allowRedistribution,
-    commercialUse: known ? commercial : undefined,
+    commercialUse: pickKnown(meta.commercialUsage, COMMERCIAL_USES),
     creditRequired: meta.creditNotation === 'required' ? true : meta.creditNotation === 'unnecessary' ? false : undefined,
+    avatarPermission: pickKnown(meta.avatarPermission, AVATAR_PERMISSIONS),
+    modification: pickKnown(meta.modification, MODIFICATIONS),
   };
 }
 

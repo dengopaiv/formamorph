@@ -196,25 +196,27 @@ Give a location the two or three entities the scene genuinely turns on. Everythi
   },
   'worldEditor.authorBrief': {
     title: "Author's Brief",
-    body: `Your notes for this thing, in whatever shape suits you. A list is fine — in fact a list is expected. "classroom, second floor", "windows face east", "smells of chalk and radiator dust". The ✨ buttons below write both descriptions from it.
+    body: `Your own notes for this place or person. A list is fine. The ✨ buttons write both descriptions from it.
 
-**Nothing ever writes into this field.** It is the only one here that no generator touches, and that is the point of it. The Player-Facing and AI-Facing descriptions can each be drafted from the other, so running both in turn quietly replaces what you wrote with what a model inferred — the player-facing prompt is *meant* to hold secrets back, and the AI-facing one is *meant* to fill in what a blurb implies. Put your facts here and they stay yours, however many times you regenerate either description.
+**No button writes into this field.** The two descriptions can each be drafted from the other. If you draft one way and then back, your writing is replaced by what the model guessed. The brief stops that. Your facts stay here, and you can draft either description again as often as you like.
 
-**You do not have to write prose.** That is the work the drafting buttons are for. Jot what is true about the place or person and let them turn it into sentences; a description that comes back wrong is fixed by correcting the brief and pressing ✨ again, rather than by rewriting the prose every time.
+**You do not have to write prose.** Write what is true, and let the ✨ buttons make sentences. If a description comes back wrong, correct the brief and press ✨ again.
 
-**Mark what is private.** A line the player should never learn — a motive, a plan, a past crime — is worth saying so on: *"SECRET: he takes bribes from the night barges"*. The Player-Facing draft leaves marked lines out and the AI-Facing draft keeps them, which is the difference between the two descriptions in the first place.
+**Mark what is private.** Start a line with *SECRET:*, for example *"SECRET: he takes bribes from the night barges"*. The Player-Facing draft leaves that line out. The AI-Facing draft keeps it.
 
-**Leave it empty and nothing changes.** A subject with no brief drafts exactly as it did before this field existed: Player-Facing from AI-Facing, and AI-Facing from Player-Facing.`,
+**The brief belongs to this world.** A library update does not change it, and Save to Library does not copy it.
+
+**An empty brief changes nothing.** The buttons draft as before: Player-Facing from AI-Facing, and AI-Facing from Player-Facing.`,
   },
   'worldEditor.aliases': {
     title: 'Aliases',
     body: `Other names an entity goes by — a nickname, a title, an epithet. "Rosalind" answers to "Roz", and to her title, "Warden". List as many as you like.
 
-They exist so the story keeps recognizing a character even when it doesn't use their full name. Given only the name, the narrator writes "the Warden" and Formamorph no longer sees Rosalind in the scene — she drops off the cast, out of the choices, off the Entities tab. An alias closes that gap, and the AI is told the nickname too so it can reach for it naturally.
+They exist so the story keeps recognizing an entity even when it doesn't use the full name. Given only the name, the narrator writes "the Warden" and Formamorph no longer sees Rosalind in the scene — she drops off the cast, out of the choices, off the Entities tab. An alias closes that gap, and the AI is told the nickname too so it can reach for it naturally.
 
 **What an alias does**
 
-- **Detection.** When an alias appears in the narration, the entity counts as present that turn — exactly as if its name had appeared. This drives who shows in the Entities tab, who the choices consider, and which characters travel with the scene.
+- **Detection.** When an alias appears in the narration, the entity counts as present that turn — exactly as if its name had appeared. This drives who shows in the Entities tab, who the choices consider, and which entities travel with the scene.
 - **Told to the AI.** Aliases are sent alongside the name as *also known as*, so the narrator knows Rosalind and the Warden are one person and can use either.
 
 **How matching works**
@@ -353,7 +355,7 @@ They exist to give the story a memory with consequences. Prose alone drifts; a s
 - **Stat Descriptors** turn a number into a word. A threshold is a **value of this stat** — on a 0–10 stat, \`3\` means 3 — and it is the *top* of its band, so the lowest band the value fits in wins, whatever order you list them in. Give the highest one a threshold of your **Max**, or a value above it gets no descriptor at all. The coverage bar draws every band's real extent with the gap above them in red, and each row says what it covers. Switch **Thresholds in** to **% of Max** if you would rather the bands rescale when you change the range; your numbers are converted as you switch, so nothing moves.
 - **Prevent AI Changes** locks a stat against the AI in one direction. Useful for anything only your world's rules should move.
 - **Body Sliders** bind a body morph to the stat, so its value drives the slider from Min to Max.
-- **Dynamic Value Calculation** replaces the value with the result of a small script that runs each turn. It has a **?** of its own beside it.
+- **Dynamic Value Calculation** runs a small script that can set the value, Min, Max, or Regen, pin a placeholder, or switch a trait. It has a **?** of its own beside it.
 
 **Simple mode hides** Stat Descriptors, Prevent AI Changes and Dynamic Value Calculation. Switch the editor to Advanced to use them.
 
@@ -362,18 +364,63 @@ Start with two or three stats that the story would genuinely turn on. Every stat
   'worldEditor.statCode': {
     title: 'Dynamic Value Calculation',
     wikiPage: 'StatCodeGuide',
-    body: `A stat can compute itself from the others. Write JavaScript that **returns a number**, and the stat recalculates each turn instead of using its Initial Value. Leave the box empty and the manual value stands.
+    body: `A stat can run a small script. Write JavaScript. A returned number replaces the stat's value. A script with no return can still set \`self\`, pin a placeholder, or switch a trait. Leave a box empty and the manual value stands.
 
-**Test Code** runs your script right there and shows the number it produced, as a one-hour turn on day one. It's the ground truth — the underlines in the editor are advice given without running anything.
+**Two boxes, one turn.** Turn order:
 
-**What your script can reach.** A read-only copy of every stat and nothing else: no page, no network, no other stat's code. Each one carries \`id\`, \`name\`, \`type\`, \`description\`, \`min\`, \`max\`, \`value\` and \`regen\`. \`stats\` is the list; \`currentStatId\` is the id of the stat you're editing.
+| | |
+|---|---|
+| 1 | **Before the AI** |
+| 2 | AI stat changes |
+| 3 | Regen |
+| 4 | **After the AI** |
+
+**Before the AI** runs at the start of the turn, before the prompt is built. A value it sets, a placeholder it pins, or a trait it switches is in the prompt for that turn. \`previous\` reads as the stat itself, every \`delta\` reads zero, and the clock reads turn start.
+
+**After the AI** runs after the AI's changes and Regen apply. It reads the values the before box set. Both boxes run every turn. An empty box is skipped. A bound set by one box persists until the other box writes it or both boxes are empty.
+
+**Test Code** sits under each box and runs that box alone on that box's clock: the opening turn for Before the AI, a one-hour turn on day one for After the AI. Test Code executes the code. Editor underlines are static analysis only.
+
+**What the script can reach.** A copy of every stat, the world's placeholders, and the world's traits. The sandbox exposes nothing else. \`stats\` is a map keyed by name. \`self\` is the stat that owns the code. Each stat carries \`id\`, \`name\`, \`type\`, \`description\`, \`min\`, \`max\`, \`value\` and \`regen\`.
 
 \`\`\`js
-const health = stats.find(s => s.name === 'Health')?.value ?? 0;
+const health = stats.Health.value;
 return health / 2;
 \`\`\`
 
-**It can also read the clock.** Six values describe where the story stands in time:
+A name with a space needs brackets: \`stats["Hit Points"]\`. \`Object.values(stats)\` iterates every stat. A name with a placeholder chip reads in code as that placeholder's name, so a stat named \`{{Beast}} Power\` is \`stats["Beast Power"]\` in every playthrough.
+
+**Writing to \`self\`.** Set \`self.value\`, \`self.min\`, \`self.max\` or \`self.regen\` and the stat takes that number this turn. A bound the code sets persists until the code writes it again or both boxes are empty. A field the code does not write keeps the turn's value, so a script can set the cap and leave the value to the AI. Only \`self\` accepts writes. Every other stat is read-only.
+
+\`\`\`js
+const level = stats.Level.value;
+self.max = level * 10;
+\`\`\`
+
+**Reading this turn.** Each stat carries the turn's state before the code ran. \`previous\`: the full stat (\`id\`, \`name\`, \`type\`, \`description\`, \`min\`, \`max\`, \`value\` and \`regen\`) at the start of the turn. \`delta\`: every change the turn made. \`delta.ai\` is the AI's requested change. \`delta.regen\` is the regen change. \`delta.total\` is their sum. \`delta.actual\` is current values minus \`previous\`. Each has \`value\`, \`min\`, \`max\` and \`regen\`. \`previous\` and \`delta\` are read-only. Use them to clamp or scale the AI's change before it applies.
+
+\`\`\`js
+self.value = self.previous.value + Math.min(self.delta.ai.value, 10);
+\`\`\`
+
+**Placeholders.** \`placeholders\` holds every placeholder by name. Each entry has \`values\`, every authored value as text; \`value\`, the current value; \`text\`, the value the prompt sees; and \`roll()\`, one weighted draw. On a Wildcard or a Variable, \`value\` is one text and \`text\` is the same text. On an Object, \`value\` is the list of current values and \`text\` joins them with \`", "\`. Compare narration wording with \`text\`. \`pin(x)\` pins the placeholder until the code changes it again. \`unpin()\` restores the other pins and the roll. \`pin\` takes the same shape \`value\` reads: one text on a Wildcard, a list on an Object. One text on an Object pins a one-item list. A name with a space needs brackets: \`placeholders["Hair Color"]\`.
+
+**Paths.** Code reaches a placeholder by the path the editor shows. An entity or dictionary that owns placeholders is a path segment. A placeholder that holds parts carries them as members, to any depth. An owner segment has no placeholder members, only the placeholders it owns. Every placeholder has \`values\`, \`value\`, \`text\`, \`roll\`, \`pin\` and \`unpin\`, so a part with one of those names is shadowed by the member. A bare name resolves to the world's own row first, then the last one authored. Write the full path for an exact match.
+
+\`\`\`js
+placeholders.Mood.pin(self.value < 20 ? 'furious' : 'calm');
+placeholders.Hair.pin(['gray', 'cropped short']);
+placeholders.Molly.Hair.Shade.pin('ash');
+placeholders["Old Molly"]["Eye Color"].pin('green');
+\`\`\`
+
+**Traits.** \`traits\` holds every authored trait by name. Each entry has \`enabled\`, true when the player has the trait and it is on, and \`acquired\`, true when the player has the trait. Set \`enabled\` to switch the trait on or off after the run, with the same effect as the player's checkbox, exclusive siblings included. Enabling a trait the player never took acquires it. Code ignores Player Can Toggle In-Game, so it can switch a trait the player cannot toggle. A trait name with a placeholder chip reads in code as that placeholder's name, so a trait named \`{{Beast}} Fury\` is \`traits["Beast Fury"]\` in every playthrough.
+
+\`\`\`js
+traits.Cursed.enabled = self.value <= 0;
+\`\`\`
+
+**Clock.** Six values describe the story time:
 
 | | |
 |---|---|
@@ -384,13 +431,17 @@ return health / 2;
 | \`startDay\` | Day number at the **start** of the turn |
 | \`startDaypart\` | Time of day at the **start** of the turn |
 
-Both ends are given because a turn spans time: an eight-hour sleep begins in the afternoon and ends at night. Dayparts are \`night\`, \`dawn\`, \`morning\`, \`midday\`, \`afternoon\`, \`evening\`. With **Measured Clock** off, \`deltaHours\` is simply \`1\`.
+Both ends are given because a turn spans time: an eight-hour sleep begins in the afternoon and ends at night. Dayparts are \`night\`, \`dawn\`, \`morning\`, \`midday\`, \`afternoon\`, \`evening\`. With **Measured Clock** off, \`deltaHours\` is \`1\`.
 
-That's what makes a per-hour drain (\`current + 2 * deltaHours\`) or a stat that only climbs after dark possible. One catch: a script mentioning any of these re-runs **every** turn, since time passes every turn — a script that mentions none of them runs only when a stat changes.
+This enables a per-hour drain (\`current + 2 * deltaHours\`) or a stat that only rises after dark.
 
-**A calculated stat ignores the AI.** Whatever the AI writes gets recomputed away, though it still *reads* the value and description normally.
+**The code runs every turn.** Both boxes run on the opening turn and on a turn with no AI stat change. They run when the stat request is off or fails. On those turns \`delta.ai\` reads zero in the after box, as it always does in the before box.
 
-**Templates** beside the button writes the common shapes for you — a drain, a timer, a blend of two stats — and asks only for what each one needs. What it inserts is ordinary code you can then edit.`,
+**A script that sets the value overrides the AI.** The AI's write is recomputed away. The AI still reads the value and description. A script that only writes a bound, a placeholder or a trait leaves the value to the AI.
+
+**A failed run changes nothing.** Code that throws or times out leaves the stat, the placeholders and the traits unchanged. A write to an unknown placeholder or trait name is ignored. Test Code and the Test Bench both report it.
+
+**Templates.** The **Templates** menu beside each Test Code button inserts common code shapes. Each box offers the templates that match its timing. Before the AI: a placeholder pin, a trait switch, an opening value. After the AI: a drain, a timer, a blend of two stats, a bound from another stat. Each template asks only for its inputs and inserts plain code you can edit.`,
   },
   'worldEditor.dictionary': {
     title: 'Dictionary',
@@ -420,6 +471,108 @@ Text that's present every single turn is deliberately left out — your world de
 **Simple mode hides** Always inject, Regex, Recursive, Scan depth and Secondary Keywords, along with the Background/Foreground split and the enable toggles. Switch the editor to Advanced to use them.
 
 Start with one book and a few entries. Reach for the extra controls only when an entry fires when it shouldn't.`,
+  },
+  // Opened from the linked copy's footer menu in the World Editor, once on a profile's first link, and by
+  // both update reviews. One topic for all: the dialog a reader opened decides which tab they read first,
+  // so every tab stands alone.
+  'library.linkedContent': {
+    title: 'Linked Content',
+    wikiPage: 'LinkedContent',
+    tabs: [
+      {
+        label: 'Linked Copies',
+        body: `A **linked copy** is an entity or a dictionary in a world that follows a **library item**. When you save the library item, every linked copy of it receives the change the next time you open its world. A copy that follows nothing is an **independent copy**.
+
+**Who owns the item decides what an edit does.** If the library item is your own, an edit to the copy stays **Linked**. Saving the world writes the edit to the library item, and every other world holding a copy receives it the next time you open that world. If the item is another author's, the first edit makes the copy a **Local replacement**: Formamorph keeps your change, and their updates still reach you for review.
+
+**How a copy becomes linked.** **Save to Library** links the copy it saved. **Add Entity** and **Add Dictionary** add a copy from your library and offer **Link to Library**, on by default. **Import Entity…** and **Import Dictionary…** offer the same choice for a file. An independent copy's menu holds **Link to Library Item…**. All of these make the same link.
+
+**The three link states.** A linked row carries a 🔗 marker in the list, and the footer button reads **Open in Library**. Point at either one to read the state and the name of what the copy follows.
+
+| | |
+|---|---|
+| **Linked** | The copy follows its library item. Updates replace its content. If the item is yours, saving the world writes your edits to it. |
+| **Local replacement** | You edited a copy of another author's item. No update overwrites it. **Keep Mine** is its default in every review. |
+| **Link pending save** | You linked the copy in this editing session. The link is written when you save the world. |
+
+**Open in Library** opens the library item. **Unlink** turns the copy into an independent copy. The content stays exactly as it is, and the copy follows nothing.
+
+**Connect World References.** A library item names the Placeholder or location it needs by an id from its own world. When this world does not already answer that reference, a step asks what each one means here. **Save Connections…** in the copy's menu reopens the step, so you can point a reference somewhere else after you remove a Placeholder.`,
+      },
+      {
+        label: 'Updates',
+        body: `**Check for Updates** sits on a library tile and in a linked copy's menu. It compares the library item against every world that holds a copy. If no world is behind it, nothing opens.
+
+**Update Available** lists one row per world, with the copy's state and an action. A **local replacement** is a copy you edited.
+
+| | |
+|---|---|
+| **Update** | Replace the copy with the library item. The default for a **Linked** copy. |
+| **Use Author's** | Replace a **Local replacement** with the library item. Your edits go. |
+| **Keep Mine** | Keep the copy as it is. The default for a local replacement. |
+| **Unlink** | Keep the copy as it is and stop following the library item. |
+
+**View Changes** shows each changed field with your value and the author's. Choosing an action changes nothing until **Apply Updates**. **Cancel** applies none of it.
+
+**Keep Mine remembers the revision you answered for.** That revision does not come back. The next revision asks again.
+
+**Update This World** opens when you choose **Update an existing copy** for a community world. It lists the linked copies the update would change, with the same four actions. A local replacement starts on **Keep Mine**, so your edits survive the update. **New Required Content** lists sources the author now requires, which download and link when you apply. **No Longer Required** lists copies the author stopped requiring, which stay in your world as independent copies. **Cancel** applies none of it.`,
+      },
+      {
+        label: 'Publishing',
+        body: `**Publishing a world.** The publish dialog lists every library item the world's copies follow under **Linked Content**. **Include as required** makes that item download and link with the world. An unchecked item is published inside the world with no source to follow. A source of yours with no listing yet reads **Will publish with this world** and publishes first, as **Unlisted** unless you choose **Public**. If one source is refused, the world stays unpublished and **Retry** finishes the rest.
+
+**Publishing an entity or a dictionary.** **Listing** is **Public** or **Unlisted**. An unlisted listing reaches players only inside a world that requires it. **Compatible Worlds** lists your published worlds that hold a linked copy. Check **Offer as add-on** for a world and the world's author reviews the offer. The review state shows beside each world you offered it for.
+
+**Manage Add-ons** on your own world card opens the offers other authors made for your world. Each offer is **Approved**, **Unreviewed**, or **Declined**.
+
+| | |
+|---|---|
+| **Approved** | The add-on is listed under **Approved Add-ons** on your world's download. |
+| **Unreviewed** | The add-on is listed under **Community Add-ons**. |
+| **Declined** | The add-on leaves both tabs. It stays downloadable from its own listing. |
+
+A source that changed after your answer keeps that answer and gains **Updated since review**. **Mark Reviewed** accepts the change. Nothing changes until **Save Changes**.`,
+      },
+      {
+        label: 'Downloading',
+        body: `A community world's details window lists what it brings under **Linked Content**.
+
+| | |
+|---|---|
+| **Required** | Comes with the world. You do not choose it. |
+| **Approved Add-ons** | Optional. The world's author approved it. |
+| **Community Add-ons** | Optional. Offered by its author and not reviewed by the world's author. |
+
+The download button counts what it installs, so it reads **Download World + 3 Items**. Downloading places each item in your library and links the world's copies to it. Each copy opens in the World Editor as **Linked** with its source named.
+
+A required item that does not download leaves the world out of your library, and **Retry** finishes it. An add-on that does not download leaves the world ready and gets its own **Retry**.
+
+**Compatible Worlds** on an entity's or a dictionary's listing shows the worlds it is offered for. Downloading the entity or dictionary installs it alone.
+
+**Importing a world file.** The file carries what each copy follows. On the machine that wrote it, every link is restored. Elsewhere, **Link bundled content to my library** saves each bundled item as a library item of yours, and the world's copies follow it. Unchecked, the copies follow nothing. If you already have a copy's source, the copy follows your item as a **local replacement**, which no update overwrites, because the file's content always wins.`,
+      },
+      {
+        label: 'Repairs',
+        body: `**Check Sources** in the Test Bench's **Issues** list asks the server about every library item this world's copies follow. It asks only when you press it, so an installed world stays playable with no connection.
+
+A source the server reports as deleted reads as a source its author removed. Any other failure reads as a source Formamorph could not check, with **Retry Check**.
+
+Each copy with a missing source gets one repair and its own **Apply**.
+
+| | |
+|---|---|
+| **Replace from Library** | Follow a different library item. |
+| **Unlink and Keep Content** | Keep the copy as an independent copy. |
+| **Remove from World** | Delete the copy from this world. |
+
+**A republished source is a new listing.** It never reconnects on its own. Replace from Library is the way back to it.
+
+While a required source reads as removed, **Enter World**, **Quick Start**, and **Publish World** are off for that world. The reason names the source and carries **Repair Sources** to the editor. **Edit World** and **Load Game** stay open.
+
+**Removing a library item** leaves every copy that followed it as an independent copy with its content untouched. No world breaks.`,
+      },
+    ],
   },
 };
 

@@ -11,10 +11,16 @@ import {
   validateSlotValues,
   fillTemplate,
   isBuiltInTemplate,
+  isNameSlotType,
   BUILT_IN_TEMPLATES,
   DAYPART_OPTIONS,
+  timingOf,
+  templatesForTiming,
+  type StatCodeTemplate,
+  type TemplateSlot,
 } from './statCodeTemplates';
-import { executeStatCode, usesStatClock } from './statCodeExecutor';
+import { executeStatCode, type SandboxTrait } from './statCodeExecutor';
+import { phMap, phWrite } from '@/test/sandboxPlaceholders';
 import type { Stat } from '@/types';
 
 const makeStat = (over: Partial<Stat>): Stat => ({
@@ -189,9 +195,11 @@ describe('built-in templates', () => {
     for (const template of BUILT_IN_TEMPLATES) {
       const { slots, errors } = parseTemplateSlots(template.code);
       expect(errors, template.name).toEqual([]);
-      // A stat slot has no sensible shipped default (world-specific), so fill it here the way the form will.
+      // A name slot has no sensible shipped default (world-specific), so fill it here the way the form will.
       const values = { ...defaultSlotValues(slots) };
-      for (const slot of slots) if (slot.type === 'stat') values[slot.name] = 'Health';
+      for (const slot of slots) {
+        if (isNameSlotType(slot.type)) values[slot.name] = { stat: 'Health', placeholder: 'Mood', trait: 'Cursed' }[slot.type];
+      }
       expect(validateSlotValues(slots, values), template.name).toEqual({});
     }
   });
@@ -204,43 +212,122 @@ describe('built-in templates', () => {
     makeStat({ id: 's', name: 'Strength', value: 20 }),
   ];
   const self = world[0];
+  const placeholders = phMap([
+    { name: 'Mood', value: 'calm', values: ['calm', 'wary', 'angry', 'furious'], roll: () => 'calm' },
+  ]);
+  const traits: SandboxTrait[] = [
+    { name: 'Cursed', enabled: true, acquired: true },
+    { name: 'Blessed', enabled: false, acquired: false },
+  ];
+  /** The world's names, the way the picker fills a slot of each kind. */
+  const pickFor = (slot: TemplateSlot): string | undefined => {
+    switch (slot.type) {
+      case 'stat': return slot.name === 'secondStat' ? 'Strength' : 'Health';
+      case 'placeholder': return placeholders[0].name;
+      case 'trait': return traits[0].name;
+      default: return undefined;
+    }
+  };
 
   for (const template of BUILT_IN_TEMPLATES) {
     it(`runs in the sandbox: ${template.name}`, async () => {
       const { slots } = parseTemplateSlots(template.code);
       const values = { ...defaultSlotValues(slots) };
       for (const slot of slots) {
-        if (slot.type === 'stat') values[slot.name] = slot.name === 'secondStat' ? 'Strength' : 'Health';
+        const picked = pickFor(slot);
+        if (picked !== undefined) values[slot.name] = picked;
       }
+      // The clock its own box hands it: a measured turn after the AI, and the opening turn's zero hours
+      // before, which is the reading the before box gives on the turn its templates are written for.
+      const clock = template.timing === 'before'
+        ? { deltaHours: 0, elapsedHours: 0 }
+        : { deltaHours: 2, elapsedHours: 12 };
       const result = await executeStatCode(fillTemplate(template.code, values), world, self, {
-        deltaHours: 2,
-        elapsedHours: 12,
+        clock, placeholders, traits,
       });
       expect(result.error, template.name).toBeNull();
-      expect(typeof result.value, template.name).toBe('number');
+      // A template writes a value, a bound, a placeholder, or a trait; one that does nothing is broken.
+      const wrote = result.value !== null || !!result.bounds || !!result.placeholders?.length || !!result.traits?.length;
+      expect(wrote, template.name).toBe(true);
     });
   }
 
-  it('gives the time-driven templates an every-turn run schedule and leaves derived ones on stat-change', () => {
-    const scheduleById = Object.fromEntries(
-      BUILT_IN_TEMPLATES.map(t => [t.id, usesStatClock(t.code)]),
-    );
-    expect(scheduleById).toEqual({
-      'builtin-weighted-blend': false,
-      'builtin-inverse': false,
-      'builtin-threshold-flag': false,
-      'builtin-per-turn-change': true,
-      'builtin-timer': true,
-      'builtin-daypart-modifier': true,
-      'builtin-random-roll': true,
-      'builtin-regen-toward-target': true,
+  // The three write templates prove themselves by what the host reads back, not by a returned number:
+  // a bound on `self`, a pin on a placeholder, and a switch on a trait.
+  describe('the write templates', () => {
+    const run = (id: string, values: Record<string, string>) => {
+      const template = BUILT_IN_TEMPLATES.find(t => t.id === id)!;
+      return executeStatCode(fillTemplate(template.code, values), world, self, { placeholders, traits });
+    };
+
+    it('sets the chosen bound from another stat times a factor, and leaves the value alone', async () => {
+      // Health 80 × 2 lands Max at 160; Min and Regen are untouched.
+      const result = await run('builtin-bound-from-stat', { source: 'Health', bound: 'max', factor: '2' });
+      expect(result).toEqual({ value: null, error: null, bounds: { max: 160 } });
+      // The same template writes Regen when the choice says so.
+      const regen = await run('builtin-bound-from-stat', { source: 'Strength', bound: 'regen', factor: '0.5' });
+      expect(regen.bounds).toEqual({ regen: 10 });
+    });
+
+    it('pins a placeholder to the value at the subject’s position in its range', async () => {
+      // The subject sits at 40 of 0–200: a fifth of the way, so the first of four values.
+      expect((await run('builtin-placeholder-follows-stat', { placeholder: 'Mood' })).placeholders)
+        .toEqual([phWrite('Mood', 'calm')]);
+      const high = { ...self, value: 200 };
+      const template = BUILT_IN_TEMPLATES.find(t => t.id === 'builtin-placeholder-follows-stat')!;
+      const atMax = await executeStatCode(
+        fillTemplate(template.code, { placeholder: 'Mood' }), [high, ...world.slice(1)], high, { placeholders, traits },
+      );
+      // At Max the index would run past the list; it clamps to the last value.
+      expect(atMax.placeholders).toEqual([phWrite('Mood', 'furious')]);
+    });
+
+    // The template hands over one of the placeholder's own values. On an Object that is one text, which
+    // pins a one-item list, so the same template runs on either kind.
+    it('pins an Object to a one-item list from the same template', async () => {
+      const [hair] = phMap([{ name: 'Hair', value: ['grey', 'long'], roll: () => 'grey' }]);
+      const template = BUILT_IN_TEMPLATES.find(t => t.id === 'builtin-placeholder-follows-stat')!;
+      const result = await executeStatCode(
+        fillTemplate(template.code, { placeholder: 'Hair' }), world, self, { placeholders: [...placeholders, hair], traits },
+      );
+      expect(result.error).toBeNull();
+      expect(result.placeholders).toEqual([phWrite('Hair', ['grey'])]);
+    });
+
+    it('sets the opening value on the opening turn and leaves later turns alone', async () => {
+      const template = BUILT_IN_TEMPLATES.find(t => t.id === 'builtin-opening-value')!;
+      const code = fillTemplate(template.code, { openingValue: '75' });
+      const at = (elapsedHours: number) =>
+        executeStatCode(code, world, self, { clock: { deltaHours: 0, elapsedHours }, placeholders, traits });
+
+      // The before box reads the clock at turn start, so the opening turn is the one at hour zero.
+      expect((await at(0)).value).toBe(75);
+      // Any later turn returns nothing, which leaves the value the turn found.
+      expect(await at(1)).toEqual({ value: null, error: null });
+      expect(await at(96)).toEqual({ value: null, error: null });
+    });
+
+    it('switches a trait on past the line and off below it', async () => {
+      // 40 >= 50 is false, so an enabled trait switches off.
+      expect((await run('builtin-trait-by-threshold', { trait: 'Cursed', comparison: '>=', threshold: '50' })).traits)
+        .toEqual([{ name: 'Cursed', enabled: false }]);
+      // 40 <= 50 is true, so an unacquired trait switches on.
+      expect((await run('builtin-trait-by-threshold', { trait: 'Blessed', comparison: '<=', threshold: '50' })).traits)
+        .toEqual([{ name: 'Blessed', enabled: true }]);
+    });
+
+    it('quotes placeholder and trait slots so a name with a space still reaches the map', () => {
+      expect(fillTemplate('placeholders[{{p:placeholder}}].value', { p: 'Hair Color' }))
+        .toBe('placeholders["Hair Color"].value');
+      expect(fillTemplate('traits[{{t:trait}}].enabled', { t: 'Night Owl' }))
+        .toBe('traits["Night Owl"].enabled');
     });
   });
 
   it('computes the values the descriptions promise', async () => {
     const run = async (id: string, values: Record<string, string>, clock?: { deltaHours: number; elapsedHours: number }) => {
       const template = BUILT_IN_TEMPLATES.find(t => t.id === id)!;
-      return executeStatCode(fillTemplate(template.code, values), world, self, clock);
+      return executeStatCode(fillTemplate(template.code, values), world, self, { clock });
     };
 
     // Weight 0.5 is the plain average of Health 80 and Strength 20.
@@ -284,10 +371,44 @@ describe('built-in templates', () => {
     const template = BUILT_IN_TEMPLATES.find(t => t.id === 'builtin-random-roll')!;
     const code = fillTemplate(template.code, {});
     for (const elapsedHours of [1, 7, 23]) {
-      const { value, error } = await executeStatCode(code, world, self, { deltaHours: 1, elapsedHours });
+      const { value, error } = await executeStatCode(code, world, self, { clock: { deltaHours: 1, elapsedHours } });
       expect(error).toBeNull();
       expect(value).toBeGreaterThanOrEqual(0);
       expect(value).toBeLessThanOrEqual(200);
     }
+  });
+});
+
+describe('which box a template belongs to', () => {
+  it('splits the built-ins so neither menu offers the other box’s templates', () => {
+    const before = templatesForTiming(BUILT_IN_TEMPLATES, 'before').map(t => t.id);
+    const after = templatesForTiming(BUILT_IN_TEMPLATES, 'after').map(t => t.id);
+
+    // The three setup shapes: a value the first narration reads, a pin it reads, a trait it reads.
+    expect(before).toEqual([
+      'builtin-placeholder-follows-stat', 'builtin-trait-by-threshold', 'builtin-opening-value',
+    ]);
+    expect(after).not.toHaveLength(0);
+    expect(before.filter(id => after.includes(id))).toEqual([]);
+    expect([...before, ...after]).toHaveLength(BUILT_IN_TEMPLATES.length);
+  });
+
+  // Three readings are dead in the before box: `deltaHours` is 0 because the turn has consumed no time,
+  // `delta` is zeros because nothing has moved, and `previous` is the stat itself. A template built on any
+  // of them would run and quietly do nothing, so it belongs in the after menu. The rest of the clock still
+  // reads: `elapsedHours` at turn start is what tells the opening turn from every later one.
+  it('offers no before template that is built on a reading the before box zeroes', () => {
+    const deadInTheBeforeBox = /deltaHours|delta[.]|previous/;
+    for (const template of templatesForTiming(BUILT_IN_TEMPLATES, 'before')) {
+      expect(template.code, template.name).not.toMatch(deadInTheBeforeBox);
+    }
+  });
+
+  it('reads a template with no timing as an after-the-AI one', () => {
+    expect(timingOf({})).toBe('after');
+    expect(timingOf({ timing: 'before' })).toBe('before');
+    const untimed = { id: 'x', name: 'x', description: '', code: '' } as StatCodeTemplate;
+    expect(templatesForTiming([untimed], 'after')).toEqual([untimed]);
+    expect(templatesForTiming([untimed], 'before')).toEqual([]);
   });
 });

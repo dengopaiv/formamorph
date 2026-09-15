@@ -221,6 +221,7 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     const { add, addEach } = bind(`entity:${entity.id}`, entity, src.updateEntity);
     add({ ...where, chipCapable: true }, 'name', 'Name', entity.name, (r, v) => ({ ...r, name: v }));
     addEach({ ...where, chipCapable: true }, 'aliases', 'Aliases', entity.aliases, (r, v) => ({ ...r, aliases: v }), (r) => r.aliases ?? []);
+    add({ ...where, chipCapable: true }, 'authorBrief', "Author's Brief", entity.authorBrief, (r, v) => ({ ...r, authorBrief: v }));
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', entity.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', entity.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', entity.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
@@ -238,6 +239,7 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     const where = { tab: 'locations', itemId: location.id, itemLabel: labeled(location.name, 'Location') };
     const { add } = bind(`location:${location.id}`, location, src.updateLocation);
     add({ ...where, chipCapable: true }, 'name', 'Name', location.name, (r, v) => ({ ...r, name: v }));
+    add({ ...where, chipCapable: true }, 'authorBrief', "Author's Brief", location.authorBrief, (r, v) => ({ ...r, authorBrief: v }));
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', location.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', location.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', location.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
@@ -272,7 +274,7 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
   (src.dictionaries ?? []).forEach((book) => {
     const bookWhere = { tab: 'dictionary', itemId: book.id, itemLabel: labeled(book.name, 'Dictionary') };
     const { add: addBook } = bind(`book:${book.id}`, book, src.updateDictionary);
-    addBook({ ...bookWhere, chipCapable: false }, 'name', 'Dictionary Name', book.name, (r, v) => ({ ...r, name: v }));
+    addBook({ ...bookWhere, chipCapable: false }, 'name', 'Name', book.name, (r, v) => ({ ...r, name: v }));
     addBook({ ...bookWhere, chipCapable: false }, 'description', 'Description', book.description, (r, v) => ({ ...r, description: v }));
     (book.entries ?? []).forEach((entry) => {
       // A regex entry drops the chip vocabulary, so its keys and value can't take a chip replacement.
@@ -412,6 +414,8 @@ export interface ReplaceSummary {
 export function replaceAll(
   matches: SearchMatch[],
   insertFor: (target: SearchTarget) => string | null,
+  /** Each field this pass rewrote, with its new text. A rename offer reads which names moved from here. */
+  onWrite?: (target: SearchTarget, next: string) => void,
 ): ReplaceSummary {
   const byTarget = new Map<SearchTarget, SearchMatch[]>();
   const summary: ReplaceSummary = { replaced: 0, fields: 0, skipped: 0, skippedFields: [], chips: 0 };
@@ -441,6 +445,7 @@ export function replaceAll(
     drafts.set(target.itemKey, { ...draft, record: target.applyTo(draft.record, next) });
     summary.replaced += hits.length;
     summary.fields += 1;
+    onWrite?.(target, next);
   }
   for (const { record, commit } of drafts.values()) commit(record);
   return summary;

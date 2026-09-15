@@ -9,6 +9,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { Tip } from '@/components/ui/tooltip';
+import { authoringFailureMessage } from '@/lib/authoringRequest';
 
 /**
  * Reads a subject's Player-Facing and AI-Facing descriptions against each other and reports where they
@@ -31,6 +32,7 @@ const DescriptionCheckButton = ({ playerText, aiText, kind, subjectName }: {
 }) => {
   const {
     activeEndpointUrl, activeApiToken, activeModelName, descCheckPrompt, descMaxTokens,
+    reasoningCapability, localModelActive,
   } = useSettings();
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
@@ -59,12 +61,13 @@ const DescriptionCheckButton = ({ playerText, aiText, kind, subjectName }: {
         template: descCheckPrompt,
         maxTokens: descMaxTokens.desccheck,
         signal: controller.signal,
+        reasoning: { capability: reasoningCapability, localEngine: localModelActive },
       });
       setFindings(result);
       setOpen(true);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
-      toast.error('Failed to check the descriptions.');
+      toast.error(authoringFailureMessage('Failed to check the descriptions.', error));
     } finally {
       setLoading(false);
     }

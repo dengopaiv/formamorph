@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { clearDeletionCancellation, hasDeletionCancellation } from '@/lib/deletionCancellation';
-import { SiteAccountControls } from './SiteAccountControls';
+import { SiteHeader } from './SiteHeader';
 
 interface SiteLayoutProps {
   /** Sits above the panel, in the landing page's heading size. Absent leaves the panel to head itself. */
@@ -10,6 +10,8 @@ interface SiteLayoutProps {
   subtitle?: string;
   /** A form is read down one column; a profile is a page. */
   width?: 'form' | 'page';
+  /** A full-width surface that owns the main area below the shared website header. */
+  surface?: boolean;
   children: ReactNode;
 }
 
@@ -19,12 +21,8 @@ const WIDTHS = {
   page: 'max-w-[640px]',
 } as const;
 
-/**
- * The frame every account page shares: the landing page's mark on top, its footer underneath, and a
- * narrow card between them. The landing page is one static file with no build step, so its look is
- * matched here rather than imported.
- */
-export function SiteLayout({ title, subtitle, width = 'form', children }: SiteLayoutProps) {
+/** Shared website frame with a content column and footer. */
+export function SiteLayout({ title, subtitle, width = 'form', surface = false, children }: SiteLayoutProps) {
   const [deletionCanceled] = useState(hasDeletionCancellation);
 
   // Cleared after render so React's development double-render cannot consume it before it is visible.
@@ -34,18 +32,13 @@ export function SiteLayout({ title, subtitle, width = 'form', children }: SiteLa
 
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <header className="border-b border-border">
-        <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-4 px-6 py-4">
-          <a href="/" className="flex items-center gap-3 no-underline">
-            <img src="/site/icon.png" width={32} height={32} alt="" className="rounded-lg" />
-            <span className="text-title font-semibold tracking-tight">Formamorph</span>
-          </a>
-          <SiteAccountControls />
-        </div>
-      </header>
+      <SiteHeader />
 
-      <main className="mx-auto flex w-full max-w-[1100px] flex-1 items-start justify-center px-6 py-12">
-        <div className={cn('w-full', WIDTHS[width])}>
+      <main className={cn(
+        'flex w-full flex-1',
+        surface ? 'min-h-0 flex-col' : 'mx-auto max-w-[1100px] items-start justify-center px-6 py-12',
+      )}>
+        <div className={cn('w-full', surface ? 'flex min-h-0 flex-1 flex-col' : WIDTHS[width])}>
           {deletionCanceled && (
             <div role="status" className="mb-6 rounded-lg border border-primary/40 bg-primary/10 p-4 text-label">
               <p className="font-semibold text-foreground">Account deletion canceled</p>
@@ -54,11 +47,13 @@ export function SiteLayout({ title, subtitle, width = 'form', children }: SiteLa
               </p>
             </div>
           )}
-          {title && <h1 className="text-display font-semibold tracking-tight">{title}</h1>}
-          {subtitle && <p className="mt-2 text-body text-muted-foreground">{subtitle}</p>}
-          <div className={cn('rounded-xl border border-border bg-card p-6', title && 'mt-6')}>
-            {children}
-          </div>
+          {surface ? children : <>
+            {title && <h1 className="text-display font-semibold tracking-tight">{title}</h1>}
+            {subtitle && <p className="mt-2 text-body text-muted-foreground">{subtitle}</p>}
+            <div className={cn('rounded-xl border border-border bg-card p-6', title && 'mt-6')}>
+              {children}
+            </div>
+          </>}
         </div>
       </main>
 

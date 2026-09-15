@@ -13,6 +13,7 @@ import { authoredPreviewValues } from "@/lib/authoredPreviewValues";
 import { composePreviewValues, languagePreviewValue } from "@/lib/previewValuePool";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/typography";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   clearWorldPromptOverride, setWorldPromptOverride, storedWorldPrompt, worldPromptEnabled, worldPromptFieldKey,
@@ -23,6 +24,7 @@ import {
 } from "@/lib/openingCue";
 import { OPENING_SCENE_CUE } from "@/components/game/GamePrompts";
 import { useEditorMode } from "@/lib/editorMode";
+import type { FocusFieldHint } from "@/types";
 
 /** Which preset field each kind replaces, and which chip palette that prompt is written against. */
 const PROMPT_KIND_VARIABLE_KEY = {
@@ -44,7 +46,7 @@ const PANEL_LABELS: Record<PanelKind, string> = { ...WORLD_PROMPT_KIND_LABELS, o
 /** The note-and-Reset row under whichever panel is open. Reset appears only for text the author stored. */
 const PanelFooter = ({ note, onReset }: { note: ReactNode; onReset?: () => void }) => (
   <div className="flex items-start justify-between gap-2">
-    <p className="text-meta text-muted-foreground">{note}</p>
+    <Hint>{note}</Hint>
     {onReset && (
       <Button variant="ghost" size="sm" className="shrink-0" onClick={onReset}>
         Reset
@@ -64,7 +66,7 @@ const PanelFooter = ({ note, onReset }: { note: ReactNode; onReset?: () => void 
  * The cue needs no player-facing opt-out where the prompts do: the pre-filled box is editable, so the
  * player already has the last word on what the opening turn says.
  */
-const CustomPromptsSection = ({ focusField }: { focusField?: { fieldKey: string } | null }) => {
+const CustomPromptsSection = ({ focusField }: { focusField?: FocusFieldHint | null }) => {
   const {
     worldOverview, updateWorldOverview, stats, locations, connections, entities, traits, traitGroups, dictionaries,
     placeholders,
@@ -287,7 +289,7 @@ const CustomPromptsSection = ({ focusField }: { focusField?: { fieldKey: string 
  * whichever readme isn't currently showing. It arrives as a fresh object per navigation so that stepping
  * onto a second hit in the same readme re-opens that tab after the author has flipped away from it.
  */
-const ReadmeSection = ({ focusField }: { focusField?: { fieldKey: string } | null }) => {
+const ReadmeSection = ({ focusField }: { focusField?: FocusFieldHint | null }) => {
   const { worldOverview, updateWorldOverview, placeholders } = useGameData();
   // Opens on the Introduction, except for a world that only has the older Gameplay readme — an author
   // whose readme is on the other tab would otherwise be met by an empty field where their text used to be.
@@ -308,24 +310,27 @@ const ReadmeSection = ({ focusField }: { focusField?: { fieldKey: string } | nul
           <TabsTrigger value="gameplay">Gameplay</TabsTrigger>
         </TabsList>
       </div>
-      {/* Both are shown once a playthrough's rolls exist, so placeholders resolve in either. */}
-      <TabsContent value="introduction">
+      {/* Both are shown once a playthrough's rolls exist, so placeholders resolve in either. Each tab's
+          guidance is a hint above its field, where a resizable field cannot push it out of view. */}
+      <TabsContent value="introduction" className="space-y-2">
+        <Hint>Shown before the player makes any setup choices.</Hint>
         <PlaceholderField
           value={worldOverview.introReadme ?? ''}
           onChange={(introReadme) => updateWorldOverview({ introReadme })}
           placeholders={placeholders}
           markdown
-          placeholder="Shown to the player before they make any setup choices. Supports markdown."
+          ariaLabel="Readme (Introduction)"
           resizable
         />
       </TabsContent>
-      <TabsContent value="gameplay">
+      <TabsContent value="gameplay" className="space-y-2">
+        <Hint>Shown when the player enters the world.</Hint>
         <PlaceholderField
           value={worldOverview.readme ?? ''}
           onChange={(readme) => updateWorldOverview({ readme })}
           placeholders={placeholders}
           markdown
-          placeholder="Shown to the player when they enter the world. Supports markdown."
+          ariaLabel="Readme (Gameplay)"
           resizable
         />
       </TabsContent>
@@ -335,39 +340,36 @@ const ReadmeSection = ({ focusField }: { focusField?: { fieldKey: string } | nul
 
 /** The AI-facing world content fields (description, system prompt, readmes), shown in the editor's right
  *  column on the Overview tab. Identity/listing fields live in WorldOverviewManager (left column). */
-const WorldDetailsManager = ({ focusField }: { focusField?: { fieldKey: string } | null }) => {
+const WorldDetailsManager = ({ focusField }: { focusField?: FocusFieldHint | null }) => {
   const { worldOverview, updateWorldOverview, placeholders } = useGameData();
   // The description shows in the library, before a playthrough exists — so placeholders can never be rolled
   // for it. No chip family here: any `{{ph…}}` an old world carries stays inert text, exactly as it'd read.
   const plainVocab = useMemo(() => plainVocabulary(), []);
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <PromptField
-          label="World Description"
-          value={worldOverview.description}
-          onChange={(description) => updateWorldOverview({ description })}
-          vocabulary={plainVocab}
-          markdown
-          placeholder="Enter world description..."
-          resizable
-        />
-      </div>
-
-      <div className="space-y-2">
-        <PlaceholderField
-          label="System Prompt Addition"
-          value={worldOverview.systemPrompt || ''}
-          onChange={(systemPrompt) => updateWorldOverview({ systemPrompt })}
-          placeholders={placeholders}
-          resizable
-        />
-      </div>
-
-      <CustomPromptsSection focusField={focusField} />
+    // Player-facing text first, then the AI-facing prompts, so the Advanced-only section is last and a
+    // Simple-mode column ends on the System Prompt Addition.
+    <div className="space-y-4">
+      <PromptField
+        label="World Description"
+        value={worldOverview.description}
+        onChange={(description) => updateWorldOverview({ description })}
+        vocabulary={plainVocab}
+        markdown
+        resizable
+      />
 
       <ReadmeSection focusField={focusField} />
+
+      <PlaceholderField
+        label="System Prompt Addition"
+        value={worldOverview.systemPrompt || ''}
+        onChange={(systemPrompt) => updateWorldOverview({ systemPrompt })}
+        placeholders={placeholders}
+        resizable
+      />
+
+      <CustomPromptsSection focusField={focusField} />
     </div>
   );
 };

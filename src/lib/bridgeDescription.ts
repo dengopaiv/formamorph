@@ -1,6 +1,8 @@
 // One-shot, non-streaming description bridging for the world editor's player/AI description buttons.
 // Same request shape as `summarize.ts`; the direction picks which description is being written.
 
+import { authoringReasoningBody, authoringRequestError, type AuthoringReasoning } from './authoringRequest';
+
 /** Which description is being written, and therefore which one is the source. */
 export type BridgeDirection = 'playerDesc' | 'aiDesc';
 
@@ -99,6 +101,8 @@ export async function bridgeDescription(
     template?: string;
     maxTokens?: number;
     signal?: AbortSignal;
+    /** The active endpoint's reasoning record; the request sends reasoning off (see `lib/authoringRequest`). */
+    reasoning?: AuthoringReasoning;
   },
 ): Promise<string> {
   const template = opts.template?.trim() || DEFAULT_BRIDGE_PROMPTS[direction];
@@ -116,11 +120,12 @@ export async function bridgeDescription(
       ],
       temperature: BRIDGE_TEMPERATURE,
       max_tokens: opts.maxTokens ?? DEFAULT_BRIDGE_MAX_TOKENS,
+      ...authoringReasoningBody(opts.reasoning),
       stream: false,
     }),
     signal: opts.signal,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw await authoringRequestError(res);
 
   const json = (await res.json()) as ChatCompletion;
   const content = json?.choices?.[0]?.message?.content;

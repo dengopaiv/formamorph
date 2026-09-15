@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BookOpen, Download, Earth, EyeOff, MessageSquare, User } from "lucide-react";
+import { BookOpen, Download, Earth, EyeOff, MessageSquare, PersonStanding, User } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -18,6 +18,7 @@ const KIND_ICONS: Record<CatalogKind, typeof Earth> = {
   world: Earth,
   entity: User,
   dictionary: BookOpen,
+  model: PersonStanding,
 };
 
 /** The list's own box: a fixed scroller in a dialog, nothing at all on a page. */
@@ -33,7 +34,9 @@ interface UserCreationsTabProps {
   /** Their name, for the empty line — a profile that says "they" about somebody named is colder. */
   username: string | null;
   /** Opens a listing in Community Creations. Absent leaves the rows as plain text. */
-  onOpenListing?: (listing: { id: string; kind: string }) => void;
+  onOpenListing?: (listing: { id: string; kind: CatalogKind }) => void;
+  /** A public destination for a listing. Takes precedence over the in-app opener. */
+  listingHref?: (listing: { id: string; kind: CatalogKind }) => string;
   /**
    * How much room the list has.
    *
@@ -49,7 +52,7 @@ interface UserCreationsTabProps {
  * Fetched as one list of every kind and split here: three requests would be three round trips to draw the
  * same rows, and the counts on the filter need the whole set regardless.
  */
-export function UserCreationsTab({ userId, username, onOpenListing, layout = 'dialog' }: UserCreationsTabProps) {
+export function UserCreationsTab({ userId, username, onOpenListing, listingHref, layout = 'dialog' }: UserCreationsTabProps) {
   const [creations, setCreations] = useState<ProfileCreation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -79,7 +82,7 @@ export function UserCreationsTab({ userId, username, onOpenListing, layout = 'di
   }, [userId]);
 
   const counts = useMemo(() => {
-    const tally = { world: 0, entity: 0, dictionary: 0 } satisfies Record<CatalogKind, number>;
+    const tally = { world: 0, entity: 0, dictionary: 0, model: 0 } satisfies Record<CatalogKind, number>;
     for (const row of creations) tally[row.kind] += 1;
 
     return tally;
@@ -173,7 +176,14 @@ export function UserCreationsTab({ userId, username, onOpenListing, layout = 'di
               </div>
 
               <div className="min-w-0 flex-1 text-left">
-                {onOpenListing ? (
+                {listingHref ? (
+                  <a
+                    href={listingHref({ id: item.id, kind: item.kind })}
+                    className="block w-full truncate text-left text-label font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+                  >
+                    {item.name}
+                  </a>
+                ) : onOpenListing ? (
                   <button
                     type="button"
                     onClick={() => onOpenListing({ id: item.id, kind: item.kind })}

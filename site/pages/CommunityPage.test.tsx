@@ -1,0 +1,119 @@
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CommunityBrowserHostProps } from '@/views/CommunityBrowserHost';
+import { CommunityPage } from './CommunityPage';
+import { resetAccountPage } from '../test/support';
+
+const { host } = vi.hoisted(() => ({
+  host: vi.fn((_props: CommunityBrowserHostProps) => <div data-testid="community-host">Community browser</div>),
+}));
+
+vi.mock('@/views/CommunityBrowserHost', () => ({ default: host }));
+const { leaveTo } = vi.hoisted(() => ({ leaveTo: vi.fn() }));
+vi.mock('../leaveSite', () => ({ leaveTo }));
+
+beforeEach(() => {
+  resetAccountPage('/community');
+  host.mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('the website community route', () => {
+  it('does not mount the browser until a guest accepts the content warning', async () => {
+    const user = userEvent.setup();
+    render(<CommunityPage />);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByTestId('community-host')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+
+    expect(await screen.findByTestId('community-host')).toBeInTheDocument();
+    expect(host).toHaveBeenCalledWith(expect.objectContaining({
+      presentation: 'embedded',
+      capabilities: expect.objectContaining({
+        localLibrary: false,
+        likes: true,
+        comments: false,
+        moderation: false,
+      }),
+    }), {});
+  });
+
+  it('keeps a direct listing destination outside the warning, then gives it to the shared browser', async () => {
+    const user = userEvent.setup();
+    resetAccountPage('/community/entity/e1');
+    render(<CommunityPage />);
+
+    expect(host).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+
+    expect(await screen.findByTestId('community-host')).toBeInTheDocument();
+    expect(host).toHaveBeenLastCalledWith(expect.objectContaining({
+      listing: { id: 'e1', kind: 'entity' },
+    }), {});
+  });
+
+  it('keeps a malformed destination unavailable instead of loading the catalog', async () => {
+    const user = userEvent.setup();
+    resetAccountPage('/community/contest/e1');
+    render(<CommunityPage />);
+
+    expect(host).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('This creation link is unavailable.');
+    expect(host).not.toHaveBeenCalled();
+  });
+
+  it('updates the destination after the shared browser selects a card', async () => {
+    const user = userEvent.setup();
+    render(<CommunityPage />);
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+    await screen.findByTestId('community-host');
+
+    const props = host.mock.calls.at(-1)?.[0];
+    const onListingChange = props?.onListingChange;
+    if (!onListingChange) throw new Error('The community host did not receive its listing callback.');
+    act(() => onListingChange({ id: 'w / 1', kind: 'world' }));
+
+    expect(window.location.pathname).toBe('/community/world/w%20%2F%201');
+  });
+
+  it('sends a guest to sign in with the exact creation as a safe return destination', async () => {
+    const user = userEvent.setup();
+    render(<CommunityPage />);
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+    await screen.findByTestId('community-host');
+
+    const onGuestLike = host.mock.calls.at(-1)?.[0]?.onGuestLike;
+    if (!onGuestLike) throw new Error('The community host did not receive its guest Like callback.');
+    act(() => onGuestLike({ id: 'e / 1', kind: 'entity' }));
+
+    expect(leaveTo).toHaveBeenCalledWith('/login?next=%2Fcommunity%2Fentity%2Fe%2520%252F%25201');
+  });
+
+  it('keeps the visible selection in step with browser Back and Forward', async () => {
+    const user = userEvent.setup();
+    render(<CommunityPage />);
+    await user.click(screen.getByRole('button', { name: 'Accept' }));
+    await screen.findByTestId('community-host');
+
+    const props = host.mock.calls.at(-1)?.[0];
+    const onListingChange = props?.onListingChange;
+    if (!onListingChange) throw new Error('The community host did not receive its listing callback.');
+    act(() => onListingChange({ id: 'w1', kind: 'world' }));
+
+    await waitFor(() => expect(window.location.pathname).toBe('/community/world/w1'));
+    act(() => window.history.back());
+    await waitFor(() => expect(host.mock.calls.at(-1)?.[0]?.listing).toBeNull());
+
+    act(() => window.history.forward());
+    await waitFor(() => expect(host.mock.calls.at(-1)?.[0]?.listing).toEqual({ id: 'w1', kind: 'world' }));
+  });
+});
