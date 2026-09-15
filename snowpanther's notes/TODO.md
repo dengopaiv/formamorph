@@ -48,15 +48,15 @@ Write here. Anything, any length, any order.
 ## Where the branches stand
 
 Regenerated 2026-09-16, after the second sync — onto upstream `685b4152`, which is **v2.19.0 plus the
-unreleased native-reasoning work**, 237 commits. Nothing below is pushed yet. Every pre-sync tip is kept
-as `pre-2.19/<branch>`.
+unreleased native-reasoning work**, 237 commits. Everything below is on `origin`, pushed 2026-09-16, and
+every pre-sync tip is kept as `pre-2.19/<branch>` — on `origin` too, so the old line survives a clone.
 
 | Branch | Carries | Behind upstream | On `origin` |
 |---|---|---|---|
-| `main` | nothing of ours — a clean mirror of upstream | 0 | **stale**, 237 behind local |
-| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | **stale**, 39 behind local |
-| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** — one commit on upstream | 0 | **not pushed** (new branch) |
-| `keyboard-tree-nesting` | the pre-rebuild line, kept only as history | 237 | matches `origin`; replace or delete it when the new branch is pushed |
+| `main` | nothing of ours — a clean mirror of upstream | 0 | in sync |
+| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | in sync |
+| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** — one commit on upstream | 0 | in sync (pushed as a new branch, so nothing was force-replaced) |
+| `keyboard-tree-nesting` | the pre-rebuild line, kept only as history | 237 | matches `origin`, left alone — delete it when you are done with it |
 | `Colossally-expensive-curiosities` | nothing any more — its doc is now `snowpanther's notes/behemoth-128b.md` | 237 | on `origin`; retire when you say so |
 
 Both working branches are green: typecheck, lint, build, and the capped suite — 10360 tests on
