@@ -47,23 +47,27 @@ Write here. Anything, any length, any order.
 
 ## Where the branches stand
 
-Regenerated 2026-09-07, after syncing every branch onto upstream `46ea181c`. Upstream is **still tagged
-v2.16.0** — 58 commits with no version bump, so the tag is not a reliable "am I current" check on this
-repo. Compare commits.
+Regenerated 2026-09-16, after the second sync — onto upstream `685b4152`, which is **v2.19.0 plus the
+unreleased native-reasoning work**, 237 commits. Nothing below is pushed yet. Every pre-sync tip is kept
+as `pre-2.19/<branch>`.
 
 | Branch | Carries | Behind upstream | On `origin` |
 |---|---|---|---|
-| `main` | nothing of ours — a clean mirror of upstream | 0 | **stale**, 291 behind local |
-| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, this file | 0 | **not pushed** |
-| `keyboard-tree-nesting` | the keyboard-nesting a11y work, plus four commits that do not belong to it | 0 | **stale** — `origin` has the pre-rebase `db665f8`; needs `--force-with-lease` |
-| `Colossally-expensive-curiosities` | one doc, `docs-internal/behemoth-128b.md` | 0 | **not pushed** |
+| `main` | nothing of ours — a clean mirror of upstream | 0 | **stale**, 237 behind local |
+| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | **stale**, 39 behind local |
+| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** — one commit on upstream | 0 | **not pushed** (new branch) |
+| `keyboard-tree-nesting` | the pre-rebuild line, kept only as history | 237 | matches `origin`; replace or delete it when the new branch is pushed |
+| `Colossally-expensive-curiosities` | nothing any more — its doc is now `snowpanther's notes/behemoth-128b.md` | 237 | on `origin`; retire when you say so |
 
-All four merged with **no textual conflicts**, and all four gates are green on the two that carry code.
-What the 58 commits brought that touches us: a Capacitor **Android** build, a whole **website** with
-accounts and a second Vite config, the tile board's `cellSim` replaced by a `gestureReader`, and — the
-part that reaches our work — **per-endpoint sampler overrides and an optional max-output cap**. That
-last one is written up in `runpod-exl3.md` §13 and the endpoint notes §13.1, and it is what **D4** below
-is about.
+Both working branches are green: typecheck, lint, build, and the capped suite — 10360 tests on
+`description-consistency`. **Two runs at once is what makes the capped run fail**, see C5.
+
+What the 237 commits brought, in the order it is likely to matter here: **stat code rebuilt** (runs every
+turn, two boxes per stat, `self`/`previous`/`delta`, placeholder pins, trait switches), **linked library
+content** (a world's entities and books follow library items, with publish, download, update review and
+repairs), **every editor panel split into tabs**, and **native reasoning per prompt** with a capability
+record in place of the old seven-request probe. The last one reaches our work directly and is folded in;
+see I1.
 
 ---
 
@@ -369,6 +373,12 @@ NODE_OPTIONS=--no-experimental-webstorage npx vitest run --pool=threads --poolOp
 
 It costs **8m20s against 5m56s**. Two and a half minutes to turn "somewhere between one and seven
 failures, work out which" back into "green means green" is worth paying every time.
+
+**2026-09-16 · claude ·** A capped run is only trustworthy when it has the machine to itself. During the
+v2.19 sync two capped suites ran at once, one per worktree, and each reported 2–3 failures in the heavy
+`views` files — `MainMenu.entry`, `MainMenu.ageGate`, `WorldEditor.sourceChecks`. Every one passed when
+re-run alone. So the rule stands with a condition attached: **one capped run at a time**, and a capped
+failure is only interesting when nothing else was running.
 
 **One run is not proof** — these are probabilistic, and a clean run can happen by luck. Treat it as the
 local gate from now on and let the next few runs confirm it; if a capped run ever fails, that failure is
