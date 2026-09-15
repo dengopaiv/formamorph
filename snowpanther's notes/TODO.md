@@ -67,6 +67,22 @@ is about.
 
 ---
 
+# I · Integrate upstream v2.17–v2.19
+
+### I1 · Bring 237 upstream commits into every branch
+
+**State:** Filed, 2026-09-16. **This comes before K1 and D1.** Both of those would otherwise be tested on
+a base three releases old.
+
+The plan is `upstream-2.19-integration-plan.md`. In short: rebuild the keyboard branch clean (which also
+does K2), merge `description-consistency` with four quiet fixes that no gate catches, send reasoning
+off from the authoring calls, then do a keyboard and NVDA audit of what upstream shipped.
+
+**Decided 2026-09-16:** Q1 rebuild the keyboard branch, yes · Q2 the Author's Brief is per world, and
+no library update writes it · Q3 reasoning is off for ✨ and 🔍.
+
+---
+
 # K · Keyboard nesting (branch `keyboard-tree-nesting`)
 
 Keyboard support for **nesting** in the drag-trees. dnd-kit resolves an arrow key by hunting for a
