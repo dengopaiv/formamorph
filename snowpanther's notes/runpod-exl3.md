@@ -271,19 +271,37 @@ Two obvious routes are closed:
 - **Pasting does not work.** A pod's PTY truncates an input line at about 4 KB. Paste a script — or a
   base64 blob of one — and the tail is silently dropped, leaving a valid-looking file that is simply
   short. It will run. It will do part of the job.
-- **`curl` from GitHub does not work yet.** The script headers show a `curl -sL <raw-url>` form, and it
-  is the right answer *once this branch is pushed*. It is not pushed. There is no raw URL to fetch.
+- **The `ssh.runpod.io` proxy does not work.** It ignores exec'd commands (§6) and carries no file
+  transfer either. Everything below needs the **direct** form: RunPod **Connect → SSH over exposed
+  TCP**, which gives you an IP and a port.
 
-What works is sending the file as a byte stream over the direct SSH connection, where no PTY and no line
-limit is involved.
+What works is sending the file as a byte stream over the direct SSH connection (Methods A and B), or
+letting the pod fetch it from GitHub itself (Method C). Neither involves a PTY or a line limit.
 
 **Only the setup script travels.** `rp.sh` runs on *your* machine and drives the pod from outside —
 copying it over would accomplish nothing. Send `pod-setup.sh` (§10) or `textgen-setup.sh` (§11),
 whichever path you are taking, and nothing else.
 
-### Method A — pipe it in (recommended; nothing to install)
+### Which shell — Git Bash
 
-In Git Bash, from the `pod-scripts` directory:
+Windows offers three candidates, and only one is worth using here.
+
+| Shell | Verdict | Why |
+|---|---|---|
+| **Git Bash** (comes with Git for Windows) | **Use this** | Has `<` redirection, `md5sum` and `wc`, its own `ssh` and `scp`, and reads the same key in `C:\Users\<you>\.ssh` that §2 made. `rp.sh` is written for it. |
+| PowerShell | Avoid | No `<` redirection, and piping a file in can plant CRLF endings. See *A word about PowerShell* below. |
+| WSL (Debian, Ubuntu, …) | Avoid | A separate Linux home with its **own** `~/.ssh`, so the key from §2 is not there. The repo sits under `/mnt/c/GIT/...`, and a key copied in from Windows arrives with permissions `ssh` refuses. Workable, but three new ways to go wrong for no gain. |
+
+Open Git Bash and go to the scripts. The double quotes are required, because the directory name has an
+apostrophe and a space in it:
+
+```bash
+cd "/c/GIT/sodi/formamorph/snowpanther's notes/pod-scripts"
+```
+
+Every command in the rest of this section runs from there.
+
+### Method A — pipe it in (recommended; nothing to install)
 
 ```bash
 ssh -p 22062 -i ~/.ssh/id_ed25519 root@69.30.85.59 'cat > /root/pod-setup.sh' < pod-setup.sh
@@ -330,10 +348,22 @@ suspect CRLF anyway, the fix on the pod is one line:
 ./rp.sh "sed -i 's/\r$//' /root/pod-setup.sh"
 ```
 
-### Method C — `curl`, once the branch is pushed
+### Method C — `curl` from GitHub (least work, now that the branch is pushed)
 
-The form the script headers assume, and the least work per pod once it is available. It needs
-`description-consistency` pushed to `origin` first (chore **C3** in `TODO.md`).
+This is the form the script headers assume. `description-consistency` is on `origin` (chore **C3** in
+`TODO.md`). On **2026-09-16** the URL below, pinned to `30694d4d`, returned `pod-setup.sh` with an md5
+matching the local copy. Nothing travels from your machine, so the shell only matters for running
+`rp.sh`.
+
+First get the SHA of the commit whose scripts you want. That is normally the one you have checked out,
+and it has to be pushed:
+
+```bash
+git rev-parse HEAD
+git branch -r --contains HEAD      # must list origin/description-consistency, or the URL is a 404
+```
+
+Then have the pod fetch it:
 
 ```bash
 ./rp.sh 'curl -sL https://raw.githubusercontent.com/dengopaiv/formamorph/<sha>/snowpanther%27s%20notes/pod-scripts/pod-setup.sh -o /root/pod-setup.sh'
@@ -345,6 +375,10 @@ always that cache. A SHA path is immutable and cannot do this.
 
 Note the `%27` and `%20`: the directory name contains an apostrophe and a space, and both need escaping
 in a URL. This is a small argument for keeping a copy of the scripts somewhere with a duller name.
+
+**The md5 check above still applies.** When the URL is wrong, `curl -sL` quietly saves GitHub's
+`404: Not Found` text as the script and still exits successfully. Compare the sum with your local copy
+before running anything.
 
 ---
 
@@ -691,9 +725,15 @@ Being explicit about this, because half of what is above was measured and half w
   around.
 
 **Read from this repository, not from a pod:** §7's Method A and Method B are standard OpenSSH
-behaviour and have not been exercised against a RunPod host — they replace a `curl` instruction that
-could not work at all, since the branch holding these scripts is unpushed. The line-ending claim is
-checked against this repo's `.gitattributes`, which pins `eol=lf`.
+behaviour and have not been exercised against a RunPod host. They were written while the branch holding
+these scripts was still unpushed, so the `curl` route could not work. The line-ending claim is checked
+against this repo's `.gitattributes`, which pins `eol=lf`.
+
+**Checked from this machine, not from a pod, 2026-09-16:** §7's Method C. The SHA-pinned raw URL
+returned `pod-setup.sh` with an md5 matching the local copy, and a bad URL made `curl -sL` save
+`404: Not Found` and exit 0. The pod doing the fetch has not been tried. The shell table in §7 is
+reasoned from how Git Bash, PowerShell and WSL handle keys and redirection, not from a failed attempt in
+each.
 
 **Read from the app's own source, 2026-09-07:** everything in §13 about the **Override endpoint limit**
 switch, the Sampling section and the rejected-override toast. These arrived in the upstream sync of the
