@@ -1,6 +1,6 @@
 # 02: Paging and the remembered face
 
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 Recommended model: Claude Sonnet 5.5 (`claude-sonnet-5-5`)
 Reasoning effort: medium

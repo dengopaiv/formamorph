@@ -2,9 +2,8 @@ import { useState, useEffect, useMemo, useCallback, useRef, type ChangeEvent, ty
 import { useGameData } from '@/contexts/GameDataContext';
 import { useDevRoute } from '@/lib/devRouter';
 import { useSurfaceTab } from '@/components/ui/surface';
-import { landingControl } from '@/lib/landingPulse';
-import { TARGET_ATTRIBUTE, targetAttribute } from '@/lib/surface/surfaceTargets';
-import { useLanding } from '@/lib/surface/useLanding';
+import { isSurfaceTarget, routeText, TARGET_ATTRIBUTE, targetAttribute, type TargetAttribute } from '@/lib/surface/surfaceTargets';
+import { useRouteLanding } from '@/lib/surface/useLanding';
 import { editorTabsFor } from './worldEditorTabs';
 import { useEditorMode, type EditorMode } from '@/lib/editorMode';
 import { EditorModeProvider } from '@/components/EditorModeProvider';
@@ -30,7 +29,6 @@ import { worldUsesAdvancedFeatures } from '@/lib/editorAdvancedData';
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { HelpButton } from '@/components/HelpButton';
 import { useListSearch } from '@/components/listToolbarHooks';
-import { ListToolbar } from '@/components/ListToolbar';
 import { useListEditor, type ListEditorParts } from '@/components/listEditorHooks';
 import { useWorldTraitsAdapter } from '../managers/useWorldTraitsAdapter';
 import { useWorldPlaceholdersAdapter } from '../managers/useWorldPlaceholdersAdapter';
@@ -39,7 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Save, ImageDown, BookPlus, UserPlus, Loader2, Search, List, Map } from "lucide-react";
+import { ArrowLeft, Save, ImageDown, BookPlus, UserPlus, Loader2, Search } from "lucide-react";
 import { ActionIcon } from '@/lib/actionIcons';
 import { cn } from "@/lib/utils";
 import EditorFindBar from '@/components/editor/EditorFindBar';
@@ -104,17 +102,10 @@ import { authoredChipScene } from '@/lib/chipValues/authoredScene';
 import { buildToolSnapshot } from '@/lib/tools/toolSnapshot';
 import { useHelpWorldSource } from '@/lib/formaquestion/helpWorld';
 
-/** The Take Me There mark for a tab's search and add row; Overview has no list. */
-function listToolbarTarget(tab: string) {
-  switch (tab) {
-    case 'stats': return targetAttribute('worldEditor.stats', 'list-toolbar');
-    case 'entities': return targetAttribute('worldEditor.entities', 'list-toolbar');
-    case 'locations': return targetAttribute('worldEditor.locations', 'list-toolbar');
-    case 'traits': return targetAttribute('worldEditor.traits', 'list-toolbar');
-    case 'dictionary': return targetAttribute('worldEditor.dictionary', 'list-toolbar');
-    case 'placeholders': return targetAttribute('worldEditor.placeholders', 'list-toolbar');
-    default: return undefined;
-  }
+/** The Take Me There mark for a tab's search and add row. The registry says which tabs have one; Overview has no list. */
+function listToolbarTarget(tab: string): TargetAttribute | undefined {
+  const surface = `worldEditor.${tab}`;
+  return isSurfaceTarget(surface, 'list-toolbar') ? { [TARGET_ATTRIBUTE]: routeText(surface, 'list-toolbar') } : undefined;
 }
 
 const WorldEditorInner = ({
@@ -231,12 +222,8 @@ const WorldEditorInner = ({
   const visibleTabs = useMemo(() => editorTabsFor(advanced), [advanced]);
   const [activeTab, setActiveTab] = useState(initialTab ?? "overview");
   useEffect(() => { if (initialTab) setActiveTab(initialTab); }, [initialTab, requestKey]);
-  // The Bench's drawer on mobile and its popover sit outside the editor's own tree, so the lookup is document-wide.
-  const landTarget = useLanding(
-    (route: string) => document.querySelector<HTMLElement>(`[${TARGET_ATTRIBUTE}="${route}"]`),
-    // A row with only a button, the Bench's Placeholder Rolls, focuses that button.
-    { pulse: true, focus: (row) => landingControl(row) ?? row.querySelector<HTMLElement>('button') },
-  );
+  // The Bench's drawer on mobile and its popover sit outside the editor's own tree, so the lookup is page-wide.
+  const landTarget = useRouteLanding();
   useEffect(() => { if (initialTarget) landTarget(initialTarget); }, [initialTarget, requestKey, landTarget]);
   // Switching to Simple while standing on a hidden tab would blank the panel with no way back to it.
   useEffect(() => {
@@ -636,7 +623,7 @@ const WorldEditorInner = ({
   // The Dictionary steps' test line once the author edits it, for this world only. It is never saved.
   const [testLineEdit, setTestLineEdit] = useState<{ worldId: string | null; text: string } | null>(null);
   const tourTestLine = {
-    testLineEdit: testLineEdit?.worldId === worldId ? testLineEdit.text : null,
+    testLineEdit: testLineEdit !== null && testLineEdit.worldId === worldId ? testLineEdit.text : null,
     onTestLineEdit: (text: string) => setTestLineEdit({ worldId, text }),
   };
   // Mobile's In Play sheet. It closes for good when the Bench opens, so the two sheets are never open together.
@@ -855,10 +842,15 @@ const WorldEditorInner = ({
   const hasHiddenData = !advanced && worldUsesAdvancedFeatures({
     worldOverview: getWorldData().worldOverview, stats, entities, locations, traits, dictionaries, placeholders,
   });
+  // The active tab's help topic, when it has copy yet — drives the `?` right of Find.
+  const helpTopicId = worldEditorTopicId(activeTab);
+  // key: remount per topic so each tab's nudge reads its own seen-state (HelpButton reads it on mount).
+  const helpButton = helpTopicId && <HelpButton key={helpTopicId} topicId={helpTopicId} />;
+  // No control here shrinks, so a tight row never squeezes a square button; the mobile gap fits it in 375px.
   const headerBar = (
-    <div className="flex items-center gap-4">
+    <div className={cn('flex items-center [&>*]:shrink-0', isMobile ? 'gap-2' : 'gap-4')}>
       {showBackButton && (
-        <Button variant="ghost" size="icon" onClick={requestClose}>
+        <Button variant="ghost" size="icon" className="border-transparent" onClick={requestClose}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
       )}
@@ -877,6 +869,7 @@ const WorldEditorInner = ({
           <Search className="h-4 w-4" />
         </Button>
       </Tip>
+      {helpButton}
       {/* The flask's first stop is quick triage; the full panel is one button inside it. */}
       <span data-tour-anchor="test-bench" className="inline-flex">
         <BenchPopover {...bench.popoverProps}>
@@ -954,11 +947,7 @@ const WorldEditorInner = ({
       {t.value === activeTab ? body : null}
     </TabsContent>
   ));
-  // The active tab's help topic, when it has copy yet — drives the `?` beside the search box.
-  const helpTopicId = worldEditorTopicId(activeTab);
-  // key: remount per topic so each tab's nudge reads its own seen-state (HelpButton reads it on mount).
-  const helpButton = helpTopicId && <HelpButton key={helpTopicId} topicId={helpTopicId} />;
-  // The Locations toolbar's List/Canvas switch, after the +.
+  // The Locations toolbar's List/Canvas switch, icon buttons past the search box.
   const locationViewToggle = activeTab === "locations" && (
     <ToggleGroup
       type="single"
@@ -968,22 +957,17 @@ const WorldEditorInner = ({
       className="flex-shrink-0"
     >
       {LOCATION_VIEWS.map((v) => (
-        isMobile
-          ? (
-            <Tip key={v.value} tip={v.label}>
-              <ToggleGroupItem value={v.value} className="px-2">
-                {v.value === 'canvas' ? <Map className="h-4 w-4" /> : <List className="h-4 w-4" />}
-              </ToggleGroupItem>
-            </Tip>
-          )
-          : <ToggleGroupItem key={v.value} value={v.value}>{v.label}</ToggleGroupItem>
+        <Tip key={v.value} tip={v.label}>
+          <ToggleGroupItem value={v.value} className="px-2">
+            <v.icon className="h-4 w-4" />
+          </ToggleGroupItem>
+        </Tip>
       ))}
     </ToggleGroup>
   );
-  // A tab with no list (Overview) gets the row anyway, holding only its `?` at the same right end.
+  // A tab with no list (Overview) renders no row.
   const addSearchBar = listEditorParts
-    ? listEditorParts.toolbar('mt-4', { children: locationViewToggle, after: helpButton, target: listToolbarTarget(activeTab) })
-    : helpButton && <ListToolbar className="mt-4 self-end">{helpButton}</ListToolbar>;
+    && listEditorParts.toolbar('mt-4', { after: locationViewToggle, target: listToolbarTarget(activeTab) });
   // The detail's frozen footer: the List Editor's on a tab that runs on it.
   const detailFooter = listEditorParts?.footer;
   const footerBar = (
@@ -1316,3 +1300,4 @@ const WorldEditor = (props: Parameters<typeof WorldEditorInner>[0]) => {
 };
 
 export default WorldEditor;
+// scroll-guard: allow horizontal: the tab strip scrolls sideways when the tabs overflow

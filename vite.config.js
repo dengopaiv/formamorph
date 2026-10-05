@@ -10,6 +10,10 @@ const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'ut
 // The ONNX runtime's dist folder, which its package exports do not expose (src/lib/embeddingWorker.ts).
 const ortDist = path.dirname(createRequire(import.meta.url).resolve('onnxruntime-web'))
 const syncAppOrigin = process.env.E2E_SYNC_APP_ORIGIN
+// Worktrees link node_modules to the main checkout, so each checkout and port gets its own dep cache.
+const portArg = process.argv.findIndex((arg) => arg === '--port' || arg.startsWith('--port='))
+const cachePort = portArg < 0 ? '5173' : process.argv[portArg].split('=')[1] ?? process.argv[portArg + 1]
+const devCacheDir = path.resolve(__dirname, 'node_modules/.vite', `${path.basename(__dirname)}-${cachePort}`)
 
 const directSyncAppModules = {
   name: 'direct-sync-app-modules',
@@ -41,7 +45,9 @@ const holdUpdates = {
     }
     server.ws.send = (payload, ...rest) => {
       const held = typeof payload === 'object' && (payload.type === 'update' || payload.type === 'full-reload')
-      if (!held) return send(payload, ...rest)
+      // A dep re-optimization (path '*', no triggering file) deletes the chunks the page holds, so it always reloads.
+      const depsRebuilt = held && payload.type === 'full-reload' && payload.path === '*' && !payload.triggeredBy
+      if (!held || depsRebuilt) return send(payload, ...rest)
       server.config.logger.info(`${payload.type} held`, { timestamp: true })
       for (const client of server.ws.clients) {
         const q = queueOf(client)
@@ -76,9 +82,7 @@ const docsIndexMarkdown = {
 
 export default defineConfig({
   plugins: [react(), directSyncAppModules, holdUpdates, docsIndexMarkdown],
-  ...(process.env.E2E_SYNC_APP
-    ? { cacheDir: path.resolve(__dirname, 'node_modules/.vite-sync-app') }
-    : {}),
+  cacheDir: process.env.E2E_SYNC_APP ? path.resolve(__dirname, 'node_modules/.vite-sync-app') : devCacheDir,
   base: './',
   // Expose the package.json version to the app (single source of truth for the app/world/save stamp).
   define: {
@@ -98,6 +102,10 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    // The scanner can't follow `new Worker(new URL(...))`; scanning workers keeps their deps out of mid-session rebuilds.
+    entries: ['index.html', 'src/lib/*Worker.ts'],
+    // Listed too because `entries` isn't in the cache hash; this makes existing caches rebuild once.
+    include: ['@huggingface/transformers'],
     // Dev-mode pre-bundling rewrites these into .vite/deps, breaking their import.meta.url-relative
     // .wasm lookup (the QuickJS engine file). Serving them unbundled keeps the wasm path resolvable.
     // Pre-bundling also breaks the ONNX runtime's `?url` imports.
@@ -123,13 +131,14 @@ export default defineConfig({
             // baseline harness writes dumps, profiles and docs of its own. A reload mid-run kills the scripted
             // turn it was driving ("Execution context was destroyed" / "__baseline is undefined").
             // Worktrees and build output too: a ticket's `npm run build` holds files in its dist/, and a watch
-            // on a held file throws EBUSY, which kills the main checkout's dev server.
+            // on a held file throws EBUSY, which kills the main checkout's dev server. The worktree ignore is
+            // anchored to this config's own folder: a `**/` form also matches a worktree server's own sources.
             ignored: [
               '**/graphify-out/**',
               '**/testing/**',
               '**/graph.json',
               '**/GRAPH_REPORT.md',
-              '**/.claude/worktrees/**',
+              path.resolve(__dirname, '.claude/worktrees/**').replace(/\\/g, '/'),
               '**/.scratch/**',
               '**/dist/**',
             ],

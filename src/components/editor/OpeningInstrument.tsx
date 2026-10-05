@@ -224,7 +224,7 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
   }
 
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea landingRoom className="h-full">
       <div className="space-y-2 pr-2">
         <div className="rounded-md border bg-muted/30 p-2">
           <p className="text-label font-medium">
@@ -375,3 +375,4 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
     </ScrollArea>
   );
 }
+// scroll-guard: allow migration-candidate: the preview blocks have a max height only; a definite height is not confirmed

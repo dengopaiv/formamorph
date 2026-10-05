@@ -1,6 +1,7 @@
 # Spec: Help Code Insert
 
-Status: ready-for-agent
+Status: done
+Status note: Closed 2026-10-05. Tickets 01-05 done; last landing d02907b3. Closed without gates.
 Spec session: help-code-insert — spec
 
 ## Problem Statement
@@ -39,6 +40,14 @@ On a code question, or when a stat's Code tab is open, the help request carries 
 | Q20 | Code words match in code form, so an ordinary question never rides the rider: `code`, `script`, `scripts`, `JavaScript`, `before the AI`, `after the AI` as words; a sandbox global only when a `.` or `[` follows it (`stats.Health`, `self.value`); `return` only before a number or identifier; `function` only as `function(` or `=>` |
 | Q21 | The Code tab trigger reads the surface hint, which exists only while Use the Open Screen is on. With it off, an open Code tab does not fire the rider; code words still do |
 | Q22 | The rider is appended verbatim, with no chip rendering, to whatever user message the turn sends, in answer, lookup and bare modes alike |
+| Q23 | The probe's gate unit is the answer, over every code case on the rider arm. Fence present = at least one fence of any language. Runs = at least one fence and every fence runs in the sandbox, so a no-fence answer misses both bars and a two-fence answer runs only when both do. A comment-only or empty fence scores as not run. Per-fence run rate, tag presence and closed state are reported, not gated. A truncated fence goes to the sandbox as written. The control arm is the same session with an empty `code` preset text |
+| Q24 | The rider may let the model write code the guide does not hold, asks for the whole contents of the box, and names the sandbox objects. Ticket 03's "carries no example code" test narrows to: no code syntax, and a sandbox name may appear only alone, never with a member. Ruled on probe evidence (ticket 04: the ticket-03 rider scored 64% fence, 38% runs) |
+| Q25 | Copy confirms with a small tip above the button that fades after about a second, never a toast. A failed copy shows "Couldn't copy" in the same tip. The tip is a shared primitive that Insert may reuse for its confirm |
+| Q26 | Q18 reopened on evidence: targets ticket 07 scoped the two boxes out, so no registry entries exist. Ticket 05 declares them as item-panel targets: a second map beside the Take Me There registry, for targets inside an open item's panel that only in-app actions land on. Same attribute, helper and row lookup; names `before-code` and `after-code` under the stat Code tab surface. They stay out of the Take Me There registry because that surface opens as the Stats list, and the registry's guards (every target is a route) stay as they are. A guide fragment naming them fails the docs route check, which is correct |
+| Q27 | In Simple editor mode the stat panel has no Code tab, so it does not register for Insert. Insert is disabled and its tooltip says to switch the editor to Advanced and open a stat's Code tab. Insert never changes the editor mode itself |
+| Q28 | The replace confirm keeps the templates' title "Replace The Existing Code" with the description "This box already has code. Inserting this code overwrites it." |
+| Q29 | On the mobile sheet, the sheet closes as soon as the panel takes the insert: on the write, or when it raises the replace confirm, so the confirm is never hidden behind the sheet |
+| Q30 | On desktop the help window closes while the panel's replace confirm is open and reopens when it closes, Confirm or Cancel, the same rule the window applies to its own dialogs. The window sits above every dialog and covered the Confirm button at 1024 wide |
 
 ## User Stories
 
@@ -80,14 +89,14 @@ On a code question, or when a stat's Code tab is open, the help request carries 
 - The shared markdown renderer gains Streamdown's fence-meta remark plugin, so the info string after the language reaches a code block renderer as its meta. Our plugin list currently drops it.
 - The help window's reader components, the map that already replaces links in answers and guide pages, gain a block-code renderer. It wraps the highlighted block in a toolbar with Copy and, for AI answers, Insert. Guide pages get Copy only. Streamdown's own controls stay off everywhere.
 - The slot tag is the fence meta: `before` or `after` after the language. The renderer reads it to preselect the Insert menu. Any other meta, or none, leaves the menu with no preselection.
-- Copy writes the block's text to the clipboard and shows the app's standard copied state.
+- Copy writes the block's text to the clipboard and confirms with a fading tip above the button; a failed copy shows "Couldn't copy" in the same tip (Q25).
 - Insert is a dropdown menu. Its header is the open stat's name. Its items are the two slot labels, as the Code tab writes them. It is disabled with a tooltip when no stat panel is registered.
 - Copy and Insert are small toolbar controls in the block's top right, following the Design System's existing icon-button pattern. No new visual pattern is introduced.
 
 ### Insert bridge
 
 - A module-level single slot, like the docs opener: the stat panel registers `{ statName, insert(slot, code) }` while mounted and unregisters on unmount. A subscribe function lets the help window re-render when the registration changes.
-- `insert` runs in the stat panel. It writes the slot's field through the panel's draft apply, the same path a keystroke takes, then switches the panel to its Code tab and requests a landing on the slot's registered target. The landing comes from the Take Me There targets effort's hook and target names (Q17, Q18).
+- `insert` runs in the stat panel. It writes the slot's field through the panel's draft apply, the same path a keystroke takes, then switches the panel to its Code tab and requests a landing on the slot's registered target. The landing comes from the Take Me There targets effort's hook; the two box targets are registered by ticket 05 (Q17, Q26).
 - The replace confirm is raised by the bridge's consumer in the stat panel, reusing the templates dialog's confirm title and copy (Q19). The help window never shows editor dialogs itself.
 - On the mobile sheet layout, a successful insert closes the sheet, as Take Me There does.
 
@@ -138,3 +147,4 @@ A good test calls the public seam with real inputs and asserts what the player s
 - Every prompt change ships with probe numbers. The control batch runs after the docs fix lands so the open fence does not skew it.
 - Probe result (ticket 04, 2026-10-04, cloud `default`, root `/home/fiery/gemma_deploy/model`, 8 runs per arm): Q7 met. Rider arm fence 100%, runs 86%, tags 71% of fences, 0% truncated; control 3% and 3%. Prose controls 0% fenced on both arms. The shipped rider is a tuned v3g that names the sandbox objects (the ticket holds the tuning table). A comment-only fence scores as not run.
 - Open: the model sometimes puts the slot word on its own line inside the block (6 of 64 rider answers). Insert would paste it into the box.
+- Ticket 05 should strip a leading line that is only `before` or `after` from the block before insert, and treat it as the tag when the fence has none. That makes the stray line a tag, not pasted code.

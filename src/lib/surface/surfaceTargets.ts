@@ -7,8 +7,10 @@ import type { SurfaceTargets } from '@/lib/docs/docsChecks';
 import type { SurfaceId } from '@/lib/docs/surfaceMap';
 
 export const SURFACE_TARGETS = {
-  'settings.display': ['narration-layout', 'narration-font', 'quote-color'],
-  'settings.output': ['thinking-mode'],
+  gameViewer: ['action-box', 'pager'],
+  export: ['story-format'],
+  'settings.display': ['narration-layout', 'narration-font', 'quote-color', 'scene-images'],
+  'settings.output': ['thinking-mode', 'choices', 'settings-mode'],
   'settings.data': ['settings-mode', 'start-authoring-tour'],
   'settingsEndpoints.text': ['text-preset', 'endpoint-url'],
   mainMenu: ['app-version'],
@@ -19,7 +21,7 @@ export const SURFACE_TARGETS = {
   menu: ['import-save'],
   backup: ['start-backup', 'start-restore'],
   avatar: ['finalize-character'],
-  'worldEditor':['editor-mode', 'find-button'],
+  worldEditor: ['editor-mode', 'find-button'],
   'worldEditor.overview': ['thumbnail', 'background-music', 'custom-prompts'],
   'worldEditor.stats': ['list-toolbar'],
   'worldEditor.entities': ['list-toolbar'],
@@ -38,7 +40,17 @@ export const SURFACE_TARGETS = {
   'formaquestionSettings.prompts': ['preset'],
   'formaquestionSettings.tools': ['new-tool'],
   'formaquestionSettings.mascot': ['scale', 'mask'],
+  'settings.tools': ['share-tools'],
+  'settingsEndpoints.image': ['enable-image-generation'],
+  'settingsPromptSurfaces.options': ['prompt-endpoint'],
 } as const satisfies Partial<Record<SurfaceId, readonly string[]>>;
+
+/** Targets inside an open item's panel, which only an in-app action such as Insert lands on; never a route. */
+export const PANEL_TARGETS = {
+  'worldEditorStat.code': ['before-code', 'after-code'],
+} as const satisfies Partial<Record<SurfaceId, readonly string[]>>;
+
+type AttributeTargets = typeof SURFACE_TARGETS & typeof PANEL_TARGETS;
 
 export type TargetedSurface = keyof typeof SURFACE_TARGETS;
 export type SurfaceTarget<S extends TargetedSurface> = (typeof SURFACE_TARGETS)[S][number];
@@ -65,7 +77,7 @@ export function findTargetRow(root: ParentNode, route: string): HTMLElement | nu
   return rows.find((row) => row.getClientRects().length > 0) ?? rows[0] ?? null;
 }
 
-/** The data attribute for a control that is a registered target of its surface. */
-export function targetAttribute<S extends TargetedSurface>(surface: S, target: SurfaceTarget<S>): TargetAttribute {
+/** The data attribute for a control that is a registered target of its surface, in either map. */
+export function targetAttribute<S extends keyof AttributeTargets>(surface: S, target: AttributeTargets[S][number]): TargetAttribute {
   return { [TARGET_ATTRIBUTE]: routeText(surface, target) };
 }

@@ -6,8 +6,9 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMe
 import { useGameData } from "../contexts/GameDataContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useSettingsOpenRequest } from "@/lib/useSettingsOpenRequest";
-import { closesWorldEditor, settingsLanding, useSurfaceNav, useSurfaceOpenRequest } from "@/lib/surface/useSurfaceOpenRequest";
-import { stepTab, type SurfaceSteps } from "@/lib/surface/surfaceRoute";
+import { landsOnPage, settingsLanding, useSurfaceNav, useSurfaceOpenRequest } from "@/lib/surface/useSurfaceOpenRequest";
+import { stepTab, targetRoute, type SurfaceSteps } from "@/lib/surface/surfaceRoute";
+import { targetAttribute } from "@/lib/surface/surfaceTargets";
 import { EXIT_TO_MENU_PROMPT } from "@/lib/leavePrompts";
 import { useGameplay } from "@/contexts/GameplayContext";
 import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
@@ -401,6 +402,7 @@ const GameViewer = ({
     placeholderOwners,
     worldOverview,
     worldId,
+    worldLoaded,
     isWorldDirty,
     saveWorld,
     loadWorldData,
@@ -1195,6 +1197,8 @@ const GameViewer = ({
     switch (steps.dialog) {
       case null:
         if (isMobile && stepTab(steps, 'gameViewer')) setMobilePanel('character');
+        // Every game screen target sits in the story panel.
+        else if (isMobile && targetRoute(steps)) setMobilePanel('game');
         break;
       case 'settings': {
         const landing = settingsLanding(steps);
@@ -1219,7 +1223,8 @@ const GameViewer = ({
       return;
     }
     clear();
-    if (closesWorldEditor(steps)) leaveEditorThen(() => openSurfaceHere(steps), () => {});
+    // Settings and the World Editor open over the editor; a surface the page lands closes it.
+    if (landsOnPage(steps)) leaveEditorThen(() => openSurfaceHere(steps), () => {});
     else openSurfaceHere(steps);
   });
   const exportStory = (format: 'txt' | 'md') => {
@@ -4053,9 +4058,9 @@ const GameViewer = ({
   useEffect(() => {
     // Gate on the world being loaded, NOT on `locations.length` — a world with no locations authored yet
     // (every freshly created one) would otherwise never initialize, silently skipping the stat baselines,
-    // traits, dictionaries and the opening-cue pre-fill below. `worldId` is set in the same batch as the
-    // rest of the world data by loadWorldData, so it's non-null exactly when that data has landed.
-    if (!isInitialized.current && worldId !== null) {
+    // traits, dictionaries and the opening-cue pre-fill below. `worldLoaded` turns true in the same batch
+    // as the rest of the world data, and holds for a world file with no id.
+    if (!isInitialized.current && worldLoaded) {
       isInitialized.current = true;
 
       // Cold-load from the main menu: restore the save instead of starting a fresh game. Its world is
@@ -4196,7 +4201,7 @@ const GameViewer = ({
     worldPlaceholders,
     traitOrder,
     locations,
-    worldId,
+    worldLoaded,
     worldOverview,
     entities,
     authoredStats,
@@ -5369,7 +5374,7 @@ const GameViewer = ({
         initialPromptTab={surfaceNav.settings?.promptTab ?? settingsPrompt?.tab ?? devRoute?.subtab}
         initialPromptSurface={surfaceNav.settings?.promptSurface ?? settingsPrompt?.surface ?? devRoute?.surface}
         initialPromptField={settingsPrompt?.field}
-        initialTarget={surfaceNav.settings?.target}
+        initialTarget={surfaceNav.target}
         requestKey={surfaceNav.key}
       />
 
@@ -5402,7 +5407,7 @@ const GameViewer = ({
               (<strong>bold</strong>, headings, lists); plain text is unformatted.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <AlertDialogFooter {...targetAttribute('export', 'story-format')}>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => exportStory('txt')}>Plain text (.txt)</AlertDialogAction>
             <AlertDialogAction onClick={() => exportStory('md')}>Markdown (.md)</AlertDialogAction>

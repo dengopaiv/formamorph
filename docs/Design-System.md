@@ -577,13 +577,37 @@ The reference descriptions, control labels, dynamic status, and accessible actio
 Use [`ScrollArea`](../src/components/ui/scroll-area.tsx) for bounded vertical content when it preserves the surface's behavior. It is the shared World Editor appearance: a 10px vertical track, rounded theme-derived thumb, no up/down chevrons, and an 11px viewport gutter so the overlay thumb does not obscure content.
 
 - Keep one vertical scrolling owner per pane. Preserve wheel, touch, keyboard, and focus-reveal behavior.
-- Give the pane a definite height or a flex-resolved height. A maximum height alone does not give the Radix viewport a scroll boundary.
+- Give the pane a definite height, a flex-resolved height, or a maximum height on the `ScrollArea` itself. The root is a flex column, so its viewport stops at that height. A maximum height on an ancestor works only through a flex column down to the `ScrollArea`, such as `flex-1 min-h-0` on it.
 - Keep search, primary inputs, and footer actions outside the list viewport when they must remain reachable while the collection scrolls.
 - Preserve horizontal scrolling where content requires it. The shared viewport assumes vertical content and forces its content wrapper to block layout; do not apply it blindly to code, tables, or other horizontal scrollers.
 - Native text editors, editable regions, canvases, virtualizers, drag lists, and popover-hosted scrollers can have selection, autoscroll, wheel-lock, or focus contracts. Match the appearance only where supported, and do not wrap them in a nested ScrollArea to hide native chrome.
 - Use `type="always"` when the scrollbar itself communicates that a bounded reference can scroll. Other production surfaces can retain the component's normal visibility behavior.
+- Set `focusable` when the pane holds only text, such as a policy or a code view. Keyboard users can then tab to the pane and scroll it with the arrow keys.
+- Put a fixed or absolute frame on a wrapper element. Radix sets the root's `position` inline, so a position class on `ScrollArea` has no effect.
 
 The [scrollbar and list inventory](../docs-internal/designs/design-system/rich-lists-scrollbars-review.md) groups remaining native and specialized surfaces by limitation. It is follow-up scope, not authorization for an app-wide migration.
+
+### Scroll guard
+
+A test, [`scrollGuard.test.ts`](../src/lib/scrollGuard.test.ts), fails when a source file under `src` holds a native overflow scroller (`overflow-auto`, `overflow-y-auto`, `overflow-x-auto`, `overflow-scroll`, or the inline style). The file passes only when it carries one allow comment. Importing `ScrollArea` exempts nothing, so a file that mixes both needs the comment too. The check works per file, so one comment covers every native scroller in that file. Put the comment on its own line. The end of the file keeps it clear of other edits:
+
+```ts
+// scroll-guard: allow popover-list: popover-hosted; dialog scroll lock can intercept wheel input
+```
+
+The name after `allow` is one row of the table below. The text after the colon says why this file relies on it.
+
+| Name | Exception |
+| --- | --- |
+| `native-editor` | Editors and editable regions bound to the scrolling element |
+| `popover-list` | Lists hosted in a popover |
+| `horizontal` | Toolbars, tables, and code blocks that scroll sideways |
+| `canvas` | Canvases that own wheel input |
+| `drag-list` | Drag lists and virtualizers that need the native scrolling ancestor |
+| `responsive-columns` | One pane that becomes two independent columns |
+| `migration-candidate` | New work only, never a backlog: a native pane that moves to `ScrollArea` once its behavior is checked |
+
+Remove the comment when the file holds no native scroller.
 
 ## Pattern: Paired Footer Actions
 
@@ -922,12 +946,12 @@ Open `#dev?modal=designSystem&tab=travel-hints` for linked, unlinked, and one-wa
 ### Composition
 
 - 🏷️ **Help tab.** A launcher that stays flat against one of the four screen edges and is round on its inner side. Its label reads top to bottom on the right edge, bottom to top on the left edge, and left to right on the top and the bottom. It is never upside down. A press opens or closes the window. A drag, or an arrow key while the tab has focus, moves it. The tab shows the accent fill while the window is open.
-- 🪟 **Floating window.** A title bar with the name, **Wide View**, a **⋮** menu and **Close**. **Wide View** keeps one icon and stays lit while on. The menu holds **Clear Conversation**, the **Chat Style** radio items (**Auto**, **Minimal**, **Full**), the **Mascot Position** radio items (**Beside**, **Below**, **Auto**), **AI Context** and **Settings**, in that order in both chromes. The mobile-size sheet leaves out **Mascot Position**, since it draws no mascot. It renders in the window's layer, and hangs from the corner of the button that has room, so it always comes from the button. **Close** is a bare X in the dialog style. A dialog opened from the menu closes the window and reopens it on close. The title bar moves the window. A grip at the bottom right corner resizes it. The window stays whole on the screen. Only the tab snaps to an edge.
+- 🪟 **Floating window.** A title bar with the name, **Wide View**, a **⋮** menu and **Close**. **Wide View** keeps one icon and stays lit while on. The menu holds **Clear Conversation**, the **Chat Style** radio items (**Auto**, **Bubble**, **Minimal**, **Full**), the **Mascot Position** radio items (**Beside**, **Below**, **Auto**), **AI Context** and **Settings**, in that order in every chrome. The mobile-size sheet and the bubble chrome leave out **Mascot Position**: the sheet draws no mascot, and Bubble places the mascot itself. It renders in the window's layer, and hangs from the corner of the button that has room, so it always comes from the button. **Close** is a bare X in the dialog style. A dialog opened from the menu closes the window and reopens it on close. The title bar moves the window. A grip at the bottom right corner resizes it. The window stays whole on the screen. Only the tab snaps to an edge.
 - ↔️ **Two widths.** Narrow (400px) shows one part at a time behind three tabs: **Ask**, **Search** and **Guide**. Wide (720px) shows a rail with search and contents beside the conversation or the reader. **Wide View** swaps them, and the grip crosses the same line at 560px. The conversation, the search text and the open section carry over.
 - 💬 **Conversation.** A scrolling log of questions and answers above the question field. It stays at its end while an answer comes in, unless the player scrolled up. The question field is one line and grows with its text while focused, as the game's action box does.
 - 🙋 **Question bubble.** The player's question, right-aligned on `muted`, with an 8-unit left margin so it never spans the full width.
 - 📝 **Answer.** Markdown through the streaming renderer, with no bubble. A `Meta` line says **Stopped** under an answer the player ended.
-- 📋 **Code block.** A fence in an answer or a guide page is the highlighted block with a ghost icon button, **Copy**, at the right of its header row. Copy confirms with the **Copied** toast. Code blocks outside the window have no controls.
+- 📋 **Code block.** A fence in an answer or a guide page is the highlighted block with a ghost icon button, **Copy**, at the right of its header row. Copy confirms with a **Copied** tip above the button, in the tooltip style, that fades out after about a second. It also opens on tap and on keyboard activation, and a failed copy shows **Couldn't copy** the same way. No toast shows. An answer's block also has **Insert**, a ghost icon button beside Copy. It opens an inline menu with the open stat's name as a `Meta` header and two ghost rows, **Before the AI** and **After the AI**, that the arrow keys move between. The row the fence's slot tag names has the accent fill and focus when the popover opens. With no stat panel open, Insert is dimmed with `aria-disabled` and a tip that says what to open. The panel's replace confirm makes the window step aside as the window's own dialogs do. Code blocks outside the window have no controls.
 - 🔗 **Source link.** A small bordered chip under an answer: the page in the muted color, a chevron, then the section in the foreground color. Chips wrap, under a `Meta` label **Sources**. A press opens the section in the reader.
 - ⌨️ **Question field.** A two-row text area with an icon button beside it. The button is **Send**, and it is **Stop** in the outline variant while an answer comes in. While a game turn generates, **Send** is unavailable and a helper line under the field says why.
 - 🔎 **Search result row.** The section name at label weight, the page as `Meta`, and a two-line excerpt in the helper role. The wide rail leaves out the excerpt.
@@ -936,7 +960,7 @@ Open `#dev?modal=designSystem&tab=travel-hints` for linked, unlinked, and one-wa
 
 ### Minimal chrome
 
-Under **Chat Style** **Minimal**, or **Auto** with the mascot on, the window drops its frame and shows three separate pieces over the app: the mascot, the column and the reader. A style change while the window is open swaps the chrome in place, with no zoom. The column and the reader take presses. The mascot does not. A press in a gap between the pieces reaches the app.
+Under **Chat Style** **Minimal**, the window drops its frame and shows three separate pieces over the app: the mascot, the column and the reader. A style change while the window is open swaps the chrome in place, with no zoom. The column and the reader take presses. The mascot does not. A press in a gap between the pieces reaches the app.
 
 - 💊 **Pill.** The chrome on top. A round, bordered `background` pill at the top right of the column, with a drag grip, the **⋮** menu, **Show Head Only** and **Close**. On a mobile-size screen the pill has no grip and no head button. The grip moves all three pieces. Every button is round, bare and `muted-foreground`, and fills with `accent` on hover.
 - 🧍 **Mascot piece.** Left of the column, as tall as the column, at the base's aspect, with its feet on the column's bottom edge. It has no box, no border and no shadow. The head view is the same piece, cropped by the Mask, left of the pill. It is 96px tall on a desktop and 64px on a mobile-size screen.
@@ -948,6 +972,18 @@ Under **Chat Style** **Minimal**, or **Auto** with the mascot on, the window dro
 - 🌫️ **Shadow.** The pill, the bubbles and the reader have `shadow-md`, which separates them from the app. The ask pill has `shadow-lg`. The mascot has none.
 - 🧍 **Mascot beside the frame.** Under **Full** with the mascot on, the whole mascot stands left of the framed window, as tall as it, with its feet on the frame's bottom edge. The head view does not apply. The mobile sheet draws no mascot under **Full**.
 - 📱 **On a mobile-size screen.** The sheet fills the screen over a dim, blurred backdrop. The bubbles sit on the backdrop, and the head view is left of the pill. A source name opens the guide section in the wiki, not in a reader piece.
+
+### Bubble chrome
+
+Under **Chat Style** **Bubble**, or **Auto** with the mascot on, the mascot speaks the newest answer. Bubble places the minimal chrome's pieces, tokens, radii, shadows and Backdrop around the mascot. The tail and the strip are its only additions. With the mascot off, or on the mobile sheet, it draws the minimal chrome.
+
+- 💬 **Answer bubble.** The assistant bubble with no tail corner, and a tail of the same `popover` fill and border that points at the mascot's head. Its bottom edge sits at the bottom of the head. It fits the answer up to the screen margin, then scrolls in a `ScrollArea`. While it scrolls, the whole bubble fades out at the top, box and all, as the minimal column's bubbles do. It holds the answer and the open **Thinking** text.
+- 🎚️ **Strip.** Under the bubble: round `background` chevron buttons at both ends, and between them the **Thinking** toggle, a **Sources** button that opens the source links in a popover, and **Take Me There**. **Sources** takes the **Thinking** toggle's leading chevron, which turns up toward the popover while it is open.
+- 🙋 **Question and ask pill.** The question bubble, read-only, then the ask pill, level with the mascot's feet.
+- 💊 **Pill.** Over the mascot's head, inside its bounds. The mascot's body moves the window too. The chat grip sets the chat's room, as the minimal grip sets its box. It sits on the room's corner that faces the most open space. The Backdrop fills the room, and the bubble fits its answer at the room's bottom. The tail draws under the bubble. The mascot's own grip sits on its top corner on the bubble side and sets its **Scale**.
+- 🫥 **Pill fade.** The pill and the mascot's grip show when the window opens and hide after one second, with a 300ms opacity fade. The fade masks the whole bubble piece, box included. The chat grip sits outside the bubble, so it stays in view. They return while the pointer is over the mascot or a piece, while keyboard focus is inside a piece, and while the **⋮** menu is open. A hidden piece takes no presses. On a touch screen they stay up. With reduced motion, they show and hide with no transition.
+- 🪞 **Sides.** The bubble stands on the mascot's side that faces the screen's middle. Past the middle, the group mirrors with no transition.
+- 🧑 **Head view.** One column: the bubble with its tail down, the head and the pill, the strip, the question, the ask pill.
 
 ### Layering
 
@@ -976,6 +1012,7 @@ The mobile sheet slides in from the edge that holds the Help tab, with the same 
 | Search field, result rows, contents, reader | [`GuideParts.tsx`](../src/components/formaquestion/GuideParts.tsx) |
 | Conversation, question bubble, answer, not-from-the-guide notice, source link, question field | [`AskParts.tsx`](../src/components/formaquestion/AskParts.tsx) |
 | Code block toolbar | `CodeSnippet` in [`CodeSnippet.tsx`](../src/components/formaquestion/CodeSnippet.tsx) |
+| Copy confirm tip | `FlashTip` in [`tooltip.tsx`](../src/components/ui/tooltip.tsx) |
 | The one instance, F1, focus and motion | [`Formaquestion.tsx`](../src/components/formaquestion/Formaquestion.tsx) |
 | Minimal chrome: pill, bubbles, ask pill | `MinimalChat` in [`MinimalChat.tsx`](../src/components/formaquestion/MinimalChat.tsx) |
 | Mascot piece and head view | [`MascotPiece.tsx`](../src/components/formaquestion/MascotPiece.tsx) |
@@ -1035,7 +1072,7 @@ A pattern that is not built gets its composition and its reference here when its
 
 ### Writing review
 
-**Help**, **Formaquestion**, **Ask**, **Search**, **Guide**, **Wide View**, **Close**, **Contents**, **Back to Conversation**, **On This Page**, **Introduction**, **Ask a Question**, **Send**, **Stop**, **Stopped**, **Sources**, **Nearest Sections**, **Clear**, **Try Again**, **Show Head Only**, **Show Full Mascot**, **Close Reader** and **Copy** are labels in Title Case. The hints and status lines are one sentence with no period. The not-from-the-guide notice is two sentences, so each has a period. The line above the docs search in a conversation is two sentences, so each has a period. With no matching section it is one sentence. The tab's tooltip is two sentences, so each has a period. Docs text in the reader is authored content and keeps its own voice. This review is local; it does not certify STE compliance.
+**Help**, **Formaquestion**, **Ask**, **Search**, **Guide**, **Wide View**, **Close**, **Contents**, **Back to Conversation**, **On This Page**, **Introduction**, **Ask a Question**, **Send**, **Stop**, **Stopped**, **Sources**, **Nearest Sections**, **Clear**, **Try Again**, **Show Head Only**, **Show Full Mascot**, **Close Reader**, **Copy** and **Insert** are labels in Title Case. The hints and status lines are one sentence with no period. The not-from-the-guide notice is two sentences, so each has a period. The line above the docs search in a conversation is two sentences, so each has a period. With no matching section it is one sentence. The tab's tooltip is two sentences, so each has a period. Docs text in the reader is authored content and keeps its own voice. This review is local; it does not certify STE compliance.
 
 ## Pattern: Filter Row With Filters Popover
 
@@ -1217,7 +1254,7 @@ The labels are **Preset**, **Duplicate**, **Rename**, **Import**, **Export**, **
 
 **Purpose:** Point the eye at one row after a **Take Me There** landing, or after a link that jumps to a setting, such as the Mascot tab's off-state link to **General**. The ring runs once and stops.
 
-> ✅ **Approved.** The user approved this pattern in the reference (2026-10-04). Production: Take Me There landings in the Settings dialog and the World Editor, the jump from a prompt's anatomy to a Messages field, and the Mascot tab's off-state link to the Mascot row of Formaquestion Settings → General.
+> ✅ **Approved.** The user approved this pattern in the reference (2026-10-04). Production: Take Me There landings in the Settings dialog, on the game screen (the action box, the page buttons and the **Export Story** format buttons) and in the World Editor, the jump from a prompt's anatomy to a Messages field, and the Mascot tab's off-state link to the Mascot row of Formaquestion Settings → General.
 
 **Density:** None of its own. The ring draws outside the row's box and changes no layout.
 
@@ -1228,7 +1265,7 @@ The labels are **Preset**, **Duplicate**, **Rename**, **Import**, **Export**, **
 - ⏱️ **Pulse.** 1500ms in all. The ring holds for the first 40%, then grows to 10px out and fades to clear. It runs once, and the class leaves the row when the animation ends.
 - ♿ **Reduced motion.** The same ring, still, for the same 1500ms. Then it goes away at once.
 - 🛑 **Canceled.** When the row hides mid-pulse, the class comes off with the animation.
-- ⌨️ **Focus.** The landing focuses the row's control, not the label's ⓘ button. Where a control draws a select and a segmented group and hides one per width, focus goes to the one on screen. The control's own inset focus ring then sits inside the landing ring.
+- ⌨️ **Focus.** The landing focuses the row's control, not the label's ⓘ button. A row of buttons focuses its first enabled button, or its first live link button, such as a pager's. Where a control draws a select and a segmented group and hides one per width, focus goes to the one on screen. The control's own inset focus ring then sits inside the landing ring.
 - 🔁 **Repeat.** A second landing on the same row restarts the pulse from the start.
 - 📏 **Room.** The pulse reaches 12px past the row. Give the row at least that much padding inside its scroll area, or the fade clips. `landingRoom` on `ScrollArea` adds it and keeps the rows in place. A target row keeps a 12px scroll margin, so a scroll to an edge leaves the same room.
 
@@ -1237,9 +1274,11 @@ The labels are **Preset**, **Duplicate**, **Rename**, **Import**, **Export**, **
 | Need | Component |
 | --- | --- |
 | Add the class, restart it, take it off on animation end | `pulseLanding` in [`landingPulse.ts`](../src/lib/landingPulse.ts) |
-| The control to focus | `landingControl` in [`landingPulse.ts`](../src/lib/landingPulse.ts) || The ring, the pulse and the still ring | `.landing-pulse` and `.landing-ring` in [`index.css`](../src/index.css) |
+| The control to focus | `landingControl` in [`landingPulse.ts`](../src/lib/landingPulse.ts) |
+| The ring, the pulse and the still ring | `.landing-pulse` and `.landing-ring` in [`index.css`](../src/index.css) |
 | Wait for the row, scroll, focus and pulse once per request | `useLanding` in [`useLanding.ts`](../src/lib/surface/useLanding.ts) |
-| Mark a row as a target | The `target` prop of `Row` and `CheckRow`, from `targetAttribute` in [`surfaceTargets.ts`](../src/lib/surface/surfaceTargets.ts) |
+| Mark a row as a target | The `target` prop of `Row`, `CheckRow` and the other shared rows, from `targetAttribute` in [`surfaceTargets.ts`](../src/lib/surface/surfaceTargets.ts) |
+| Find a target's row | `findTargetRow` in [`surfaceTargets.ts`](../src/lib/surface/surfaceTargets.ts) |
 | Room for the ring in a scroll area | `landingRoom` on `ScrollArea` in [`scroll-area.tsx`](../src/components/ui/scroll-area.tsx) |
 | Isolated reference | [`LandingPulseReference.tsx`](../src/components/design-system/LandingPulseReference.tsx) |
 
@@ -1273,7 +1312,7 @@ The pattern adds no player-facing text. The reference labels **Play Landing**, *
 
 The project `design-system` skill routes UI changes and prototypes here. Use the applicable named pattern and its production components, then inspect the result through the live reference. Agents verify established patterns themselves and report desktop/mobile states, theme/font inheritance, interaction results, and static evidence.
 
-For a new pattern, show a proposal inside a representative Formamorph app screen at desktop and mobile sizes. Keep it separate from the approved registry until the user approves that concrete proposal. Record the approval with the artifacts before adoption.
+For a new pattern, add a reference to the showcase registry and show it inside a representative Formamorph app screen at desktop and mobile sizes. The showcase is where the user approves it. Until the approval note is on its section here, the pattern is a proposal and no production surface adopts it.
 
 The reference navigation uses equal flexible columns that wrap into additional rows. Every tab keeps enough width for its label, so all references remain readable and reachable without horizontal page scrolling.
 
@@ -1281,6 +1320,6 @@ The reference navigation uses equal flexible columns that wrap into additional r
 
 The live shell renders `DESIGN_SYSTEM_REFERENCES` from [`DesignSystemShowcase.tsx`](../src/views/DesignSystemShowcase.tsx). Add one definition with an ID, label, description, and production-backed component; the reference navigation and responsive shell update from that registry.
 
-Add a matching `## Pattern:` section here with its purpose, density, desktop/mobile behavior, component mapping, and applicable states. Demonstrate a new visual pattern inside a representative Formamorph screen at desktop and mobile sizes, then get product approval before adding it to this reference.
+Add a matching `## Pattern:` section here with its purpose, density, desktop/mobile behavior, component mapping, and applicable states. Mark it a proposal until the user approves it in the showcase, then record the approval on the section before any production surface adopts it.
 
 Keep the guide and registry synchronized when an approved reference changes; retain the existing shell and shared semantic values.
