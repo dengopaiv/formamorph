@@ -138,7 +138,7 @@ function TreeRow({ id, selectId, depth, spec, selected, onSelect, isCollapsed, t
       depth={depth}
       gripProps={spec.fixed ? undefined : { ...attributes, ...listeners }}
       grip={!spec.fixed}
-      gripTitle="Drag to reorder or nest — or press space, then the arrow keys"
+      gripTitle="Drag to reorder or nest"
       selected={selected}
       onSelect={() => onSelect(selectId)}
       lead={spec.lead === 'none' ? undefined : spec.lead}
