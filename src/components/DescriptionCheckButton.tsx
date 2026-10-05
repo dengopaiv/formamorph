@@ -8,6 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { Tip } from '@/components/ui/tooltip';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { authoringServerNote } from '@/lib/authoringRequest';
 import { useAiSettingsSnapshot } from '@/lib/aiRequest/useAiSettingsSnapshot';
 import { toastError } from '@/lib/linkToast';
@@ -104,9 +105,11 @@ const DescriptionCheckButton = ({ playerText, aiText, kind, subjectName }: {
             <DialogDescription>{summary}</DialogDescription>
           </DialogHeader>
           {findings.length > 0 && (
-            <ul className="list-disc space-y-2 pl-5 text-body max-h-[50vh] overflow-y-auto">
-              {findings.map((finding, i) => <li key={i}>{finding}</li>)}
-            </ul>
+            <ScrollArea className="max-h-[50vh]" focusable>
+              <ul className="list-disc space-y-2 pl-5 text-body">
+                {findings.map((finding, i) => <li key={i}>{finding}</li>)}
+              </ul>
+            </ScrollArea>
           )}
         </DialogContent>
       </Dialog>
