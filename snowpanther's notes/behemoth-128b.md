@@ -54,6 +54,13 @@ Behemoth-X-123B-v2 on `Mistral-Large`; v3's newer, more aligned base does not in
 refusal mid-session stops the story rather than weakening it. Details in
 [`model-recommendations.md`](model-recommendations.md).
 
+**Update 2026-10-05 — it has stopped refusing, at least on a Q6 GGUF.** dengopaiv's recent sessions ran
+a Q6_K GGUF (bartowski's is 107.8 GB, mradermacher's 102.6 GB) on **3× A40 under KoboldCpp**, with no
+refusals. The weights on Hugging Face have **not** changed: `TheDrummer/Behemoth-128B-v3` has one upload
+(2026-08-18) and two README edits, and no newer Behemoth exists. So the change is somewhere along the path,
+not in the model. The candidates are the quant (Q6_K against whatever the 2026-08-22 session ran), the backend and
+its chat template, and Formamorph's own prompts, which upstream reworked in v3. Nobody has separated these.
+
 ---
 
 ## Route A — Featherless (flat rate) — closed
@@ -140,7 +147,9 @@ before anything was measured.)*
 
 ### Behemoth-specific notes on the procedure
 
-1. **Two cards, not three**, and not one 80 GB card — that leaves no usable context (§4).
+1. **Two cards, not three**, and not one 80 GB card — that leaves no usable context (§4). That rule is for
+   EXL3 under TabbyAPI. The Q6_K GGUF has run on **three** A40s under KoboldCpp (2026-10-05), with coherent
+   output on those pods.
 2. **Container disk ≥ 100 GB, weights on it.** Not a network volume: the ~14 s load is from local NVMe, and a
    restart re-downloads the 68 GB in two or three minutes with `HF_HUB_ENABLE_HF_TRANSFER=1`, which is
    cheaper than a standing volume (§5, §15).
@@ -165,7 +174,14 @@ before anything was measured.)*
 
 ## Open questions
 
-- **How often does it refuse in play?** One session found refusals; nobody has counted them.
+- **How often does it refuse in play?** One session found refusals (2026-08-22); later Q6 GGUF sessions found
+  none (2026-10-05). What made the difference is unknown — see the update under *What the model is*.
+- **Why does the Q6 GGUF slow down late in a session?** On 3× A40 under KoboldCpp it gets slow once
+  KoboldCpp shows roughly **90k of ~148k**. Unconfirmed: whether those figures are tokens or something else,
+  and how they relate to the 32k context the preset was believed to use. Two likely causes, not yet told apart:
+  (a) KoboldCpp re-reading the whole prompt every turn because something near its start changed, which shows
+  in its console as `Processing Prompt` counting up before any text appears; and (b) each new token getting
+  slower as the context grows. Check the console during a slow turn.
 - **What does a pod with working peer-to-peer give?** 12 tok/s is the broken-p2p floor.
 - **Does `pod-setup.sh` bring it up unattended?** Only done by hand so far.
 - **Is it actually better for narration than the No-Limit catalog pick (G4 MeroMero 31B, A/84)?** Untested,

@@ -163,10 +163,15 @@ the download.
 
 ### Is the step up worth it
 
-Probably not by itself. At ~125B, 4.25 → 5.0 bpw is a small change in quality for ~15% more weights, and
-the known problem with Behemoth v3 is its **refusals**, which come from the newer base, not from the
-bit-rate. 5.0 is worth running if 4.25 sessions felt slightly lossy *and* a 96 GB single card is available,
-so it costs nothing in stability.
+Probably not by itself. At ~125B, 4.25 → 5.0 bpw is a small change in quality for ~15% more weights. 5.0 is
+worth running if 4.25 sessions felt slightly lossy *and* a 96 GB single card is available, so it costs
+nothing in stability.
+
+The refusals, which this note first named as the real problem, are no longer seen: a **Q6_K GGUF on 3× A40
+under KoboldCpp** stopped refusing (2026-10-05, weights unchanged; see `behemoth-128b.md`). That run is
+also the comparison any EXL3 session now has to beat. It slows down late in long sessions, around 90k of
+~148k as KoboldCpp shows it. At 5.0 bpw on two cards, EXL3 would be about a fifth smaller than Q6_K, use one
+card fewer, and quantise the cache cleanly. Nobody has measured whether it is faster at that length.
 
 ---
 

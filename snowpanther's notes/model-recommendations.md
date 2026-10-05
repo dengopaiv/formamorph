@@ -283,6 +283,9 @@ brought with it. For a narrator that picks its own beats through the director an
 refusal mid-session is a harder failure than a prose deficit — it stops the story rather than weakening it.
 The leaderboard's Refusals column is a ⚠ review flag for exactly this, and v3 has not been screened.
 
+*Update 2026-10-05:* a Q6_K GGUF on 3× A40 under KoboldCpp has stopped refusing in play, with the weights
+unchanged. The cause is not separated; see `behemoth-128b.md`.
+
 **No screen result exists for the base either.** `Mistral-Medium-3.5` has never been run here, and the
 leaderboard's `mistral-heretic` (Obj 41, Format 30, tier C) is a different and older Mistral — not a proxy.
 So the newer-is-not-better pattern this family already showed once, with Anubis v1.1 over v1.2, now has a
