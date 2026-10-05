@@ -23,6 +23,14 @@ export interface PromptGroup {
  */
 export const AUTHORING_TABS = ['playerdesc', 'aidesc', 'aisummary', 'desccheck'] as const;
 
+/** What each authoring prompt is called on the Settings rail, and wherever a help request names its tab. */
+export const AUTHORING_LABELS: Record<(typeof AUTHORING_TABS)[number], string> = {
+  playerdesc: 'Player Description',
+  aidesc: 'AI Description',
+  aisummary: 'AI Summary',
+  desccheck: 'Description Check',
+};
+
 /** Whether a `promptTab` id is one of the authoring prompts. */
 export function isAuthoringTab(tab: string): boolean {
   return (AUTHORING_TABS as readonly string[]).includes(tab);

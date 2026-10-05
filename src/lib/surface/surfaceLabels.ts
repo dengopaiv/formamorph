@@ -7,7 +7,7 @@ import { TOUR_STEPS } from '@/lib/authoringTour/steps';
 import { BROWSE_TAB_LABELS } from '@/lib/browseTabs';
 import { KIND_LABELS } from '@/lib/catalogKinds';
 import { FEEDBACK_TYPE_LABELS } from '@/lib/feedbackPresentation';
-import { HUB_LABEL, OVERVIEW_LABEL, PROMPT_LABELS, SURFACE_LABELS as PROMPT_SURFACE_LABELS } from '@/lib/promptGroups';
+import { AUTHORING_LABELS, HUB_LABEL, OVERVIEW_LABEL, PROMPT_LABELS, SURFACE_LABELS as PROMPT_SURFACE_LABELS } from '@/lib/promptGroups';
 import { BENCH_TABS } from '@/lib/testBench/benchTabs';
 import type { SurfaceId } from '@/lib/docs/surfaceMap';
 import { FORMAQUESTION_TABS } from '@/components/formaquestion/formaquestionTabs';
@@ -86,6 +86,7 @@ const ENTRIES: [string, string][] = [
   ...tabsOf('settingsEndpoints', SETTINGS_ENDPOINT_TABS.map((tab) => ({ value: tab.route, label: tab.label }))),
   ...tabsOf('settingsToolEdit', TOOL_EDIT_TABS),
   ...Object.entries(PROMPT_LABELS).map(([tab, label]): [string, string] => [`settingsPrompts.${tab}`, label]),
+  ...Object.entries(AUTHORING_LABELS).map(([tab, label]): [string, string] => [`settingsPrompts.${tab}`, label]),
   ...Object.entries(PROMPT_SURFACE_LABELS).map(([tab, label]): [string, string] => [`settingsPromptSurfaces.${tab}`, label]),
   ['settingsPromptSurfaces.anatomy', HUB_LABEL],
   ['settingsPromptPreset.overview', OVERVIEW_LABEL],

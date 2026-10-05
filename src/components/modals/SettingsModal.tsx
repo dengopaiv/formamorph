@@ -39,7 +39,7 @@ import { PresetOverviewPanel } from './PresetOverviewPanel';
 import { useEndpointModelSuggestions } from './useEndpointModelSuggestions';
 import { usePromptCatalogSuggestions } from './usePromptCatalogSuggestions';
 import { mergeModelSuggestions } from '@/lib/promptCatalogSuggestions';
-import { visibleGroups, SURFACE_LABELS, HUB_LABEL, HUB_ROUTE, OVERVIEW_LABEL, OVERVIEW_ROUTE, PROMPT_DESCRIPTIONS, PROMPT_LABELS, PROMPT_TAB_REQUESTS, isPromptTab, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
+import { visibleGroups, SURFACE_LABELS, HUB_LABEL, HUB_ROUTE, OVERVIEW_LABEL, OVERVIEW_ROUTE, PROMPT_DESCRIPTIONS, PROMPT_LABELS, AUTHORING_LABELS, PROMPT_TAB_REQUESTS, isPromptTab, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
 import {
   DEFAULT_BRIDGE_MAX_TOKENS, BRIDGE_MAX_TOKENS_MIN, BRIDGE_MAX_TOKENS_MAX, BRIDGE_SUBJECT, BRIDGE_FACETS,
 } from '@/lib/bridgeDescription';
@@ -747,19 +747,19 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     // Reset restores the prompt AND its cap: the two were edited as a pair, so restoring only the text
     // would leave a default template running under a cap the author raised for a longer one.
     playerdesc: {
-      label: 'Player Description', value: playerDescPrompt, def: styledDefaults.playerDescPrompt, set: setPlayerDescPrompt,
+      label: AUTHORING_LABELS.playerdesc, value: playerDescPrompt, def: styledDefaults.playerDescPrompt, set: setPlayerDescPrompt,
       variables: PROMPT_KIND_VARIABLES.playerdesc, onReset: () => setDescMaxTokens('playerdesc', DEFAULT_BRIDGE_MAX_TOKENS),
     },
     aidesc: {
-      label: 'AI Description', value: aiDescPrompt, def: styledDefaults.aiDescPrompt, set: setAiDescPrompt,
+      label: AUTHORING_LABELS.aidesc, value: aiDescPrompt, def: styledDefaults.aiDescPrompt, set: setAiDescPrompt,
       variables: PROMPT_KIND_VARIABLES.aidesc, onReset: () => setDescMaxTokens('aidesc', DEFAULT_BRIDGE_MAX_TOKENS),
     },
     aisummary: {
-      label: 'AI Summary', value: aiSummaryPrompt, def: styledDefaults.aiSummaryPrompt, set: setAiSummaryPrompt,
+      label: AUTHORING_LABELS.aisummary, value: aiSummaryPrompt, def: styledDefaults.aiSummaryPrompt, set: setAiSummaryPrompt,
       variables: PROMPT_KIND_VARIABLES.aisummary, onReset: () => setDescMaxTokens('aisummary', DEFAULT_SUMMARY_MAX_TOKENS),
     },
     desccheck: {
-      label: 'Description Check', value: descCheckPrompt, def: styledDefaults.descCheckPrompt, set: setDescCheckPrompt,
+      label: AUTHORING_LABELS.desccheck, value: descCheckPrompt, def: styledDefaults.descCheckPrompt, set: setDescCheckPrompt,
       variables: PROMPT_KIND_VARIABLES.desccheck, onReset: () => setDescMaxTokens('desccheck', DEFAULT_CHECK_MAX_TOKENS),
     },
   };
