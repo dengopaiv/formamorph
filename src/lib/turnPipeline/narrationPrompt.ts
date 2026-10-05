@@ -8,31 +8,13 @@ import {
   type ScanSource,
 } from "../dictionaryUtils";
 import { selectSemanticLore, applySemanticLore } from "../semanticDictionary";
-import { renderPromptTemplateRuns, parsePromptTemplate } from "../promptTemplate";
+import { renderPromptTemplateRuns, templateChipKeys } from "../promptTemplate";
 import { trimEndTiled, type AnatomyRun } from "../requestAnatomy";
-import { splitToken } from "../promptVariables";
-import { restyle } from "../sectionStyle";
 import type { SectionStyle } from "../promptPresets";
-import { markdownGuidance } from "../../components/game/GamePrompts";
+import { markdownDefinitions, markdownGuidance } from "../../components/game/GamePrompts";
 import { lengthGuidance, type ParagraphLimit } from "../outputLength";
 import { NONE_PLACEHOLDER } from "../promptFallbacks";
 import { languageDirective } from "../languages";
-
-/**
- * Which chips a template carries, as the affix-free tokens the value map is keyed by (`<NOTES>`,
- * `<DICTIONARY|before>`).
- *
- * Read through the parser rather than by substring: a placement with a prefix or suffix
- * (`<NOTES|pre="Remember: ">`) renders its value like any other, so a raw `includes("<NOTES>")` would call
- * the chip absent and then withhold the notes from the lore scan they are visibly part of.
- */
-function chipKeys(template: string): Set<string> {
-  return new Set(
-    parsePromptTemplate(template).flatMap((s) =>
-      s.type === "variable" ? [splitToken(s.token)?.key ?? s.token] : [],
-    ),
-  );
-}
 
 /** The per-entry activation report plus the verbatim scanned strings a hit landed in. */
 export interface DictionaryDebug {
@@ -84,10 +66,10 @@ export interface NarrationPromptResult {
 export function buildNarrationPrompt(input: NarrationPromptInput): NarrationPromptResult {
   const {
     template, ctx, action, history, dictionary, actionVec, semanticLore,
-    embedVectors, language, paragraphLimit, maxTokens, markdownOutput, sectionStyle, resolvePH,
+    embedVectors, language, paragraphLimit, maxTokens, markdownOutput, resolvePH,
   } = input;
 
-  const chips = chipKeys(template);
+  const chips = templateChipKeys(template);
   const dictCorpus = buildScanCorpus({
     template,
     ctx,
@@ -114,14 +96,12 @@ export function buildNarrationPrompt(input: NarrationPromptInput): NarrationProm
     : [];
   const afterEntries = hasAfterChip ? activatedEntries.filter((e) => !beforeEntries.includes(e)) : [];
 
-  // The markdown guidance is a code-generated block authored in markdown, so it is restyled to the active
-  // preset's section style to match the authored prompt's headers; the lore blocks carry no headers of their
-  // own and need none. Trailing whitespace goes, so a trailing chip that resolves to nothing — the language
-  // chip on an English game — leaves no dangling blank lines behind it.
+  // Placements own headers; trimming keeps empty trailing chips from leaving blank lines.
   const rendered = trimEndTiled(renderPromptTemplateRuns(template, {
     ...ctx,
     "<LENGTH GUIDANCE>": lengthGuidance(paragraphLimit, maxTokens),
-    "<MARKDOWN GUIDANCE>": restyle(markdownGuidance(markdownOutput), sectionStyle),
+    "<MARKDOWN GUIDANCE>": markdownGuidance(markdownOutput),
+    "<MARKDOWN GUIDANCE|definitions>": markdownDefinitions(markdownOutput),
     "<DICTIONARY>": resolvePH(buildDictionaryContext(afterEntries, false)) || NONE_PLACEHOLDER,
     "<DICTIONARY|before>": resolvePH(buildDictionaryContext(beforeEntries, false)) || NONE_PLACEHOLDER,
     "<LANGUAGE>": languageDirective("narration", language),

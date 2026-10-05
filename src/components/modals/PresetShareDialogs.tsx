@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useResetOnOpen } from '@/lib/useResetOnOpen';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -7,10 +7,16 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'react-toastify';
 import { downloadBlob } from '@/lib/downloadBlob';
 import { filesFrom } from '@/lib/importFiles';
+import { CHIP_BASE } from '@/components/Chip';
+import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
+import { cn } from '@/lib/utils';
+import { hasOverviewContent, type PresetOverview } from '@/lib/promptPresets';
 import {
   serializeSharedJson, serializeSharedCode, parseSharedAny,
   type SharedPreset, type ImportedPreset, type ParseResult,
 } from '@/lib/promptPresetShare';
+import { PRESET_SCRIPT_TOOL_WARNING, planPresetTools } from '@/lib/tools/toolPack';
+import type { Tool } from '@/types';
 
 const safeFile = (name: string) => (name.trim().replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'preset');
 
@@ -44,12 +50,42 @@ export function ExportPresetDialog({ open, onOpenChange, shared }: {
   );
 }
 
-/** Import dialog: choose a file or paste a code → preview name + warnings → pick tuning + collision handling → add. */
-export function ImportPresetDialog({ open, onOpenChange, currentAppVersion, existingUserNames, onImport }: {
+/** The imported preset's Overview, one row per field that has content. */
+function OverviewPreview({ overview }: { overview: PresetOverview }) {
+  const chips = (items: string[]) => (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((t) => <span key={t} className={cn(CHIP_BASE, 'bg-primary text-primary-foreground')}>{t}</span>)}
+    </div>
+  );
+  if (!hasOverviewContent(overview)) return null;
+  const { author, description, tags, models } = overview;
+  return (
+    <dl aria-label="Overview" className="flex flex-col gap-2 rounded-md border p-3 max-h-60 overflow-y-auto">
+      {author && <OverviewRow label="Author"><span className="text-label">{author}</span></OverviewRow>}
+      {description && <OverviewRow label="Description"><div className="text-muted-foreground"><MarkdownRenderer text={description} /></div></OverviewRow>}
+      {tags.length > 0 && <OverviewRow label="Tags">{chips(tags)}</OverviewRow>}
+      {models.length > 0 && <OverviewRow label="Models">{chips(models)}</OverviewRow>}
+    </dl>
+  );
+}
+
+function OverviewRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <dt className="text-helper font-semibold text-muted-foreground">{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+/** Import dialog: choose a file or paste a code → preview warnings, Overview, and name → pick tuning + collision handling → add. */
+export function ImportPresetDialog({ open, onOpenChange, currentAppVersion, existingUserNames, userTools, onImport }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   currentAppVersion: string;
   existingUserNames: { id: string; name: string }[];
+  /** The player's Tools, which embedded Tools merge into by name. */
+  userTools: readonly Tool[];
   onImport: (imported: ImportedPreset, opts: { includeTuning: boolean; name: string; overwriteId?: string }) => void;
 }) {
   const [parsed, setParsed] = useState<ParseResult | null>(null);
@@ -73,7 +109,12 @@ export function ImportPresetDialog({ open, onOpenChange, currentAppVersion, exis
     if (f) ingest(await f.text());
   };
 
-  const hasTuning = !!(parsed?.preset && (parsed.preset.samplers || parsed.preset.reasoning || parsed.preset.verbatim));
+  const warnings = useMemo(() => {
+    if (!parsed?.preset) return [];
+    const addsScript = planPresetTools(userTools, parsed.preset.tools ?? [], () => '').hasScript;
+    return addsScript ? [...parsed.warnings, PRESET_SCRIPT_TOOL_WARNING] : parsed.warnings;
+  }, [parsed, userTools]);
+  const hasTuning = !!(parsed?.preset && (parsed.preset.samplers || parsed.preset.reasoning || parsed.preset.maxOutput || parsed.preset.attachments || parsed.preset.verbatim));
   const collision = parsed?.ok ? existingUserNames.find((p) => p.name.trim().toLowerCase() === name.trim().toLowerCase()) : undefined;
   const canAdd = !!(parsed?.ok && name.trim());
   const submit = () => {
@@ -101,9 +142,10 @@ export function ImportPresetDialog({ open, onOpenChange, currentAppVersion, exis
 
         {parsed?.ok && (
           <div className="flex flex-col gap-3">
-            {parsed.warnings.map((w, i) => (
+            {warnings.map((w, i) => (
               <p key={i} className="text-meta text-amber-600 dark:text-amber-500">⚠ {w}</p>
             ))}
+            {parsed.preset?.overview && <OverviewPreview overview={parsed.preset.overview} />}
             <label className="flex flex-col gap-1 text-label">
               Name
               <Input value={name} onChange={(e) => { setName(e.target.value); setOverwrite(false); }} />
@@ -111,7 +153,7 @@ export function ImportPresetDialog({ open, onOpenChange, currentAppVersion, exis
             {hasTuning && (
               <label className="flex items-start gap-2">
                 <Checkbox checked={includeTuning} onCheckedChange={(c) => setIncludeTuning(c === true)} className="mt-0.5 shrink-0" />
-                <span className="text-meta text-muted-foreground">Include the preset&apos;s tuning (per-prompt samplers, reasoning, and verbatim turns). Uncheck to import the prompt text only.</span>
+                <span className="text-meta text-muted-foreground">Include the preset&apos;s tuning (per-prompt samplers, reasoning, max output, attachments, and verbatim turns). Uncheck to import the prompt text only.</span>
               </label>
             )}
             {collision && (

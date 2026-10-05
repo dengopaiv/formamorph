@@ -4,10 +4,13 @@ import { cn } from '@/lib/utils';
 import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tip } from '@/components/ui/tooltip';
-import { THUMB_FRAME } from '@/lib/thumbAspect';
+import { THUMB_FRAME, type CardLayout } from '@/lib/thumbAspect';
 
-/** The scrim behind a name laid over tile art: a smooth black fade, the same in both themes. */
-export const TITLE_SCRIM = 'bg-gradient-to-t from-black/80 via-black/40 to-transparent';
+/** The scrim behind a name laid over tile art: an eased black fade, the same in both themes. */
+export const TITLE_SCRIM = 'bg-title-scrim';
+
+/** The same scrim for a name at the top of the art. */
+export const TITLE_SCRIM_TOP = 'bg-title-scrim-top';
 
 /** How many lines a hovered name may take. Must match the `line-clamp-*` class below. */
 const TITLE_MAX_LINES = 3;
@@ -17,8 +20,8 @@ const TITLE_MAX_LINES = 3;
  * slides up to show up to three lines. A name still clipped at three lines carries the full text
  * as a tip.
  */
-export function OverlayTitle({ name, className }: { name: string; className?: string }) {
-  const ref = useRef<HTMLHeadingElement>(null);
+export function OverlayTitle({ name, className, onOpen }: { name: string; className?: string; onOpen?: () => void }) {
+  const ref = useRef<HTMLElement>(null);
   const [clipped, setClipped] = useState(false);
   // Multi-line mode. Entered on card hover; left only when the collapse transition finishes, so
   // the exit animates instead of the clamp snapping the text to one line while max-height is
@@ -54,33 +57,52 @@ export function OverlayTitle({ name, className }: { name: string; className?: st
       card?.removeEventListener('pointerleave', leave);
     };
   }, [name]);
-  return (
-    <Tip tip={clipped ? name : undefined} labelsChild={false}>
-      <h3
-        ref={ref}
-        // Until the first measure sets the vars, max-height resolves to none and the clamp alone
-        // clips — so there is no flash, just no slide yet.
-        className={cn(
-          'font-semibold text-white break-words max-h-[var(--title-collapsed)]',
-          reveal ? 'line-clamp-3' : 'line-clamp-1',
-          // easeOutExpo, as arbitrary properties: this config overloads duration-/ease-, so those
-          // utility forms are ambiguous and emit nothing.
-          'transition-[max-height] [transition-duration:350ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
-          'group-hover:max-h-[var(--title-expanded)]',
-          className,
-        )}
-        onTransitionEnd={() => {
-          if (!ref.current?.closest('.group')?.matches(':hover')) setReveal(false);
-        }}
-      >
-        {name}
-      </h3>
+  const titleAttrs = {
+    // The folder zoom fades every name on the board it is shrinking, and this is the name.
+    'data-tile-title': true,
+    // Until the first measure sets the vars, max-height resolves to none and the clamp alone
+    // clips — so there is no flash, just no slide yet.
+    className: cn(
+      'font-semibold text-white break-words max-h-[var(--title-collapsed)]',
+      reveal ? 'line-clamp-3' : 'line-clamp-1',
+      // easeOutExpo, as arbitrary properties: this config overloads duration-/ease-, so those
+      // utility forms are ambiguous and emit nothing.
+      'transition-[max-height] [transition-duration:350ms] [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
+      'group-hover:max-h-[var(--title-expanded)]',
+      onOpen && 'block w-full text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+      className,
+    ),
+    onTransitionEnd: () => {
+      if (!ref.current?.closest('.group')?.matches(':hover')) setReveal(false);
+    },
+  };
+  const tip = clipped ? name : undefined;
+  // The heading keeps its place in the outline; the button inside it is the keyboard way in. The tip
+  // sits on the button, because a `contents` heading has no box to anchor to.
+  return onOpen ? (
+    <h3 className="contents">
+      <Tip tip={tip} labelsChild={false}>
+        <button
+          type="button"
+          ref={ref as React.RefObject<HTMLButtonElement>}
+          {...titleAttrs}
+          onClick={(event) => { event.stopPropagation(); onOpen(); }}
+        >
+          {name}
+        </button>
+      </Tip>
+    </h3>
+  ) : (
+    <Tip tip={tip} labelsChild={false}>
+      <h3 ref={ref as React.RefObject<HTMLHeadingElement>} {...titleAttrs}>{name}</h3>
     </Tip>
   );
 }
 
 interface WorldCardShellProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** The thumbnail image node (an `img`/`CachedThumbnail`); a `Globe` placeholder fills the area when absent. */
+  /** Makes the name a real button that calls this, so the card opens from the keyboard. The frame's own click stays. */
+  onOpen?: () => void;
+  /** The thumbnail node (an `img`, a `CachedThumbnail` or an entity's Morph art); a `Globe` fills the area when absent. */
   thumbnail?: ReactNode;
   /** Absolutely-positioned overlay over the thumbnail (e.g. a download button / progress bar). */
   thumbnailOverlay?: ReactNode;
@@ -88,6 +110,8 @@ interface WorldCardShellProps extends React.HTMLAttributes<HTMLDivElement> {
   cornerAction?: ReactNode;
   name: string;
   description?: string;
+  /** Drop the description line when there is no description, instead of the stand-in text. */
+  omitEmptyDescription?: boolean;
   /** The author line — plain text, or an interactive element (e.g. a hide-author span). */
   author?: ReactNode;
   /** A line about the card's subject (e.g. a place badge), between the author and the card's own content. */
@@ -96,6 +120,8 @@ interface WorldCardShellProps extends React.HTMLAttributes<HTMLDivElement> {
   frameClassName?: string;
   /** Draw the card's own shape with its text and art still loading: shimmer in each region's place. */
   loading?: boolean;
+  /** Where the art sits relative to the text. Stacked when absent. */
+  layout?: CardLayout;
 }
 
 /**
@@ -107,39 +133,57 @@ interface WorldCardShellProps extends React.HTMLAttributes<HTMLDivElement> {
  * Forwards a ref + spreads the rest onto the frame so a caller can attach dnd-kit listeners / `onClick`.
  */
 export const WorldCardShell = forwardRef<HTMLDivElement, WorldCardShellProps>(function WorldCardShell(
-  { thumbnail, thumbnailOverlay, cornerAction, name, description, author, note, frameClassName, className, loading, children, ...rest },
+  { thumbnail, thumbnailOverlay, cornerAction, onOpen, name, description, omitEmptyDescription, author, note, frameClassName, className, loading, layout = 'stacked', children, ...rest },
   ref,
 ) {
+  const split = layout === 'split';
   return (
     <div
       ref={ref}
-      className={cn('relative flex flex-col rounded-lg border cursor-pointer', frameClassName, className)}
+      data-layout={layout}
+      className={cn('relative flex rounded-lg border cursor-pointer', split ? 'flex-row' : 'flex-col', frameClassName, className)}
       {...rest}
     >
       {cornerAction}
       {/* The `group` is the image, not the card: the name reveal and the hover actions all key off
-          hovering the art, so mousing over the text block below changes nothing. */}
-      <div className={cn('group relative bg-muted rounded-t-lg overflow-hidden', THUMB_FRAME.landscape)}>
+          hovering the art, so mousing over the text block beside it changes nothing. */}
+      <div className={cn(
+        'group relative bg-muted overflow-hidden',
+        // Stretched: the art sets the card's minimum height, and grows with text that runs taller.
+        split ? cn('w-2/5 shrink-0 rounded-l-lg', THUMB_FRAME.portrait) : cn('rounded-t-lg', THUMB_FRAME.landscape),
+      )}>
         {thumbnailOverlay}
         {loading ? <Skeleton className="w-full h-full rounded-none" /> : thumbnail ?? (
           <div className="w-full h-full flex items-center justify-center text-muted-foreground">
             <Globe className="h-12 w-12" />
           </div>
         )}
-        {/* The name and author live on the art, matching the grid tiles, so the text block stays short. */}
-        <div className={cn('absolute bottom-0 left-0 right-0 p-2 pt-8', TITLE_SCRIM)}>
+        {/* The name and author live on the art, matching the grid tiles, so the text block stays short.
+            Split cards put them at the top, where the art's hover actions are not. */}
+        <div className={cn(
+          'absolute left-0 right-0 p-2',
+          // A 64 px fade past the name lets the scrim dissolve into the art rather than end on it.
+          split ? cn('top-0 pb-16', TITLE_SCRIM_TOP) : cn('bottom-0 pt-16', TITLE_SCRIM),
+        )}>
           {loading
             ? <Skeleton className="h-6 w-2/5 bg-white/20" />
-            : <OverlayTitle name={name} className="text-title" />}
-          {!loading && author != null && <div className="text-meta text-white/85">{author}</div>}
+            : <OverlayTitle name={name} className="text-title" onOpen={onOpen} />}
+          {/* Flex so a long author truncates inside the art rather than running past its edge. */}
+          {!loading && author != null && (
+            <div className="flex min-w-0 text-meta text-white/85">
+              {typeof author === 'string' ? <span className="truncate">{author}</span> : author}
+            </div>
+          )}
         </div>
       </div>
-      <div className="p-4 flex flex-col flex-grow">
-        <div className="text-helper text-muted-foreground mb-2 max-h-20 overflow-hidden">
-          {loading
-            ? <div className="space-y-1.5"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-4/5" /></div>
-            : <MarkdownRenderer text={description || 'No description available.'} />}
-        </div>
+      <div className="p-4 flex flex-col flex-grow min-w-0">
+        {(loading || description || !omitEmptyDescription) && (
+          <div className="text-helper text-muted-foreground mb-2 max-h-20 overflow-hidden">
+            {loading
+              ? <div className="space-y-1.5"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-4/5" /></div>
+              : <MarkdownRenderer text={description || 'No description available.'} />}
+          </div>
+        )}
         {note}
         {children}
       </div>

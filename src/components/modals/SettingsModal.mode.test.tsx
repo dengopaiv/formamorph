@@ -53,11 +53,11 @@ describe('settings mode', () => {
     expect(readSettingsMode()).toBe('simple');
   });
 
-  it('drops Prompts from the tab list in Simple only', () => {
+  it('drops Prompts and Tools from the tab list in Simple only', () => {
     expect(settingsTabsFor(false).map((t) => t.value))
       .toEqual(['display', 'output', 'endpoints', 'data']);
     expect(settingsTabsFor(true).map((t) => t.value))
-      .toEqual(['display', 'output', 'prompts', 'endpoints', 'data']);
+      .toEqual(['display', 'output', 'prompts', 'tools', 'endpoints', 'data']);
   });
 
   it('hides the Prompts tab in Simple and shows it in Advanced', () => {
@@ -89,6 +89,21 @@ describe('settings mode', () => {
     openSettingsOnTab('prompts');
     expect(tabNames()).toContain('Prompts');
     expect(screen.getByRole('tab', { name: 'Prompts', selected: true })).toBeTruthy();
+  });
+
+  it('opens on the Endpoints tab the route names, in Advanced for Tag Prompt', () => {
+    const openOnEndpoint = (subtab: string) => render(
+      <ThemeProvider>
+        <SettingsProvider>
+          <SettingsModal isOpen onOpenChange={() => {}} initialTab="endpoints" initialPromptTab={subtab} />
+        </SettingsProvider>
+      </ThemeProvider>,
+    );
+    const { unmount } = openOnEndpoint('image');
+    expect(screen.getByRole('tab', { name: 'Image', selected: true })).toBeTruthy();
+    unmount();
+    openOnEndpoint('tagPrompt');
+    expect(screen.getByRole('tab', { name: 'Tag Prompt', selected: true })).toBeTruthy();
   });
 
   it('hides Paragraph Limit and Markdown Formatting on Display in Simple only', () => {

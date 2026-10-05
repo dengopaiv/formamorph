@@ -1,40 +1,49 @@
 import { useDictionaryStore } from '@/contexts/DictionaryStoreContext';
 import { Label } from '@/components/ui/label';
 import { TagsField } from '@/components/TagsField';
+import { LibraryAuthorField } from '@/components/LibraryAuthorField';
+import { FieldColumn } from '@/components/modals/FieldColumn';
 import { ImageUpload } from '@/lib/UtilityComponents';
 import { IMAGE_CAPS } from '@/lib/imageOptim';
+import DictionaryBookFields from './DictionaryBookFields';
 import type { Dictionary } from '@/types';
 
 /**
- * How a book looks in the catalog: its tags and its cover.
- *
- * Only the listing fields. What the book *is* — its name, its note, whether it is on — stays beside the
- * entry tree where it has always been, because that is what you reach for while writing entries; these
- * two are set once, when it goes out.
+ * Library metadata and cover beside the book's name and description; stacked below `sm`.
  */
-const DictionaryOverviewManager = ({ book }: { book: Dictionary }) => {
+const DictionaryOverviewManager = ({ book, author, onAuthorChange }: {
+  book: Dictionary;
+  author?: string;
+  onAuthorChange: (author: string) => void;
+}) => {
   const { updateDictionary } = useDictionaryStore();
 
   return (
-    <div className="space-y-6 max-w-[560px]">
-      <TagsField values={book.tags} onChange={(tags) => updateDictionary({ ...book, tags })} />
+    <div className="flex flex-col sm:flex-row">
+      <div className="space-y-6 p-4 pb-0 sm:w-80 sm:shrink-0 sm:pb-4 sm:pr-0">
+        <LibraryAuthorField value={author} onChange={onAuthorChange} />
+        <TagsField values={book.tags} onChange={(tags) => updateDictionary({ ...book, tags })} />
 
-      <div className="space-y-2">
-        <Label htmlFor="image-upload-dictionary-thumbnail">Cover Image</Label>
-        {/* Capped like a world's thumbnail, and for the same reason: a book downloads as one JSON file
-            carrying this inline, so a full-size cover would dwarf the text it is decorating. */}
-        <ImageUpload
-          id="dictionary-thumbnail"
-          value={book.thumbnail ?? null}
-          onChange={(thumbnail) => updateDictionary({ ...book, thumbnail })}
-          cap={IMAGE_CAPS.thumbnail}
-          objectFit="cover"
-          previewClassName="w-full max-w-[400px] aspect-video relative rounded-md"
-        />
-        <p className="text-meta text-muted-foreground">
-          Optional. A dictionary published without one gets a stand-in cover.
-        </p>
+        <div className="space-y-2">
+          <Label htmlFor="image-upload-dictionary-thumbnail">Cover Image</Label>
+          {/* Capped like a world's thumbnail, and for the same reason: a book downloads as one JSON file
+              carrying this inline, so a full-size cover would dwarf the text it is decorating. */}
+          <ImageUpload
+            id="dictionary-thumbnail"
+            value={book.thumbnail ?? null}
+            onChange={(thumbnail) => updateDictionary({ ...book, thumbnail })}
+            cap={IMAGE_CAPS.thumbnail}
+            objectFit="cover"
+            previewClassName="w-full max-w-[400px] aspect-video relative rounded-md"
+          />
+          <p className="text-meta text-muted-foreground">
+            Optional. A dictionary published without one gets a stand-in cover.
+          </p>
+        </div>
       </div>
+      <FieldColumn>
+        <DictionaryBookFields book={book} showEnabled={false} />
+      </FieldColumn>
     </div>
   );
 };

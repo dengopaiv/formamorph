@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
+import { toastError } from "@/lib/linkToast";
 import { Ban, Calendar, CheckCircle2, Clock, Loader2, Megaphone, Pencil, Plus, Trophy, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,11 +20,10 @@ import {
   ADMIN_EVENT_STATE_LABELS,
   ADMIN_EVENT_STATE_STYLES,
   adminEventActions,
-  adminEventState,
   adminEventSummary,
   groupAdminEvents,
 } from "@/lib/adminEvents";
-import { isContestEvent } from "@/lib/serverEvents";
+import { eventState, isContestEvent } from "@/lib/serverEvents";
 import { formatServerDate } from "@/lib/serverDate";
 import { isAdmin } from "@/lib/roles";
 import { useDevEventSample } from "@/lib/useDevEventSample";
@@ -49,7 +49,7 @@ const PAST_SHOWN = 10;
 
 /** The badge saying which state an event is in. */
 function StateBadge({ event }: { event: ServerEvent }) {
-  const state = adminEventState(event);
+  const state = eventState(event);
 
   return (
     <span className={cn('rounded-full px-2 py-0.5 text-meta font-semibold shrink-0', ADMIN_EVENT_STATE_STYLES[state])}>
@@ -125,7 +125,7 @@ export function EventsTab({ active }: EventsTabProps) {
       .then((list) => { if (current) setEvents(list); })
       .catch((error) => {
         console.error('Failed to load events:', error);
-        if (current) toast.error((error as Error).message || 'Failed to load events');
+        if (current) toastError(error, 'Failed to load events');
       })
       .finally(() => { if (current) setLoading(false); });
 
@@ -151,7 +151,7 @@ export function EventsTab({ active }: EventsTabProps) {
       setCanceling(null);
       refresh();
     } catch (error) {
-      toast.error((error as Error).message || 'Failed to cancel the event');
+      toastError(error, 'Failed to cancel the event');
     } finally {
       setBusy(false);
     }
@@ -166,7 +166,7 @@ export function EventsTab({ active }: EventsTabProps) {
       setRemoving(null);
       refresh();
     } catch (error) {
-      toast.error((error as Error).message || 'Failed to delete the event');
+      toastError(error, 'Failed to delete the event');
     } finally {
       setBusy(false);
     }
@@ -215,7 +215,7 @@ export function EventsTab({ active }: EventsTabProps) {
       key={event.id}
       className={cn(
         'flex flex-wrap items-center gap-x-3 gap-y-2 border-b py-2.5',
-        adminEventState(event) === 'canceled' && 'opacity-60',
+        eventState(event) === 'canceled' && 'opacity-60',
       )}
     >
       <div className="flex-1 min-w-[12rem]">

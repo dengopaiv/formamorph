@@ -1,9 +1,11 @@
-import { OPENING_CUE_FIELD_KEY, setOpeningCue, storedOpeningCue } from '@/lib/openingCue';
+import { openingFieldKey, setOpeningText } from '@/lib/openings';
 import { decodePlaceholderToken, describePlaceholders, parsePlaceholderText } from '@/lib/placeholders';
+import { builtinLabel } from '@/lib/builtinPlaceholders';
 import { qualifiedPlaceholderName } from '@/lib/placeholderTree';
 import { foldSeparators, labelPlaceholders, worldPlacementLetters, type PlacementLetters } from '@/lib/placementLetters';
 import { placeholderOwners, type PlaceholderOwners } from '@/lib/placeholderHomes';
 import { withPinnedValue } from '@/lib/placeholderPins';
+import { acceptsBlueprintChips, dropBlueprintChips } from '@/lib/blueprintChips';
 import {
   setWorldPromptOverride, storedWorldPrompt, worldPromptFieldKey, WORLD_PROMPT_KINDS, WORLD_PROMPT_KIND_LABELS,
 } from '@/lib/worldPrompt';
@@ -52,6 +54,8 @@ export interface SearchTarget {
   fieldLabel: string;
   /** Whether the field renders placeholder chips, and so can accept a chip replacement. */
   chipCapable: boolean;
+  /** Whether the field takes a blueprint chip: a world trait's or trait group's text. */
+  blueprintChips?: boolean;
   /** Whether this is one entry of a chip list rather than a text box. Every string-array field in the
    *  editor is edited as chips, and an entry often repeats its item's name verbatim — so which of the two
    *  a hit belongs to cannot be read off the text. */
@@ -131,7 +135,7 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
   const labeled = (name: string | undefined, fallback: string) =>
     untitled(labelPlaceholders(name ?? '', src.placeholders ?? [], { letters, owners }), fallback);
 
-  type Where = Pick<SearchTarget, 'tab' | 'itemId' | 'itemLabel' | 'chipCapable'>;
+  type Where = Pick<SearchTarget, 'tab' | 'itemId' | 'itemLabel' | 'chipCapable' | 'blueprintChips'>;
 
   /**
    * Bind one record's fields. `set` describes an edit as a pure update of the record, so the same
@@ -184,20 +188,21 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...ovWhere, chipCapable: false }, 'author', 'Author', ov.author, (r, v) => ({ ...r, author: v }));
     addEach({ ...ovWhere, chipCapable: false }, 'tags', 'Tags', ov.tags, (r, v) => ({ ...r, tags: v }), (r) => r.tags ?? []);
     // Uses the plain prompt vocabulary rather than the placeholder one, so a chip here stays inert text.
-    add({ ...ovWhere, chipCapable: false }, 'description', 'World Description', ov.description, (r, v) => ({ ...r, description: v }));
-    add({ ...ovWhere, chipCapable: true }, 'systemPrompt', 'System Prompt Addition', ov.systemPrompt, (r, v) => ({ ...r, systemPrompt: v }));
+    add({ ...ovWhere, chipCapable: false }, 'description', 'Player-Facing Description', ov.description, (r, v) => ({ ...r, description: v }));
+    add({ ...ovWhere, chipCapable: true }, 'systemPrompt', 'AI-Facing Description', ov.systemPrompt, (r, v) => ({ ...r, systemPrompt: v }));
     // The two readmes share one caption ("Readme") and are told apart by their tab, so their labels carry
     // which one — the breadcrumb is all the author has to go on once both hold the same phrase.
     add({ ...ovWhere, chipCapable: true }, 'introReadme', 'Readme (Introduction)', ov.introReadme, (r, v) => ({ ...r, introReadme: v }));
     add({ ...ovWhere, chipCapable: true }, 'readme', 'Readme (Gameplay)', ov.readme, (r, v) => ({ ...r, readme: v }));
-    // Registered only once the author has stored a cue: a field still tracking the shipped default holds
-    // no world text to find, and replacing into it would freeze a cue nobody wrote.
-    add({ ...ovWhere, chipCapable: true }, OPENING_CUE_FIELD_KEY, 'Opening Cue', storedOpeningCue(ov),
-      (r, v) => ({ ...r, ...setOpeningCue({ text: v }) }));
+    // Every row, switched on or not; the default opening is not world text and is never a target.
+    (ov.openings ?? []).forEach((opening, i) => {
+      add({ ...ovWhere, chipCapable: true }, openingFieldKey(opening.id), `Opening ${i + 1}`, opening.text,
+        (r, v) => ({ ...r, ...setOpeningText(r, opening.id, v) }));
+    });
     // One target per custom prompt the author has actually stored — a tab still tracking the preset holds
     // no world text to find, and replacing into it would silently freeze a prompt nobody wrote.
     WORLD_PROMPT_KINDS.forEach((kind) => {
-      add({ ...ovWhere, chipCapable: false }, worldPromptFieldKey(kind),
+      add({ ...ovWhere, chipCapable: true }, worldPromptFieldKey(kind),
         `Custom Prompt (${WORLD_PROMPT_KIND_LABELS[kind]})`, storedWorldPrompt(ov, kind),
         (r, v) => ({ ...r, promptOverrides: setWorldPromptOverride(r.promptOverrides, kind, { text: v }) }));
     });
@@ -224,8 +229,13 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', entity.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', entity.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', entity.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
+    add({ ...where, chipCapable: false }, 'pronouns', 'Pronouns', entity.pronouns, (r, v) => ({ ...r, pronouns: v }));
     add({ ...where, chipCapable: false }, 'type', 'Type', entity.type, (r, v) => ({ ...r, type: v }));
     add({ ...where, chipCapable: false }, 'imageTags', 'Image Tags', entity.imageTags, (r, v) => ({ ...r, imageTags: v }));
+    (entity.openings ?? []).forEach((opening, i) => {
+      add({ ...where, chipCapable: true }, openingFieldKey(opening.id), `Opening ${i + 1}`, opening.text,
+        (r, v) => ({ ...r, ...setOpeningText(r, opening.id, v) }));
+    });
   });
   (src.entityGroups ?? []).forEach((group) => {
     const where = { tab: 'entities', itemId: group.id, itemLabel: labeled(group.name, 'Group') };
@@ -242,15 +252,20 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', location.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', location.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
     add({ ...where, chipCapable: false }, 'imageTags', 'Image Tags', location.imageTags, (r, v) => ({ ...r, imageTags: v }));
+    (location.openings ?? []).forEach((opening, i) => {
+      add({ ...where, chipCapable: true }, openingFieldKey(opening.id), `Opening ${i + 1}`, opening.text,
+        (r, v) => ({ ...r, ...setOpeningText(r, opening.id, v) }));
+    });
   });
 
   // ── Traits ────────────────────────────────────────────────────────────────
   (src.traits ?? []).forEach((trait) => {
     const where = { tab: 'traits', itemId: trait.id, itemLabel: labeled(trait.name, 'Trait') };
+    const text = { ...where, chipCapable: true, blueprintChips: acceptsBlueprintChips({ kind: 'trait', owned: false }, src) };
     const { add } = bind(`trait:${trait.id}`, trait, src.updateTrait);
-    add({ ...where, chipCapable: true }, 'name', 'Name', trait.name, (r, v) => ({ ...r, name: v }));
-    add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', trait.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
-    add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', trait.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
+    add(text, 'name', 'Name', trait.name, (r, v) => ({ ...r, name: v }));
+    add(text, 'playerDescription', 'Player-Facing Description', trait.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
+    add(text, 'aiDescription', 'AI-Facing Description', trait.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     trait.placeholderPins?.forEach((pin, i) => {
       add({ ...where, chipCapable: false }, `placeholderPins[${i}].value`, 'Pinned Value', pin.value,
         (r, v) => ({
@@ -262,10 +277,11 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
   });
   (src.traitGroups ?? []).forEach((group) => {
     const where = { tab: 'traits', itemId: group.id, itemLabel: labeled(group.name, 'Group') };
+    const text = { ...where, chipCapable: true, blueprintChips: acceptsBlueprintChips({ kind: 'trait', owned: false }, src) };
     const { add } = bind(`traitGroup:${group.id}`, group, src.updateTraitGroup);
-    add({ ...where, chipCapable: true }, 'name', 'Group Name', group.name, (r, v) => ({ ...r, name: v }));
-    add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', group.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
-    add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', group.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
+    add(text, 'name', 'Group Name', group.name, (r, v) => ({ ...r, name: v }));
+    add(text, 'playerDescription', 'Player-Facing Description', group.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
+    add(text, 'aiDescription', 'AI-Facing Description', group.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
   });
 
   // ── Dictionaries ──────────────────────────────────────────────────────────
@@ -296,7 +312,8 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     // there is nothing to carry across.
     // `?? []` throughout: hand-edited world JSON can omit the field the type calls required, and the scan
     // runs in the editor's render, so a missing list has to be nothing to search rather than a blank editor.
-    addEach(where, 'values', 'Values', (ph.values ?? []).map((v) => v.text),
+    const valuesWhere = { ...where, blueprintChips: acceptsBlueprintChips({ kind: 'values', placeholderId: ph.id }, src) };
+    addEach(valuesWhere, 'values', 'Values', (ph.values ?? []).map((v) => v.text),
       (r, next) => ({ ...r, values: (r.values ?? []).map((v, i) => ({ ...v, text: next[i] ?? v.text })) }),
       (r) => (r.values ?? []).map((v) => v.text));
   });
@@ -333,7 +350,10 @@ function hitsIn(text: string, needle: string, opts: SearchOptions): number[] {
  *  whose placeholder is gone still answers to its label — the one thing left that says what it was for. */
 function chipReadings(token: string, chips: ChipSearch, byId: Map<string, Placeholder>): string[] {
   const decoded = decodePlaceholderToken(token);
-  if (!decoded) return [];
+  if (!decoded) {
+    const builtin = builtinLabel(token);
+    return builtin ? [builtin] : [];
+  }
   const ph = byId.get(decoded.id);
   if (!ph) return decoded.label ? [decoded.label] : [];
   return [
@@ -398,6 +418,10 @@ export interface ReplaceSummary {
   /** Hits that were chips. A chip is changed from its own pop-out, never by a text replace. */
   chips: number;
 }
+
+/** True where `insert` would put a blueprint chip into a field that refuses one. */
+export const refusesBlueprintInsert = (target: SearchTarget, insert: string, blueprints: ReadonlySet<string>): boolean =>
+  !target.blueprintChips && dropBlueprintChips(insert, blueprints).dropped > 0;
 
 /**
  * Replace every match in one pass.

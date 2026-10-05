@@ -1,6 +1,7 @@
 import type { Placeholder } from '@/types';
 import { decodePlaceholderToken, hasPlaceholders, parsePlaceholderText } from './placeholders';
 import { mapPreservingIdentity } from './utils';
+import { builtinLabel } from './builtinPlaceholders';
 
 /**
  * The one name stat code sees for a stat or a trait.
@@ -24,7 +25,7 @@ export function statCodeName(name: string | undefined, placeholders: readonly Pl
   return parsePlaceholderText(name)
     .map((segment) => (segment.type === 'text'
       ? segment.value
-      : nameById.get(decodePlaceholderToken(segment.token)?.id ?? '') ?? ''))
+      : builtinLabel(segment.token) ?? nameById.get(decodePlaceholderToken(segment.token)?.id ?? '') ?? ''))
     .join('')
     .replace(/\s+/g, ' ')
     .trim();
@@ -41,3 +42,6 @@ export function statCodeNamed<T extends { name: string }>(
     return name === stat.name ? stat : { ...stat, name };
   });
 }
+
+/** Whether `entities` keys an entity by this code name: only a named one gets a key. */
+export const hasEntityKey = (name: string): boolean => name !== '';

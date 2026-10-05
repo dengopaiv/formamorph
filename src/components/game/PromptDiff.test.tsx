@@ -3,13 +3,15 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PromptDiff, PromptDiffModeToggle } from './PromptDiff';
 import { SHIPPED_PROMPT_DEFAULTS } from '@/lib/worldPrompt';
+import { encodePlaceholderToken, newPlaceholder } from '@/lib/placeholders';
 
 /** The shipped narration prompt with one line reworded and one guideline dropped, as an author would. */
 const REWORDED = 'grim, weather-beaten prose';
+const BACKGROUND_LORE = '<DICTIONARY|before|format=markdown|header="Background Lore">';
 const authoredNarration = () =>
   SHIPPED_PROMPT_DEFAULTS.narration
     .replace('vivid second-person prose', REWORDED)
-    .replace('## Background Lore\n<DICTIONARY|before>\n\n', '');
+    .replace(BACKGROUND_LORE, '');
 
 const insertions = (container: HTMLElement) =>
   [...container.querySelectorAll('ins')].map((el) => el.textContent).join('');
@@ -32,7 +34,7 @@ describe('PromptDiff', () => {
     for (const word of ['grim', 'weather', 'beaten']) expect(insertions(container)).toContain(word);
     expect(deletions(container)).toContain('vivid');
     // The dropped section leaves its chip struck through whole rather than in pieces.
-    expect(deletions(container)).toContain('<DICTIONARY|before>');
+    expect(deletions(container)).toContain(BACKGROUND_LORE);
   });
 
   it('reads as the world’s prompt past the strikethroughs, and as the default past the insertions', () => {
@@ -64,6 +66,29 @@ describe('PromptDiff', () => {
     );
     expect(container.querySelectorAll('ins, del')).toHaveLength(0);
     expect(container.textContent).toBe(SHIPPED_PROMPT_DEFAULTS.statUpdates);
+  });
+});
+
+describe('PromptDiff: placeholder chips', () => {
+  const weather = newPlaceholder('Weather', ['sleet', 'fog']);
+  const chipFor = (id: string) => encodePlaceholderToken({ id, mode: 'world', placementId: 'p1' });
+  const chipTexts = (container: HTMLElement) => [...container.querySelectorAll('[data-chip]')].map((el) => el.textContent);
+
+  it.each(['changes', 'raw'] as const)('draws a placeholder token as a chip named for its placeholder in %s', (mode) => {
+    const token = chipFor(weather.id);
+    const text = `${SHIPPED_PROMPT_DEFAULTS.choices}
+The weather today: ${token}.`;
+    const { container } = render(<PromptDiff kind="choices" text={text} mode={mode} placeholders={[weather]} />);
+    expect(chipTexts(container)).toEqual(['Weather']);
+    expect(container.textContent).not.toContain('{{ph:');
+  });
+
+  it('draws a placeholder the world no longer defines under a neutral name', () => {
+    const text = `${SHIPPED_PROMPT_DEFAULTS.choices}
+${chipFor('gone')}`;
+    const { container } = render(<PromptDiff kind="choices" text={text} mode="changes" placeholders={[weather]} />);
+    expect(chipTexts(container)).toEqual(['Placeholder']);
+    expect(container.textContent).not.toContain('{{ph:');
   });
 });
 

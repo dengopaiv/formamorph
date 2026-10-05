@@ -277,6 +277,17 @@
       "ambientSound": null
     },
     {
+      "id": "64c2212e-cf1a-42b0-8d76-3b04252b4f43",
+      "name": "The Surveyor's Camp",
+      "parentId": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
+      "playerDescription": "A collapsed canvas shelter inside the Hollow Fig: ration tins, a waterproof journal, and a hand-drawn map missing its other half.",
+      "aiDescription": "The surveyor's camp inside the Hollow Fig, left behind by {{ph:12382226-bdc4-45aa-a9a4-1089bec1c173:world:94ecb21a-d775-423f-98de-00bbedc5a529}}: a collapsed canvas shelter, ration tins (safe food — they restore Satiety with no risk), a waterproof journal, and a hand-drawn map fragment marking the Veilbreak east of the fig. The journal is precise and calm until its final entry: \"Moths all went east at dusk. So will I, at first light.\"",
+      "aiSummary": "Surveyor's camp: abandoned shelter with safe ration tins, a journal, and a map to the Veilbreak.",
+      "imageTags": "abandoned campsite inside hollow tree, canvas tarp, tin cans, weathered journal, hand-drawn map",
+      "backgroundImage": null,
+      "ambientSound": null
+    },
+    {
       "id": "f0977527-8c51-47a3-b0d9-f2efdd11709c",
       "name": "The Veilbreak",
       "parentId": "1725037201878",
@@ -290,38 +301,58 @@
   "connections": [
     {
       "id": "d0b02078-0fd4-4941-a971-7d31e60a799c",
-      "from": "952e1bae-8503-46b7-9a66-15e05d3ec38c",
-      "to": "343d2396-c459-44f2-bf1a-8df30863d44e",
-      "twoWay": true,
-      "aiHint": "along a spine of roots above the waterline"
+      "a": "952e1bae-8503-46b7-9a66-15e05d3ec38c",
+      "b": "343d2396-c459-44f2-bf1a-8df30863d44e",
+      "aToB": {
+        "hint": "along a spine of roots above the waterline"
+      },
+      "bToA": {
+        "hint": "along a spine of roots above the waterline"
+      }
     },
     {
       "id": "28097286-1991-4afe-b9a0-9ef0a5110270",
-      "from": "952e1bae-8503-46b7-9a66-15e05d3ec38c",
-      "to": "1ca86d9a-0690-4865-be91-3c6ee21b53ea",
-      "twoWay": true,
-      "aiHint": "where the hollow's water drains into the channels"
+      "a": "952e1bae-8503-46b7-9a66-15e05d3ec38c",
+      "b": "1ca86d9a-0690-4865-be91-3c6ee21b53ea",
+      "aToB": {
+        "hint": "where the hollow's water drains into the channels"
+      },
+      "bToA": {
+        "hint": "where the hollow's water drains into the channels"
+      }
     },
     {
       "id": "091b2a03-4e2b-4754-aee8-8d58ff35b53a",
-      "from": "343d2396-c459-44f2-bf1a-8df30863d44e",
-      "to": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
-      "twoWay": true,
-      "aiHint": "following the fig's colossal roots home"
+      "a": "343d2396-c459-44f2-bf1a-8df30863d44e",
+      "b": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
+      "aToB": {
+        "hint": "following the fig's colossal roots home"
+      },
+      "bToA": {
+        "hint": "following the fig's colossal roots home"
+      }
     },
     {
       "id": "ca91b347-3f53-4deb-b728-b2c4e91d00d9",
-      "from": "1ca86d9a-0690-4865-be91-3c6ee21b53ea",
-      "to": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
-      "twoWay": true,
-      "aiHint": "hauling out of the water at the fig's knees"
+      "a": "1ca86d9a-0690-4865-be91-3c6ee21b53ea",
+      "b": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
+      "aToB": {
+        "hint": "hauling out of the water at the fig's knees"
+      },
+      "bToA": {
+        "hint": "hauling out of the water at the fig's knees"
+      }
     },
     {
       "id": "b1bbae38-3e93-4f25-a962-f2ed78613415",
-      "from": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
-      "to": "f0977527-8c51-47a3-b0d9-f2efdd11709c",
-      "twoWay": true,
-      "aiHint": "a hard eastward climb — the same way the moths go at dusk"
+      "a": "2dcf2b34-f694-4018-bfca-83a02db92e7a",
+      "b": "f0977527-8c51-47a3-b0d9-f2efdd11709c",
+      "aToB": {
+        "hint": "a hard eastward climb — the same way the moths go at dusk"
+      },
+      "bToA": {
+        "hint": "a hard eastward climb — the same way the moths go at dusk"
+      }
     }
   ],
   "entities": [
@@ -489,24 +520,6 @@
         "952e1bae-8503-46b7-9a66-15e05d3ec38c",
         "1ca86d9a-0690-4865-be91-3c6ee21b53ea",
         "f0977527-8c51-47a3-b0d9-f2efdd11709c"
-      ]
-    },
-    {
-      "id": "e967d424-3fd8-4150-bf78-465060e9beb9",
-      "name": "The Surveyor's Camp",
-      "aliases": [
-        "camp"
-      ],
-      "type": "Object",
-      "playerDescription": "A collapsed canvas shelter inside the Hollow Fig: ration tins, a waterproof journal, and a hand-drawn map missing its other half.",
-      "aiDescription": "The surveyor's camp inside the Hollow Fig, left behind by {{ph:12382226-bdc4-45aa-a9a4-1089bec1c173:world:94ecb21a-d775-423f-98de-00bbedc5a529}}: a collapsed canvas shelter, ration tins (safe food — they restore Satiety with no risk), a waterproof journal, and a hand-drawn map fragment marking the Veilbreak east of the fig. The journal is precise and calm until its final entry: \"Moths all went east at dusk. So will I, at first light.\"",
-      "aiSummary": "Surveyor's camp: abandoned shelter with safe ration tins, a journal, and a map to the Veilbreak.",
-      "imageTags": "abandoned campsite inside hollow tree, canvas tarp, tin cans, weathered journal, hand-drawn map",
-      "images": [],
-      "sound": null,
-      "model": null,
-      "locations": [
-        "2dcf2b34-f694-4018-bfca-83a02db92e7a"
       ]
     }
   ],

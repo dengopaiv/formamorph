@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Pencil, RefreshCw, Loader2 } from "lucide-react";
-import { EntityVisual, hasEntityVisual } from '../game/EntityVisual';
-import AudioPlayer from '../game/AudioPlayer';
-import { usePlaceholderResolver } from "@/lib/usePlaceholderResolver";
+import { EntityCardBody, EntityDescription } from '../game/EntityCard';
+import { useEntityTextResolver } from "@/lib/usePlaceholderResolver";
 import { useEntityVisualPreference } from "@/lib/useEntityVisualPreference";
 import { useEntityGallery } from "@/lib/useEntityGallery";
 import type { Entity } from "@/types";
@@ -30,7 +28,7 @@ export const EntityModal = ({ entity, isOpen, onOpenChange, editing }: {
   onOpenChange: (open: boolean) => void;
   editing?: EntityDescriptionEditing;
 }) => {
-  const resolvePH = usePlaceholderResolver();
+  const resolveEntityText = useEntityTextResolver();
   const { preference, onPreferenceChange } = useEntityVisualPreference(entity?.id);
   const { imageIndex, onImageStep } = useEntityGallery(entity);
 
@@ -105,28 +103,17 @@ export const EntityModal = ({ entity, isOpen, onOpenChange, editing }: {
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={undefined} className="sm:max-w-[800px] h-[90dvh] flex flex-col">
+      <DialogContent surface="entity" aria-describedby={undefined} className="sm:max-w-[800px] h-[90dvh] flex flex-col">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>{entity.name}</DialogTitle>
         </DialogHeader>
-        <div className="flex-grow min-h-0 flex flex-col gap-4 p-4">
-          {/* Picture takes 3/4 of the body height (aspect ratio preserved); description fills the rest. */}
-          {hasEntityVisual(entity) && (
-            <div className="flex-[3] min-h-0 flex items-center justify-center">
-              <EntityVisual
-                entity={entity}
-                preference={preference}
-                onPreferenceChange={onPreferenceChange}
-                imageIndex={imageIndex}
-                onImageStep={onImageStep}
-              />
-            </div>
-          )}
-          {/* Scroll area whose content sits vertically centered when short (min-h-full + justify-center)
-              and scrolls from the top when long. */}
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="min-h-full flex flex-col justify-center">
-              <div className="flex flex-col gap-4">
+        <EntityCardBody
+          entity={entity}
+          preference={preference}
+          onPreferenceChange={onPreferenceChange}
+          imageIndex={imageIndex}
+          onImageStep={onImageStep}
+        >
               {mode === 'edit' ? (
                 <div className="flex flex-col gap-2">
                   <Textarea
@@ -151,12 +138,7 @@ export const EntityModal = ({ entity, isOpen, onOpenChange, editing }: {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2">
-                  {description ? (
-                    <p>{resolvePH(description)}</p>
-                  ) : (
-                    <p className="italic text-muted-foreground">No description provided.</p>
-                  )}
+                <EntityDescription text={description} resolveText={(text) => resolveEntityText(entity, text)}>
                   {editing && (
                     <div className="flex gap-2 justify-end items-center">
                       {regenError && (
@@ -183,15 +165,9 @@ export const EntityModal = ({ entity, isOpen, onOpenChange, editing }: {
                       </Tip>
                     </div>
                   )}
-                </div>
+                </EntityDescription>
               )}
-              {entity.sound && (
-                <AudioPlayer src={entity.sound.data} className="w-full" />
-              )}
-              </div>
-            </div>
-          </ScrollArea>
-        </div>
+        </EntityCardBody>
       </DialogContent>
     </Dialog>
   );

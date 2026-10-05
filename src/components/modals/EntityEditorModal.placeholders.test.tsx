@@ -6,13 +6,13 @@ import { phValues } from '@/test/placeholderValues';
 import type { Entity } from '@/types';
 
 vi.mock('@/services/EntityStorageService', () => ({
-  default: { getEntityData: vi.fn(), storeEntity: vi.fn() },
+  default: { getEntityData: vi.fn(), getEntityMetadata: vi.fn().mockResolvedValue([]), storeEntity: vi.fn() },
 }));
 vi.mock('@/components/game/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ text }: { text: string }) => <div data-testid="md">{text}</div>,
 }));
-// The Character tab's fields reach into settings and image generation; the tab under test is the other one.
-vi.mock('@/managers/EntityFields', () => ({ default: () => null }));
+// The field tabs reach into settings and image generation; the tab under test is another one.
+vi.mock('@/managers/EntityFields', () => ({ EntityProfileFields: () => null, EntityDescriptionFields: () => null }));
 
 const draft: Entity = {
   id: 'e1',

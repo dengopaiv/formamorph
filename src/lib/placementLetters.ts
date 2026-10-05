@@ -8,9 +8,13 @@ import {
 } from './placeholders';
 import type { PlaceholderSegment, PlaceholderToken } from './placeholders';
 import { allPlaceholders, type PlaceholderOwners } from './placeholderHomes';
+import { builtinLabel } from './builtinPlaceholders';
 import { qualifiedPlaceholderName } from './placeholderTree';
 import { sortedDescriptors } from './statDescriptorGeometry';
 import { inAuthoredOrder, traitOrderIndex } from './traitEffects';
+import { entityTexts as entityTextFields } from './entityTexts';
+import { openingTexts } from './openings';
+import { overviewTexts } from './overviewTexts';
 
 /**
  * Placement letters — how a placed chip reads on an editor surface.
@@ -84,8 +88,8 @@ export interface PlacementWorld {
   placeholders?: Placeholder[];
 }
 
-const entityTexts = (e: Entity) => present([e.name, ...(e.aliases ?? []), e.playerDescription, e.aiDescription, e.aiSummary, e.imageTags]);
-const locationTexts = (l: GameLocation) => present([l.name, l.playerDescription, l.aiDescription, l.aiSummary, l.description, l.imageTags]);
+const entityTexts = (e: Entity) => present(entityTextFields(e));
+const locationTexts = (l: GameLocation) => present([l.name, l.playerDescription, l.aiDescription, l.aiSummary, l.description, l.imageTags, ...openingTexts(l)]);
 const traitTexts = (t: Trait | TraitGroup) => present([t.name, t.playerDescription, t.aiDescription]);
 /** Bands run by threshold, the order the player meets them in, whatever order the author listed them. */
 const statTexts = (s: Stat) => present([s.name, s.description, ...sortedDescriptors(s).map((d) => d.description)]);
@@ -108,7 +112,7 @@ export function worldPlacementTexts(world: PlacementWorld): string[] {
     ...(world.traitGroups ?? []).flatMap(traitTexts),
     ...(world.stats ?? []).flatMap(statTexts),
     ...(world.dictionaries ?? []).flatMap(entryTexts),
-    ...present([ov?.systemPrompt, ov?.readme, ov?.introReadme, ov?.openingCue]),
+    ...present(overviewTexts(ov)),
     ...valueTexts(allPlaceholders(world)),
   ];
 }
@@ -240,6 +244,8 @@ export function labelPlaceholders(
   return parsePlaceholderText(text).map((seg) => {
     if (seg.type === 'text') return seg.value;
     const token = decodePlaceholderToken(seg.token);
+    const builtin = builtinLabel(seg.token);
+    if (builtin) return seg.token === text ? builtin : `{${builtin}}`;
     if (!token) return '';
     const name = chipPathName(token, placeholders, options);
     const shown = name == null

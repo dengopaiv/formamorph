@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useResetOnOpen } from '@/lib/useResetOnOpen';
+import { useMountedRef } from '@/lib/useMountedRef';
 import { filesFrom } from '@/lib/importFiles';
-import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { Archive } from 'lucide-react';
 import {
   Dialog,
@@ -13,24 +14,27 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { BreadcrumbLabel, BreadcrumbTip } from '@/components/ui/breadcrumb-picker';
 import {
   buildBackup,
   saveBackup,
   listBackupItems,
-  parseBackup,
+  readBackupIndex,
   analyzeBackup,
-  applyBackup,
-  itemLabel,
+  restoreBackup,
+  optimizes,
   BACKUP_CATEGORIES,
   CATEGORY_LABELS,
   type BackupCategory,
+  type BackupIndex,
   type BackupItem,
   type CategoryPlan,
 } from '@/lib/backup';
-import { applyWorldOptimize, applyEntityImagesOptimize, countWorldImages, type OptimizeMode } from '@/lib/imageOptim';
-import { entityImages } from '@/lib/entityImages';
+import type { OptimizeMode } from '@/lib/imageOptim';
+import { supportsWebp } from '@/lib/imageOptimWorkerClient';
 import { withOptimizeProgress } from '@/lib/optimizeProgress';
-import type { World, Entity } from '@/types';
+import { targetAttribute } from '@/lib/surface/surfaceTargets';
 
 const OPTIMIZE_MODES: { value: OptimizeMode; label: string }[] = [
   { value: 'off', label: 'Keep as-is' },
@@ -94,49 +98,53 @@ function CategoryTree({
   onToggleOverwrite?: (c: BackupCategory, on: boolean) => void;
 }) {
   return (
-    <div className="flex max-h-[55vh] flex-col gap-2 overflow-y-auto pr-1">
-      {groups.map(({ category, rows }) => {
-        const sel = selected[category];
-        const onCount = rows.filter((r) => sel.has(r.id)).length;
-        const parent = onCount === 0 ? false : onCount === rows.length ? true : 'indeterminate';
-        const hasConflicts = rows.some((r) => r.exists);
-        return (
-          <div key={category} className="rounded-md border">
-            <div className="flex items-center justify-between gap-2 border-b p-2">
-              <label className="flex items-center gap-2 text-label font-medium">
-                <Checkbox checked={parent} onCheckedChange={(v) => onToggleAll(category, v === true)} />
-                {CATEGORY_LABELS[category]}
-                <span className="font-normal text-muted-foreground">
-                  ({onCount}/{rows.length})
-                </span>
-              </label>
-              {overwrite && onToggleOverwrite && hasConflicts && (
-                <label className="flex items-center gap-1.5 text-meta">
-                  <Checkbox
-                    checked={overwrite[category]}
-                    onCheckedChange={(v) => onToggleOverwrite(category, v === true)}
-                  />
-                  Overwrite existing
+    <ScrollArea className="max-h-[55dvh]">
+      <div className="flex flex-col gap-2">
+        {groups.map(({ category, rows }) => {
+          const sel = selected[category];
+          const onCount = rows.filter((r) => sel.has(r.id)).length;
+          const parent = onCount === 0 ? false : onCount === rows.length ? true : 'indeterminate';
+          const hasConflicts = rows.some((r) => r.exists);
+          return (
+            <div key={category} className="rounded-md border">
+              <div className="flex items-center justify-between gap-2 border-b p-2">
+                <label className="flex items-center gap-2 text-label font-medium">
+                  <Checkbox checked={parent} onCheckedChange={(v) => onToggleAll(category, v === true)} />
+                  {CATEGORY_LABELS[category]}
+                  <span className="font-normal text-muted-foreground">
+                    ({onCount}/{rows.length})
+                  </span>
                 </label>
-              )}
+                {overwrite && onToggleOverwrite && hasConflicts && (
+                  <label className="flex items-center gap-1.5 text-meta">
+                    <Checkbox
+                      checked={overwrite[category]}
+                      onCheckedChange={(v) => onToggleOverwrite(category, v === true)}
+                    />
+                    Overwrite existing
+                  </label>
+                )}
+              </div>
+              <div className="flex flex-col p-1">
+                {rows.map((r) => (
+                  <BreadcrumbTip key={r.id} breadcrumb={r.breadcrumb}>
+                    <label className="flex items-center gap-2 rounded px-2 py-1 text-label hover:bg-muted/50">
+                      <Checkbox checked={sel.has(r.id)} onCheckedChange={(v) => onToggleItem(category, r.id, v === true)} />
+                      <BreadcrumbLabel name={r.label} breadcrumb={r.breadcrumb} />
+                      {r.exists && (
+                        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                          exists
+                        </span>
+                      )}
+                    </label>
+                  </BreadcrumbTip>
+                ))}
+              </div>
             </div>
-            <div className="flex flex-col p-1">
-              {rows.map((r) => (
-                <label key={r.id} className="flex items-center gap-2 rounded px-2 py-1 text-label hover:bg-muted/50">
-                  <Checkbox checked={sel.has(r.id)} onCheckedChange={(v) => onToggleItem(category, r.id, v === true)} />
-                  <span className="truncate">{r.label}</span>
-                  {r.exists && (
-                    <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      exists
-                    </span>
-                  )}
-                </label>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+    </ScrollArea>
   );
 }
 
@@ -150,12 +158,14 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
   const fileRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>('home');
   const [busy, setBusy] = useState(false);
+  const mounted = useMountedRef();
 
   // Backup state
   const [items, setItems] = useState<Record<BackupCategory, BackupItem[]> | null>(null);
   const [exportSel, setExportSel] = useState<SelState>(emptySel);
 
   // Restore state
+  const [index, setIndex] = useState<BackupIndex | null>(null);
   const [plans, setPlans] = useState<CategoryPlan[] | null>(null);
   const [restoreSel, setRestoreSel] = useState<SelState>(emptySel);
   const [overwrite, setOverwrite] = useState<Record<BackupCategory, boolean>>(emptyFlags);
@@ -167,6 +177,7 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
     setBusy(false);
     setItems(null);
     setExportSel(emptySel());
+    setIndex(null);
     setPlans(null);
     setRestoreSel(emptySel());
     setOverwrite(emptyFlags());
@@ -221,8 +232,8 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
     .map((p) => ({
       category: p.category,
       rows: [
-        ...p.fresh.map((r) => ({ id: r.id, label: itemLabel(r) })),
-        ...p.conflicts.map((r) => ({ id: r.id, label: itemLabel(r), exists: true })),
+        ...p.fresh.map((r) => ({ id: r.id, label: r.label, breadcrumb: r.breadcrumb })),
+        ...p.conflicts.map((r) => ({ id: r.id, label: r.label, breadcrumb: r.breadcrumb, exists: true })),
       ],
     }));
   const restoreCount = BACKUP_CATEGORIES.reduce((n, c) => n + restoreSel[c].size, 0);
@@ -234,8 +245,10 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
     if (!file) return;
     setBusy(true);
     try {
-      const bundle = parseBackup(await file.text());
-      const analyzed = await analyzeBackup(bundle);
+      const read = await readBackupIndex(file);
+      const analyzed = await analyzeBackup(read);
+      if (!mounted.current) return;
+      setIndex(read);
       setPlans(analyzed);
       const sel = emptySel();
       for (const p of analyzed) sel[p.category] = new Set([...p.fresh, ...p.conflicts].map((r) => r.id));
@@ -243,9 +256,9 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
       setOverwrite(emptyFlags());
       setStep('restore-what');
     } catch (err) {
-      toast.error((err as Error).message);
+      toastError(err, 'Failed to read the backup');
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -253,71 +266,47 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
     setBusy(true);
     try {
       await saveBackup(await buildBackup(exportSel));
-      setStep('backup-done');
+      if (mounted.current) setStep('backup-done');
     } catch (err) {
-      toast.error(`Backup failed: ${(err as Error).message}`);
+      toastError(err, { headline: `Backup failed: ${(err as Error).message}` });
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
   const handleRestore = async () => {
-    if (!plans) return;
+    if (!plans || !index) return;
     setBusy(true);
     try {
-      // How many images the chosen modes will touch across the ticked items, for the progress dialog.
-      const ticked = (p: CategoryPlan) => [...p.fresh, ...p.conflicts].filter((r) => restoreSel[p.category].has(r.id));
-      const totalImages = plans.reduce((n, p) => {
-        if (p.category === 'worlds' && worldOpt !== 'off')
-          return n + ticked(p).reduce((m, r) => m + countWorldImages(r.data as World), 0);
-        if (p.category === 'entities' && entityOpt !== 'off')
-          return n + ticked(p).reduce((m, r) => m + entityImages(r.data as Entity).length, 0);
-        return n;
+      // Restore only the ticked items; overwrite still gates whether a ticked conflict replaces the existing one.
+      const ticked = plans.map((p) => {
+        const keep = (r: CategoryPlan['fresh'][number]) => restoreSel[p.category].has(r.id);
+        return { category: p.category, fresh: p.fresh.filter(keep), conflicts: p.conflicts.filter(keep) };
+      });
+      const modes = { worlds: worldOpt, entities: entityOpt };
+      // How many images the chosen modes will touch, for the progress dialog.
+      const totalImages = ticked.reduce((n, p) => {
+        if (!optimizes(modes, p.category)) return n;
+        const written = [...p.fresh, ...(overwrite[p.category] ? p.conflicts : [])];
+        return n + written.reduce((m, r) => m + r.images, 0);
       }, 0);
 
-      // Restore only the ticked items; overwrite still gates whether a ticked conflict replaces the existing
-      // one. Sequential (not Promise.all) so the progress ticks stay monotonic — the encode worker
-      // serializes the images anyway.
-      const restore = async (tick: (done: number) => void) => {
-        let done = 0;
-        // Optimize/downscale a world or entity record's images in place before it's written (no-op for 'off').
-        const optimize = async (category: BackupCategory, rec: { id: string; [k: string]: unknown }) => {
-          if (category === 'worlds' && worldOpt !== 'off') {
-            const world = rec.data as World;
-            const data = await applyWorldOptimize(world, worldOpt, (d) => tick(done + d));
-            done += countWorldImages(world);
-            return { ...rec, data, thumbnail: data.worldOverview?.thumbnail ?? (rec as { thumbnail?: string }).thumbnail };
-          }
-          if (category === 'entities' && entityOpt !== 'off') {
-            const data = await applyEntityImagesOptimize(rec.data as Entity, entityOpt, () => tick(++done));
-            return { ...rec, data };
-          }
-          return rec;
-        };
-        const filtered: CategoryPlan[] = [];
-        for (const p of plans) {
-          const rows = async (list: CategoryPlan['fresh']) => {
-            const out: CategoryPlan['fresh'] = [];
-            for (const r of list.filter((r) => restoreSel[p.category].has(r.id))) out.push(await optimize(p.category, r));
-            return out;
-          };
-          filtered.push({ category: p.category, fresh: await rows(p.fresh), conflicts: await rows(p.conflicts) });
-        }
-        return filtered;
-      };
-      const filtered = totalImages ? await withOptimizeProgress(totalImages, restore) : await restore(() => {});
-      await applyBackup(filtered, overwrite);
-      setStep('restore-done');
+      // The worker reads, optimizes and writes each record in turn; the WebP probe needs this thread's DOM.
+      // It runs to the end even if the dialog closes: stopping midway would leave half a restore.
+      const request = { index, plans: ticked, overwrite, modes, webpSupported: supportsWebp() };
+      if (totalImages) await withOptimizeProgress(totalImages, (tick) => restoreBackup(request, tick));
+      else await restoreBackup(request);
+      if (mounted.current) setStep('restore-done');
       setTimeout(() => window.location.reload(), 900);
     } catch (err) {
-      toast.error(`Restore failed: ${(err as Error).message}`);
-      setBusy(false);
+      toastError(err, { headline: `Restore failed: ${(err as Error).message}` });
+      if (mounted.current) setBusy(false);
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent surface="backup" className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Archive className="h-4 w-4" /> Backup &amp; Restore</DialogTitle>
           <DialogDescription>
@@ -333,8 +322,8 @@ export function BackupRestoreDialog({ open, onOpenChange }: { open: boolean; onO
         <div className="py-2">
           {step === 'home' && (
             <div className="flex flex-col gap-3">
-              <Button onClick={() => setStep('backup-what')}>Backup</Button>
-              <Button variant="outline" onClick={pickFile} disabled={busy}>
+              <Button onClick={() => setStep('backup-what')} {...targetAttribute('backup', 'start-backup')}>Backup</Button>
+              <Button variant="outline" onClick={pickFile} disabled={busy} {...targetAttribute('backup', 'start-restore')}>
                 Restore
               </Button>
             </div>

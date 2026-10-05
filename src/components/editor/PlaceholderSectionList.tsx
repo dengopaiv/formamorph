@@ -41,7 +41,9 @@ export const PlaceholderRowPath = ({ row }: { row: ChipRow }) => (
  * its chips drawn. `portal={false}` keeps the list inside the dialog's own subtree, where the wheel reaches
  * it and a native `max-h` is all the scrolling it needs.
  */
-export function PlaceholderSectionList({ rows, selectedId, onSelect, placeholders, empty = 'Select placeholder', footer, trigger, className }: {
+export function PlaceholderSectionList({
+  rows, selectedId, onSelect, placeholders, empty = 'Select placeholder', footer, trigger, className,
+}: {
   rows: readonly ChipRow[];
   /** The placeholder the picker stands on, or `''` while it stands on none. */
   selectedId: string;
@@ -59,8 +61,7 @@ export function PlaceholderSectionList({ rows, selectedId, onSelect, placeholder
 }) {
   const [open, setOpen] = useState(false);
   const selected = rows.find((row) => isPicked(rowId(row), selectedId));
-  const content = selected
-    ? <PlaceholderRowPath row={selected} />
+  const content = selected ? <PlaceholderRowPath row={selected} />
     : <span className="truncate text-muted-foreground">{empty}</span>;
 
   return (
@@ -98,7 +99,7 @@ export function PlaceholderSectionList({ rows, selectedId, onSelect, placeholder
               </button>
             </Fragment>
           ))}
-          {!rows.length && <p className="px-2 py-1.5 text-helper text-muted-foreground">No placeholders.</p>}
+          {!rows.length && <p className="px-2 py-1.5 text-helper text-muted-foreground">No placeholders</p>}
         </div>
         {footer?.(() => setOpen(false))}
       </PopoverContent>

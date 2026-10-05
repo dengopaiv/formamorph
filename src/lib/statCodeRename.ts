@@ -16,16 +16,22 @@
 import { javascriptLanguage } from '@codemirror/lang-javascript';
 import type { SyntaxNode } from '@lezer/common';
 import type { Placeholder, Stat } from '@/types';
-import type { PlaceholderOwners } from './placeholderHomes';
+import { canBePlayer } from './bearers';
+import type { PlaceholderOwnerRef, PlaceholderOwners } from './placeholderHomes';
 import {
   placeholderPathMap, walkPlaceholderPath,
   type PlaceholderPathMap, type PlaceholderPathNode, type PlaceholderPathSource,
 } from './statCodePaths';
 import { statCodeName } from './statCodeNames';
+import type { TraitHolders } from './statCodeTraits';
 import { boxCode, STAT_CODE_TIMINGS, type StatCodeTiming } from './statCodeTiming';
 
 /** The name-keyed maps a rename can reach. */
 export type RenameRoot = 'stats' | 'placeholders' | 'traits';
+
+/** Every global a renamed key can hang off: the maps, and the owner globals, whose entries hold trait and
+ *  placeholder maps. */
+type ChainRoot = RenameRoot | 'entities' | 'persona' | 'dictionaries';
 
 /** One key of a member chain hanging off a map, and what it takes to rewrite that key alone. */
 export interface CodeRenameKey {
@@ -73,7 +79,7 @@ function isInnerMember(node: SyntaxNode): boolean {
 }
 
 /** The keys of one chain off `root`, outermost first, cut short at the first key a run would name. */
-function chainAt(node: SyntaxNode, code: string, root: RenameRoot): CodeRenameKey[] | null {
+function chainAt(node: SyntaxNode, code: string, root: ChainRoot): CodeRenameKey[] | null {
   const members: SyntaxNode[] = [];
   let at: SyntaxNode | null = node;
   while (at?.name === 'MemberExpression') {
@@ -99,7 +105,7 @@ function chainAt(node: SyntaxNode, code: string, root: RenameRoot): CodeRenameKe
  * walk asks: whether the author declared a name of their own over the map — in which case none of these
  * members is the sandbox's map and the whole code is left alone — and where each key of each chain sits.
  */
-export function codeRenameChains(code: string, root: RenameRoot): CodeRenameKey[][] {
+export function codeRenameChains(code: string, root: ChainRoot): CodeRenameKey[][] {
   if (!code || !code.includes(root)) return [];
   const found: CodeRenameKey[][] = [];
   const cursor = javascriptLanguage.parser.parse(code).cursor();
@@ -121,14 +127,14 @@ const quoted = (name: string, quote: string) =>
   `${quote}${name.replace(/\\/g, '\\\\').replace(new RegExp(quote, 'g'), `\\${quote}`)}${quote}`;
 
 /** One stretch of code and what replaces it. */
-interface CodeSplice {
+export interface CodeSplice {
   from: number;
   to: number;
   insert: string;
 }
 
 /** `code` with every splice applied. Back to front, so an earlier splice keeps a later one's offsets. */
-const spliced = (code: string, edits: readonly CodeSplice[]): string =>
+export const spliced = (code: string, edits: readonly CodeSplice[]): string =>
   [...edits]
     .sort((a, b) => b.from - a.from)
     .reduce((out, edit) => out.slice(0, edit.from) + edit.insert + out.slice(edit.to), code);
@@ -159,16 +165,17 @@ type NameRenames = ReadonlyMap<string, string>;
  * The keys of one chain that a rename moves, resolved against the map as it read before the edit.
  *
  * Resolution rather than name matching is what keeps a rename of Molly's `Hair` off a world-level
- * `placeholders.Hair`, and what carries it onto the bare-name fallback where the world has no `Hair` of its
- * own. More than one key can move at once: an owner named through a chip is renamed by the same edit that
- * renames the placeholder behind the chip. Each prefix goes through the one walk, so a key that lost to a
+ * `placeholders.Hair`. More than one key can move at once: an owner named through a chip is renamed by the
+ * same edit that renames the placeholder behind the chip. Each prefix goes through the one walk, so a key that lost to a
  * member of its holder is left alone here exactly as it is everywhere else.
  */
-function pathSplices(map: PlaceholderPathMap, chain: readonly CodeRenameKey[], renames: PathRenames): CodeSplice[] {
+function pathSplices(
+  map: PlaceholderPathMap, chain: readonly CodeRenameKey[], renames: PathRenames, start: PlaceholderPathNode | null = null,
+): CodeSplice[] {
   const edits: CodeSplice[] = [];
   const segments = chain.map((key) => key.name);
   for (let at = 0; at < chain.length; at += 1) {
-    const { node, rest } = walkPlaceholderPath(map, segments.slice(0, at + 1));
+    const { node, rest } = walkPlaceholderPath(map, segments.slice(0, at + 1), start);
     if (rest.length || !node) break;
     const moved = renames.get(nodeKey(node));
     if (moved !== undefined) edits.push(rewrittenKey(chain[at], moved));
@@ -176,12 +183,30 @@ function pathSplices(map: PlaceholderPathMap, chain: readonly CodeRenameKey[], r
   return edits;
 }
 
+/** Each owner entry's node as code reaches it before a rename: by code name, and the persona's candidates. */
+interface OwnedStarts {
+  entities: ReadonlyMap<string, PlaceholderPathNode>;
+  dictionaries: ReadonlyMap<string, PlaceholderPathNode>;
+  /** Every playable entity's node, since the editor can't know which one plays. */
+  persona: readonly PlaceholderPathNode[];
+}
+
 /** Every rewrite one rename asks of a stat's code, as the splices each root contributes. */
 interface CodeRewrite {
-  /** The map a rename walks as a tree, and the nodes it moves there. Absent where nothing moves. */
-  paths?: { map: PlaceholderPathMap; renames: PathRenames };
+  /** The map a rename walks as a tree, the nodes it moves there, and where each owner entry's walk starts.
+   *  Absent where nothing moves. */
+  paths?: { map: PlaceholderPathMap; renames: PathRenames; owned: OwnedStarts };
   /** The bare-name lookups that move, per root. */
-  names: ReadonlyMap<RenameRoot, NameRenames>;
+  names: ReadonlyMap<ChainRoot, NameRenames>;
+  /** The trait names that move inside entity trait maps, and whose maps they move in. Absent where none do. */
+  entityTraits?: { moved: NameRenames; holders: TraitHolders };
+}
+
+/** The splices for one entity trait map's key: `traits` at `at`, the trait name after it. */
+function entityTraitSplice(chain: readonly CodeRenameKey[], at: number, moved: NameRenames): CodeSplice | null {
+  const key = chain[at + 1];
+  const to = key && chain[at].name === 'traits' ? moved.get(key.name) : undefined;
+  return to === undefined ? null : rewrittenKey(key, to);
 }
 
 /**
@@ -194,14 +219,43 @@ interface CodeRewrite {
 function rewriteCode(code: string, rewrite: CodeRewrite): { code: string; references: number } {
   const edits: CodeSplice[] = [];
   if (rewrite.paths) {
-    const { map, renames } = rewrite.paths;
+    const { map, renames, owned } = rewrite.paths;
     for (const chain of codeRenameChains(code, 'placeholders')) edits.push(...pathSplices(map, chain, renames));
+    for (const [root, starts] of [['entities', owned.entities], ['dictionaries', owned.dictionaries]] as const) {
+      for (const chain of codeRenameChains(code, root)) {
+        const start = chain[1]?.name === 'placeholders' ? starts.get(chain[0].name) : undefined;
+        if (start) edits.push(...pathSplices(map, chain.slice(2), renames, start));
+      }
+    }
+    for (const chain of codeRenameChains(code, 'persona')) {
+      if (chain[0].name !== 'placeholders') continue;
+      const path = chain.slice(1).map((key) => key.name);
+      // How many steps of the path a start's own tree answers; a trailing member such as `.value` is not one.
+      const reach = (start: PlaceholderPathNode) => path.length - walkPlaceholderPath(map, path, start).rest.length;
+      const movers = owned.persona.map((start) => ({ start, found: pathSplices(map, chain.slice(1), renames, start) }));
+      const mover = movers.find(({ found }) => found.length);
+      if (!mover) continue;
+      // Another playable entity answering as deep may be the one played, so the path stays.
+      const depth = reach(mover.start);
+      if (owned.persona.filter((start) => reach(start) >= depth).length > 1) continue;
+      edits.push(...mover.found);
+    }
   }
   for (const [root, moved] of rewrite.names) {
     for (const chain of codeRenameChains(code, root)) {
       const to = moved.get(chain[0].name);
       if (to !== undefined) edits.push(rewrittenKey(chain[0], to));
     }
+  }
+  if (rewrite.entityTraits) {
+    const { moved, holders } = rewrite.entityTraits;
+    const splices = [
+      ...(holders.persona ? codeRenameChains(code, 'persona').map((chain) => entityTraitSplice(chain, 0, moved)) : []),
+      ...codeRenameChains(code, 'entities')
+        .filter((chain) => holders.entities.includes(chain[0].name))
+        .map((chain) => entityTraitSplice(chain, 1, moved)),
+    ];
+    edits.push(...splices.filter((splice): splice is CodeSplice => splice !== null));
   }
   return { code: edits.length ? spliced(code, edits) : code, references: edits.length };
 }
@@ -226,14 +280,14 @@ const TARGET_ROOTS: Record<string, { root: RenameRoot; kind?: CodeRenameSubject[
  *  not a rename. */
 export function codeRenameTarget(
   itemKey: string, fieldKey: string,
-): { root: RenameRoot; subject?: CodeRenameSubject } | null {
+): { root: RenameRoot; subject?: CodeRenameSubject; traitId?: string } | null {
   if (fieldKey !== 'name') return null;
   const at = itemKey.indexOf(':');
   const target = TARGET_ROOTS[itemKey.slice(0, at)];
   if (!target) return null;
-  return target.kind
-    ? { root: target.root, subject: { kind: target.kind, id: itemKey.slice(at + 1) } }
-    : { root: target.root };
+  const id = itemKey.slice(at + 1);
+  if (target.kind) return { root: target.root, subject: { kind: target.kind, id } };
+  return target.root === 'traits' ? { root: target.root, traitId: id } : { root: target.root };
 }
 
 /** Whether a subject is the entity or book that owns placeholders, rather than an entry of its own. */
@@ -293,6 +347,13 @@ export interface CodeRenameInput {
   stats: readonly Stat[];
   /** Every trait in the world. A placeholder rename moves the code name of a trait whose name carries it. */
   traits?: readonly { name: string }[];
+  /** Every entity in the world. A placeholder rename moves the code name of an entity whose name carries it,
+   *  and follows a playable one's own placeholders into `persona`. */
+  entities?: readonly { id?: string; name: string; persona?: boolean; customPersona?: boolean }[];
+  /** Every dictionary in the world. A rename moves the code name of a book whose name carries it. */
+  dictionaries?: readonly { name: string }[];
+  /** Whose trait maps hold a renamed trait. Absent, only `traits` follows the rename. */
+  traitHolders?: TraitHolders;
   /** The names the other entries of this kind carry. A rename onto one of them is a duplicate, which the
    *  duplicate-name warning already covers, so it gets no offer. */
   otherNames: readonly string[];
@@ -369,16 +430,32 @@ function treeRewrite(
   newName: string,
   stats: readonly { name: string }[],
   traits: readonly { name: string }[],
+  entities: NonNullable<CodeRenameInput['entities']>,
+  dictionaries: readonly { name: string }[],
 ): CodeRewrite {
   const before = sourceNaming(source, subject, oldName);
   const after = sourceNaming(source, subject, newName);
   const renames = movedNodes(before, after, subject, newName);
-  const names = new Map<RenameRoot, NameRenames>();
-  for (const [root, entries] of [['stats', stats], ['traits', traits]] as const) {
+  const names = new Map<ChainRoot, NameRenames>();
+  for (const [root, entries] of [['stats', stats], ['traits', traits], ['entities', entities], ['dictionaries', dictionaries]] as const) {
     const moved = movedNames(entries, before, after);
     if (moved.size) names.set(root, moved);
   }
-  return { paths: renames.size ? { map: placeholderPathMap(before), renames } : undefined, names };
+  // An entity or a book is keyed by its code name, which is what the rename carries.
+  if (subject.kind === 'entity' || subject.kind === 'dictionary') {
+    const root = subject.kind === 'entity' ? 'entities' : 'dictionaries';
+    names.set(root, new Map([...names.get(root) ?? [], [oldName, newName]]));
+  }
+  if (!renames.size) return { names };
+  const map = placeholderPathMap(before);
+  // Later wins a shared code name, as the sandbox keys it.
+  const startsOf = (kind: PlaceholderOwnerRef['kind']) =>
+    new Map([...map.owners.values()].filter((node) => node.owner?.kind === kind).map((node) => [node.name, node]));
+  const persona = entities.flatMap((entity) => {
+    const node = entity.id !== undefined && canBePlayer(entity) ? map.owners.get(entity.id) : undefined;
+    return node ? [node] : [];
+  });
+  return { paths: { map, renames, owned: { entities: startsOf('entity'), dictionaries: startsOf('dictionary'), persona } }, names };
 }
 
 /**
@@ -386,7 +463,7 @@ function treeRewrite(
  * blank name, a name another entry of the same kind already carries, or a name no stat's code references.
  */
 export function planCodeRename(input: CodeRenameInput): CodeRenamePlan | null {
-  const { root, stats, traits = [], otherNames, placeholders, subject } = input;
+  const { root, stats, traits = [], entities = [], dictionaries = [], otherNames, placeholders, subject, traitHolders } = input;
   const from = input.oldName.trim();
   const to = input.newName.trim();
   // Trimmed on both sides of the comparison: the field's text is what an author typed, and a name that
@@ -394,9 +471,13 @@ export function planCodeRename(input: CodeRenameInput): CodeRenamePlan | null {
   if (!from || !to || from === to || otherNames.some((name) => name.trim() === to)) return null;
   // A rename that names its node follows the tree. Without one — a caller that knows only the name — the
   // bare-name form is all that can be proven, which is what every root but `placeholders` has anyway.
+  const moved: NameRenames = new Map([[from, to]]);
   const rewrite: CodeRewrite = placeholders && subject
-    ? treeRewrite(placeholders, subject, from, to, stats, traits)
-    : { names: new Map([[root, new Map([[from, to]])]]) };
+    ? treeRewrite(placeholders, subject, from, to, stats, traits, entities, dictionaries)
+    : {
+      names: new Map(root === 'traits' && traitHolders?.world === false ? [] : [[root, moved]]),
+      ...(root === 'traits' && traitHolders ? { entityTraits: { moved, holders: traitHolders } } : {}),
+    };
   const edits: CodeRenameEdit[] = [];
   let references = 0;
   // Both boxes, because a rename that moved one and left the other would strand the lookups it skipped.

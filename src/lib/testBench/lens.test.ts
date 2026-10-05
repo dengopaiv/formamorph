@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { encodePlaceholderToken, resolvePlaceholders } from '@/lib/placeholders';
-import type { GameLocation, Placeholder, Trait, TraitGroup } from '@/types';
-import { phValues } from '@/test/placeholderValues';
+import type { Entity, GameLocation, Placeholder, Trait, TraitGroup } from '@/types';
+import { phValueId, phValues } from '@/test/placeholderValues';
 import {
-  buildLens, describeBrokenPin, lensLocationOptions, lensPcOptions, lensStatOverrides, resolveLensText,
+  buildLens, describeBrokenPin, lensActiveTraits, lensLocationOptions, lensPcOptions, lensStatOverrides, resolveLensText,
   seedLens, type LensWorld,
 } from './lens';
 
@@ -11,7 +11,7 @@ const hairColor: Placeholder = { id: 'ph-hair', name: 'Hair Color', values: phVa
 const homeland: Placeholder = { id: 'ph-home', name: 'Homeland', values: phValues(['the Reach']) };
 
 const groups: TraitGroup[] = [
-  { id: 'g-origin', name: 'Origin', parentId: null, exclusive: true },
+  { id: 'g-origin', name: 'Origin', parentId: null, maxPicks: 1 },
   { id: 'g-gifts', name: 'Gifts', parentId: null },
 ];
 
@@ -53,7 +53,7 @@ describe('lens options', () => {
   });
 
   it('has no PCs at all in a world with no exclusive group', () => {
-    const flat = world({ traitGroups: groups.map((g) => ({ ...g, exclusive: false })) });
+    const flat = world({ traitGroups: groups.map(({ maxPicks: _max, ...g }) => g) });
     expect(lensPcOptions(flat)).toEqual([]);
   });
 
@@ -172,6 +172,115 @@ describe('pins from every source', () => {
     const w = world({ traits: [...traits, { id: 't-fen', name: 'Fen Blood', isDefault: true, statChanges: [],
       placeholderPins: [{ placeholderId: 'ph-home', value: 'the Fen' }] }] });
     expect(buildLens(w, { pcTraitId: null, locationId: null }).pins).toEqual({ 'ph-home': 'the Fen' });
+  });
+});
+
+describe('pins from owned traits', () => {
+  // Ash's default Tamed pins hair to jet; Wild, its exclusive sibling, is not a default.
+  const ash = (over: Partial<Trait> = {}): LensWorld['entities'] => [{
+    id: 'ash', name: 'Ash',
+    traitGroups: [{ id: 'g-bond', name: 'Bond', parentId: null, maxPicks: 1 }],
+    traits: [
+      { id: 't-tamed', name: 'Tamed', groupId: 'g-bond', statChanges: [], isDefault: true,
+        placeholderPins: [{ placeholderId: 'ph-hair', value: 'jet' }], ...over },
+      { id: 't-wild', name: 'Wild', groupId: 'g-bond', statChanges: [], placeholderPins: [{ placeholderId: 'ph-hair', value: 'ash' }] },
+    ],
+  }];
+
+  it('keeps a cast entity’s owned default out of the world-level pins', () => {
+    const lens = buildLens(world({ entities: ash() }), { pcTraitId: null, locationId: null });
+    expect(lens.pins).toEqual({});
+    expect(buildLens(world({ entities: ash() }), { pcTraitId: 't-sedge', locationId: null }).pinLayers.map((l) => [l.label, l.wins]))
+      .toEqual([['Trait: Sedge-Born', true]]);
+  });
+
+  describe('a blueprint pin', () => {
+    // Sedge-Born pins Hair Color, the blueprint, to its "copper" value by id.
+    const byId = { placeholderId: 'ph-hair', valueId: phValueId('copper'), value: 'copper' };
+    const copy: Placeholder = {
+      id: 'cp-hair', name: 'Hair Color', values: [], blueprintId: 'ph-hair',
+      valueOverrides: { [phValueId('copper')]: { text: { value: 'rust', blueprint: 'copper' } } },
+    };
+    const holder = (over: Partial<Entity>): Entity => ({ id: 'cp', name: 'Newcomer', placeholders: [copy], ...over });
+    const w = (entities: Entity[]) => world({ traits: [{ ...traits[0], placeholderPins: [byId] }, ...traits.slice(1)], entities });
+    const lens = (entities: Entity[]) => buildLens(w(entities), { pcTraitId: 't-sedge', locationId: null });
+
+    it('traces to the Custom Persona entity’s copy under None, valued as the copy rewords it, labeled with the trait', () => {
+      const traced = lens([holder({ customPersona: true })]);
+      expect(traced.pins).toEqual({ 'cp-hair': 'rust' });
+      expect(traced.pinLayers.map((l) => [l.label, l.wins])).toEqual([['Trait: Sedge-Born', true]]);
+      expect(traced.brokenPins).toEqual([]);
+    });
+
+    it('reads the blueprint itself with no marked entity, whoever else holds a copy', () => {
+      expect(lens([]).pins).toEqual({ 'ph-hair': 'copper' });
+      expect(lens([holder({ persona: true })]).pins).toEqual({ 'ph-hair': 'copper' });
+    });
+
+    it('lays nothing for a value the Custom Persona entity’s copy removed', () => {
+      const removed = { ...copy, valueOverrides: { [phValueId('copper')]: { removed: true as const } } };
+      expect(lens([holder({ customPersona: true, placeholders: [removed] })]).pins).toEqual({});
+    });
+  });
+});
+
+describe('the player bearer', () => {
+  // Blueprints: Classes (Paladin pins Hair Color by value id, Wizard) and a default Warded pinning Homeland.
+  const blueprints: TraitGroup[] = [
+    { id: 'g-blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' },
+    { id: 'g-classes', name: 'Classes', parentId: 'g-blueprints', maxPicks: 1 },
+  ];
+  const blueprinted: Trait[] = [
+    {
+      id: 't-paladin', name: 'Paladin', groupId: 'g-classes', statChanges: [], order: 0, isDefault: true,
+      placeholderPins: [{ placeholderId: 'ph-hair', valueId: phValueId('ash'), value: 'ash' }],
+    },
+    { id: 't-wizard', name: 'Wizard', groupId: 'g-classes', statChanges: [], order: 1 },
+    {
+      id: 't-warded', name: 'Warded', groupId: 'g-blueprints', statChanges: [], isDefault: true,
+      placeholderPins: [{ placeholderId: 'ph-home', value: 'the Reach' }],
+    },
+  ];
+  const link = (id: string, originalId: string, kind: 'trait' | 'group', extra = {}) =>
+    ({ id, originalId, kind, originalName: originalId, groupId: null, ...extra });
+  const withBlueprints = (over: Partial<LensWorld> = {}) =>
+    world({ traits: [...traits, ...blueprinted], traitGroups: [...groups, ...blueprints], ...over });
+  const active = (w: LensWorld, pcTraitId: string | null = null) =>
+    lensActiveTraits(w, buildLens(w, { pcTraitId, locationId: null })).map((t) => t.id);
+
+  it('caps the defaults at each group’s max, first in authored order, as a new game does', () => {
+    const twoGifts = groups.map((g) => (g.id === 'g-gifts' ? { ...g, maxPicks: 2 } : g));
+    const gifts = ['t-keen', 't-sharp', 't-quick'].map((id, order): Trait => ({ id, name: id, groupId: 'g-gifts', statChanges: [], order, isDefault: true }));
+    expect(active(world({ traits: gifts, traitGroups: twoGifts }))).toEqual(['t-keen', 't-sharp']);
+  });
+
+  it('leaves Blueprints out: no PC from its groups, no default, no pin', () => {
+    const w = withBlueprints();
+    expect(lensPcOptions(w).map((o) => o.id)).toEqual(['t-sedge', 't-reach']);
+    expect(active(w)).toEqual([]);
+    expect(buildLens(w, { pcTraitId: null, locationId: null }).pins).toEqual({});
+  });
+
+  it('adds the Custom Persona entity’s links as the None player: their PCs, defaults and pins', () => {
+    const newcomer: Entity = { id: 'cp', name: 'Newcomer', customPersona: true, traitLinks: [
+      link('cp-classes', 'g-classes', 'group', { overrides: { 't-paladin': { placeholderPins: {
+        value: [{ placeholderId: 'ph-hair', value: 'jet' }], blueprint: [],
+      } } } }),
+      link('cp-warded', 't-warded', 'trait'),
+    ] };
+    const w = withBlueprints({ entities: [newcomer] });
+    expect(lensPcOptions(w).map((o) => o.id)).toEqual(['t-sedge', 't-reach', 't-paladin', 't-wizard']);
+    expect(active(w)).toEqual(['t-paladin', 't-warded']);
+    expect(buildLens(w, { pcTraitId: null, locationId: null }).pins).toEqual({ 'ph-hair': 'jet', 'ph-home': 'the Reach' });
+    // Picking Wizard retires Paladin, its exclusive sibling in the linked group.
+    expect(active(w, 't-wizard')).toEqual(['t-wizard', 't-warded']);
+  });
+
+  it('reads a Custom Persona entity link’s own default-on over the original’s', () => {
+    const newcomer: Entity = { id: 'cp', name: 'Newcomer', customPersona: true, traitLinks: [
+      link('cp-warded', 't-warded', 'trait', { overrides: { 't-warded': { isDefault: { value: false, blueprint: true } } } }),
+    ] };
+    expect(active(withBlueprints({ entities: [newcomer] }))).toEqual([]);
   });
 });
 

@@ -38,11 +38,12 @@ const WORLD: Placeholder[] = [
 const store: { trait: Trait; rival: Trait; locations: GameLocation[]; writes: Trait[]; rerender: () => void } =
   { trait: sedgeBorn, rival: marshWed, locations: [], writes: [], rerender: () => {} };
 
-vi.mock('@/contexts/GameDataContext', () => ({
-  useGameData: () => ({
+vi.mock('@/contexts/GameDataContext', () => {
+  const world = () => ({
     stats: [],
     traits: [store.trait, store.rival],
     traitGroups: [],
+    entities: [],
     locations: store.locations,
     placeholders: WORLD,
     updateTrait: (next: Trait) => {
@@ -50,8 +51,10 @@ vi.mock('@/contexts/GameDataContext', () => ({
       store.trait = next;
       store.rerender();
     },
-  }),
-}));
+  });
+  // Both readers of the one context, as the real module has.
+  return { useGameData: world, useGameDataOptional: world };
+});
 // The chip fields are Lexical editors this test has no use for; the pin row is what is under test.
 vi.mock('@/components/prompt/PlaceholderField', () => ({
   default: (props: { label: string; value: string }) => <input readOnly aria-label={props.label} value={props.value} />,
@@ -101,6 +104,33 @@ describe('the section help buttons', () => {
 
     renderManager('pins');
     expect(screen.getByRole('button', { name: 'About Placeholder Pins' })).toBeInTheDocument();
+  });
+});
+
+describe('the mode control', () => {
+  it('writes Always On and hides the Default and Player Can Toggle fields, and Optional brings them back', async () => {
+    const user = userEvent.setup();
+    renderManager('availability');
+    expect(screen.getByRole('checkbox', { name: /Enabled by Default/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: 'Always On' }));
+    expect(store.writes[store.writes.length - 1].mode).toBe('alwaysOn');
+    expect(screen.queryByRole('checkbox', { name: /Enabled by Default/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Player Can Toggle/ })).toBeNull();
+    await user.click(screen.getByRole('radio', { name: 'Optional' }));
+    expect(store.writes[store.writes.length - 1].mode).toBeUndefined();
+    expect(screen.getByRole('checkbox', { name: /Player Can Toggle/ })).toBeInTheDocument();
+  });
+
+  it('writes Hidden, selects it, and hides the Default and Player Can Toggle fields', async () => {
+    const user = userEvent.setup();
+    renderManager('availability');
+    await user.click(screen.getByRole('radio', { name: 'Hidden' }));
+    expect(store.writes[store.writes.length - 1].mode).toBe('hidden');
+    expect(screen.getByRole('radio', { name: 'Hidden' })).toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: /Enabled by Default/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Player Can Toggle/ })).toBeNull();
+    await user.click(screen.getByRole('radio', { name: 'Always On' }));
+    expect(store.writes[store.writes.length - 1].mode).toBe('alwaysOn');
   });
 });
 

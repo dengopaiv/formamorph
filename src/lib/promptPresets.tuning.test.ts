@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  activeSamplers, activeReasoning, activeVerbatim,
+  activeSamplers, activeReasoning, activeVerbatim, activeMaxOutput, updateMaxOutput, activeAttachments, updateAttachments,
   updateSamplers, updateReasoning, updateVerbatim, foldTuningIntoUserPresets, presetStoreCodec,
   type PromptPresetStore, type PromptValues,
 } from './promptPresets';
@@ -95,5 +95,58 @@ describe('foldTuningIntoUserPresets (migration)', () => {
   it('is a no-op when all categories are empty', () => {
     const store = userStore();
     expect(foldTuningIntoUserPresets(store, {}, {}, {})).toBe(store);
+  });
+});
+
+describe('preset-scoped Max Output', () => {
+  const summaryCap = { summary: { custom: true, value: 320 } };
+
+  it('persists on the active user preset through the store codec', () => {
+    const store = updateMaxOutput(userStore(), () => summaryCap);
+    const reloaded = presetStoreCodec.parse(presetStoreCodec.serialize(store));
+    expect(activeMaxOutput(reloaded)).toEqual(summaryCap);
+  });
+
+  it('reads empty under a built-in, and its writer leaves a built-in untouched', () => {
+    // A stored entry under a built-in id still resolves to the shipped caps.
+    const shadowed: PromptPresetStore = { activeId: 'simple', presets: [{ id: 'simple', name: 'Simple', values: V, maxOutput: summaryCap }] };
+    expect(activeMaxOutput(shadowed)).toEqual({});
+    expect(updateMaxOutput(builtin, () => summaryCap)).toBe(builtin);
+  });
+
+  it('patches only the active preset', () => {
+    const store: PromptPresetStore = {
+      activeId: 'u2',
+      presets: [{ id: 'u1', name: 'U1', values: V }, { id: 'u2', name: 'U2', values: V }],
+    };
+    const next = updateMaxOutput(store, () => summaryCap);
+    expect(next.presets[0].maxOutput).toBeUndefined();
+    expect(next.presets[1].maxOutput).toEqual(summaryCap);
+  });
+});
+
+describe('preset-scoped Include Attachments', () => {
+  const flags = { narration: false, choices: true };
+
+  it('persists on the active user preset through the store codec', () => {
+    const store = updateAttachments(userStore(), () => flags);
+    const reloaded = presetStoreCodec.parse(presetStoreCodec.serialize(store));
+    expect(activeAttachments(reloaded)).toEqual(flags);
+  });
+
+  it('reads empty under a built-in, and its writer leaves a built-in untouched', () => {
+    const shadowed: PromptPresetStore = { activeId: 'simple', presets: [{ id: 'simple', name: 'Simple', values: V, attachments: flags }] };
+    expect(activeAttachments(shadowed)).toEqual({});
+    expect(updateAttachments(builtin, () => flags)).toBe(builtin);
+  });
+
+  it('patches only the active preset', () => {
+    const store: PromptPresetStore = {
+      activeId: 'u2',
+      presets: [{ id: 'u1', name: 'U1', values: V }, { id: 'u2', name: 'U2', values: V }],
+    };
+    const next = updateAttachments(store, () => flags);
+    expect(next.presets[0].attachments).toBeUndefined();
+    expect(next.presets[1].attachments).toEqual(flags);
   });
 });

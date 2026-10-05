@@ -2,10 +2,17 @@ import { randomUUID } from "@/lib/uuid";
 import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, type ReactNode, type SetStateAction } from 'react';
 import WorldStorageService from '../services/WorldStorageService';
 import { canonicalStringify } from '@/lib/canonicalStringify';
+import { dirtyDiff } from '@/lib/dirtyDiff';
+import { registerDevHook } from '@/lib/devRouter';
 import { migrateWorld, APP_VERSION } from '@/lib/version';
 import { dropLocationFromEntities } from '@/lib/entityPresence';
+import { dropLinksTo, removeBlueprints } from '@/lib/traitLinks';
+import { neededCopies, syncBlueprintCopies } from '@/lib/blueprintCopies';
 import { dropLocationFromConnections } from '@/lib/locationGraph';
+import { removeLocationPromotingChildren } from '@/lib/locationTree';
 import { newLocationPosition } from '@/lib/locationCanvas';
+import { withDefaultDescriptors } from '@/lib/blankWorld';
+import { followRename } from '@/lib/statDescriptors';
 import { renamedPlaceholderValues, repinRenamedValues } from '@/lib/traitEffects';
 import { directChipTargets } from '@/lib/placeholders';
 import {
@@ -20,7 +27,9 @@ import { followedLibraryId } from '@/lib/publishLinks';
 import { useDictionaryStoreState, DictionaryStoreProvider } from '@/contexts/DictionaryStoreContext';
 import { PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
 import { PlacementLettersProvider, useStablePlacementLetters } from '@/contexts/PlacementLettersContext';
-import { worldPlacementLetters } from '@/lib/placementLetters';
+import { EMPTY_LETTERS, worldPlacementLetters } from '@/lib/placementLetters';
+import { worldAllowedPersonas, worldStartPersona } from '@/lib/personaPick';
+import { CodeRenameContext } from '@/lib/useCodeRename';
 import type {
   WorldMetadata,
   WorldOverview,
@@ -57,7 +66,9 @@ function buildWorldData(
   placeholders: Placeholder[],
   placeholderGroups: PlaceholderGroup[],
 ): Omit<World, 'id' | 'version'> {
-  return { worldOverview: overview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders, placeholderGroups };
+  return {
+    worldOverview: overview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders, placeholderGroups,
+  };
 }
 
 function useProvideGameData() {
@@ -108,19 +119,16 @@ function useProvideGameData() {
   const [savedSnapshot, setSavedSnapshot] = useState<string>('');
 
   const addStat = useCallback((newStat: Omit<Stat, 'descriptors'>) => {
-    const defaultDescriptors = [
-      { id: randomUUID(), threshold: 30, description: `${newStat.name} is low` },
-      { id: randomUUID(), threshold: 60, description: `${newStat.name} is medium` },
-      { id: randomUUID(), threshold: 100, description: `${newStat.name} is high` },
-    ];
-    const statWithDescriptors = { ...newStat, descriptors: defaultDescriptors };
-    setStats(prevStats => [...prevStats, statWithDescriptors]);
+    setStats(prevStats => [...prevStats, withDefaultDescriptors(newStat)]);
   }, []);
 
+  // A default descriptor follows the stat's name, so a rename never leaves "New Stat is low" behind.
   const updateStat = useCallback((updatedStat: Stat) => {
-    setStats(prevStats => prevStats.map(stat =>
-      stat.id === updatedStat.id ? updatedStat : stat
-    ));
+    setStats(prevStats => prevStats.map(stat => {
+      if (stat.id !== updatedStat.id) return stat;
+      const descriptors = followRename(stat, updatedStat);
+      return descriptors === updatedStat.descriptors ? updatedStat : { ...updatedStat, descriptors };
+    }));
   }, []);
 
   const removeStat = useCallback((statId: string) => {
@@ -144,7 +152,8 @@ function useProvideGameData() {
   }, []);
 
   const removeLocation = useCallback((locationId: string) => {
-    setLocations(prevLocations => prevLocations.filter(location => location.id !== locationId));
+    // Sub-locations move up to the deleted location's parent, so a delete loses one location only.
+    setLocations(prevLocations => removeLocationPromotingChildren(prevLocations, locationId));
     // Membership is entity-owned, so a deleted location would otherwise stay listed on everyone who
     // belonged to it — invisible in every roster, but riding along into the exported world forever.
     setEntities(prevEntities => dropLocationFromEntities(locationId, prevEntities));
@@ -181,6 +190,15 @@ function useProvideGameData() {
         ? (entity.link === updatedEntity.link
           ? markEdited(updatedEntity, ownedLibraryIds.current.has(followedLibraryId(updatedEntity) ?? ''))
           : updatedEntity)
+        : entity
+    ));
+  }, []);
+
+  // A content edit read off the entity as it stands at write time, so two edits in one tick both land.
+  const editEntity = useCallback((entityId: string, edit: (entity: Entity) => Entity) => {
+    setEntities(prevEntities => prevEntities.map(entity =>
+      entity.id === entityId
+        ? markEdited(edit(entity), ownedLibraryIds.current.has(followedLibraryId(entity) ?? ''))
         : entity
     ));
   }, []);
@@ -226,8 +244,10 @@ function useProvideGameData() {
     ));
   }, []);
 
+  // A link to a gone original resolves to nothing, so its links go with it.
   const removeTrait = useCallback((traitId: string) => {
     setTraits(prevTraits => prevTraits.filter(trait => trait.id !== traitId));
+    setEntities(prevEntities => dropLinksTo(prevEntities, traitId));
   }, []);
 
   const addTraitGroup = useCallback((newGroup: TraitGroup) => {
@@ -241,8 +261,16 @@ function useProvideGameData() {
   }, []);
 
   // Removing a group reparents its direct children (subgroups + traits) to the group's own parent,
-  // rather than orphaning them under a deleted id.
+  // rather than orphaning them under a deleted id. Blueprints detaches its linked items and moves the rest up.
   const removeTraitGroup = useCallback((groupId: string) => {
+    if (traitGroups.find(g => g.id === groupId)?.system === 'blueprints') {
+      const removed = removeBlueprints({ traits, traitGroups }, entities);
+      if (!removed) return;
+      setTraitGroups(removed.traitGroups);
+      setTraits(removed.traits);
+      setEntities(removed.entities);
+      return;
+    }
     setTraitGroups(prev => {
       const parentId = prev.find(g => g.id === groupId)?.parentId ?? null;
       return prev
@@ -253,27 +281,8 @@ function useProvideGameData() {
       const parentId = traitGroups.find(g => g.id === groupId)?.parentId ?? null;
       return prev.map(t => (t.groupId === groupId ? { ...t, groupId: parentId } : t));
     });
-  }, [traitGroups]);
-
-  const addStatUpdate = useCallback((newStatUpdate: StatUpdate) => {
-    setStatUpdates(prevStatUpdates => [...prevStatUpdates, {
-      ...newStatUpdate,
-      messageHistory: newStatUpdate.messageHistory || []
-    }]);
-  }, []);
-
-  const updateStatUpdate = useCallback((updatedStatUpdate: StatUpdate) => {
-    setStatUpdates(prevStatUpdates => prevStatUpdates.map(statUpdate =>
-      statUpdate.id === updatedStatUpdate.id ? {
-        ...updatedStatUpdate,
-        messageHistory: updatedStatUpdate.messageHistory || statUpdate.messageHistory || []
-      } : statUpdate
-    ));
-  }, []);
-
-  const removeStatUpdate = useCallback((statUpdateId: string) => {
-    setStatUpdates(prevStatUpdates => prevStatUpdates.filter(statUpdate => statUpdate.id !== statUpdateId));
-  }, []);
+    setEntities(prevEntities => dropLinksTo(prevEntities, groupId));
+  }, [traits, traitGroups, entities]);
 
   const updateWorldOverview = useCallback((updates: Partial<WorldOverview>) => {
     setWorldOverview(prev => ({ ...prev, ...updates }));
@@ -309,6 +318,8 @@ function useProvideGameData() {
 
     // Handle world overview with validation (migrateWorld already moved any legacy VRM into worldOverview).
     const overview = worldData.worldOverview || defaultOverview;
+    const allowedPersonas = worldAllowedPersonas(overview);
+    const startPersona = worldStartPersona(overview);
     const normalizedOverview: WorldOverview = {
       name: overview.name || defaultOverview.name,
       description: overview.description || defaultOverview.description,
@@ -324,12 +335,13 @@ function useProvideGameData() {
       // Allowlisted like everything above — omitting it here would silently drop a world's authored
       // narration prompt on load, and the next saveWorld would write the loss back to disk.
       ...(overview.promptOverrides ? { promptOverrides: overview.promptOverrides } : {}),
-      // Same allowlist rule. The flag is spread only when it is actually a boolean: absent means "applied
-      // if there is text", which is not the same as `false`.
-      ...(typeof overview.openingCue === 'string' ? { openingCue: overview.openingCue } : {}),
-      ...(typeof overview.openingCueEnabled === 'boolean'
-        ? { openingCueEnabled: overview.openingCueEnabled }
-        : {})
+      // Same allowlist rule. The switch is spread only when it is actually a boolean: absent means on.
+      ...(Array.isArray(overview.openings) ? { openings: overview.openings } : {}),
+      ...(overview.openingWeights ? { openingWeights: overview.openingWeights } : {}),
+      ...(typeof overview.openingsEnabled === 'boolean' ? { openingsEnabled: overview.openingsEnabled } : {}),
+      // Any and the player's default are the absent values.
+      ...(allowedPersonas !== 'any' ? { allowedPersonas } : {}),
+      ...(startPersona ? { startPersona } : {})
     };
     // Replace, never merge: a merge lets a field the normalizer doesn't set survive from the previously
     // loaded world, leaking it into this one and into the next saveWorld.
@@ -339,7 +351,7 @@ function useProvideGameData() {
     const nextStats = Array.isArray(worldData.stats) ? worldData.stats : [];
     const nextLocations = Array.isArray(worldData.locations) ? worldData.locations : [];
     const nextConnections = Array.isArray(worldData.connections) ? worldData.connections : [];
-    const nextEntities = Array.isArray(worldData.entities) ? worldData.entities : [];
+    const loadedEntities = Array.isArray(worldData.entities) ? worldData.entities : [];
     const nextEntityGroups = Array.isArray(worldData.entityGroups) ? worldData.entityGroups : [];
     const nextTraits = Array.isArray(worldData.traits) ? worldData.traits : [];
     const nextTraitGroups = Array.isArray(worldData.traitGroups) ? worldData.traitGroups : [];
@@ -349,6 +361,11 @@ function useProvideGameData() {
       ? worldData.dictionaries : [makeDefaultBook()];
     const nextPlaceholders = Array.isArray(worldData.placeholders) ? worldData.placeholders : [];
     const nextPlaceholderGroups = Array.isArray(worldData.placeholderGroups) ? worldData.placeholderGroups : [];
+    // Every bearer holds the copies its traits need before the baseline is taken, so a world that arrives
+    // without them opens clean.
+    const nextEntities = syncBlueprintCopies({
+      traits: nextTraits, traitGroups: nextTraitGroups, entities: loadedEntities, placeholders: nextPlaceholders, placeholderGroups: nextPlaceholderGroups,
+    });
     setWorldId(worldData.id);
     setStats(nextStats);
     setLocations(nextLocations);
@@ -369,6 +386,18 @@ function useProvideGameData() {
 
     return { world: worldData, isDefault };
   }, [setWorldOverview, setStats, setLocations, setEntities, setTraits, setStatUpdates, setDictionaries]);
+
+  // Copies follow the traits after every write. The slices are separate states, so the pass reads the
+  // committed world rather than one setter's view of it.
+  useEffect(() => {
+    const next = syncBlueprintCopies({ traits, traitGroups, entities, placeholders: worldPlaceholders, placeholderGroups });
+    if (next !== entities) setEntities(next);
+  }, [traits, traitGroups, entities, worldPlaceholders, placeholderGroups]);
+  // What each entity's copies are kept for, so the Placeholders tab can refuse a delete the sync would undo.
+  const copiesInUse = useMemo(
+    () => neededCopies({ traits, traitGroups, entities, placeholders: worldPlaceholders, placeholderGroups }),
+    [traits, traitGroups, entities, worldPlaceholders, placeholderGroups],
+  );
 
   // The current editor state as a canonical world payload; the one source consumers serialize/save/export from.
   const getWorldData = useCallback(
@@ -472,9 +501,9 @@ function useProvideGameData() {
     () => ({
       placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder,
       placedIds: () => directChipTargets(chipBearingTexts(worldRef.current())),
-      owners: placeholderOwnerIndex, lists, setLists: setPlaceholderLists,
+      owners: placeholderOwnerIndex, lists, setLists: setPlaceholderLists, copiesInUse,
     }),
-    [placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder, placeholderOwnerIndex, lists, setPlaceholderLists],
+    [placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder, placeholderOwnerIndex, lists, setPlaceholderLists, copiesInUse],
   );
 
   // The document's placement letters, rewalked on every edit and kept by identity while nothing changed,
@@ -501,6 +530,11 @@ function useProvideGameData() {
     () => !!savedSnapshot && canonicalStringify(getWorldData(), stringifyCache.current) !== savedCanonical,
     [getWorldData, savedCanonical, savedSnapshot],
   );
+  // DEV: names what `isWorldDirty` is reacting to. Parses the stored snapshot, as the baseline above does.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    return registerDevHook('dirtyDiff', () => (savedSnapshot ? dirtyDiff(JSON.parse(savedSnapshot), getWorldData()) : []));
+  }, [savedSnapshot, getWorldData]);
 
   /**
    * Drop every pending edit and restore the last saved (or freshly loaded) world.
@@ -525,6 +559,7 @@ function useProvideGameData() {
       const data = getWorldData();
       const stamps = await writeBackOwnedCopies({
         entities: data.entities, dictionaries: data.dictionaries, placeholders, locations,
+        traits: data.traits, traitGroups: data.traitGroups ?? [],
       });
       const world = stamps.length
         ? { ...data, entities: stampLinks(data.entities, stamps), dictionaries: stampLinks(data.dictionaries, stamps) }
@@ -587,6 +622,7 @@ function useProvideGameData() {
     removeConnection,
     addEntity,
     updateEntity,
+    editEntity,
     removeEntity,
     addEntityGroup,
     updateEntityGroup,
@@ -597,9 +633,6 @@ function useProvideGameData() {
     addTraitGroup,
     updateTraitGroup,
     removeTraitGroup,
-    addStatUpdate,
-    updateStatUpdate,
-    removeStatUpdate,
     addDictionary,
     updateDictionary,
     removeDictionary,
@@ -662,6 +695,21 @@ export const useGameData = () => {
  *  no world behind it. */
 // eslint-disable-next-line react-refresh/only-export-components
 export const useGameDataOptional = () => useContext(GameDataContext);
+
+/** Hides the loaded world from everything under it: optional reads get null, required reads throw, chips
+ *  letter from nothing, and a rename asks no offer. A library editor wraps its body in it and provides its
+ *  own stores inside. */
+export const NoWorld = ({ children }: { children: ReactNode }) => (
+  <GameDataContext.Provider value={null}>
+    <DictionaryStoreProvider value={null}>
+      <PlaceholderStoreProvider value={null}>
+        <PlacementLettersProvider letters={EMPTY_LETTERS}>
+          <CodeRenameContext.Provider value={null}>{children}</CodeRenameContext.Provider>
+        </PlacementLettersProvider>
+      </PlaceholderStoreProvider>
+    </DictionaryStoreProvider>
+  </GameDataContext.Provider>
+);
 
 /** Provides the world-editor data store (see `useGameData`); on mount it initializes storage and loads
  *  the world-metadata list. */

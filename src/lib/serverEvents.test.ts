@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  daysRemaining, eventChipMarker, eventPhase, isContestEvent, phaseMessageId, placeOf, placementsOf,
-  resultsAnnounced,
+  daysRemaining, eventChipMarker, eventPhase, eventState, firstPlaceOf, isContestEvent, phaseMessageId, placeOf,
+  placementsOf, resultsAnnounced,
 } from './serverEvents';
 import { daysFrom, serverEvent } from '@/test/serverEvents';
 import type { ServerEvent } from '@/types';
@@ -87,6 +87,84 @@ describe('placeOf', () => {
   });
 });
 
+describe('firstPlaceOf', () => {
+  const tied = event({
+    resultsAnnouncedAt: at(0),
+    placements: [
+      { place: 1, worldId: 'w1', worldName: 'Gold', authorName: 'a' },
+      { place: 1, worldId: 'w2', worldName: 'Also Gold', authorName: 'b' },
+      { place: 2, worldId: 'w3', worldName: 'Silver', authorName: 'c' },
+    ],
+  });
+
+  it('hands back the one winner of an ordinary podium', () => {
+    expect(firstPlaceOf(decided()).map((p) => p.worldId)).toEqual(['w1']);
+  });
+
+  it('hands back every world that shares 1st, in the order the podium stores them', () => {
+    expect(firstPlaceOf(tied).map((p) => p.worldId)).toEqual(['w1', 'w2']);
+  });
+
+  it('reads the place rather than the front of the list, so a reordered podium still answers', () => {
+    // Filtering by place is what makes this safe against an archive row whose order is not the
+    // server's own; taking the head would name bronze the winner here.
+    const reordered = event({
+      resultsAnnouncedAt: at(0),
+      placements: [
+        { place: 3, worldId: 'w3', worldName: 'Bronze', authorName: 'c' },
+        { place: 1, worldId: 'w1', worldName: 'Gold', authorName: 'a' },
+      ],
+    });
+
+    expect(firstPlaceOf(reordered).map((p) => p.worldId)).toEqual(['w1']);
+  });
+
+  it('is empty for a contest with no podium at all', () => {
+    expect(firstPlaceOf(event())).toEqual([]);
+  });
+});
+
+describe('eventState', () => {
+  it('is active inside its window', () => {
+    expect(eventState(event(), NOW)).toBe('active');
+  });
+
+  it('is scheduled before its window opens', () => {
+    expect(eventState(event({ startsAt: at(2), endsAt: at(9) }), NOW)).toBe('scheduled');
+  });
+
+  it('is judging once a contest closes with its results still to come', () => {
+    expect(eventState(event({ startsAt: at(-9), endsAt: at(-1) }), NOW)).toBe('judging');
+  });
+
+  it('is ended once a contest has announced its results', () => {
+    expect(eventState(decided({ startsAt: at(-9), endsAt: at(-1) }), NOW)).toBe('ended');
+  });
+
+  it('is ended the moment a contest announces, however much of the window is left', () => {
+    expect(eventState(decided(), NOW)).toBe('ended');
+  });
+
+  it('is ended for a closed announcement, which has no results to wait for', () => {
+    const notice = event({ type: 'announcement', startsAt: at(-9), endsAt: at(-1) });
+
+    expect(eventState(notice, NOW)).toBe('ended');
+  });
+
+  it('is canceled whatever the clock or the podium says', () => {
+    expect(eventState(event({ cancelledAt: at(-1) }), NOW)).toBe('canceled');
+    expect(eventState(decided({ cancelledAt: at(-1) }), NOW)).toBe('canceled');
+  });
+
+  it('counts the closing instant as closed, not as one more moment of running', () => {
+    expect(eventState(event({ startsAt: at(-4), endsAt: NOW.toISOString() }), NOW)).toBe('judging');
+  });
+
+  it('reads an unreadable window as over rather than running', () => {
+    expect(eventState(event({ endsAt: 'not a date' }), NOW)).toBe('ended');
+  });
+});
+
 describe('eventPhase', () => {
   it('is the opening while the window is still open', () => {
     expect(eventPhase(event(), NOW)).toBe('start');
@@ -100,8 +178,12 @@ describe('eventPhase', () => {
     expect(eventPhase(decided(), NOW)).toBe('end');
   });
 
-  it('treats an unreadable end timestamp as still open rather than instantly over', () => {
-    expect(eventPhase(event({ endsAt: 'not a date' }), NOW)).toBe('start');
+  it('is the ending for an event called off mid-window', () => {
+    expect(eventPhase(event({ cancelledAt: at(-1) }), NOW)).toBe('end');
+  });
+
+  it('reads an unreadable window as over, as eventState does', () => {
+    expect(eventPhase(event({ endsAt: 'not a date' }), NOW)).toBe('end');
   });
 });
 

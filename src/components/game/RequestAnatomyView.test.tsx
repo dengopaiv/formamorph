@@ -2,6 +2,8 @@ import { render, screen, cleanup, within, fireEvent } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, afterEach } from 'vitest';
 import { RequestAnatomyView } from './RequestAnatomyView';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { renderPromptTemplateRuns } from '@/lib/promptTemplate';
 import { CONTEXT_HINTS, CONTEXT_LABELS, tilePieces, type AnatomyBlock, type AnatomyPiece } from '@/lib/requestAnatomy';
 
 /**
@@ -178,6 +180,25 @@ describe('RequestAnatomyView plain (verbatim) rendering', () => {
 });
 
 describe('RequestAnatomyView chips mode', () => {
+  it.each([0, 1, 2, 3, 4, 5, 6, 7])('keeps headed chip spacing independent of populated values (mask %s)', mask => {
+    const template = '<WORLD DESCRIPTION|header="world"><TRAITS DESCRIPTION|header="traits"><NOTES|header="notes">';
+    const values = { '<WORLD DESCRIPTION>': mask & 1 ? 'World text' : '', '<TRAITS DESCRIPTION>': mask & 2 ? 'Trait text' : '', '<NOTES>': mask & 4 ? 'Note text' : '' };
+    const request = { role: 'system' as const, ...renderPromptTemplateRuns(template, values, { source: 'system-template' }) };
+    const { container, rerender } = render(<RequestAnatomyView blocks={[request]} mode="chips" />);
+    expect(container.querySelector('p')?.textContent).toBe('\nWorld\n\nTraits\n\nNotes\n');
+    expect(container.querySelectorAll('[data-anatomy-run]')).toHaveLength(request.runs.length);
+    rerender(<RequestAnatomyView blocks={[request]} mode="resolved" />);
+    expect(container.querySelector('p')?.textContent).toBe(request.content);
+    rerender(<RequestAnatomyView blocks={[request]} mode="chips" plain />);
+    expect(container.querySelector('p')?.textContent).toBe(request.content);
+  });
+
+  it('keeps unheaded chips inline with surrounding prose', () => {
+    const request = { role: 'system' as const, ...renderPromptTemplateRuns('Meet <PERSONA> at <LOCATION>.', { '<PERSONA>': 'Mira', '<LOCATION>': 'Dock' }, { source: 'system-template' }) };
+    const { container } = render(<RequestAnatomyView blocks={[request]} mode="chips" />);
+    expect(container.querySelector('p')?.textContent).toBe('System PromptMeet Persona at Location.');
+  });
+
   it('collapses a chip run to the editor own chip, labeled the way the editor labels it', () => {
     render(<RequestAnatomyView blocks={BLOCKS} mode="chips" />);
     expect(screen.getByText('World')).toBeInTheDocument();
@@ -211,7 +232,7 @@ describe('RequestAnatomyView chips mode', () => {
   });
 
   it('collapses an assembled run to its own chip, short name out and the sentence in the tooltip', async () => {
-    render(<RequestAnatomyView blocks={BLOCKS} mode="chips" />);
+    render(<RequestAnatomyView blocks={BLOCKS} mode="chips" />, { wrapper: TooltipProvider });
     const chip = screen.getByText(CONTEXT_LABELS.condensed);
 
     await userEvent.hover(chip);
@@ -396,11 +417,14 @@ describe('RequestAnatomyView jumps', () => {
     expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('resolves nothing to click on a call with no editor behind it', () => {
-    render(<RequestAnatomyView blocks={BLOCKS} mode="resolved" type="discoverEntity" onJump={() => {}} />);
-    // The two stacked narration lines still belong to the Narration prompt; the system template does not.
-    expect(screen.queryByRole('button', { name: /You are the narrator/ })).toBeNull();
-    expect(screen.getByRole('button', { name: /Recap the story so far/ })).toBeInTheDocument();
+  it('sends the discovery pass and the milestone selector to their own tabs', () => {
+    for (const [type, tab] of [['discoverEntity', 'discover'], ['milestoneSelect', 'milestone']] as const) {
+      const jumps: unknown[] = [];
+      const { unmount } = render(<RequestAnatomyView blocks={BLOCKS} mode="resolved" type={type} onJump={(t) => jumps.push(t)} />);
+      fireEvent.click(screen.getByRole('button', { name: /You are the narrator/ }));
+      expect(jumps).toEqual([{ tab, surface: 'system' }]);
+      unmount();
+    }
   });
 });
 
@@ -413,7 +437,7 @@ describe('RequestAnatomyView chip jumps', () => {
   });
 
   it('says where a chip goes before it is clicked', async () => {
-    render(<RequestAnatomyView blocks={BLOCKS} mode="chips" type="narration" onJump={() => {}} />);
+    render(<RequestAnatomyView blocks={BLOCKS} mode="chips" type="narration" onJump={() => {}} />, { wrapper: TooltipProvider });
 
     await userEvent.hover(screen.getByRole('button', { name: 'World' }));
 
@@ -433,7 +457,7 @@ describe('RequestAnatomyView chip jumps', () => {
   it('sends an assembled chip to the anatomy of the prompt that wrote its content', async () => {
     const jumps: unknown[] = [];
     const blocks = [block('user', [{ text: 'the plan', contextLabel: 'turn-plan' }])];
-    render(<RequestAnatomyView blocks={blocks} mode="chips" type="narration" onJump={(t) => jumps.push(t)} />);
+    render(<RequestAnatomyView blocks={blocks} mode="chips" type="narration" onJump={(t) => jumps.push(t)} />, { wrapper: TooltipProvider });
     const chip = screen.getByRole('button', { name: CONTEXT_LABELS['turn-plan'] });
     await userEvent.hover(chip);
     expect(await screen.findByText(/open the Planning prompt/)).toBeVisible();
@@ -455,7 +479,7 @@ describe('RequestAnatomyView chip jumps', () => {
   });
 
   it('leaves every chip inert without a handler, and promises no destination either', async () => {
-    render(<RequestAnatomyView blocks={BLOCKS} mode="chips" type="narration" />);
+    render(<RequestAnatomyView blocks={BLOCKS} mode="chips" type="narration" />, { wrapper: TooltipProvider });
     expect(screen.queryAllByRole('button')).toHaveLength(0);
     // Base UI stamps every live trigger, so its absence is the absence of a "where it goes" tip.
     expect(screen.getByText('World').hasAttribute('data-base-ui-tooltip-trigger')).toBe(false);

@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { APP_VERSION, migrateWorld, migrateSave, isSaveEnvelope, migrateCarriedPlaceholders } from './version';
 import { placeholderWeight } from './placeholders';
 import { entityIdsAt } from './entityPresence';
-import { buildEntityContext } from './locationContext';
+import { buildEntityContext, navigableDestinationEntries } from './locationContext';
 import { effectiveDestinations } from './locationGraph';
-import type { Connection, Entity, GameLocation, Placeholder, SaveObject } from '@/types';
+import type { Connection, Entity, GameLocation, Placeholder, SaveObject, World } from '@/types';
 
 // Loose view of a migrated world for assertions (avoids `any`).
 type DescItem = {
@@ -172,8 +172,8 @@ describe('migrateWorld — connection records (ADR-0002)', () => {
 
   type WithConnections = { locations: (GameLocation & { connections?: string[] })[]; connections?: Connection[] };
   const migrated = (raw: unknown) => migrateWorld(raw) as unknown as WithConnections;
-  const record = (world: WithConnections, from: string, to: string) =>
-    world.connections!.find((c) => (c.from === from && c.to === to) || (c.twoWay && c.from === to && c.to === from));
+  const record = (world: WithConnections, a: string, b: string) =>
+    world.connections!.find((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
 
   /**
    * Effective destinations as the pre-migration union rule computed them: authored names resolved
@@ -198,15 +198,15 @@ describe('migrateWorld — connection records (ADR-0002)', () => {
   it('pair-merges reciprocal declarations into one two-way record', () => {
     const out = migrated(legacyWorld());
     const pair = out.connections!.filter((c) =>
-      [c.from, c.to].sort().join('|') === ['green', 'cottage'].sort().join('|'));
+      [c.a, c.b].sort().join('|') === ['green', 'cottage'].sort().join('|'));
     expect(pair).toHaveLength(1);
-    expect(pair[0].twoWay).toBe(true);
+    expect(pair[0]).toMatchObject({ aToB: {}, bToA: {} });
   });
 
   it('makes an unmatched declaration a one-way record from the declaring end', () => {
     const out = migrated(legacyWorld());
     const link = record(out, 'green', 'landing')!;
-    expect(link).toMatchObject({ from: 'green', to: 'landing', twoWay: false });
+    expect(link).toEqual({ id: expect.any(String), a: 'green', b: 'landing', aToB: {} });
   });
 
   it('drops a name matching no location and strips every list from the locations', () => {
@@ -228,7 +228,7 @@ describe('migrateWorld — connection records (ADR-0002)', () => {
       ],
       entities: [],
     });
-    expect(out.connections![0].twoWay).toBe(true);
+    expect(out.connections![0]).toMatchObject({ aToB: {}, bToA: {} });
     expect([...effectiveDestinations('cottage', out.locations, out.connections!).keys()].sort())
       .toEqual(['green', 'hamlet']);
   });
@@ -266,7 +266,7 @@ describe('migrateWorld — connection records (ADR-0002)', () => {
   });
 
   it('keeps records an author already authored, appending the migrated ones', () => {
-    const authored: Connection = { id: 'existing', from: 'hamlet', to: 'landing', twoWay: true };
+    const authored: Connection = { id: 'existing', a: 'hamlet', b: 'landing', aToB: {}, bToA: {} };
     const out = migrated({ ...legacyWorld(), connections: [authored] });
     expect(out.connections![0]).toEqual(authored);
     expect(out.connections).toHaveLength(4);
@@ -279,6 +279,63 @@ describe('migrateWorld — connection records (ADR-0002)', () => {
       entities: [],
     });
     expect(out.connections).toBeUndefined();
+  });
+});
+
+describe('migrateWorld — Connection legs', () => {
+  const locations = [{ id: 'quay', name: 'Quay' }, { id: 'tower', name: 'Tower' }];
+  const connectionsOf = (connections: unknown[], version?: string) =>
+    (migrateWorld({ worldOverview: {}, locations, entities: [], connections, version }) as unknown as {
+      connections: Connection[];
+    }).connections;
+
+  it('puts a two-way hint on both legs, so the pair plays as before', () => {
+    const [record] = connectionsOf([{ id: 'c1', from: 'quay', to: 'tower', twoWay: true, aiHint: 'up the steps' }]);
+    expect(record).toEqual({
+      id: 'c1', a: 'quay', b: 'tower', aToB: { hint: 'up the steps' }, bToA: { hint: 'up the steps' },
+    });
+    expect(navigableDestinationEntries(locations[1], locations, [record])[0].hint).toBe('up the steps');
+  });
+
+  it('gives a one-way record one leg, from its old start', () => {
+    const [record] = connectionsOf([{ id: 'c1', from: 'tower', to: 'quay', twoWay: false, aiHint: 'down the chute' }]);
+    expect(record).toEqual({ id: 'c1', a: 'tower', b: 'quay', aToB: { hint: 'down the chute' } });
+  });
+
+  it('stores a blank old hint as no hint', () => {
+    const [record] = connectionsOf([{ id: 'c1', from: 'quay', to: 'tower', twoWay: true, aiHint: '  ' }]);
+    expect(record).toEqual({ id: 'c1', a: 'quay', b: 'tower', aToB: {}, bToA: {} });
+  });
+
+  it('passes a new-shape record through unchanged', () => {
+    const current: Connection = { id: 'c1', a: 'quay', b: 'tower', bToA: { hint: 'down' } };
+    expect(connectionsOf([current])).toEqual([current]);
+  });
+
+  it('normalizes a new-shape record: a blank hint becomes no hint, a malformed leg or end is dropped', () => {
+    expect(connectionsOf([
+      { id: 'c1', a: 'quay', b: 'tower', aToB: { hint: '  ' }, bToA: 'yes' },
+      { id: 'c2', a: 'quay', aToB: {} },
+    ])).toEqual([{ id: 'c1', a: 'quay', b: 'tower', aToB: {} }]);
+  });
+
+  it('drops a record with no legs', () => {
+    expect(connectionsOf([{ id: 'c1', a: 'quay', b: 'tower' }, { id: 'c2', a: 'tower', b: 'quay', aToB: {} }]))
+      .toEqual([{ id: 'c2', a: 'tower', b: 'quay', aToB: {} }]);
+  });
+
+  it('runs on a world already stamped at APP_VERSION (shipped worlds carry the old shape)', () => {
+    const [record] = connectionsOf([{ id: 'c1', from: 'quay', to: 'tower', twoWay: false }], APP_VERSION);
+    expect(record).toEqual({ id: 'c1', a: 'quay', b: 'tower', aToB: {} });
+  });
+
+  it('migrating twice is identical to migrating once', () => {
+    const raw = {
+      worldOverview: {}, locations, entities: [],
+      connections: [{ id: 'c1', from: 'quay', to: 'tower', twoWay: true, aiHint: 'up' }],
+    };
+    const once = migrateWorld(raw);
+    expect(migrateWorld(structuredClone(once))).toEqual(once);
   });
 });
 
@@ -334,14 +391,60 @@ describe('migrateWorld', () => {
       expect(codeOf(migrateWorld({ worldOverview: { name: 'W' }, stats }))[1]).toBe('const me = self;\nreturn me.value;');
     });
 
-    it('leaves a world already at APP_VERSION as written', () => {
-      expect(codeOf(migrateWorld({ version: APP_VERSION, worldOverview: { name: 'W' }, stats })))
-        .toEqual(stats.map((s) => s.code));
+    // A world saved by v3.1.2 carries APP_VERSION 3.1.2 and may still hold the retired routes.
+    it('rewrites a world already at APP_VERSION', () => {
+      expect(codeOf(migrateWorld({ version: APP_VERSION, worldOverview: { name: 'W' }, stats }))).toEqual([
+        "return stats['Power'].value + self.value;",
+        'const me = self;\nreturn me.value;',
+        undefined,
+      ]);
     });
 
     it('is idempotent', () => {
       const once = migrateWorld({ version: '2.14.0', worldOverview: { name: 'W' }, stats });
       expect(migrateWorld({ ...once, version: '2.14.0' })).toEqual(once);
+    });
+  });
+
+  describe('stat code routes', () => {
+    const ph = (id: string, name: string, over: Partial<Placeholder> = {}) => ({ id, name, values: [], ...over });
+    // The world holds Mood, and Hair › Shade; Molly owns Eyes; the Weather book owns Sky.
+    const world = {
+      version: APP_VERSION,
+      worldOverview: { name: 'W' },
+      placeholders: [
+        ph('mood', 'Mood'),
+        ph('hair', 'Hair', { values: [{ id: 'v1', text: '{{ph:shade:world:p-shade}}' }] }),
+        ph('shade', 'Shade', { ownerId: 'hair' }),
+      ],
+      entities: [{ id: 'molly', name: 'Molly', placeholders: [ph('eyes', 'Eyes')] }],
+      dictionaries: [{ id: 'weather', name: 'Weather', enabled: true, entries: [], placeholders: [ph('sky', 'Sky')] }],
+      stats: [{
+        id: 's1', name: 'Mood Meter',
+        beforeCode: "placeholders.Molly.Eyes.pin('green'); placeholders.Shade.pin('ash');",
+        code: 'return placeholders.Weather.Sky.text.length + deltaHours + startDay + (currentStatId ? 1 : 0)'
+          + " + (placeholders.Eyes.value === 'green' ? 1 : 0);",
+      }],
+    };
+    const boxesOf = (out: unknown) => (out as { stats: { beforeCode?: string; code?: string }[] }).stats[0];
+
+    it('rewrites every retired route in both boxes', () => {
+      expect(boxesOf(migrateWorld(world))).toMatchObject({
+        beforeCode: "entities.Molly.placeholders.Eyes.pin('green'); placeholders.Hair.Shade.pin('ash');",
+        code: 'return dictionaries.Weather.placeholders.Sky.text.length + clock.deltaHours + clock.previous.day'
+          + " + (self.id ? 1 : 0) + (entities.Molly.placeholders.Eyes.value === 'green' ? 1 : 0);",
+      });
+    });
+
+    it('is idempotent', () => {
+      const once = migrateWorld(world);
+      expect(migrateWorld(once)).toEqual(once);
+    });
+
+    it('keeps a stat whose code needs nothing as the same object', () => {
+      const plain = { id: 's2', name: 'Plain', code: 'return clock.day;' };
+      const out = migrateWorld({ ...world, stats: [plain] }) as unknown as { stats: unknown[] };
+      expect(out.stats[0]).toBe(plain);
     });
   });
 
@@ -502,6 +605,57 @@ describe('migrateWorld — pre-rebuild start flag', () => {
   });
 });
 
+describe('migrateWorld — single opening cue to the openings list', () => {
+  const CUE = 'I wake in the reed-beds with the tide already climbing.';
+  const overviewOf = (worldOverview: Record<string, unknown>, version?: string) =>
+    migrateWorld({ ...(version ? { version } : {}), worldOverview }).worldOverview as unknown as Record<string, unknown>;
+
+  it('moves the cue into the list as one Opening Action and removes the old fields', () => {
+    const ov = overviewOf({ openingCue: CUE, openingCueEnabled: true }, APP_VERSION);
+    expect(ov.openings).toEqual([{ id: expect.any(String), text: CUE, kind: 'action' }]);
+    expect(ov.openingsEnabled).toBeUndefined();
+    expect('openingCue' in ov).toBe(false);
+    expect('openingCueEnabled' in ov).toBe(false);
+  });
+
+  it('treats a cue with no switch as on', () => {
+    const ov = overviewOf({ openingCue: CUE });
+    expect(ov.openings).toHaveLength(1);
+    expect(ov.openingsEnabled).toBeUndefined();
+  });
+
+  it('keeps a switched-off cue as a row and switches the list off', () => {
+    const ov = overviewOf({ openingCue: CUE, openingCueEnabled: false });
+    expect(ov.openings).toEqual([{ id: expect.any(String), text: CUE, kind: 'action' }]);
+    expect(ov.openingsEnabled).toBe(false);
+  });
+
+  it('adds no row for a blank cue, which opened on the default before', () => {
+    const ov = overviewOf({ openingCue: '  ', openingCueEnabled: true });
+    expect(ov.openings).toBeUndefined();
+    expect('openingCue' in ov).toBe(false);
+  });
+
+  it('carries a switched-off blank cue over as a switched-off empty list', () => {
+    const ov = overviewOf({ openingCue: '', openingCueEnabled: false });
+    expect(ov.openings).toBeUndefined();
+    expect(ov.openingsEnabled).toBe(false);
+  });
+
+  it('is idempotent — a second run changes nothing', () => {
+    const once = migrateWorld({ worldOverview: { openingCue: CUE, openingCueEnabled: false } });
+    const twice = migrateWorld(structuredClone(once));
+    expect(twice.worldOverview).toEqual(once.worldOverview);
+  });
+
+  it('leaves a world already on the list untouched', () => {
+    const openings = [{ id: 'a', text: CUE, kind: 'action' }];
+    const ov = overviewOf({ openings, openingWeights: { a: 2 } });
+    expect(ov.openings).toStrictEqual(openings);
+    expect(ov.openingWeights).toEqual({ a: 2 });
+  });
+});
+
 describe('migrateWorld — dictionary keyword arrays', () => {
   type KeyedWorld = {
     dictionaries?: { entries: { key: string[]; secondaryKeys?: string[] }[] }[];
@@ -655,5 +809,125 @@ describe('isSaveEnvelope', () => {
     expect(isSaveEnvelope({ gameStates: [] })).toBe(false);
     expect(isSaveEnvelope(null)).toBe(false);
     expect(isSaveEnvelope('x')).toBe(false);
+  });
+});
+
+describe('migrateWorld — player setting to persona rules', () => {
+  const playable = { id: 'w', name: 'Maren', persona: true };
+  const overviewOf = (playerSetting: string, entities: unknown[] = []) =>
+    migrateWorld({ version: APP_VERSION, worldOverview: { name: 'W', playerSetting }, entities }).worldOverview as unknown as Record<string, unknown>;
+
+  it('drops Open, which is the absent value', () => {
+    const ov = overviewOf('open');
+    expect('playerSetting' in ov).toBe(false);
+    expect(ov.allowedPersonas).toBeUndefined();
+    expect(ov.startPersona).toBeUndefined();
+  });
+
+  it('turns Fixed into a start on None', () => {
+    const ov = overviewOf('fixed', [playable]);
+    expect('playerSetting' in ov).toBe(false);
+    expect(ov.allowedPersonas).toBeUndefined();
+    expect(ov.startPersona).toEqual({ source: 'none' });
+  });
+
+  it('turns Cast into World Only, starting on the first persona', () => {
+    const ov = overviewOf('cast', [playable]);
+    expect(ov.allowedPersonas).toBe('world');
+    expect(ov.startPersona).toBeUndefined();
+  });
+
+  it('keeps a Cast world with no playable entity starting on None, as Cast did', () => {
+    const ov = overviewOf('cast');
+    expect(ov.allowedPersonas).toBe('world');
+    expect(ov.startPersona).toEqual({ source: 'none' });
+  });
+
+  it('is idempotent', () => {
+    const once = migrateWorld({ version: APP_VERSION, worldOverview: { playerSetting: 'cast' }, entities: [playable] });
+    expect(migrateWorld(JSON.parse(JSON.stringify(once))).worldOverview).toEqual(once.worldOverview);
+  });
+});
+
+describe('migrateWorld — exclusive groups to pick counts', () => {
+  const raw = () => ({
+    version: APP_VERSION,
+    traitGroups: [
+      { id: 'class', name: 'Class', parentId: null, exclusive: true },
+      { id: 'perks', name: 'Perks', parentId: null, exclusive: false },
+    ],
+    entities: [{ id: 'e', name: 'Maren', traitGroups: [{ id: 'bond', name: 'Bond', parentId: null, exclusive: true }] }],
+  });
+  const groupsOf = (world: World) => world.traitGroups as unknown as Record<string, unknown>[];
+  const ownedOf = (world: World) => world.entities[0].traitGroups as unknown as Record<string, unknown>[];
+
+  it('turns an exclusive world group into a max of one', () => {
+    const [cls, perks] = groupsOf(migrateWorld(raw()));
+    expect(cls.maxPicks).toBe(1);
+    expect('exclusive' in cls).toBe(false);
+    expect(perks.maxPicks).toBeUndefined();
+    expect('exclusive' in perks).toBe(false);
+  });
+
+  it('turns an exclusive entity-owned group into a max of one', () => {
+    const [bond] = ownedOf(migrateWorld(raw()));
+    expect(bond.maxPicks).toBe(1);
+    expect('exclusive' in bond).toBe(false);
+  });
+
+  it('is idempotent', () => {
+    const once = migrateWorld(raw());
+    const twice = migrateWorld(JSON.parse(JSON.stringify(once)));
+    expect(twice.traitGroups).toEqual(once.traitGroups);
+    expect(twice.entities).toEqual(once.entities);
+  });
+});
+
+describe('migrateWorld — links only into Blueprints', () => {
+  const link = (id: string, originalId: string, kind: 'trait' | 'group' = 'trait') =>
+    ({ id, originalId, kind, originalName: originalId, groupId: null, order: 0, overrides: { [originalId]: { isDefault: { value: true, blueprint: false } } } });
+  // A 3.1.0 world: Classes (Paladin) in Blueprints, Brave and Faction (Guard) at the top level.
+  const raw = () => ({
+    version: APP_VERSION,
+    traits: [
+      { id: 'paladin', name: 'Paladin', statChanges: [], groupId: 'classes' },
+      { id: 'brave', name: 'Brave', statChanges: [], groupId: null },
+      { id: 'guard', name: 'Guard', statChanges: [], groupId: 'faction' },
+    ],
+    traitGroups: [
+      { id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' },
+      { id: 'classes', name: 'Classes', parentId: 'bp' },
+      { id: 'faction', name: 'Faction', parentId: null },
+    ],
+    entities: [
+      { id: 'albus', name: 'Albus', traitLinks: [link('l1', 'paladin'), link('l2', 'brave'), link('l3', 'classes', 'group')] },
+      { id: 'mira', name: 'Mira', customPersona: true, traitLinks: [link('l4', 'faction', 'group'), link('l5', 'guard')] },
+      { id: 'tomas', name: 'Tomas', traitLinks: [link('l6', 'bp', 'group')] },
+      { id: 'vex', name: 'Vex' },
+    ],
+  });
+  const linkIds = (world: World) => world.entities.map((e) => e.traitLinks?.map((l) => l.id));
+
+  it('drops each link whose original sits outside Blueprints, overrides and all, and keeps the rest', () => {
+    const world = migrateWorld(raw());
+    expect(linkIds(world)).toEqual([['l1', 'l3'], undefined, undefined, undefined]);
+    expect(world.entities[0].traitLinks?.[0]).toEqual(raw().entities[0].traitLinks![0]);
+  });
+
+  it('removes the list outright when no link is left, so the entity stores none', () => {
+    const [, mira, tomas, vex] = migrateWorld(raw()).entities;
+    expect(mira).not.toHaveProperty('traitLinks');
+    expect(tomas).not.toHaveProperty('traitLinks');
+    expect(vex).toEqual(raw().entities[3]);
+  });
+
+  it('drops every link in a world with no Blueprints group', () => {
+    const bare = { ...raw(), traitGroups: raw().traitGroups.filter((g) => g.id !== 'bp') };
+    expect(linkIds(migrateWorld(bare))).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  it('is idempotent', () => {
+    const once = migrateWorld(raw());
+    expect(migrateWorld(JSON.parse(JSON.stringify(once))).entities).toEqual(once.entities);
   });
 });

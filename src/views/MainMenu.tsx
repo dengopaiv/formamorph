@@ -1,19 +1,17 @@
 import { randomUUID } from "@/lib/uuid";
+import { newBlankWorld } from "@/lib/blankWorld";
 import { DEFAULT_WORLDS, isDefaultWorldId } from "@/lib/defaultWorlds";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useGameData } from '../contexts/GameDataContext';
-import { useLingeringMount } from '@/lib/useLingeringMount';
-import { usePlaceholderSession } from '../contexts/PlaceholderSessionContext';
 import { useResolvedAuthoredWorld } from '@/lib/useResolvedWorld';
-import { inAuthoredOrder, traitOrderIndex } from '@/lib/traitEffects';
-import { collectPins } from '@/lib/placeholderPins';
-import { startingStatsWith } from '@/lib/traitRuntime';
 import { useUserProfile } from '../contexts/userProfileStore';
 import { useDevRoute, registerDevHook } from '../lib/devRouter';
+import { useSurfaceTab } from '@/components/ui/surface';
 import { MAIN_MENU_CARD_TABS, type MainMenuCardTab } from './mainMenuTabs';
 import { findSavesUsingModel } from '@/lib/modelUsage';
 import { DEFAULT_AVATAR_URL } from '@/lib/defaultAvatar';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { ThemedToastContainer } from '@/components/ThemedToastContainer';
 import 'react-toastify/dist/ReactToastify.css';
 import { Button } from "@/components/ui/button";
@@ -21,6 +19,9 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tip, Tooltip, TooltipTrigger, TooltipPortal, TooltipPositioner, TooltipPopup } from "@/components/ui/tooltip";
 import {ConfirmDialog} from "@/components/ConfirmDialog";
 import {FilePlus2, DoorOpen, Pencil, AlertTriangle, Code, User, Shield, Globe, LayoutGrid, GalleryThumbnails, Columns2, RectangleVertical, Menu, Earth, BookOpen, ChevronLast, MoreHorizontal, PersonStanding, MessageSquarePlus, FolderOpen, Archive, Settings, ScrollText, type LucideIcon } from "lucide-react";
+import { DefaultPersonaBadge, DefaultPersonaMenuItem } from '@/components/library/DefaultPersona';
+import { AvatarThumbnailMenuItems } from '@/components/library/AvatarThumbnail';
+import { useAvatarThumbnails } from '@/lib/useAvatarThumbnails';
 import { ActionIcon } from '@/lib/actionIcons';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageZoomViewer } from "@/components/ImageZoomViewer";
@@ -28,16 +29,22 @@ import { cn } from "@/lib/utils";
 import { THUMB_FRAME, thumbFit } from "@/lib/thumbAspect";
 import { usePersistentState, boolCodec } from "@/lib/usePersistentState";
 import {
+  ENTITY_LIBRARY_FILTER_KEY, entityLibraryFilterCodec, entityLibraryPredicate, type EntityLibraryFilter,
+} from "@/lib/entityLibraryFilter";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import CharacterCustomization, { defaultCharacterData } from './CharacterCustomization';
 import { SettingsModal } from '../components/modals/SettingsModal';
 import { asSettingsTab, type SettingsTabId } from '../components/modals/settingsTabs';
 import { useSettingsOpenRequest } from '@/lib/useSettingsOpenRequest';
+import { closesWorldEditor, settingsLanding, useSurfaceNav, useSurfaceOpenRequest } from '@/lib/surface/useSurfaceOpenRequest';
+import { stepTab, type SurfaceSteps } from '@/lib/surface/surfaceRoute';
+import { targetAttribute, type TargetAttribute } from '@/lib/surface/surfaceTargets';
+import { useTargetLanding } from '@/lib/surface/useLanding';
 import { useSettings } from "@/contexts/SettingsContext";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { AiSetupGate, type GateReason } from '../components/AiSetupGate';
@@ -45,6 +52,7 @@ import { useAiReachable } from '@/lib/useAiReachable';
 import { LoadGameDialog } from '../components/modals/LoadGameDialog';
 import WorldEditor from './WorldEditor';
 import { LibraryTileGrid } from '@/components/library/LibraryTileGrid';
+import { EntityPlaceholderArt } from '@/components/EntityPlaceholderArt';
 import { useLibraryTiles } from '@/lib/useLibraryTiles';
 import { useComponentUpdates } from '@/lib/useComponentUpdates';
 import { UpdateAvailableDialog } from '@/components/modals/UpdateAvailableDialog';
@@ -53,30 +61,25 @@ import type { WorldUpdateReview } from '@/lib/useDownloadCoordinator';
 import type { LiveWorld } from '@/lib/componentUpdateRun';
 import type { UpdateRow } from '@/lib/componentUpdates';
 import type { LibrarySource, LinkableContent } from '@/lib/linkedContent';
-import EnterWorldWorkspace from './EnterWorldWorkspace';
-import { startingLocations } from '@/lib/startingLocation';
-import { exclusiveSiblings, collapseExclusiveDefaults } from '@/lib/traitEffects';
-import { buildInitialSelection, finalizeSelection, shouldShowDictionaryChoices } from '@/lib/dictionarySelection';
-import { libraryLines } from '@/lib/librarySources';
-import { followedLibraryId } from '@/lib/publishLinks';
-import { emptyEntryDraft, type EntryDraft } from '@/lib/entryDraft';
-import { hasWorldAdditionDefaults, restoreWorldAdditionDefaults, saveWorldAdditionDefaults } from '@/lib/worldAdditionDefaults';
+import EnterWorldFlow, { type EnterWorldFlowHandle, type StartGame } from './EnterWorldFlow';
+import { clearDefaultPersona, readDefaultPersona, setDefaultPersona } from '@/lib/personaPick';
 import WorldStorageService from '../services/WorldStorageService';
 import DictionaryStorageService from '../services/DictionaryStorageService';
 import EntityStorageService from '../services/EntityStorageService';
-import { LibraryRecordNotFoundError } from '../services/LibraryStore';
 import ModelStorageService from '../services/ModelStorageService';
 import AuthService from '../services/AuthService';
 import ConnectReferencesModal from '@/components/modals/ConnectReferencesModal';
 import type { ReferenceChoices, ReferenceRow } from '@/lib/worldReferences';
-import type { World, Stat, CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, ServerEvent, WorldOverview } from '@/types';
+import type { World, Stat, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, ServerEvent, WorldOverview } from '@/types';
 import { migrateWorld } from '@/lib/version';
 import { updateBridge } from '@/lib/updates/updateBridge';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { UpdateVersionControl } from '@/components/menu/UpdateVersionControl';
 import { WebVersionChangelog } from '@/components/menu/WebVersionChangelog';
 import { parseDictionaryImport } from '@/lib/dictionaryFile';
+import { readLibraryDetails } from '@/lib/contentAuthor';
 import { importCharacterFile } from '@/lib/entityFile';
+import { importedDefaultPersona, isJsonFile, isStPersonaBackupFile, readStPersonaFiles, stPersonaReport } from '@/lib/stPersonaImport';
 import { useDownscalePrompt } from '@/lib/useDownscalePrompt';
 import { useWorldExport } from '@/lib/useWorldExport';
 import { IMAGE_CAPS, applyWorldOptimize, applyEntityImagesOptimize, countWorldImages } from '@/lib/imageOptim';
@@ -97,6 +100,8 @@ import EntityEditorModal from "@/components/modals/EntityEditorModal";
 import { ModelDetailsModal } from "@/components/modals/ModelDetailsModal";
 import { AdminPanelDialog } from "@/components/menu/AdminPanelDialog";
 import { type ProfileTab } from "@/components/menu/profileTabs";
+import { ENTITY_EDITOR_SUBTABS, ENTITY_EDITOR_TABS } from "@/views/entityPanelTabs";
+import { DICTIONARY_EDITOR_TABS } from '@/views/dictionaryEditorTabs';
 import { TutorialPopover } from "@/components/TutorialPopover";
 import { useTutorial } from "@/lib/tutorials";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -120,11 +125,13 @@ import { EventAckModal } from "@/components/events/EventAckModal";
 import FeedbackService from "@/services/FeedbackService";
 import { FeedbackHubDialog } from "@/components/menu/FeedbackHubDialog";
 import { AuthModals } from "@/components/menu/AuthModals";
+import { onSignInSucceeded, requestSignIn } from "@/lib/signInStore";
 import { PublishModal } from "@/components/menu/PublishModal";
-import { worldPublishPayload, entityPublishPayload, dictionaryPublishPayload, type PublishPayload } from "@/lib/publishPayload";
+import { creditLine, entityPublishPayload, dictionaryPublishPayload, type PublishPayload } from "@/lib/publishPayload";
 import { linkedSourceCopies, sourceBlockReason } from "@/lib/sourceChecks";
 import { readSourceCheck } from "@/lib/sourceCheckStore";
-import { buildAvatarPublish, avatarPublishRefusal } from "@/lib/avatarPublish";
+import { buildAvatarPublish } from "@/lib/avatarPublish";
+import { buildWorldPublish, type WorldPublishTarget } from "@/lib/worldPublish";
 import { BackupRestoreDialog } from "@/components/menu/BackupRestoreDialog";
 import { COMMUNITY_ENABLED } from "@/lib/featureFlags";
 import { useAgeGate } from "@/contexts/AgeGateContext";
@@ -141,21 +148,21 @@ import { hasComponentLinks, readComponentFileLinks, type ComponentFileLinks } fr
 import { useComponentFileImport } from "@/lib/useComponentFileImport";
 import { resolveImportedWorld } from "@/lib/worldBundleRun";
 import { useReadmeVisibility } from "@/lib/useReadmeVisibility";
-import ReadmeModal from "@/components/game/ReadmeModal";
-import { buildEnterFlow, navigableSteps, type EnterMode, type EnterStep, type NavigableStep } from "@/lib/enterFlow";
 import {
   customizedPromptKinds, promptKindsPhrase, worldPrompt, useWorldPromptOptOut, WORLD_PROMPT_KIND_LABELS,
   type WorldPromptKind,
 } from "@/lib/worldPrompt";
 import { PromptDiff, PromptDiffModeToggle, type PromptDiffMode } from "@/components/game/PromptDiff";
+import { allPlaceholders, placeholderOwners } from "@/lib/placeholderHomes";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorldPromptPresets, GLOBAL_PRESET_VALUE } from "@/lib/worldPromptPreset";
+import { promptLibraryTarget } from "@/lib/promptDownload";
 import PatreonIcon from "@/components/PatreonIcon";
 import GithubIcon from "@/components/GithubIcon";
 import { describePlaceholders } from '@/lib/placeholders';
 
 interface MainMenuProps {
-  onStartGame: (traits: string[], characterData: CharacterData | null, isNewGame?: boolean, startingLocationId?: string | null, dictionaries?: Dictionary[] | null, characters?: Entity[] | null) => void;
+  onStartGame: StartGame;
   /** Cold-load a save from the menu: its world is loaded into GameData here, then App enters the game. */
   onLoadSaveGame: (saveId: string) => void;
   /** Easter-egg: replay the first-run welcome intro (snappy). Wired to the footer version click. */
@@ -177,6 +184,14 @@ const CARD_TABS: { value: MainMenuCardTab; label: string; Icon: LucideIcon }[] =
   { value: 'models', label: 'Avatars', Icon: PersonStanding },
 ];
 
+/** The Import button's Take Me There target on each tab. */
+const IMPORT_TARGET: Record<MainMenuCardTab, TargetAttribute> = {
+  worlds: targetAttribute('mainMenu.worlds', 'import-world'),
+  entities: targetAttribute('mainMenu.entities', 'import-entity'),
+  dictionaries: targetAttribute('mainMenu.dictionaries', 'import-dictionary'),
+  models: targetAttribute('mainMenu.models', 'import-avatar'),
+};
+
 /** Name the affected saves in a prompt, capping the list so a big library doesn't produce a wall of text. */
 const listSaves = (names: string[]): string => {
   const shown = names.slice(0, 3).map((name) => `"${name}"`);
@@ -196,6 +211,9 @@ const ENTITY_MIN_TILE = (WORLD_MIN_TILE - 16) / 2;
 /** Columns for the detailed (community-card) layout — pure CSS, since it keeps no cell arrangement.
  *  The minimum matches the narrowest card the old four-across breakpoint produced. */
 const DETAILED_GRID_CLASS = 'grid-cols-[repeat(auto-fill,minmax(236px,1fr))]';
+// Split cards put portrait art beside the text, so each needs about twice the width. The min() keeps a
+// phone to one full-width column.
+const DETAILED_SPLIT_GRID_CLASS = 'grid-cols-[repeat(auto-fill,minmax(min(100%,400px),1fr))]';
 const LAYOUT_MODE_KEY = 'FORMAMORPH_layoutMode';
 // Persisted preference to force the local world modal's single-column (portrait) layout at any width.
 const WORLD_MODAL_COLLAPSED_KEY = 'FORMAMORPH_worldModalCollapsed';
@@ -244,15 +262,17 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     return () => { isMountedRef.current = false; };
   }, []);
   const {
-    traits: rawTraits, traitGroups: rawTraitGroups, stats: rawStats, locations: rawLocations, placeholders,
-    loadWorldData, dictionaries: worldBooks, entities: worldEntities, getWorldData,
+    placeholders, loadWorldData, getWorldData,
   } = useGameData();
-  const { beginSession, endSession, rolls } = usePlaceholderSession();
   const { showReadme, setShowReadme } = useReadmeVisibility();
   const { applyWorldPrompt, setApplyWorldPrompt } = useWorldPromptOptOut();
   const { worldPreset, setWorldPreset } = useWorldPromptPresets();
-  // Only the preset list is needed here; the pin is applied by GameViewer when the world opens.
-  const { builtinPresets, promptPresets } = useSettings();
+  // The preset list, and the store prompt listings download into; the pin is applied by GameViewer.
+  const { builtinPresets, promptPresets, userPromptPresets, storeDownloadedPreset, activePresetId, selectPreset } = useSettings();
+  const promptTarget = useMemo(
+    () => promptLibraryTarget({ presets: userPromptPresets, store: storeDownloadedPreset }),
+    [userPromptPresets, storeDownloadedPreset],
+  );
   /** A preset id as the player knows it, or undefined when nothing names that id any more. */
   const presetName = useCallback(
     (id: string | undefined) =>
@@ -280,6 +300,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // Which passes the selected world rewrites — what the details notice names, what the viewer tabs, and
   // what the single opt-out declines. A world that stores a prompt but switched it off customizes nothing.
   const customPromptKinds = useMemo(() => customizedPromptKinds(promptOverview), [promptOverview]);
+  // What the viewer names the prompts' placeholder chips by.
+  const promptWorldData = selectedWorld?.data;
+  const promptPlaceholders = useMemo(() => (promptWorldData ? allPlaceholders(promptWorldData) : undefined), [promptWorldData]);
+  const promptPlaceholderOwners = useMemo(() => (promptWorldData ? placeholderOwners(promptWorldData) : undefined), [promptWorldData]);
   // Falls back to whichever kind the world does customize, so the viewer never opens on an empty tab.
   const [promptTab, setPromptTab] = useState<string>('narration');
   const shownPromptTab = customPromptKinds.includes(promptTab as WorldPromptKind)
@@ -297,12 +321,17 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [entitiesLayout, setEntitiesLayout] = usePersistentState<'grid' | 'detailed'>(`${LAYOUT_MODE_KEY}_entities`, 'grid', layoutCodec);
   const [dictionariesLayout, setDictionariesLayout] = usePersistentState<'grid' | 'detailed'>(`${LAYOUT_MODE_KEY}_dictionaries`, 'grid', layoutCodec);
   const [modelsLayout, setModelsLayout] = usePersistentState<'grid' | 'detailed'>(`${LAYOUT_MODE_KEY}_models`, 'grid', layoutCodec);
+  const [entityFilter, setEntityFilter] = usePersistentState<EntityLibraryFilter>(
+    ENTITY_LIBRARY_FILTER_KEY, 'all', entityLibraryFilterCodec,
+  );
+  const entityPredicate = useMemo(() => entityLibraryPredicate(entityFilter), [entityFilter]);
   // Per-modal "collapse to single column" preference, persisted across sessions.
   const [worldModalCollapsed, setWorldModalCollapsed] = usePersistentState(
     WORLD_MODAL_COLLAPSED_KEY, false, boolCodec,
   );
   // Which content library the menu shows. Only "worlds" is populated for now; the rest swap to an empty view.
   const [cardType, setCardType] = useState<MainMenuCardTab>('worlds');
+  useSurfaceTab('mainMenu', cardType);
   // The toggle drives whichever library is on screen; the other three keep theirs.
   const layoutMode = cardType === 'entities' ? entitiesLayout
     : cardType === 'dictionaries' ? dictionariesLayout
@@ -317,6 +346,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // World Editor as an in-place modal (keeps MainMenu mounted so it animates and only the world grid
   // refreshes on close). The editor's own back arrow + unsaved-changes prompt handle the dirty guard.
   const [showWorldEditor, setShowWorldEditor] = useState(false);
+  // The open editor holds a world New World just made, not one from the library.
+  const [editorOnNewWorld, setEditorOnNewWorld] = useState(false);
+  // The Authoring Tour starts on that new world as soon as the editor opens.
+  const [editorStartsTour, setEditorStartsTour] = useState(false);
   // A required source the world's last check found removed. Read from that recorded answer alone: a check
   // runs only when the author asks for one in the World Editor, so opening this menu makes no request and
   // an installed world stays playable offline. Editing and loading a save are never gated — repair lives in
@@ -331,50 +364,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [worldToDelete, setWorldToDelete] = useState<string | null>(null);
   const [warmingOffline, setWarmingOffline] = useState(false);
   const [showCharacterCustomization, setShowCharacterCustomization] = useState(false);
-  const [showSetupWorkspace, setShowSetupWorkspace] = useState(false);
-  // The workspace stays mounted for one exit animation after it closes, so the dialog can fade out.
-  const workspaceMounted = useLingeringMount(showSetupWorkspace, 250);
   const [showIntroReadme, setShowIntroReadme] = useState(false);
-  // Set only when the Introduction has no setup screen to sit over: the traits to start with once the
-  // player closes it. A world with nothing to choose would otherwise flash the overlay and enter anyway.
-  const [enterAfterIntro, setEnterAfterIntro] = useState<EntryDraft | null>(null);
-  const [entryDraft, setEntryDraft] = useState<EntryDraft>(emptyEntryDraft);
-  const { traitIds: selectedTraits, locationId: selectedLocationId } = entryDraft;
-  const [resolvingEntry, setResolvingEntry] = useState(false);
-  const entryRequest = useRef<object | null>(null);
-  const entryStarted = useRef(false);
-  const cancelEntryResolution = () => {
-    entryRequest.current = null;
-    setResolvingEntry(false);
-  };
-  const updateDraft = <K extends keyof EntryDraft>(key: K, value: React.SetStateAction<EntryDraft[K]>) => {
-    cancelEntryResolution();
-    setEntryDraft(prev => ({ ...prev, [key]: typeof value === 'function' ? value(prev[key]) : value }));
-  };
-  useEffect(() => () => { entryRequest.current = null; }, []);
-  // Finalized dictionaries for normal entry; null keeps Quick Start and saves on authored defaults.
-  const [selectedDictionaries, setSelectedDictionaries] = useState<Dictionary[] | null>(null);
-  // Independent entity copies finalized for normal entry; null means this path did not configure entities.
-  const [selectedCharacters, setSelectedCharacters] = useState<Entity[] | null>(null);
-
-  // The pins the *draft* selection would impose: the traits ticked so far, the starting location picked, and
-  // the bands the starting stats fall in once those traits have applied — so these screens resolve the way
-  // the game will open, and a pinned name changes the moment its source is picked. Pins mask the roll
-  // rather than replacing it, so unticking the trait brings the rolled value back.
-  const draftPins = useMemo(() => {
-    const chosen = inAuthoredOrder(
-      rawTraits.filter((t) => selectedTraits.includes(t.id)), traitOrderIndex(rawTraits, rawTraitGroups),
-    );
-    const starting = startingStatsWith(rawStats, chosen, { traits: rawTraits, groups: rawTraitGroups });
-    return collectPins({
-      traits: chosen,
-      location: rawLocations.find((l) => l.id === selectedLocationId),
-      stats: starting,
-      placeholders,
-      rolls,
-    });
-  }, [selectedTraits, selectedLocationId, rawTraits, rawTraitGroups, rawStats, rawLocations, placeholders, rolls]);
-  const { traits, traitGroups, stats, locations, resolvePH, resolveTraitText } = useResolvedAuthoredWorld(draftPins);
+  // The global default persona: a library entity id, device-local.
+  const [defaultPersona, setDefaultPersonaId] = useState(readDefaultPersona);
+  const entryFlow = useRef<EnterWorldFlowHandle>(null);
+  // Unpinned: the code notice reads stat names outside any entry draft.
+  const { stats } = useResolvedAuthoredWorld();
 
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [showWorldPrompts, setShowWorldPrompts] = useState(false);
@@ -398,7 +393,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // to stay in the footer rather than collapsing into the ⋯ menu — an update offer nobody opens is no offer.
   const canUpdate = updateBridge() !== null;
   // The age attestation every community surface waits on (see AgeGateContext).
-  const { attested, gateOpen, requireAttestation, requireAuthentication } = useAgeGate();
+  const { attested, gateOpen, requireAttestation } = useAgeGate();
 
   /**
    * Open Community Creations, asking for the age attestation first.
@@ -418,7 +413,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    if (devRoute?.modal === 'settings') setShowSettings(true);
+    if (devRoute?.modal === 'settings' || devRoute?.modal === 'settingsCompare') setShowSettings(true);
     if (devRoute?.modal === 'menu') setShowLoadDialog(true);
     if (devRoute?.modal === 'backup') setShowBackup(true);
     if (devRoute?.modal === 'community') openCommunityBrowser();
@@ -427,7 +422,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     // The add-on review hangs off a published world, so this route opens the catalog and lands there too.
     if (devRoute?.modal === 'manageAddons') openCommunityBrowser();
     if (devRoute?.modal === 'profile') setShowProfileDialog(true);
-    if (devRoute?.modal === 'auth') setShowAuthDialog(true);
     if (devRoute?.modal === 'feedbackHub') setShowFeedback(true);
     if (devRoute?.modal === 'adminPanel') setShowAdminPanel(true);
     if (devRoute?.modal === 'worldEditor' || devRoute?.modal === 'replaceSource') setShowWorldEditor(true);
@@ -446,7 +440,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     // The publish dialog names itself from a payload, so it opens on a canned world rather than on
     // whatever the library happens to hold — it is reachable on an empty profile that way.
     if (devRoute?.modal === 'publish') {
-      void import('@/lib/devPublishSample').then(({ devPublishPayload }) => openPublish(devPublishPayload()));
+      void import('@/lib/devPublishSample').then(({ devPublishPayload }) => openPublish(devPublishPayload(devRoute.tab)));
     }
     // The connection step only opens partway through an add in the World Editor, so its dev route builds the
     // rows rather than the library item and the world that would raise them.
@@ -483,6 +477,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       setCardType(devRoute.tab as typeof cardType);
     }
   }, [devRoute?.modal, devRoute?.tab, openCommunityBrowser]);
+
+  // DEV: the Authoring Tour always runs on a world of its own, so its route opens a new blank one.
+  useEffect(() => {
+    if (devRoute?.modal === 'worldEditor' && devRoute.tour) loadWorldData(newBlankWorld(), true);
+  }, [devRoute?.modal, devRoute?.tour, loadWorldData]);
 
   // DEV: open the World Editor on a *stored* world. The `worldEditor` modal route opens a blank draft, so
   // authoring an existing world otherwise means clicking through the library grid.
@@ -523,7 +522,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       onLoadSaveGame(saveId);
     } catch (error) {
       console.error('Cold-load failed:', error);
-      toast.error("Couldn't load that save's world.");
+      toastError(error, { headline: "Couldn't load that save's world." });
     }
   };
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -558,10 +557,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // A blank character being authored but not yet saved (New Entity → editor, persisted only on Save).
   const [draftEntity, setDraftEntity] = useState<Entity | null>(null);
 
-  // Shared auth identity (header, publish gating, community browser). The login/profile forms live in AuthModals.
+  // Shared auth identity (header, publish gating, community browser). The profile forms live in AuthModals.
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<WorldRecord | null>(null);
-  const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
   // Bumped when another tab signs in, so the identity below is re-read rather than left as this tab
   // found it. Signing in on formamorph.ai writes the same storage keys this build reads.
@@ -599,8 +597,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
    * 5MB" — a dead end in a dialog that never mentions thumbnails, and no way to act on it. The download
    * side already offers this choice; the publish side is where the big image actually comes from.
    */
-  const publishEntity = async (entity: Entity) => {
-    openPublish(entityPublishPayload(await promptEntity(entity)), entity.id);
+  const publishEntity = async (entity: Entity, libraryDetails?: { author?: string }) => {
+    openPublish(entityPublishPayload(await promptEntity(entity), libraryDetails), entity.id);
   };
 
   /**
@@ -612,10 +610,21 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const publishModel = async (model: { id: string; name: string }) => {
     const attempt = await buildAvatarPublish(model);
     if (!attempt.allowed) {
-      toast.error(avatarPublishRefusal(attempt.failedRequirements));
+      toast.error(attempt.message);
       return;
     }
     openPublish(attempt.payload);
+  };
+
+  /** Publish the selected world, unless it is a bundled world the player never edited. */
+  const publishWorld = (world: WorldRecord) => {
+    // A selected world always holds its migrated data (handleWorldSelection); WorldRecord is loose.
+    const attempt = buildWorldPublish(world as WorldPublishTarget);
+    if (!attempt.allowed) {
+      toast.error(attempt.message);
+      return;
+    }
+    openPublish(attempt.payload, world.id);
   };
   const [showBackup, setShowBackup] = useState(false);
 
@@ -816,12 +825,15 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         if (!isMountedRef.current) return;
         setSkeletonWorlds(existingIds.map((id) => ({ id, isLoading: true })));
         const firstRun = existingIds.length === 0;
-        const { failed, updated } = await WorldStorageService.loadDefaultWorlds(DEFAULT_WORLDS);
+        const { failed, errors, updated } = await WorldStorageService.loadDefaultWorlds(DEFAULT_WORLDS);
         if (!isMountedRef.current) return;
         if (firstRun) {
           if (failed.length === 0) toast.success("Loaded default worlds");
-          else if (failed.length < DEFAULT_WORLDS.length) toast.error(`Some default worlds failed to load: ${failed.join(", ")}`);
-          else toast.error("Failed to load default worlds");
+          else toastError(new AggregateError(errors, "Default worlds failed to load"), {
+            headline: failed.length < DEFAULT_WORLDS.length
+              ? `Some default worlds failed to load: ${failed.join(", ")}`
+              : "Failed to load default worlds",
+          });
         }
         if (updated.length > 0) {
           toast.info(`Updated ${updated.length} default world${updated.length > 1 ? "s" : ""}: ${updated.join(", ")}`);
@@ -877,27 +889,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     return () => { cancelled = true; };
   }, [modelToDelete]);
 
-  // Fill in thumbnails for models that don't have one yet, one at a time so a grid of un-thumbnailed models
-  // doesn't try to hold several WebGL contexts at once. Each card updates in place as its picture arrives;
-  // models whose render fails are marked in storage, so this settles rather than retrying every visit.
-  useEffect(() => {
-    if (cardType !== 'models') return;
-    const pending = models.filter((model) => !model.thumbnail);
-    if (!pending.length) return;
-    let cancelled = false;
-    (async () => {
-      for (const model of pending) {
-        if (cancelled) return;
-        const thumbnail = await ModelStorageService.ensureThumbnail(model.id);
-        if (cancelled || !thumbnail) continue;
-        setModels((prev) => prev.map((m) => (m.id === model.id ? { ...m, thumbnail } : m)));
-      }
-    })();
-    return () => { cancelled = true; };
-    // Keyed on the id set, not on thumbnail state: one run processes every pending model in sequence, and
-    // a landing thumbnail (which changes `models` but not the id list) doesn't tear the loop down and restart
-    // it. It re-runs only when a model is added or removed.
-  }, [cardType, models.map((m) => m.id).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setModelThumbnailSource = useAvatarThumbnails(models, setModels, cardType === 'models');
 
   // Load the local character library metadata. Reused on mount and after the editor modal closes.
   const refreshEntities = useCallback(async () => {
@@ -991,9 +983,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
   // Persist a dictionary and show its card — shared by the dictionary import and the lorebooks that ride
   // along inside imported character cards.
-  const addDictionaryToLibrary = async (book: Dictionary) => {
+  const addDictionaryToLibrary = async (book: Dictionary, libraryDetails?: { author?: string }) => {
     const now = new Date().toISOString();
-    await DictionaryStorageService.storeDictionary({ id: book.id, name: book.name, createdAt: now, lastAccessed: now, data: book });
+    await DictionaryStorageService.storeDictionary({ id: book.id, name: book.name, createdAt: now, lastAccessed: now, data: book, libraryDetails });
     setDictionaries(prev => [...prev, { id: book.id, name: book.name, entryCount: book.entries.length, createdAt: now, lastAccessed: now }]);
   };
 
@@ -1067,14 +1059,14 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const importDictionaryFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = filesFrom(event);
     if (!files.length) return;
-    const parsed: { book: Dictionary; links: ComponentFileLinks }[] = [];
+    const parsed: { book: Dictionary; links: ComponentFileLinks; libraryDetails?: { author?: string } }[] = [];
     let ok = 0, skipped = 0;
     for (const file of files) {
       try {
         // Foreign lorebooks (ST / character cards) carry no internal name — fall back to the filename.
         const fallbackName = file.name.replace(/\.[^.]+$/, '');
         const raw = JSON.parse(await file.text());
-        parsed.push({ book: parseDictionaryImport(raw, fallbackName), links: readComponentFileLinks(raw) });
+        parsed.push({ book: parseDictionaryImport(raw, fallbackName), links: readComponentFileLinks(raw), libraryDetails: readLibraryDetails(raw) });
       } catch (err) {
         console.error('Error importing dictionary:', file.name, err);
         skipped++;
@@ -1083,16 +1075,16 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
     // A lone file that carries relationships is reviewed; everything else lands straight in the library.
     if (parsed.length === 1 && !skipped && hasComponentLinks(parsed[0].links)) {
-      await reviewComponentFile('dictionary', parsed[0].book, parsed[0].links);
+      await reviewComponentFile('dictionary', parsed[0].book, parsed[0].links, parsed[0].libraryDetails);
       return;
     }
 
-    for (const { book, links } of parsed) {
+    for (const { book, links, libraryDetails } of parsed) {
       try {
         // Through the same store either way: a file naming a listing refreshes the copy of it the player
         // already holds, rather than leaving a batch import with two rows of one name.
-        if (links.source?.sourceId) await storeComponentFile('dictionary', book, links);
-        else await addDictionaryToLibrary(book);
+        if (links.source?.sourceId) await storeComponentFile('dictionary', book, links, libraryDetails);
+        else await addDictionaryToLibrary(book, libraryDetails);
         ok++;
       } catch (err) { console.error('Error importing dictionary:', book.name, err); skipped++; }
     }
@@ -1103,10 +1095,17 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // Import one or more character images (our WebP cards or SillyTavern PNGs) into the library. One combined
   // Optimize/Downscale prompt covers every portrait; any lorebooks embedded in the cards are added too.
   const importEntityFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = filesFrom(event);
+    let files = filesFrom(event);
     if (!files.length) return;
+    const backupFlags = await Promise.all(files.map(isStPersonaBackupFile));
+    const backups = files.filter((_, index) => backupFlags[index]);
+    if (backups.length) {
+      await importStPersonas(backups, files.filter((file) => !isJsonFile(file)));
+      files = files.filter((file) => isJsonFile(file) && !backups.includes(file));
+      if (!files.length) return;
+    }
 
-    const parsed: { entity: Entity; book: Dictionary | null; links: ComponentFileLinks }[] = [];
+    const parsed: Awaited<ReturnType<typeof importCharacterFile>>[] = [];
     let skipped = 0;
     for (const file of files) {
       try { parsed.push(await importCharacterFile(file)); }
@@ -1118,7 +1117,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     if (parsed.length === 1 && !skipped && hasComponentLinks(parsed[0].links)) {
       const mode = await promptImagesBatch(entityImages(parsed[0].entity), IMAGE_CAPS.entity);
       const record = await applyEntityImagesOptimize(parsed[0].entity, mode, () => {});
-      await reviewComponentFile('entity', record, parsed[0].links);
+      await reviewComponentFile('entity', record, parsed[0].links, parsed[0].libraryDetails);
       return;
     }
 
@@ -1130,18 +1129,18 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       const total = mode === 'off' ? 0 : parsed.reduce((n, p) => n + entityImages(p.entity).length, 0);
       const storeAll = async (tick: (done: number) => void) => {
         let done = 0;
-        for (const { entity, book, links } of parsed) {
+        for (const { entity, book, links, libraryDetails } of parsed) {
           // Guarded per card: a portrait can blow the storage quota mid-batch, and that must not drop the rest.
           try {
             const record = await applyEntityImagesOptimize(entity, mode, () => tick(++done));
             // A card naming a listing goes through the same store a reviewed one does, so a batch import
             // refreshes the copy the player already holds rather than adding a second row of one name.
             if (links.source?.sourceId) {
-              await storeComponentFile('entity', record, links);
+              await storeComponentFile('entity', record, links, libraryDetails);
               await refreshEntities();
             } else {
-              await EntityStorageService.storeEntity({ id: record.id, name: record.name, createdAt: now, lastAccessed: now, data: record });
-              setEntities(prev => [...prev, { id: record.id, name: record.name, image: primaryImage(record), createdAt: now, lastAccessed: now }]);
+              await EntityStorageService.storeEntity({ id: record.id, name: record.name, createdAt: now, lastAccessed: now, data: record, libraryDetails });
+              setEntities(prev => [...prev, { id: record.id, name: record.name, image: primaryImage(record), createdAt: now, lastAccessed: now, tags: libraryDetails?.tags ?? record.tags, author: libraryDetails?.author, libraryDetails }]);
             }
             stored++;
           } catch (err) {
@@ -1162,6 +1161,65 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     } else if (skipped) {
       toast.error(`Couldn't import ${skipped} character${skipped === 1 ? '' : 's'}.`);
     }
+  };
+
+  // Import a SillyTavern persona backup. The other picked files are its avatars, matched by filename.
+  const importStPersonas = async (backups: File[], images: File[]) => {
+    if (backups.length > 1) {
+      toast.error('Pick one persona backup at a time.');
+      return;
+    }
+    let backup: Awaited<ReturnType<typeof readStPersonaFiles>>;
+    try {
+      backup = await readStPersonaFiles(backups[0], images);
+    } catch (err) {
+      toastError(err, 'Could not read that persona backup.');
+      return;
+    }
+    const mode = await promptImagesBatch(backup.personas.flatMap((p) => entityImages(p.entity)), IMAGE_CAPS.entity);
+    const now = new Date().toISOString();
+    const failed = new Set<string>();
+    const total = mode === 'off' ? 0 : backup.personas.filter((p) => p.entity.images?.length).length;
+    const storeAll = async (tick: (done: number) => void) => {
+      let done = 0;
+      for (const { entity } of backup.personas) {
+        try {
+          const record = await applyEntityImagesOptimize(entity, mode, () => tick(++done));
+          await EntityStorageService.storeEntity({ id: record.id, name: record.name, createdAt: now, lastAccessed: now, data: record });
+        } catch (err) {
+          console.error('Error storing persona:', entity.name, err);
+          failed.add(entity.id);
+        }
+      }
+    };
+    if (total) await withOptimizeProgress(total, storeAll);
+    else await storeAll(() => {});
+    await refreshEntities();
+
+    const storedDefault = backup.defaultId && !failed.has(backup.defaultId) ? backup.defaultId : undefined;
+    const libraryPersonas = new Set(entities.filter((entity) => entity.persona).map((entity) => entity.id));
+    const nextDefault = importedDefaultPersona(defaultPersona, libraryPersonas, storedDefault);
+    if (nextDefault) {
+      setDefaultPersona(nextDefault);
+      setDefaultPersonaId(nextDefault);
+    }
+
+    const stored = backup.personas.length - failed.size;
+    const summary = `Imported ${stored} persona${stored === 1 ? '' : 's'}${nextDefault ? ', and set the default persona' : ''}.`;
+    const report = stPersonaReport(backup, failed);
+    if (!report.length) {
+      toast.success(summary);
+      return;
+    }
+    toast.warning(
+      <div>
+        <p>{summary} Check these:</p>
+        <ul className="mt-1 list-disc pl-4">
+          {report.map((line, i) => <li key={i}>{line}</li>)}
+        </ul>
+      </div>,
+      { autoClose: false },
+    );
   };
 
   // Import one or more .vrm/.glb files into the model library. A file whose bytes are already stored asks
@@ -1200,164 +1258,18 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     setDraftDictionary({ id: randomUUID(), name: 'New Dictionary', enabled: true, entries: [] });
   };
 
-  // Toggle a trait in the starting selection. Picking one from an exclusive group retires its siblings,
-  // which is what makes that group read (and behave) as a set of radio buttons.
-  const handleTraitSelection = (traitId: string) => {
-    const trait = traits.find(t => t.id === traitId);
-    updateDraft('traitIds', prev => {
-      if (prev.includes(traitId)) return prev.filter(id => id !== traitId);
-      const retire = trait ? new Set(exclusiveSiblings(trait, traits, traitGroups)) : new Set<string>();
-      return [...prev.filter(id => !retire.has(id)), traitId];
-    });
-  };
-
   /** The signed-in account, for the author line that tells two same-named library items apart. */
   const signedInId = String(currentUser?.id ?? '') || undefined;
-  /**
-   * The library characters this world does not already hold a copy of, each with its author and source
-   * lines. Offering one the world already holds would put the same character in the run twice.
-   *
-   * A hidden character gets no Linked row the way a hidden dictionary does. The step lists dictionaries
-   * from both the world and the library, so a world dictionary has a row to mark; the world's own
-   * characters are always in play and were never rows here.
-   */
-  const additionEntities = useMemo(() => {
-    const followed = new Set(worldEntities
-      .map(followedLibraryId)
-      .filter((id): id is string => !!id));
-    return entities
-      .filter((meta) => !followed.has(meta.id))
-      .map((meta) => ({ ...meta, ...libraryLines(meta, signedInId) }));
-  }, [entities, signedInId, worldEntities]);
 
-  const hasLibraryAdditions = additionEntities.length > 0 || shouldShowDictionaryChoices(worldBooks, dictionaries)
-    || (worldBooks.length > 0 && !!selectedWorld && hasWorldAdditionDefaults(selectedWorld.id));
-
-  // Resolve one snapshot; navigation or cancellation invalidates its pending handoff.
-  const enterWorld = async (draft: EntryDraft = entryDraft) => {
-    if (entryRequest.current || entryStarted.current) return;
-    const request = {};
-    entryRequest.current = request;
-    setResolvingEntry(true);
-    try {
-      const loaded = await Promise.all(additionEntities.filter(m => draft.entityIds.has(m.id))
-        .map(async (metadata) => {
-          try {
-            return await EntityStorageService.getEntityData(metadata.id);
-          } catch (error) {
-            if (error instanceof LibraryRecordNotFoundError) return null;
-            throw error;
-          }
-        }));
-      const chars = loaded.filter((e): e is Entity => e !== null)
-        .map(e => ({ ...e, id: randomUUID() }));
-      const books = new Map<string, Dictionary>();
-      for (const item of draft.dictionaryItems) {
-        if (item.enabled && item.source === 'library') {
-          try {
-            books.set(item.book.id, await DictionaryStorageService.getDictionaryData(item.book.id));
-          } catch (error) {
-            if (!(error instanceof LibraryRecordNotFoundError)) throw error;
-          }
-        }
-      }
-      if (entryRequest.current !== request) return;
-      const dicts = finalizeSelection(draft.dictionaryItems, books);
-      setSelectedCharacters(chars);
-      setSelectedDictionaries(dicts);
-      if (selectedWorld!.data.worldOverview?.use3DModel) {
-        showEnterStep('avatar');
-      } else {
-        entryStarted.current = true;
-        onStartGame(draft.traitIds, null, true, draft.locationId, dicts, chars);
-      }
-    } catch (error) {
-      if (entryRequest.current === request) {
-        entryStarted.current = false;
-        console.error('Could not finalize enter-world library additions', error);
-        toast.error('Formamorph could not prepare those library additions. Try again.');
-      }
-    } finally {
-      if (entryRequest.current === request) cancelEntryResolution();
-    }
-  };
-
-  const advanceEntry = (step: NavigableStep) => {
-    const steps = navigableSteps(enterFlowSteps());
-    const next = steps[steps.indexOf(step) + 1];
-    if (next && next !== 'avatar') showEnterStep(next);
-    else void enterWorld();
-  };
-
-  const abandonEnterFlow = () => {
-    cancelEntryResolution();
-    setEntryDraft(emptyEntryDraft());
-    setSelectedCharacters(null);
-    setSelectedDictionaries(null);
-    setShowIntroReadme(false);
-    setEnterAfterIntro(null);
-    setShowSetupWorkspace(false);
-    setShowCharacterCustomization(false);
-    endSession();
-  };
-
-  // The enter-world steps actually shown for this world + library, in flow order — drives the Back button
-  // and the Introduction overlay (see `lib/enterFlow`).
-  const enterFlowSteps = (mode: EnterMode = 'newGame'): EnterStep[] => buildEnterFlow({
-    introReadme: selectedWorld?.data.worldOverview?.introReadme,
-    traitCount: traits.length,
-    startingLocationCount: startingLocations(locations).length,
-    hasLibraryAdditions,
-    use3DModel: !!selectedWorld?.data.worldOverview?.use3DModel,
-  }, mode);
-  const showEnterStep = (step: NavigableStep) => {
-    cancelEntryResolution();
-    setShowSetupWorkspace(step === 'workspace');
-    setShowCharacterCustomization(step === 'avatar');
-  };
-  // Back handler for a given step: goes to the previous shown step, or undefined on the first (button fades).
-  const backFrom = (step: NavigableStep): (() => void) | undefined => {
-    const steps = navigableSteps(enterFlowSteps());
-    const idx = steps.indexOf(step);
-    return idx > 0 ? () => showEnterStep(steps[idx - 1]) : undefined;
-  };
-
-  const openFirstEnterStep = (steps: NavigableStep[], draft: EntryDraft) => {
-    if (steps[0] && steps[0] !== 'avatar') showEnterStep(steps[0]);
-    else void enterWorld(draft);
-  };
-
-  const closeIntroReadme = () => {
-    setShowIntroReadme(false);
-    if (!enterAfterIntro) return;
-    const draft = enterAfterIntro;
-    setEnterAfterIntro(null);
-    void enterWorld(draft);
-  };
-
+  // Enter World, the tour's Play and the dev route all start here, so they share these checks.
   const startEntry = () => {
-    const defaults = collapseExclusiveDefaults(
-      rawTraits.filter(t => t.isDefault).map(t => t.id), rawTraits, rawTraitGroups);
-    const draft: EntryDraft = {
-      ...emptyEntryDraft(), traitIds: defaults,
-      ...restoreWorldAdditionDefaults(
-        selectedWorld!.id, buildInitialSelection(worldBooks, dictionaries, signedInId), additionEntities),
-    };
-    cancelEntryResolution();
-    entryStarted.current = false;
-    setEntryDraft(draft);
-    setShowWorldModal(false);
-    beginSession();
-    const steps = enterFlowSteps();
-    const rest = navigableSteps(steps);
-    if (steps[0] === 'intro' && showReadme(selectedWorld!.id)) {
-      setShowIntroReadme(true);
-      if (rest.length === 0) {
-        setEnterAfterIntro(draft);
-        return;
-      }
+    // The world modal carries the block's message and its repair.
+    if (sourceBlock) {
+      setShowWorldModal(true);
+      return;
     }
-    openFirstEnterStep(rest, draft);
+    setShowWorldModal(false);
+    entryFlow.current?.start();
   };
 
   const devEntryActions = useRef({ select: handleWorldSelection, start: startEntry });
@@ -1375,6 +1287,92 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     setDevEntryPending(false);
     devEntryActions.current.start();
   }, [devEntryPending, selectedWorld]);
+
+  // The Authoring Tour's Play: once the saved world is the selected one, enter it as Enter World does.
+  const [playAfterTour, setPlayAfterTour] = useState<string | null>(null);
+  const startEntryRef = useRef(startEntry);
+  useEffect(() => { startEntryRef.current = startEntry; });
+  useEffect(() => {
+    if (!playAfterTour || selectedWorld?.id !== playAfterTour) return;
+    setPlayAfterTour(null);
+    startEntryRef.current();
+  }, [playAfterTour, selectedWorld]);
+  /** Closes the World Editor and reloads the world grid, which the caller reads back. */
+  const closeWorldEditor = () => {
+    setShowWorldEditor(false);
+    setEditorOnNewWorld(false);
+    setEditorStartsTour(false);
+    return refreshWorlds();
+  };
+  const playFromEditor = (worldId: string) => {
+    void closeWorldEditor().then((list) => {
+      if (!list.some((w) => w.id === worldId)) {
+        toast.error('Your world is saved. Open it from the library to play.');
+        return;
+      }
+      resyncSelectedWorld(list, worldId);
+      setPlayAfterTour(worldId);
+    });
+  };
+  /** The editor's own exit: close it and follow the open world into the reloaded grid. */
+  const exitWorldEditor = () => {
+    const openId = selectedWorld?.id;
+    void closeWorldEditor().then((list) => (openId ? resyncSelectedWorld(list, openId) : undefined));
+  };
+
+  // --- Surface requests ------------------------------------------------------------------------------
+  const surfaceNav = useSurfaceNav();
+  useTargetLanding(surfaceNav.pageTarget, surfaceNav.key);
+  // The World Editor's leave step, which asks about unsaved edits before it lets go.
+  const editorLeaveRef = useRef<((then: () => void) => void) | null>(null);
+  const openSurfaceHere = (steps: SurfaceSteps) => {
+    surfaceNav.land(steps);
+    // No game is running, so a game surface opens the saves that lead into one.
+    if (steps.view === 'gameViewer') { setShowLoadDialog(true); return; }
+    const cardTab = stepTab(steps, 'mainMenu');
+    if (cardTab) setCardType(cardTab);
+    switch (steps.dialog) {
+      case 'settings': {
+        const landing = settingsLanding(steps);
+        if (landing.tab) setSettingsTab(landing.tab);
+        if (landing.endpointTab) setSettingsEndpointTab(landing.endpointTab);
+        setShowSettings(true);
+        break;
+      }
+      // The editor edits the open world. With none open, the library is where one is picked.
+      case 'worldEditor':
+        if (selectedWorld || showWorldEditor) setShowWorldEditor(true);
+        else setCardType('worlds');
+        break;
+      // Held as the browser's own tab request, so it outlasts the landing and an age gate's answer.
+      case 'community': {
+        const tab = stepTab(steps, 'community');
+        if (!showCommunityBrowser) openCommunityBrowser(tab);
+        else if (tab) setCommunityTab(tab);
+        break;
+      }
+      case 'profile':
+        if (isAuthenticated) setShowProfileDialog(true);
+        else requestSignIn();
+        break;
+      case 'auth': if (!isAuthenticated) requestSignIn(); break;
+      case 'feedbackHub': setShowFeedback(true); break;
+      case 'menu': setShowLoadDialog(true); break;
+      case 'backup': setShowBackup(true); break;
+      case 'avatar': setShowCharacterCustomization(true); break;
+      case 'aiSetup': setGate({ reason: 'firstRun' }); break;
+      case 'intro': onReplayIntro?.(); break;
+    }
+  };
+  useSurfaceOpenRequest((steps, clear) => {
+    clear();
+    const leave = editorLeaveRef.current;
+    if (!showWorldEditor || !closesWorldEditor(steps) || !leave) {
+      openSurfaceHere(steps);
+      return;
+    }
+    leave(() => { exitWorldEditor(); openSurfaceHere(steps); });
+  });
 
   /**
    * Download this world's linked pictures into the on-device cache so it stays viewable without a connection.
@@ -1396,8 +1394,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       } else {
         toast.success(`This world's ${cached} linked image${cached === 1 ? '' : 's'} are available offline.`);
       }
-    } catch {
-      toast.error('Could not save the images for offline use');
+    } catch (error) {
+      toastError(error, { headline: 'Could not save the images for offline use' });
     } finally {
       setWarmingOffline(false);
     }
@@ -1451,51 +1449,23 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       toast.success('World duplicated successfully!');
     } catch (error) {
       console.error('Error duplicating world:', error);
-      toast.error('Failed to duplicate world');
+      toastError(error, { headline: 'Failed to duplicate world' });
     }
   };
 
-  const handleCreateNewWorld = async () => {
+  const handleCreateNewWorld = async ({ tour = false }: { tour?: boolean } = {}) => {
     try {
-      // Generate a unique ID for the new world
-      const worldId = `new-${randomUUID()}`;
-
-      // Create a basic blank world structure
-      const blankWorld: World = {
-        id: worldId,
-        worldOverview: {
-          name: 'New World',
-          description: 'A blank world ready for editing',
-          thumbnail: null,
-          use3DModel: false,
-          bgm: null,
-          systemPrompt: '',
-          author: '',
-          tags: []
-        },
-        stats: [],
-        traits: [],
-        // Seed the two default trait groups so authors start with World/Player folders.
-        traitGroups: [
-          { id: randomUUID(), name: 'World', parentId: null, order: 0 },
-          { id: randomUUID(), name: 'Player', parentId: null, order: 1 },
-        ],
-        locations: [],
-        entities: [],
-        statUpdates: [], // This field is required by WorldStorageService
-        // Seed one "Default" book so new worlds start with a dictionary (Foreground by default).
-        dictionaries: [{ id: randomUUID(), name: 'Default', enabled: true, entries: [] }],
-      };
-
       // Load the blank world into context for editing; it is NOT persisted until the user hits Save World
       // (so backing out without saving leaves no stray blank world behind).
-      loadWorldData(blankWorld, true);
+      loadWorldData(newBlankWorld(), true);
 
-      // Open the world editor
+      // Open the world editor on it, which offers the Authoring Tour there.
+      setEditorOnNewWorld(true);
+      setEditorStartsTour(tour);
       setShowWorldEditor(true);
     } catch (error) {
       console.error('Error creating new world:', error);
-      toast.error('Failed to create new world');
+      toastError(error, { headline: 'Failed to create new world' });
     }
   };
 
@@ -1646,6 +1616,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     setUnreadMessages(0);
   }), []);
 
+  // The sign-in dialog is shared by every view, so a sign-in raised from Error Details lands here too.
+  useEffect(() => onSignInSucceeded(() => {
+    setIsAuthenticated(true);
+    setCurrentUser(AuthService.getCurrentUser());
+  }), []);
+
   // Signing in is raised from more than this screen's dialog too: /login on the site writes the same
   // session, and this tab has to show it without a reload. The check above does the adopting — it is
   // already the one path that waits on the age attestation and refreshes the profile.
@@ -1739,6 +1715,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
       <GradientButton
         tone="green"
+        {...IMPORT_TARGET[cardType]}
         onClick={() => {
           if (cardType === 'worlds') fileInputRef.current?.click();
           else if (cardType === 'dictionaries') dictionaryImportRef.current?.click();
@@ -1768,25 +1745,25 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     </>
   );
 
-  if (showCharacterCustomization && !showIntroReadme) {
-    return (
-      <CharacterCustomization
-        onCharacterCustomized={(customizedData) => {
-          if (entryStarted.current) return;
-          entryStarted.current = true;
-          setShowCharacterCustomization(false);
-          onStartGame(selectedTraits, customizedData, true, selectedLocationId, selectedDictionaries, selectedCharacters);
-        }}
-        onBack={backFrom('avatar')}
-        onAbort={() => {
-          setShowCharacterCustomization(false);
-          abandonEnterFlow();
-        }}
-      />
-    );
-  }
-
-  return (
+  // One place in the tree, so the entry draft survives the Avatar step taking the whole screen.
+  const flow = (
+    <EnterWorldFlow
+      ref={entryFlow}
+      world={selectedWorld}
+      libraryEntities={entities}
+      libraryDictionaries={dictionaries}
+      signedInId={signedInId}
+      defaultPersona={defaultPersona}
+      showReadme={showReadme}
+      setShowReadme={setShowReadme}
+      introOpen={showIntroReadme}
+      setIntroOpen={setShowIntroReadme}
+      avatarOpen={showCharacterCustomization}
+      setAvatarOpen={setShowCharacterCustomization}
+      onStartGame={onStartGame}
+    />
+  );
+  const menu = (
     <div className="pt-[calc(5rem+env(safe-area-inset-top))] relative flex flex-col app-viewport overflow-hidden">
       {downscaleDialog}
       {updateDialog}
@@ -1921,9 +1898,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         onOpenChange={(v) => { setShowSettings(v); if (!v) { setSettingsTab(undefined); setSettingsEndpointTab(undefined); } }}
         initialTab={settingsTab ?? asSettingsTab(devRoute?.tab)}
         initialEndpointTab={settingsEndpointTab}
-        initialPromptTab={devRoute?.subtab}
-        initialPromptSurface={devRoute?.surface}
+        initialPromptTab={surfaceNav.settings?.promptTab ?? devRoute?.subtab}
+        initialPromptSurface={surfaceNav.settings?.promptSurface ?? devRoute?.surface}
+        initialTarget={surfaceNav.settings?.target}
+        requestKey={surfaceNav.key}
         onWorldsRestored={refreshWorlds}
+        onStartAuthoringTour={() => { setShowSettings(false); void handleCreateNewWorld({ tour: true }); }}
       />
       <AiSetupGate
         open={gate !== null}
@@ -1965,7 +1945,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         type="file"
         ref={entityImportRef}
         onChange={importEntityFile}
-        accept="image/webp,image/png,.webp,.png"
+        accept="image/webp,image/png,image/jpeg,.webp,.png,.jpg,.jpeg,.json,application/json"
         multiple
         className="hidden"
       />
@@ -1985,11 +1965,12 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           idOf={(model) => model.id}
           nameOf={(model) => model.name}
           tiles={modelTiles}
-          layout="grid"
+          layout={layoutMode}
           aspect="portrait"
           minMediumWidth={ENTITY_MIN_TILE}
-          detailedColumnsClass={DETAILED_GRID_CLASS}
+          detailedColumnsClass={DETAILED_SPLIT_GRID_CLASS}
           thumbnailOf={(model) => model.thumbnail}
+          placeholderOf={(model) => <EntityPlaceholderArt id={model.id} name={model.name} />}
           emptyState={!isLoadingModels ? (
             <div className="flex items-center justify-center py-16 px-4 select-none">
               <p className="max-w-md text-center text-helper text-muted-foreground">
@@ -1997,32 +1978,45 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               </p>
             </div>
           ) : undefined}
-          renderCard={(model, { fill, compact }) => (
-            <SortableWorldCard
-              world={{ id: model.id, name: model.name, thumbnail: model.thumbnail }}
-              layout="grid"
-              aspect="portrait"
-              fill={fill}
-              compact={compact}
-              // A plain .glb carries no VRM metadata, so it has no license and its morph targets
-              // aren't guaranteed — say so on the card rather than letting it pass as a full VRM.
-              badge={model.license?.metaVersion === null ? (
-                <Tip tip="Plain glTF: no license information, and morph targets aren't guaranteed.">
-                  <span
-                    tabIndex={0}
-                    className="rounded bg-overlay/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-                  >
-                    GLB
-                  </span>
-                </Tip>
-              ) : undefined}
-              onSelect={setPreviewModelId}
-            />
-          )}
+          renderCard={(model, { layout, fill, compact }) => {
+            // A plain .glb carries no VRM metadata, so it has no license and its morph targets
+            // aren't guaranteed — say so on the card rather than letting it pass as a full VRM.
+            const glb = model.license?.metaVersion === null ? (
+              <Tip tip="Plain glTF: no license information, and morph targets aren't guaranteed.">
+                <span
+                  tabIndex={0}
+                  className="self-start rounded bg-overlay/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                >
+                  GLB
+                </span>
+              </Tip>
+            ) : undefined;
+            return (
+              <SortableWorldCard
+                world={{ id: model.id, name: model.name, description: creditLine(model.license?.authors), thumbnail: model.thumbnail }}
+                layout={layout}
+                aspect="portrait"
+                fill={fill}
+                compact={compact}
+                placeholder={<EntityPlaceholderArt id={model.id} name={model.name} />}
+                omitEmptyDescription
+                omitEmptyTags
+                badge={glb}
+                note={glb}
+                onSelect={setPreviewModelId}
+              />
+            );
+          }}
           onPublish={isAuthenticated ? (id) => {
             const target = models.find((m) => m.id === id);
             if (target) void publishModel(target);
           } : undefined}
+          itemActions={(id) => {
+            const model = models.find((m) => m.id === id);
+            return model ? (
+              <AvatarThumbnailMenuItems model={model} onChange={(source) => { void setModelThumbnailSource(id, source); }} />
+            ) : null;
+          }}
           onDelete={setModelToDelete}
         />
       ) : cardType === 'entities' ? (
@@ -2034,26 +2028,58 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           layout={layoutMode}
           aspect="portrait"
           minMediumWidth={ENTITY_MIN_TILE}
-          detailedColumnsClass={DETAILED_GRID_CLASS}
+          detailedColumnsClass={DETAILED_SPLIT_GRID_CLASS}
           thumbnailOf={(entity) => entity.image}
-          emptyState={!isLoadingEntities ? (
+          placeholderOf={(entity) => <EntityPlaceholderArt id={entity.id} sourceId={entity.sourceId} name={entity.name} />}
+          filter={entityPredicate}
+          toolbar={(
+            <ToggleGroup
+              type="single"
+              value={entityFilter}
+              aria-label="Entity Filter"
+              onValueChange={(v) => { if (v) setEntityFilter(entityLibraryFilterCodec.parse(v)); }}
+            >
+              <ToggleGroupItem value="all">All</ToggleGroupItem>
+              <ToggleGroupItem value="personas">Personas</ToggleGroupItem>
+            </ToggleGroup>
+          )}
+          emptyState={isLoadingEntities ? undefined : entityPredicate ? (
+            <div className="flex items-center justify-center py-16 px-4 select-none">
+              <p className="max-w-md text-center text-helper text-muted-foreground">
+                No personas yet. Open an entity and select the <span className="font-semibold">Persona</span> checkbox on its <span className="font-semibold">Profile</span> tab.
+              </p>
+            </div>
+          ) : (
             <div className="flex items-center justify-center py-16 px-4 select-none">
               <p className="max-w-md text-center text-helper text-muted-foreground">
                 No characters yet — use <span className="font-semibold">New Entity</span> or <span className="font-semibold">Import Entity</span> to add one.
               </p>
             </div>
-          ) : undefined}
+          )}
           renderCard={(entity, { layout, fill, compact }) => (
             <SortableWorldCard
-              world={{ id: entity.id, name: entity.name, description: entity.description, thumbnail: entity.image, tags: entity.tags }}
+              world={{ id: entity.id, name: entity.name, description: entity.description, thumbnail: entity.image, tags: entity.tags, author: entity.author }}
               layout={layout}
               aspect="portrait"
               fill={fill}
               compact={compact}
+              placeholder={<EntityPlaceholderArt id={entity.id} sourceId={entity.sourceId} name={entity.name} />}
               onSelect={setEditingEntityId}
+              badge={entity.id === defaultPersona && entity.persona ? <DefaultPersonaBadge /> : undefined}
+              note={entity.id === defaultPersona && entity.persona ? 'Default persona' : undefined}
             />
           )}
           onCheckUpdates={(id) => { void checkForUpdates('entity', id); }}
+          itemActions={(id) => {
+            if (!entities.some((entity) => entity.id === id && entity.persona)) return null;
+            return (
+              <DefaultPersonaMenuItem
+                isDefault={id === defaultPersona}
+                onSet={() => { setDefaultPersona(id); setDefaultPersonaId(id); }}
+                onClear={() => { clearDefaultPersona(); setDefaultPersonaId(undefined); }}
+              />
+            );
+          }}
           onDelete={setEntityToDelete}
         />
       ) : cardType === 'dictionaries' ? (
@@ -2184,7 +2210,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 // An account is what unlocks profiles and comments, so signing up sits behind the same
                 // attestation the browser does. A player who already attested is not asked twice.
                 if (isAuthenticated) setShowProfileDialog(true);
-                else requireAuthentication({ onAccept: () => setShowAuthDialog(true) });
+                else requestSignIn();
               }}
               aria-label={
                 isAuthenticated
@@ -2456,21 +2482,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                       tone="amberSoft"
                       className="w-1/3 rounded-l-none"
                       disabled={!!sourceBlock}
-                      onClick={() => {
-                        // For uploaded worlds, use the worldData from context
-                        const currentWorldData = selectedWorld!.data;
-                        // Skip the setup steps but honor the author's default trait choices.
-                        const defaults = collapseExclusiveDefaults(
-                          traits.filter((t) => t.isDefault).map((t) => t.id), traits, traitGroups);
-                        const draft: EntryDraft = {
-                          ...emptyEntryDraft(), traitIds: defaults,
-                          dictionaryItems: buildInitialSelection(worldBooks, dictionaries, signedInId),
-                        };
-                        cancelEntryResolution();
-                        entryStarted.current = false;
-                        setEntryDraft(draft);
-                        onStartGame(defaults, currentWorldData.worldOverview?.use3DModel ? defaultCharacterData : null, true);
-                      }}
+                      onClick={() => entryFlow.current?.quickStart()}
                     >
                       <ChevronLast className="h-4 w-4 landscape:mr-2" />
                       <span className="hidden landscape:inline">Quick Start</span>
@@ -2514,7 +2526,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                     <WorldActionButton
                       tone="redSoft"
                       disabled={!!sourceBlock}
-                      onClick={() => selectedWorld && openPublish(worldPublishPayload(selectedWorld.data), selectedWorld.id)}
+                      onClick={() => { if (selectedWorld) publishWorld(selectedWorld); }}
                     >
                       <ActionIcon.publish className="mr-2 h-4 w-4" /> Publish World
                     </WorldActionButton>
@@ -2665,9 +2677,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
       <DictionaryEditorModal
         dictionaryId={editingDictionaryId}
+        initialTab={devRoute?.modal === 'dictionaryEditor' ? DICTIONARY_EDITOR_TABS.find((t) => t.value === devRoute.tab)?.value : undefined}
         draft={draftDictionary}
         onClose={() => { setEditingDictionaryId(null); setDraftDictionary(null); refreshDictionaries(); }}
-        onPublish={isAuthenticated ? (book) => openPublish(dictionaryPublishPayload(book), book.id) : undefined}
+        onPublish={isAuthenticated ? (book, details) => openPublish(dictionaryPublishPayload(book, details), book.id) : undefined}
       />
 
       <ConfirmDialog
@@ -2703,7 +2716,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
             setModels(prev => prev.filter(m => m.id !== modelToDelete));
           } catch (error) {
             // The library refuses to drop its last avatar; tell the player why rather than failing silently.
-            toast.error((error as Error).message);
+            toastError(error, 'Could not delete that player avatar.');
           } finally {
             setModelToDelete(null);
           }
@@ -2721,6 +2734,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         draft={draftEntity}
         onClose={() => { setEditingEntityId(null); setDraftEntity(null); refreshEntities(); }}
         onPublish={isAuthenticated ? publishEntity : undefined}
+        initialTab={devRoute?.modal === 'entityEditor' ? ENTITY_EDITOR_TABS.find((t) => t.value === devRoute.tab)?.value : undefined}
+        initialSubTab={devRoute?.modal === 'entityEditor' ? ENTITY_EDITOR_SUBTABS.find((t) => t.value === devRoute.subtab)?.value : undefined}
       />
 
       <Dialog open={showCodeModal} onOpenChange={setShowCodeModal}>
@@ -2784,7 +2799,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           which parts are this world's doing. Chips are shown as their raw tokens: this is the text as
           authored, not a per-turn render, and the AI-context viewer already shows the filled one. */}
       <Dialog open={showWorldPrompts} onOpenChange={setShowWorldPrompts}>
-        <DialogContent className="sm:max-w-[700px] h-[85dvh] flex flex-col">
+        <DialogContent surface="worldPrompts" className="sm:max-w-[700px] h-[85dvh] flex flex-col">
           <DialogHeader className="shrink-0">
             {/* The mode switch shares the title row (pr-6 clears the dialog's X), and the description
                 doubles as the legend — its "added"/"removed" carry the diff's actual colors — so the
@@ -2823,7 +2838,13 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 value={kind}
                 className="flex-1 min-h-0 mt-0 overflow-auto rounded-md bg-muted p-4"
               >
-                <PromptDiff kind={kind} text={worldPrompt(promptOverview, kind) ?? ''} mode={promptView} />
+                <PromptDiff
+                  kind={kind}
+                  text={worldPrompt(promptOverview, kind) ?? ''}
+                  mode={promptView}
+                  placeholders={promptPlaceholders}
+                  owners={promptPlaceholderOwners}
+                />
               </TabsContent>
             ))}
           </Tabs>
@@ -2834,81 +2855,21 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         </DialogContent>
       </Dialog>
 
-      {/* The world's Introduction, over whichever setup screen is behind it. Placeholders resolve because
-          `beginSession` rolls them on the Enter World click, before this opens. */}
-      {selectedWorld && (
-        <ReadmeModal
-          title="Introduction"
-          readme={resolvePH(selectedWorld.data.worldOverview?.introReadme ?? '')}
-          open={showIntroReadme}
-          onOpenChange={(open) => { if (!open) closeIntroReadme(); }}
-          show={showReadme(selectedWorld.id)}
-          onShowChange={(s) => setShowReadme(selectedWorld.id, s)}
-        />
-      )}
-
-      {workspaceMounted && selectedWorld && (
-        <EnterWorldWorkspace
-          open={showSetupWorkspace}
-          worldName={selectedWorld.name}
-          traits={traits}
-          traitGroups={traitGroups}
-          stats={rawStats}
-          locations={startingLocations(locations)}
-          resolveText={resolvePH}
-          resolveTraitText={resolveTraitText}
-          selectedTraits={selectedTraits}
-          selectedLocationId={selectedLocationId}
-          worldAuthor={selectedWorld?.author}
-          libraryEntities={additionEntities}
-          selectedEntityIds={entryDraft.entityIds}
-          dictionaryItems={entryDraft.dictionaryItems}
-          categoryIndex={entryDraft.traitSection}
-          onCategoryChange={(index) => updateDraft('traitSection', index)}
-          onTraitSelect={handleTraitSelection}
-          onLocationChange={(id) => updateDraft('locationId', id)}
-          onEntityToggle={(id, selected) => updateDraft('entityIds', (current) => {
-            const next = new Set(current);
-            if (selected) next.add(id); else next.delete(id);
-            return next;
-          })}
-          onDictionaryItemsChange={(items) => updateDraft('dictionaryItems', items)}
-          onSaveAdditions={() => {
-            try {
-              saveWorldAdditionDefaults(selectedWorld.id, entryDraft);
-              return true;
-            } catch {
-              toast.error('Formamorph could not save these additions. Try again.');
-              return false;
-            }
-          }}
-          onIntroduction={selectedWorld.data.worldOverview?.introReadme?.trim()
-            ? () => setShowIntroReadme(true)
-            : undefined}
-          onCancel={abandonEnterFlow}
-          onContinue={() => advanceEntry('workspace')}
-          continueLabel={selectedWorld.data.worldOverview?.use3DModel ? 'Continue to Avatar' : 'Start game'}
-          resolving={resolvingEntry}
-        />
-      )}
-
       {/* Community-server dialogs (auth, publish, world browser) — omitted entirely in the hosted build. */}
       {COMMUNITY_ENABLED && (
         <>
-          {/* Auth + Profile dialogs (login/register + change password/logout) */}
+          {/* Profile dialogs (change password/logout). Sign-in is the app-wide SignInHost. */}
           <AuthModals
-            showAuthDialog={showAuthDialog}
-            setShowAuthDialog={setShowAuthDialog}
             showProfileDialog={showProfileDialog}
             setShowProfileDialog={setShowProfileDialog}
             currentUser={currentUser}
-            onAuthenticated={() => { setIsAuthenticated(true); setCurrentUser(AuthService.getCurrentUser()); }}
             onAvatarChanged={() => setCurrentUser(AuthService.getCurrentUser())}
             onLogout={handleLogout}
             onUnreadChange={setUnreadMessages}
             onNotificationsRead={handleNotificationsRead}
             onOpenListing={handleOpenListing}
-            initialTab={devRoute?.modal === 'profile' ? (devRoute.tab as ProfileTab | undefined) : undefined}
+            initialTab={surfaceNav.tab('profile') ?? (devRoute?.modal === 'profile' ? (devRoute.tab as ProfileTab | undefined) : undefined)}
+            requestKey={surfaceNav.key}
           />
 
           {/* Publish Modal — form/handlers live in the component */}
@@ -2938,8 +2899,13 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
             onOpenChange={handleCommunityBrowserOpenChange}
             presentation={devRoute?.modal === 'community' && devRoute.mode === 'page' ? 'page' : 'dialog'}
             initialTab={communityTab ?? (devRoute?.modal === 'community' ? asBrowseTab(devRoute.tab) : undefined)}
+            requestKey={surfaceNav.key}
             openListing={pendingListing}
             onListingOpened={handleListingOpened}
+            // Only on a press, and only where a guest's like cannot land: a server with the feature
+            // switched off, and the cap toast's own Sign in. Closing it leaves them on the listing.
+            onGuestLike={() => requestSignIn()}
+            promptLibrary={{ target: promptTarget, activeId: activePresetId, select: selectPreset }}
             openLikersOnMount={devRoute?.modal === 'likers'}
             openManageAddonsOnMount={devRoute?.modal === 'manageAddons'}
           />
@@ -2952,7 +2918,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           arrow means the editor's guarded back arrow is the sole exit; Esc/overlay are blocked so they can't
           bypass the dirty prompt. */}
       <Dialog open={showWorldEditor} onOpenChange={(open) => { if (open) setShowWorldEditor(true); }}>
-        <DialogContent aria-describedby={undefined}
+        <DialogContent surface="worldEditor" aria-describedby={undefined}
           hideClose
           onEscapeKeyDown={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
@@ -2962,11 +2928,15 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           <WorldEditor
             embedded
             backButton
-            onClose={() => {
-              setShowWorldEditor(false);
-              const openId = selectedWorld?.id;
-              void refreshWorlds().then((list) => (openId ? resyncSelectedWorld(list, openId) : undefined));
-            }}
+            newWorld={editorOnNewWorld}
+            startTour={editorStartsTour}
+            onPlay={playFromEditor}
+            onClose={exitWorldEditor}
+            initialTab={surfaceNav.tab('worldEditor')}
+            initialBenchTab={surfaceNav.tab('worldEditorBench')}
+            initialTarget={surfaceNav.target}
+            requestKey={surfaceNav.key}
+            leaveRef={editorLeaveRef}
           />
         </DialogContent>
       </Dialog>
@@ -2983,7 +2953,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       <FeedbackHubDialog
         open={showFeedback}
         onOpenChange={setShowFeedback}
-        initialTab={devRoute?.modal === 'feedbackHub' ? (devRoute.tab as MyFeedbackTabKey | undefined) : undefined}
+        initialTab={surfaceNav.tab('feedbackHub') ?? (devRoute?.modal === 'feedbackHub' ? (devRoute.tab as MyFeedbackTabKey | undefined) : undefined)}
+        requestKey={surfaceNav.key}
         onChanged={handleBugsChange}
       />
 
@@ -3001,6 +2972,13 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         onReportsChanged={() => setReportCountNonce((n) => n + 1)}
       />
     </div>
+  );
+
+  return (
+    <>
+      {flow}
+      {!(showCharacterCustomization && !showIntroReadme) && menu}
+    </>
   );
 };
 

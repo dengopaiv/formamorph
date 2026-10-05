@@ -6,8 +6,7 @@ import { entityIdsAt, setLocationRoster } from '@/lib/entityPresence';
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { PanelTabsList } from '@/components/ui/panel-tabs';
+import { PanelTabContent, PanelTabs } from '@/components/ui/panel-tabs';
 import AiGenerateButton from "@/components/AiGenerateButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { labelPlaceholders } from '@/lib/placementLetters';
@@ -15,6 +14,7 @@ import { SoundUpload } from '../lib/UtilityComponents';
 import { IMAGE_CAPS } from '../lib/imageOptim';
 import ImageTagsField from './ImageTagsField';
 import LocationConnections from './LocationConnections';
+import { LocationOpenings } from './OpeningsPanel';
 import { useEditorMode } from '@/lib/editorMode';
 import { HelpButton } from '@/components/HelpButton';
 import { HintInfo } from '@/components/SettingsRows';
@@ -23,7 +23,7 @@ import { locationPanelTabsFor, locationTabForField, type LocationPanelTab } from
 import type { FocusFieldHint, GameLocation, PlaceholderPin } from '@/types';
 
 /**
- * Right-panel editor for one location: its fields split across Details, Presence, Media and Pins.
+ * Right-panel editor for one location: its fields split across Details, Presence, Media, Pins and Openings.
  *
  * The panel remounts per location, so the chosen tab is the editor's to hold and arrives as a prop. The
  * background image sits on Media rather than beside the name: a location has one slot and it is a backdrop,
@@ -34,11 +34,11 @@ import type { FocusFieldHint, GameLocation, PlaceholderPin } from '@/types';
  */
 /** The long form behind the Starting Location ⓘ. The row has no room for a line, so the label decides and
  *  the popover defines. */
-const STARTING_INFO = `**Starting Location** marks where a new game may begin.
+export const STARTING_INFO = `**Starting Location** marks where a new game can begin
 
-- With one, every new game starts there.
-- With several, the player picks one, or the game picks at random.
-- With none, any location can be the start.`;
+- With one, every new game starts there
+- With several, the player picks one, or the game picks at random
+- With none, any location can be the start`;
 
 const LocationManager = ({ location, tab, onTabChange, focusField }: {
   location: GameLocation;
@@ -76,12 +76,11 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
   const tabs = locationPanelTabsFor(advanced);
 
   return (
-    <Tabs value={tab} onValueChange={(v) => onTabChange(v as LocationPanelTab)} className="space-y-4">
-      <PanelTabsList tabs={tabs} stripLabel="Location Fields" />
+    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Location Fields" surfaceTabs="worldEditorLocation">
 
-      <TabsContent value="details" className="space-y-4">
+      <PanelTabContent value="details">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1 space-y-2">
+          <div data-tour-anchor="location-name" className="min-w-0 flex-1 space-y-2">
             <Label>Name</Label>
             <PlaceholderNameField
               value={editingLocation.name || ''}
@@ -92,7 +91,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
           </div>
           {/* Bottom-aligned and as tall as the field, so the checkbox sits on the name's last line when a
               long name wraps. */}
-          <div className="flex min-h-10 shrink-0 items-center gap-2">
+          <div data-tour-anchor="location-starting" className="flex min-h-10 shrink-0 items-center gap-2">
             <Checkbox
               id={`location-starting-${editingLocation.id}`}
               checked={!!editingLocation.isStarting}
@@ -116,6 +115,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
           onChange={(v) => handleChange('playerDescription', v)}
           placeholders={placeholders}
           resizable
+          tourAnchor="location-player-description"
         />
         <PlaceholderField
           label="AI-Facing Description"
@@ -131,6 +131,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
           onChange={(v) => handleChange('aiDescription', v)}
           placeholders={placeholders}
           resizable
+          tourAnchor="location-ai-description"
         />
         {advanced && (
           <PlaceholderField
@@ -142,16 +143,16 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
                 onChange={(s) => handleChange('aiSummary', s)}
               />
             )}
-            hint="A one-line version for where the full description is too long. Keep it brief."
+            hint="Replaces the full description in prompt slots too small for it. Keep it brief."
             value={editingLocation.aiSummary || ''}
             onChange={(v) => handleChange('aiSummary', v)}
             placeholders={placeholders}
             resizable
           />
         )}
-      </TabsContent>
+      </PanelTabContent>
 
-      <TabsContent value="presence" className="space-y-4">
+      <PanelTabContent value="presence">
         <div className="space-y-2">
           <Label>Entities</Label>
           <MultiSelect
@@ -160,15 +161,15 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
             defaultValue={presentIds}
             onValueChange={handleEntitiesChange}
             placeholder="Select entities"
-            hideSelectAll
           />
         </div>
         <LocationConnections location={editingLocation} />
-      </TabsContent>
+      </PanelTabContent>
 
-      <TabsContent value="media" className="space-y-4">
+      <PanelTabContent value="media">
         <ImageTagsField
           label="Background Image"
+          tourAnchor="location-image"
           images={editingLocation.backgroundImage ? [editingLocation.backgroundImage] : []}
           onImagesChange={(list) => handleChange('backgroundImage', list[0] ?? '')}
           imageId={`location-image-${editingLocation.id}`}
@@ -189,10 +190,10 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
             />
           </div>
         )}
-      </TabsContent>
+      </PanelTabContent>
 
       {advanced && (
-        <TabsContent value="pins" className="space-y-2">
+        <PanelTabContent value="pins" className="space-y-2">
           <div className="flex items-center gap-2">
             <Label>Placeholder Pins</Label>
             <HelpButton topicId="worldEditor.locationPins" className="h-6 w-6" />
@@ -204,9 +205,20 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
             world={world}
             placeholders={placeholders}
           />
-        </TabsContent>
+        </PanelTabContent>
       )}
-    </Tabs>
+
+      {advanced && (
+        <PanelTabContent value="openings">
+          <LocationOpenings
+            location={editingLocation}
+            placeholders={placeholders}
+            names={{ placeholders, letters: placementLetters, owners: placeholderOwners }}
+            onChange={apply}
+          />
+        </PanelTabContent>
+      )}
+    </PanelTabs>
   );
 };
 

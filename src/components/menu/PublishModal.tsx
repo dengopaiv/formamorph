@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { toast } from "react-toastify";
+import { toastError } from "@/lib/linkToast";
 import {
   Dialog,
   DialogContent,
@@ -27,14 +28,16 @@ import { CONTEST_ALREADY_ENTERED, CONTEST_NOT_ACTIVE } from "@/services/WorldSto
 import { useContestWithdrawal } from "@/lib/useContestWithdrawal";
 import { useDevEventSample } from "@/lib/useDevEventSample";
 import { useDevRoute } from "@/lib/devRouter";
+import { SurfaceTab } from "@/components/ui/surface";
 import { ChangelogEntryDialog } from "@/components/community/ChangelogEntryDialog";
 import { type ChangelogDraft } from "@/lib/listingChangelog";
 import { LinkedContentSection } from "@/components/menu/LinkedContentSection";
 import { CompatibleWorldsSection } from "@/components/menu/CompatibleWorldsSection";
 import { hasLinkedContent, type LinkedWorldContent } from "@/lib/publishLinks";
-import { usePublishLinks } from "@/lib/usePublishLinks";
+import { offersCompatibility, usePublishLinks } from "@/lib/usePublishLinks";
 import { AlertTriangle, ScrollText, Trophy } from "lucide-react";
 import type { ServerEvent } from "@/types";
+import { useMountedRef } from "@/lib/useMountedRef";
 
 interface PublishModalProps {
   open: boolean;
@@ -47,22 +50,25 @@ interface PublishModalProps {
   /**
    * The local record this payload was built from. A world links itself to the listing it becomes, which
    * is what the community browser tracks and what carries a contest win back. A character or a dictionary
-   * names the library item its Compatible Worlds are derived from. An Avatar passes none.
+   * names the library item its Compatible Worlds are derived from, and a prompt names its preset. An
+   * Avatar passes none.
    */
   localId?: string;
   /** Called once a published world's link has been written, so the caller can re-read its library. */
   onLinked?: () => void;
+  /** Called after any successful publish with the listing it became, for a caller that links its own copy. */
+  onPublished?: (listing: { id: string; updatedAt?: string }) => void;
 }
 
 /**
- * Publish a world, character, or dictionary to the community server — as a new listing, or by replacing
+ * Publish a world, character, dictionary, Avatar, or prompt to the community server — as a new listing, or by replacing
  * one of the user's own. Kind-agnostic: it takes a ready payload and names itself from `payload.kind`, so
  * the mapping from each kind's fields lives in `lib/publishPayload` rather than here.
  *
  * The overwrite list is fetched per kind: your characters are never offered as targets for a world.
  */
 export function PublishModal({
-  open, onOpenChange, isAuthenticated, payload, events = [], localId, onLinked,
+  open, onOpenChange, isAuthenticated, payload, events = [], localId, onLinked, onPublished,
 }: PublishModalProps) {
   const [userWorlds, setUserWorlds] = useState<WorldRecord[]>([]);
   const [selectedWorldToOverride, setSelectedWorldToOverride] = useState<string | null>(null);
@@ -78,7 +84,14 @@ export function PublishModal({
   const [changelogDraft, setChangelogDraft] = useState<ChangelogDraft | null>(null);
   const [changelogSupported, setChangelogSupported] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
+  // Mirrors of the two above for a publish already in flight, which the author can still write into.
+  const changelogDraftRef = useRef<ChangelogDraft | null>(null);
+  const changelogOpenRef = useRef(false);
+  /** Set while a finished upload waits on an entry still being written. */
+  const entrySettledRef = useRef<(() => void) | null>(null);
   const changelogReqRef = useRef(0);
+  // The request id still matches after an unmount, so it alone cannot stop a late answer.
+  const mountedRef = useMountedRef();
   /** The answer, once one listing has given it. Null until then, and again on the next opening. */
   const changelogSupportRef = useRef<boolean | null>(null);
 
@@ -96,16 +109,19 @@ export function PublishModal({
   const [isAccepting, setIsAccepting] = useState(false);
 
   const kind = payload?.kind ?? 'world';
-  // Pure inspection of the payload — no request, so this is right the moment the modal opens.
+  // Pure inspection of the payload — no request, so this is right the moment the modal opens. A prompt
+  // carries no images, so a link in its text is not one.
   const expiringCount = useMemo(
-    () => (payload ? remoteImagesInContent(payload.contentData).filter(isExpiringImageHost).length : 0),
+    () => (payload && payload.kind !== 'prompt'
+      ? remoteImagesInContent(payload.contentData).filter(isExpiringImageHost).length
+      : 0),
     [payload],
   );
   const noun = KIND_LABELS[kind].one.toLowerCase();
-  // Whether this publish needs the target listing's relationships: a component always does, and a world
+  // Whether this publish needs the target listing's relationships: a component or a prompt always does, and a world
   // does once its content follows a source. Read from the payload, so it is settled before the library
   // loads. A world that follows nothing states an empty required set without reading anything.
-  const declaresRelationships = kind === 'entity' || kind === 'dictionary'
+  const declaresRelationships = offersCompatibility(kind)
     || (kind === 'world' && hasLinkedContent(payload?.contentData as LinkedWorldContent));
 
   /** The listing this publish would replace, or null when it is publishing something new. */
@@ -164,6 +180,21 @@ export function PublishModal({
   // built from: the switch arms itself again in place, with no reopen and no reload.
   const withdrawal = useContestWithdrawal(() => { void fetchUserWorlds(); });
 
+  const setDraft = useCallback((draft: ChangelogDraft | null) => {
+    changelogDraftRef.current = draft;
+    setChangelogDraft(draft);
+  }, []);
+
+  // The dialog submits before it closes, so a waiting publish reads the saved draft, or the old one on Cancel.
+  const setEntryOpen = useCallback((next: boolean) => {
+    changelogOpenRef.current = next;
+    setChangelogOpen(next);
+    if (!next) {
+      entrySettledRef.current?.();
+      entrySettledRef.current = null;
+    }
+  }, []);
+
   /** Publish as a new listing, or replace `targetId` when given one. */
   const publish = async (targetId: string | null) => {
     if (!payload) return;
@@ -202,18 +233,24 @@ export function PublishModal({
         // download states from it — so without this the author's own listing offers them a first download.
         if (linked) onLinked?.();
       }
+      if (listingId) onPublished?.({ id: String(listingId), updatedAt: created?.updated_at });
 
       // Sent only now that the update is really up: an entry describing changes nobody received would be
       // a lie in the listing's own history, so a refused publish must leave the draft where it is. Its own
       // failure is answered on its own rather than reaching the catch below — the update did go out, and
       // reading that as a refused upload would be the same lie the other way round.
-      if (targetId && changelogDraft) {
+      // Read through refs: the author can write or change the entry while the upload runs.
+      if (targetId && changelogOpenRef.current) {
+        await new Promise<void>((resolve) => { entrySettledRef.current = resolve; });
+      }
+      const draft = changelogDraftRef.current;
+      if (targetId && draft) {
         try {
-          await WorldStorageService.createChangelogEntry(targetId, changelogDraft);
+          await WorldStorageService.createChangelogEntry(targetId, draft);
         } catch (error) {
-          toast.error(
-            `${KIND_LABELS[kind].one} updated, but the changelog entry did not save. Add it from the listing's Changelog.`,
-          );
+          toastError(error, {
+            headline: `${KIND_LABELS[kind].one} updated, but the changelog entry did not save. Add it from the listing's Changelog.`,
+          });
           console.error('Failed to attach the changelog entry:', error);
         }
       }
@@ -315,7 +352,7 @@ export function PublishModal({
   // changelog, and no more.
   useEffect(() => {
     // A note written about one listing must not ride along on a publish to another.
-    setChangelogDraft(null);
+    setDraft(null);
     setListing(null);
     if (!overwriteTarget) {
       setChangelogSupported(false);
@@ -332,14 +369,14 @@ export function PublishModal({
     const reqId = ++changelogReqRef.current;
     setListingPending(true);
     void WorldStorageService.fetchListingDetails(overwriteTarget).then((details) => {
-      if (reqId !== changelogReqRef.current) return;
+      if (!mountedRef.current || reqId !== changelogReqRef.current) return;
       const supported = (details?.changelog ?? null) !== null;
       changelogSupportRef.current = supported;
       setChangelogSupported(supported);
       setListing(details);
       setListingPending(false);
     });
-  }, [overwriteTarget, declaresRelationships]);
+  }, [overwriteTarget, declaresRelationships, mountedRef, setDraft]);
 
   // Load the user's listings when the publish modal is opened, or when the kind changes under it.
   useEffect(() => {
@@ -367,7 +404,8 @@ export function PublishModal({
       {/* Bounded height + a scrolling middle: the list grows with every world the author has published,
           and an unbounded dialog would grow out of the viewport (it's centered) taking the Publish button
           with it, unreachable. Header and footer stay put; only the options scroll. */}
-      <DialogContent className="sm:max-w-[500px] max-h-[85dvh] flex flex-col">
+      <DialogContent surface="publish" className="sm:max-w-[500px] max-h-[85dvh] flex flex-col">
+        <SurfaceTab ledger="publish" tab={kind} />
         <DialogHeader>
           <DialogTitle>Publish {KIND_LABELS[kind].one}</DialogTitle>
           <DialogDescription>
@@ -472,15 +510,15 @@ export function PublishModal({
                 {changelogDraft ? (
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="min-w-0 truncate text-label">{changelogDraft.title}</span>
-                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setChangelogOpen(true)}>
+                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setEntryOpen(true)}>
                       Edit
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setChangelogDraft(null)}>
+                    <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
                       Remove
                     </Button>
                   </div>
                 ) : (
-                  <Button size="sm" variant="outline" onClick={() => setChangelogOpen(true)}>
+                  <Button size="sm" variant="outline" onClick={() => setEntryOpen(true)}>
                     Describe What Changed
                   </Button>
                 )}
@@ -495,7 +533,7 @@ export function PublishModal({
               />
             )}
 
-            {(kind === 'entity' || kind === 'dictionary') && (
+            {offersCompatibility(kind) && (
               <CompatibleWorldsSection
                 visibility={links.visibility}
                 onVisibilityChange={links.setVisibility}
@@ -503,6 +541,7 @@ export function PublishModal({
                 onRowsChange={links.setCompatRows}
                 disabled={isPublishing}
                 noun={noun}
+                declared={kind === 'prompt'}
               />
             )}
 
@@ -611,11 +650,11 @@ export function PublishModal({
           starts. Here it only hands the draft back — nothing is sent until the update is up. */}
       <ChangelogEntryDialog
         open={changelogOpen}
-        onOpenChange={setChangelogOpen}
+        onOpenChange={setEntryOpen}
         entry={changelogDraft}
         submitLabel="Attach to Update"
         description="Optional. This is added to the listing's changelog once the update is published."
-        onSubmit={setChangelogDraft}
+        onSubmit={setDraft}
       />
 
       {withdrawal.dialog}

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Must load before importing the service: its singleton constructor opens IndexedDB.
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -10,7 +11,7 @@ import { PUBLISH_LIMITS } from '@/lib/publishLimits';
 import { KIND_LABELS } from '@/lib/catalogKinds';
 
 const res = (body: unknown, ok = true, status = 200): Response =>
-  ({ ok, status, json: async () => body } as unknown as Response);
+  ({ ok, status, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response);
 
 beforeEach(() => {
   AuthService.logout();
@@ -617,6 +618,16 @@ describe('loadDefaultWorlds (content-hash refresh)', () => {
     expect(failed).toEqual(['no-such-world']);
     expect(updated).toEqual([]);
   });
+
+  it('keeps the error behind each failed world, named by its id', async () => {
+    const { errors } = await WorldStorageService.loadDefaultWorlds([
+      { id: 'no-such-world', defaultName: 'Nope' },
+    ]);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toBe('no-such-world');
+    expect(errors[0].cause).toBeInstanceOf(Error);
+  });
 });
 
 describe('default worlds: seed vs. the player deleting one', () => {
@@ -756,6 +767,24 @@ describe('the listing changelog', () => {
     expect(await WorldStorageService.fetchListingDetails('w1')).toBeNull();
   });
 
+  it.each([403, 404])('reads a %i as a listing this reader may not see', async (status) => {
+    vi.mocked(fetch).mockResolvedValue(res({ error: 'World not found' }, false, status));
+
+    expect(await WorldStorageService.readListingDetails('w1')).toEqual({ status: 'gone' });
+  });
+
+  it.each([429, 500])('reads a %i as no answer, not as gone', async (status) => {
+    vi.mocked(fetch).mockResolvedValue(res({ error: 'Try again' }, false, status));
+
+    expect(await WorldStorageService.readListingDetails('w1')).toEqual({ status: 'unreachable' });
+  });
+
+  it('reads a dead network as no answer', async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error('offline'));
+
+    expect(await WorldStorageService.readListingDetails('w1')).toEqual({ status: 'unreachable' });
+  });
+
   it('posts a new entry with its fields trimmed', async () => {
     AuthService.token = 'tok';
     vi.mocked(fetch).mockResolvedValue(res({ data: entryRow() }, true, 201));
@@ -856,7 +885,7 @@ describe('fetchCatalog', () => {
     vi.mocked(fetch).mockResolvedValue(catalogRes({ data: [{ id: 'w1' }] }, 200, 'W/"new"'));
 
     expect(await WorldStorageService.fetchCatalog()).toEqual({
-      status: 'fresh', data: [{ id: 'w1' }], tag: 'W/"new"',
+      status: 'fresh', data: [{ id: 'w1' }], tag: 'W/"new"', anonymousLikes: false,
     });
   });
 
@@ -864,7 +893,7 @@ describe('fetchCatalog', () => {
     vi.mocked(fetch).mockResolvedValue(catalogRes({ data: [{ id: 'w1' }] }));
 
     expect(await WorldStorageService.fetchCatalog()).toEqual({
-      status: 'fresh', data: [{ id: 'w1' }], tag: null,
+      status: 'fresh', data: [{ id: 'w1' }], tag: null, anonymousLikes: false,
     });
   });
 

@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { getGameplayText } from '@/lib/gameplayTextStore';
 import { CONTINUE_CHOICE } from '@/lib/choices';
 import { encodePlaceholderToken } from '@/lib/placeholders';
+import { defaultSystemPrompt } from './GamePrompts';
+import openChat from '@/defaultworlds/open-chat.json';
 import { readTurn, renderLeftPanel, renderMiddlePanel, renderRightPanel, statFixture, type PanelHarness, type TurnFixture } from '@/test/gamePanels';
 import { resetTtsPlayback, setTtsPlayback } from '@/test/stubs/ttsPlayback';
 import { lastVrmViewerProps, resetVrmViewerStub } from '@/test/stubs/vrmViewer';
@@ -38,22 +40,20 @@ const TURNS = [
 
 const STATS = [statFixture('Vigor', 50)];
 
-/** Open the caret flyout beside Re-generate and return its two partial-regenerate items. */
-const openRegenFlyout = () => {
-  fireEvent.click(screen.getByRole('button', { name: 'More re-generate options' }));
-  return {
-    stats: screen.getByRole('button', { name: 'Re-generate Stats' }),
-    choices: screen.getByRole('button', { name: 'Re-generate Choices' }),
-  };
+/** The latest page's partial re-generates, including the stats action in its menu. */
+const partialRegens = () => {
+  const choices = screen.getByRole('button', { name: 'Re-generate Choices' });
+  fireEvent.click(within(screen.getByTestId('bubble-actions')).getByRole('button', { name: 'More' }));
+  return { stats: screen.getByRole('menuitem', { name: 'Re-generate Stats' }), choices };
 };
 
 describe('MiddlePanel — partial re-generate against a scene render', () => {
   it('holds both partial re-generates while a scene image is being drawn', () => {
     const view = renderMiddlePanel({ sceneImageJob: 'image' }, { turns: TURNS, stats: STATS });
-    const items = openRegenFlyout();
+    const items = partialRegens();
 
     // One graphics card can't write and draw at once.
-    expect(items.stats).toBeDisabled();
+    expect(items.stats).toHaveAttribute('aria-disabled', 'true');
     expect(items.choices).toBeDisabled();
 
     fireEvent.click(items.stats);
@@ -68,37 +68,42 @@ describe('MiddlePanel — partial re-generate against a scene render', () => {
 
   it('holds them while the tag pass runs too', () => {
     renderMiddlePanel({ sceneImageJob: 'tags' }, { turns: TURNS, stats: STATS });
-    const items = openRegenFlyout();
-    expect(items.stats).toBeDisabled();
+    const items = partialRegens();
+    expect(items.stats).toHaveAttribute('aria-disabled', 'true');
     expect(items.choices).toBeDisabled();
   });
 
   it('offers only the partial re-generates their aux requests are switched on for', () => {
     renderMiddlePanel({}, { turns: TURNS, stats: STATS, settings: (s) => s.setChoicesEnabled(false) });
-    fireEvent.click(screen.getByRole('button', { name: 'More re-generate options' }));
 
-    expect(screen.getByRole('button', { name: 'Re-generate Stats' })).toBeInTheDocument();
     // Re-generating choices that are switched off would fire a request whose result nothing displays.
     expect(screen.queryByRole('button', { name: 'Re-generate Choices' })).toBeNull();
+    fireEvent.click(within(screen.getByTestId('bubble-actions')).getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('menuitem', { name: 'Re-generate Stats' })).toBeInTheDocument();
   });
 
-  it('drops the flyout entirely when neither is available', () => {
-    // No stats in this world and choices off — a caret opening an empty menu.
+  it('offers neither when neither is available, and keeps the full re-generate', () => {
+    // No stats in this world and choices off.
     renderMiddlePanel({}, { turns: TURNS, settings: (s) => s.setChoicesEnabled(false) });
-    expect(screen.queryByRole('button', { name: 'More re-generate options' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Re-generate' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Re-generate Stats' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Re-generate Choices' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Re-generate Narration' })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('bubble-actions')).getByRole('button', { name: 'More' }));
+    expect(screen.queryByRole('menuitem', { name: 'Re-generate Stats' })).toBeNull();
   });
 
   it('offers them again with nothing in flight', () => {
-    // The other half of the guard: the hold has to be the job's doing, not a permanently dead menu.
+    // The other half of the guard: the hold has to be the job's doing, not a permanently dead control.
     const view = renderMiddlePanel({ sceneImageJob: null }, { turns: TURNS, stats: STATS });
-    const items = openRegenFlyout();
+    const items = partialRegens();
 
-    expect(items.stats).toBeEnabled();
+    expect(items.stats).not.toHaveAttribute('aria-disabled', 'true');
     expect(items.choices).toBeEnabled();
 
     fireEvent.click(items.stats);
     expect(view.props.handleRegenerateStats).toHaveBeenCalled();
+    fireEvent.click(items.choices);
+    expect(view.props.handleRegenerateChoices).toHaveBeenCalled();
   });
 });
 
@@ -148,10 +153,11 @@ describe('MiddlePanel — the audio row', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate audio for current text' }));
     expect(view.props.onRegenerateTTS).toHaveBeenCalled();
-    // With audio in hand the narration menu offers neither of the two entries that produce it.
+    // The card's row offers the audio entries under Chat's conditions; the corner menu holds the whole-story item only.
+    expect(within(screen.getByTestId('bubble-actions')).getByRole('button', { name: 'Text to Speech' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'More narration options' }));
-    expect(screen.queryByRole('button', { name: /Regenerate Audio/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Text to Speech/ })).toBeNull();
+    const menu = screen.getByRole('dialog');
+    expect(within(menu).getAllByRole('button').map((b) => b.textContent)).toEqual(['Export Story']);
   });
 });
 
@@ -165,6 +171,22 @@ describe('LeftPanel', () => {
 
     expect(screen.getByTestId('vrm-viewer')).toBeInTheDocument();
     expect(lastVrmViewerProps()?.bodyMorphValues).toMatchObject({ Belly: 0.25 });
+  });
+
+  // Both built-in prompts place the chip with options, which a raw substring check misses.
+  it.each([
+    ['the built-in narration prompt', defaultSystemPrompt],
+    ['the Open Chat world prompt', openChat.worldOverview.promptOverrides.systemPrompt],
+  ])('shows no missing-notes warning under %s', (_name, prompt) => {
+    expect(prompt).toMatch(/<NOTES\|/);
+    renderLeftPanel({ narrationPrompt: prompt });
+    expect(screen.getByPlaceholderText(/Add notes here/)).toBeInTheDocument();
+    expect(screen.queryByText(/does not include the <NOTES> placeholder/)).not.toBeInTheDocument();
+  });
+
+  it('warns when the narration prompt places no notes chip', () => {
+    renderLeftPanel({ narrationPrompt: 'Narrate the scene. <LOCATION>' });
+    expect(screen.getByText(/does not include the <NOTES> placeholder/)).toBeInTheDocument();
   });
 
   it('keeps the notes the player types for the turn', () => {
@@ -219,6 +241,21 @@ describe('LeftPanel', () => {
     expect(screen.getByText('Direwolf')).toBeInTheDocument();
     expect(screen.queryByText('Wolf')).not.toBeInTheDocument();
   });
+
+  it('lists the persona first in every scene, marked as the player, and opens it like any entity', () => {
+    const onEntityClick = vi.fn();
+    const world = [{ id: 'p1', name: 'Kira', persona: true }, { id: 'e1', name: 'Wolf' }];
+    renderLeftPanel({ entities: [world[1]] as never, onEntityClick }, {
+      world: { entities: world } as never,
+      seed: (gameplay) => gameplay.setPersonaRef({ source: 'world', entityId: 'p1' }),
+    });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Entities/i }));
+    expect(screen.getByText('Kira (You)')).toBeInTheDocument();
+    expect(screen.queryByText('No entity visible.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Kira (You)'));
+    expect(onEntityClick).toHaveBeenCalledWith('Kira');
+  });
 });
 
 describe('MiddlePanel — editing a turn\'s narration', () => {
@@ -247,9 +284,9 @@ describe('MiddlePanel — editing a turn\'s narration', () => {
     }),
   });
 
-  /** Rewrite the viewed turn through the Edit Text modal and save. */
+  /** Rewrite the viewed turn through its row's Edit and save. */
   const rewriteAs = async (text: string) => {
-    fireEvent.click(screen.getByRole('button', { name: 'Edit text' }));
+    fireEvent.click(within(screen.getByTestId('bubble-actions')).getByRole('button', { name: 'Edit' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: text } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
@@ -335,6 +372,26 @@ describe('RightPanel', () => {
     });
     expect(screen.getByText('Vigor')).toBeInTheDocument();
     expect(screen.queryByText('Luck')).toBeNull();
+  });
+
+  it('keeps the Stats tab when one stat shows', () => {
+    renderRightPanel({}, {
+      turns: TURNS,
+      stats: [statFixture('Vigor', 50), statFixture('Luck', 30, { hidden: true })],
+    });
+    expect(screen.getByRole('tab', { name: 'Stats' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('has no Stats tab and opens on Traits when every stat is hidden', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [statFixture('Luck', 30, { hidden: true })] });
+    expect(screen.queryByRole('tab', { name: 'Stats' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Traits' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('has no Stats tab in a world with no stats', () => {
+    renderRightPanel({}, { turns: TURNS, stats: [] });
+    expect(screen.queryByRole('tab', { name: 'Stats' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Traits' })).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -573,7 +630,7 @@ describe('RightPanel — the traits tab against an edited world', () => {
     expect(box).toBeEnabled();
 
     fireEvent.click(box);
-    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-brave', false);
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-brave', false, 'world');
   });
 
   it('offers no switch when the author has not marked it switchable', () => {
@@ -628,7 +685,7 @@ describe('RightPanel — acquirable traits in the traits tab', () => {
     const view = renderPanel();
     openDisabled();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Switch on Feral' }));
-    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-first', true);
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-first', true, 'world');
   });
 
   it('leaves a trait the author never marked switchable out of the panel entirely', () => {
@@ -694,19 +751,22 @@ describe('MiddlePanel — paging repaints the narration', () => {
 });
 
 describe('MiddlePanel — the player\'s own action', () => {
+  // The opening page has no action line, so each case plays one turn past it.
+  const afterOpening = (action: string) => [{ narration: 'The ferry lands.' }, { action, narration: 'The dock creaks.' }];
+
   it('renders as markdown, like the narration it sits among', () => {
-    renderMiddlePanel({}, { turns: [{ action: 'I shout **stop** and _step back_', narration: 'The dock creaks.' }] });
+    renderMiddlePanel({}, { turns: afterOpening('I shout **stop** and _step back_') });
 
     // Streamdown renders bold as a marked span rather than a <strong>, so match on its own marker.
-    const you = screen.getByText('You:').parentElement!;
+    const you = screen.getByTestId('action-line');
     expect(within(you).getByText('stop').closest('[data-streamdown="strong"]')).not.toBeNull();
     expect(within(you).getByText('step back').closest('em')).not.toBeNull();
   });
 
   it('keeps a typed line break', () => {
-    renderMiddlePanel({}, { turns: [{ action: 'I wait.\nThen I knock.', narration: 'The dock creaks.' }] });
+    renderMiddlePanel({}, { turns: afterOpening('I wait.\nThen I knock.') });
 
-    const you = screen.getByText('You:').parentElement!;
+    const you = screen.getByTestId('action-line');
     expect(you.querySelector('br')).not.toBeNull();
   });
 });

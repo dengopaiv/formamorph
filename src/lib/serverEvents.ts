@@ -44,15 +44,60 @@ export function placeOf(event: ServerEvent, worldId: string | null | undefined):
 }
 
 /**
+ * The worlds that took 1st place — one on an ordinary podium, several when the place is shared.
+ *
+ * The one answer every surface that names a winner reads. Four of them are a single line each and none
+ * can list a whole podium, so each falls back to a count when this returns more than one; sharing the
+ * lookup is what keeps the four from drifting into four different accounts of the same result.
+ *
+ * Filtered by place rather than taken off the front of the list, so a podium whose order is not the
+ * server's own still answers with the worlds that actually won.
+ */
+export function firstPlaceOf(event: ServerEvent): EventPlacement[] {
+  return placementsOf(event).filter((placement) => placement.place === 1);
+}
+
+/**
+ * Where an event stands in its life. `judging` is a contest whose window has closed with its results
+ * still to come.
+ */
+export type EventState = 'scheduled' | 'active' | 'judging' | 'ended' | 'canceled';
+
+/**
+ * Which state an event is in — the one lifecycle every surface reads, staff and player alike.
+ *
+ * Derived rather than read off the row, the way the server derives it: the only stamps an event carries
+ * are its cancellation and its announcement. The announcement outranks the clock, since it is what
+ * decides a contest.
+ *
+ * @param now - The instant to judge against; defaults to the current time
+ */
+export function eventState(event: ServerEvent, now: Date = new Date()): EventState {
+  if (event.cancelledAt) return 'canceled';
+  if (isContestEvent(event) && resultsAnnounced(event)) return 'ended';
+
+  const starts = parseServerDate(event.startsAt);
+  const ends = parseServerDate(event.endsAt);
+
+  // An unreadable window reads as over rather than running: nothing should be posted about an event
+  // nobody can date.
+  if (!starts || !ends) return 'ended';
+
+  if (now.getTime() < starts.getTime()) return 'scheduled';
+  if (now.getTime() < ends.getTime()) return 'active';
+
+  return isContestEvent(event) ? 'judging' : 'ended';
+}
+
+/**
  * Which phase to show for an event: its ending once the window has closed or its results are out, its
  * opening until then.
  *
  * @param now - The instant to judge against; defaults to the current time
  */
 export function eventPhase(event: ServerEvent, now: Date = new Date()): ServerEventPhase {
-  if (resultsAnnounced(event)) return 'end';
-  const ends = parseServerDate(event.endsAt);
-  return ends && ends.getTime() <= now.getTime() ? 'end' : 'start';
+  const state = eventState(event, now);
+  return state === 'scheduled' || state === 'active' ? 'start' : 'end';
 }
 
 /** The broadcast an acknowledgment of this phase should mark read; null when the event carries none. */

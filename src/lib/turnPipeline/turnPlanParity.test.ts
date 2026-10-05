@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { planTurn } from './planTurn';
-import { TURN_PASSES } from './turnPasses';
+import { TURN_PASSES, milestoneSelectPass } from './turnPasses';
 import type { TurnMaterial, TurnPassId, TurnPassRecord } from './turnPlan';
 import type { ChatMessage } from '@/types';
 import { planDirective } from '@/components/game/GamePrompts';
+import { personaContextValues } from '@/lib/personaContext';
 import {
   fixture, PARITY_PROMPTS as PROMPTS, PASS_ID_BY_TYPE, DRAINER_TYPES,
-  recordedPasses, inputFor, narrationOf,
+  recordedPasses, inputFor, narrationOf, expectedCap, PARITY_DESTINATIONS,
 } from './parityTestInputs';
 
 /**
@@ -47,10 +48,11 @@ const materialFor = (index: number, over: Partial<TurnMaterial> = {}): TurnMater
     action: turn.action,
     effectiveAction: index === 0 ? 'START GAME' : turn.action,
     turnId: turn.turnId ?? '',
-    ctx: {},
-    baseCtx: {},
+    // The recorded run had no persona; the game's context map still carries the persona chips, empty.
+    ctx: personaContextValues(null),
+    baseCtx: personaContextValues(null),
     sceneEntityTokens: {},
-    destinations: [],
+    destinations: PARITY_DESTINATIONS,
     narrationSystemPrompt: narrationOf(turn).systemPrompt,
     narrationSystemPromptRuns: [],
     historyRuns: [],
@@ -145,7 +147,7 @@ describe('turn plan parity with the recorded run', () => {
         }),
       );
       expect([id, built.type], `${id} request type`).toEqual([id, request.type]);
-      expect([id, built.maxTokens], `${id} cap`).toEqual([id, request.maxTokens]);
+      expect([id, built.maxTokens], `${id} cap`).toEqual([id, expectedCap(request)]);
       expect([id, built.silent], `${id} silent flag`).toEqual([id, request.silent]);
       expect([id, built.attachTurnId ?? null], `${id} attached turn`).toEqual([id, request.attachTurnId]);
       const template = templateById[id];
@@ -173,6 +175,34 @@ describe('turn plan parity with the recorded run', () => {
       expect(built.messages[built.messages.length - 1].content).toBe(
         narration.messages[narration.messages.length - 1].content,
       );
+    }
+  });
+});
+
+describe('milestone selector parity', () => {
+  /** The two lists a recorded selector message numbered, read back from its numbered lines. */
+  const listsOf = (content: string) => {
+    const lines = (block: string) => [...block.matchAll(/^\d+\. (.*)$/gm)].map((m) => m[1]);
+    const [kept, fresh] = content.split(/\n\nNew moments to judge/);
+    return fresh === undefined
+      ? { kept: [], fresh: lines(kept.split('\n\nReply with')[0]) }
+      : { kept: lines(kept), fresh: lines(fresh.split('\n\nReply with')[0]) };
+  };
+
+  it('builds every recorded selector request exactly as the run sent it', () => {
+    const recorded = fixture.turns.flatMap((t) => t.requests.map((r) => ({ index: t.index, r })))
+      .filter(({ r }) => r.type === 'milestoneSelect');
+    expect(recorded.length).toBeGreaterThan(1);
+    expect(recorded.some(({ r }) => listsOf(r.messages[0].content).kept.length === 0)).toBe(true);
+    for (const { index, r } of recorded) {
+      const built = milestoneSelectPass.buildRequest(
+        inputFor(index),
+        materialFor(index, { milestone: listsOf(r.messages[0].content), turnId: r.attachTurnId ?? '' }),
+      );
+      expect(built.systemPrompt).toBe(r.systemPrompt);
+      expect(built.messages).toEqual(r.messages);
+      expect(built.maxTokens).toBe(r.maxTokens);
+      expect(built.silent).toBe(r.silent);
     }
   });
 });

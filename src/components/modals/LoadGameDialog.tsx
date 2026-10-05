@@ -24,6 +24,7 @@ import {
 } from '../../lib/saveOrdering';
 import type { SaveRecord } from "@/types";
 import { Tip } from "@/components/ui/tooltip";
+import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { SaveList, type SaveListItem } from './SaveList';
 
 /** SaveMeta enriched with the raw record + display bits, so the row can render and export without a re-read. */
@@ -367,7 +368,8 @@ export function LoadGameDialog({ open, onOpenChange, current, onLoad, title, ico
       />
 
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[560px] max-h-[90dvh] flex flex-col">
+        {/* Pick mode is the Save dialog, which has no surface id. */}
+        <DialogContent surface={onPickSave ? undefined : 'menu'} className="sm:max-w-[560px] max-h-[90dvh] flex flex-col">
           <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
               {icon ?? <FolderOpen className="h-4 w-4" />} {title ?? 'Load Game'}
@@ -389,6 +391,8 @@ export function LoadGameDialog({ open, onOpenChange, current, onLoad, title, ico
                 variant="outline"
                 className="w-full flex items-center justify-center gap-2"
                 onClick={() => document.getElementById('save-upload')?.click()}
+                // Pick mode is the Save dialog, which has no surface id.
+                {...(onPickSave ? {} : targetAttribute('menu', 'import-save'))}
               >
                 <ActionIcon.import className="h-4 w-4" />
                 <span>Import</span>

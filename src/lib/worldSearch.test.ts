@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { placementLetters } from '@/lib/placementLetters';
-import { collectSearchTargets, findMatches, replaceAll, spliceText } from '@/lib/worldSearch';
+import { isOpeningFieldKey, openingFieldKey } from '@/lib/openings';
+import { collectSearchTargets, findMatches, refusesBlueprintInsert, replaceAll, spliceText } from '@/lib/worldSearch';
 import type { SearchSources, SearchTarget } from '@/lib/worldSearch';
 import type { Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
 
@@ -104,6 +105,14 @@ describe('collectSearchTargets', () => {
     expect(targetFor(targets, 'descriptors[0].description')).toMatchObject({ value: 'Winded', chipCapable: true });
   });
 
+  it('reaches an entity’s pronouns as plain text and writes a replace to that entity', () => {
+    const { src, writes } = sources({ entities: [entity({ pronouns: 'she/her' })] });
+    const target = targetFor(collectSearchTargets(src), 'pronouns');
+    expect(target).toMatchObject({ itemId: 'e1', tab: 'entities', fieldLabel: 'Pronouns', chipCapable: false });
+    target.write('they/them');
+    expect(writes.at(-1)).toEqual(['entity', expect.objectContaining({ id: 'e1', pronouns: 'they/them' })]);
+  });
+
   it('gives each element of a string-array field its own target', () => {
     const { src } = sources({ entities: [entity({ aliases: ['the Sparrow', 'Mira of Sedge'] })] });
     const targets = collectSearchTargets(src);
@@ -141,6 +150,17 @@ describe('collectSearchTargets', () => {
       targetFor(collectSearchTargets(sources({ dictionaries: [book(regex)] }).src), 'value').chipCapable;
     expect(chipOf(false)).toBe(true);
     expect(chipOf(true)).toBe(false);
+  });
+
+  it('labels the overview descriptions by who reads them, as the editor captions them', () => {
+    const { src } = sources({
+      worldOverview: overview({ description: 'A drowned town.', systemPrompt: 'The tide never turns.' }),
+    });
+    const targets = collectSearchTargets(src);
+    expect(targetFor(targets, 'description'))
+      .toMatchObject({ itemLabel: 'World', fieldLabel: 'Player-Facing Description', chipCapable: false });
+    expect(targetFor(targets, 'systemPrompt'))
+      .toMatchObject({ itemLabel: 'World', fieldLabel: 'AI-Facing Description', chipCapable: true });
   });
 
   it('reaches both readmes, each writing back to its own field', () => {
@@ -185,23 +205,44 @@ describe('collectSearchTargets', () => {
     })]]);
   });
 
-  it('reaches a stored opening cue, switched on or not', () => {
+  it('reaches every opening row, switched on or not', () => {
+    const openings = [
+      { id: 'o1', text: 'You wake in the reed-beds.', kind: 'action' as const },
+      { id: 'o2', text: 'The ferry bell rings twice.', kind: 'action' as const },
+    ];
     const { src, writes } = sources({
-      worldOverview: overview({ openingCue: 'You wake in the reed-beds.', openingCueEnabled: false }),
+      worldOverview: overview({ openings, openingWeights: { o2: 3 }, openingsEnabled: false }),
     });
     const targets = collectSearchTargets(src);
-    expect(targetFor(targets, 'openingCue'))
-      .toMatchObject({ value: 'You wake in the reed-beds.', fieldLabel: 'Opening Cue', chipCapable: true });
+    expect(targetFor(targets, openingFieldKey('o1')))
+      .toMatchObject({ value: 'You wake in the reed-beds.', fieldLabel: 'Opening 1', chipCapable: true });
+    expect(targetFor(targets, openingFieldKey('o2'))).toMatchObject({ value: 'The ferry bell rings twice.' });
 
-    targetFor(targets, 'openingCue').write('You wake in the reed-beds, already wet.');
-    // The switch is the author's; a replace edits their text and leaves it where they set it.
+    targetFor(targets, openingFieldKey('o2')).write('The ferry bell rings once.');
+    // The switch and the weights are the author's; a replace edits one row's text and nothing else.
     expect(writes).toEqual([['overview', expect.objectContaining({
-      openingCue: 'You wake in the reed-beds, already wet.', openingCueEnabled: false,
+      openings: [openings[0], { ...openings[1], text: 'The ferry bell rings once.' }],
+      openingWeights: { o2: 3 },
+      openingsEnabled: false,
     })]]);
   });
 
-  it('offers no target for an opening cue still tracking the default', () => {
-    expect(collectSearchTargets(sources().src).map((t) => t.fieldKey)).not.toContain('openingCue');
+  it('reaches an entity’s opening rows and writes a replace to that entity', () => {
+    const openings = [{ id: 'o1', text: 'Mira waves from the jetty.', kind: 'narration' as const }];
+    const { src, writes } = sources({ entities: [entity({ openings, openingWeights: { o1: 2 } })] });
+    const target = targetFor(collectSearchTargets(src), openingFieldKey('o1'));
+    expect(target).toMatchObject({ itemId: 'e1', tab: 'entities', fieldLabel: 'Opening 1', chipCapable: true });
+
+    target.write('Mira waves from the pier.');
+    expect(writes).toEqual([['entity', expect.objectContaining({
+      id: 'e1',
+      openings: [{ ...openings[0], text: 'Mira waves from the pier.' }],
+      openingWeights: { o1: 2 },
+    })]]);
+  });
+
+  it('offers no target for the default opening', () => {
+    expect(collectSearchTargets(sources().src).some((t) => isOpeningFieldKey(t.fieldKey))).toBe(false);
   });
 
   it('offers no target for a prompt tab still tracking the preset', () => {
@@ -325,6 +366,14 @@ describe('findMatches — chips', () => {
     expect(chipHits(findMatches(targets, 'hometown', LOOSE, chips))).toEqual([second]);
   });
 
+  it('matches the Player Name chip by its label and never inside its token', () => {
+    const { src } = sources({ entities: [entity({ name: '', aiDescription: 'Wren greets {{user}}.' })] });
+    const targets = collectSearchTargets(src);
+    const chips = { placeholders: [], letters: placementLetters([]) };
+    expect(chipHits(findMatches(targets, 'player name', LOOSE, chips))).toEqual(['{{user}}']);
+    expect(findMatches(targets, 'user', LOOSE, chips)).toHaveLength(0);
+  });
+
   it('matches a chip by any of its values', () => {
     const { targets, chips } = setup();
     expect(chipHits(findMatches(targets, 'harrow', LOOSE, chips))).toEqual([first, second]);
@@ -402,6 +451,19 @@ describe('replaceAll', () => {
     expect(writes[0][1]).toMatchObject({ aiDescription: `marsh ${token} marsh` });
   });
 
+  it('replaces inside a custom prompt with a chip, and keeps the chips it already holds', () => {
+    const token = encodePlaceholderToken({ id: 'p1', mode: 'world', placementId: 'place-1' });
+    const { src, writes } = sources({
+      worldOverview: overview({ promptOverrides: { systemPrompt: `Narrate the fen. ${token} <NOTES>` } }),
+    });
+    const matches = findMatches(collectSearchTargets(src), 'fen', LOOSE);
+    const summary = replaceAll(matches, (t) => (t.chipCapable ? '<chip>' : null));
+    expect(summary).toMatchObject({ replaced: 1, fields: 1, skipped: 0 });
+    expect(writes).toEqual([['overview', expect.objectContaining({
+      promptOverrides: { systemPrompt: `Narrate the <chip>. ${token} <NOTES>` },
+    })]]);
+  });
+
   it('skips fields that cannot hold a chip and counts them', () => {
     const { src, writes } = sources({
       // `type` is a plain input; `aiDescription` renders chips.
@@ -465,5 +527,42 @@ describe('replaceAll', () => {
 describe('spliceText', () => {
   it('replaces the given range only', () => {
     expect(spliceText('a fen here', 2, 5, 'marsh')).toBe('a marsh here');
+  });
+});
+
+describe('replaceAll — blueprint chips', () => {
+  const blueprints = new Set(['garb']);
+  const garbChip = encodePlaceholderToken({ id: 'garb', mode: 'world', placementId: 'place-g' });
+  const townChip = encodePlaceholderToken({ id: 'town', mode: 'world', placementId: 'place-t' });
+  const world = () => sources({
+    traits: [{ id: 't1', name: 'Paladin', aiDescription: 'sworn in the fen', statChanges: [] } as Trait],
+    traitGroups: [{ id: 'g1', name: 'Oaths', aiDescription: 'of the fen', parentId: null }],
+    locations: [{ id: 'l1', name: 'Landing', aiDescription: 'a fen shore' } as GameLocation],
+  });
+  const insert = (text: string) => (target: SearchTarget) => (refusesBlueprintInsert(target, text, blueprints) ? null : text);
+
+  it('puts a blueprint chip only into world trait and group text, and skips the rest', () => {
+    const { src, writes } = world();
+    const summary = replaceAll(findMatches(collectSearchTargets(src), 'fen', LOOSE), insert(garbChip));
+    expect(summary).toMatchObject({ replaced: 2, skipped: 1, skippedFields: ['Landing · AI-Facing Description'] });
+    expect(writes.map(([label]) => label).sort()).toEqual(['trait', 'traitGroup']);
+  });
+
+  it('takes a blueprint chip in a blueprint’s values and refuses it in a world placeholder’s', () => {
+    const { src, writes } = sources({
+      placeholders: [
+        { id: 'garb', name: 'Garb', groupId: 'bp', values: [{ id: 'v1', text: 'fen cloak' }] },
+        { id: 'town', name: 'Town', values: [{ id: 'v2', text: 'fen town' }] },
+      ],
+      placeholderGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+    });
+    const summary = replaceAll(findMatches(collectSearchTargets(src), 'fen', LOOSE), insert(garbChip));
+    expect(summary).toMatchObject({ replaced: 1, skipped: 1, skippedFields: ['Town · Values'] });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('puts any other chip everywhere a chip goes', () => {
+    const { src } = world();
+    expect(replaceAll(findMatches(collectSearchTargets(src), 'fen', LOOSE), insert(townChip))).toMatchObject({ replaced: 3, skipped: 0 });
   });
 });

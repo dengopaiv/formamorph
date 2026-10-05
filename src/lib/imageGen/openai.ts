@@ -2,7 +2,8 @@
 // exposure), so this always routes through the Electron desktop bridge (net-fetch in the main process).
 import type { ImageGenOpts, ImageGenParams, ImageProvider } from './types';
 import { desktopFetch } from './desktop';
-import { trimUrl, authHeaders, abortable } from './http';
+import { trimUrl, authHeaders, abortable, refusalDetails } from './http';
+import { DetailedError } from '../errorDetails';
 
 // OpenAI's Images API only accepts a fixed set of sizes; snap the requested dimensions to the nearest
 // by aspect ratio (square / portrait / landscape).
@@ -25,21 +26,25 @@ export function parseOpenAIResponse(json: unknown): string {
   throw new Error('No image in OpenAI response');
 }
 
+/** The model sent when the preset names none. */
+export const OPENAI_DEFAULT_MODEL = 'gpt-image-1';
+
 export const openaiProvider: ImageProvider = async (params: ImageGenParams, opts: ImageGenOpts) => {
   const body = {
-    model: params.model || 'gpt-image-1',
+    model: params.model || OPENAI_DEFAULT_MODEL,
     prompt: params.prompt,
     n: 1,
     size: nearestOpenAISize(params.width, params.height),
   };
   // The IPC bridge takes no AbortSignal, so Cancel unblocks the UI while the request finishes unseen —
   // a cloud generation can't be interrupted server-side anyway.
+  const url = `${trimUrl(opts.endpointUrl)}/v1/images/generations`;
   const res = await abortable(desktopFetch({
-    url: `${trimUrl(opts.endpointUrl)}/v1/images/generations`,
+    url,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(opts.apiToken, 'Bearer') },
     body: JSON.stringify(body),
   }), opts.signal);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw new DetailedError(`HTTP ${res.status}`, refusalDetails('POST', url, res, res.body));
   return parseOpenAIResponse(JSON.parse(res.body));
 };

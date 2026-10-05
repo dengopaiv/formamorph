@@ -13,15 +13,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Tip } from '@/components/ui/tooltip';
 import { Hint } from '@/components/ui/typography';
+import type { TargetAttribute } from '@/lib/surface/surfaceTargets';
+import { useWheelScroll } from '@/lib/useWheelScroll';
+import { cn } from '@/lib/utils';
 import 'streamdown/styles.css';
 
 /** An `ⓘ` button that reveals its full explanation in a popover, so a setting row can show a terse lead
  *  inline and keep the long detail on demand. `children` is a **Markdown string** — write hints with a
  *  lead sentence and a short bullet list so the popover reads as structure, not a blob. Portaled (the
- *  default) so it floats above the settings ScrollArea instead of being clipped by its overflow; content
- *  is short and never scrolls, so the scroll-lock caveat in popover.tsx doesn't apply. Click-to-open so
- *  it works on touch. */
+ *  default) so it floats above the settings ScrollArea instead of being clipped by its overflow. Content
+ *  taller than the room scrolls, by `useWheelScroll` since a modal's scroll lock cancels the wheel.
+ *  Click-to-open so it works on touch. */
 export function HintInfo({ children }: { children: string }) {
+  const wheelRef = useWheelScroll<HTMLDivElement>();
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -34,11 +38,12 @@ export function HintInfo({ children }: { children: string }) {
         </button>
       </PopoverTrigger>
       <PopoverContent
+        ref={wheelRef}
         align="center"
         collisionPadding={12}
         // `h4` is reserved for the "this part is about your current selection" header a segmented row's
         // ⓘ puts above the option detail — styled like a Section title so it reads as a divider, not prose.
-        className="w-80 max-w-[calc(100vw-2rem)] text-helper leading-relaxed text-muted-foreground [&_p]:my-0 [&_*+p]:mt-2 [&_ul]:my-0 [&_*+ul]:mt-1.5 [&_ul]:list-disc [&_ul]:list-outside [&_ul]:pl-5 [&_li]:mt-0.5 [&_li]:pl-0.5 [&_strong]:font-medium [&_strong]:text-foreground [&_code]:text-[0.9em] [&_h4]:mt-3 [&_h4]:mb-1 [&_h4]:border-t [&_h4]:border-border [&_h4]:pt-3 [&_h4]:text-meta [&_h4]:font-semibold [&_h4]:uppercase [&_h4]:tracking-wider [&_h4]:text-foreground"
+        className="w-80 max-w-[calc(100vw-2rem)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto text-helper leading-relaxed text-muted-foreground [&_p]:my-0 [&_*+p]:mt-2 [&_ul]:my-0 [&_*+ul]:mt-1.5 [&_ul]:list-disc [&_ul]:list-outside [&_ul]:pl-5 [&_li]:mt-0.5 [&_li]:pl-0.5 [&_strong]:font-medium [&_strong]:text-foreground [&_code]:text-[0.9em] [&_h4]:mt-3 [&_h4]:mb-1 [&_h4]:border-t [&_h4]:border-border [&_h4]:pt-3 [&_h4]:text-meta [&_h4]:font-semibold [&_h4]:uppercase [&_h4]:tracking-wider [&_h4]:text-foreground"
       >
         {/* Keyed by content: Streamdown memoizes blocks by their position in the source, so a hint whose
             text swaps with the selected option keeps the old block at that position otherwise. */}
@@ -139,11 +144,12 @@ export function RecommendedMark() {
 }
 
 /** A segmented option control that becomes a dropdown below `sm`. */
-export function OptionSwitcher<T extends string>({ value, onChange, options, ariaLabel }: {
+export function OptionSwitcher<T extends string>({ value, onChange, options, ariaLabel, disabled }: {
   value: T;
   onChange: (v: T) => void;
   options: readonly { value: T; label: string; recommended?: true }[];
   ariaLabel?: string;
+  disabled?: boolean;
 }) {
   const choose = (nextValue: string) => {
     const option = options.find(({ value: optionValue }) => optionValue === nextValue);
@@ -152,7 +158,7 @@ export function OptionSwitcher<T extends string>({ value, onChange, options, ari
 
   return (
     <div>
-      <Select value={value} onValueChange={choose}>
+      <Select value={value} onValueChange={choose} disabled={disabled}>
         <SelectTrigger aria-label={ariaLabel} className="w-full sm:hidden"><SelectValue /></SelectTrigger>
         <SelectContent>
           {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
@@ -163,6 +169,7 @@ export function OptionSwitcher<T extends string>({ value, onChange, options, ari
           type="single"
           aria-label={ariaLabel}
           value={value}
+          disabled={disabled}
           onValueChange={(nextValue) => { if (nextValue) choose(nextValue); }}
           className="grid w-full"
           style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
@@ -192,14 +199,16 @@ export function OptionSwitcher<T extends string>({ value, onChange, options, ari
  * alignment guard can tell it apart from a plain one-line control. Omitting `label` leaves the label cell
  * empty, which is how a row that is only a button or a status line still lands in the control column.
  */
-export function Row({ label, htmlFor, children, hint, top, info, muted, experimental }: {
+export function Row({ label, htmlFor, children, hint, top, info, muted, experimental, target }: {
   label?: string; htmlFor?: string; children: ReactNode; hint?: string;
   top?: boolean; info?: ReactNode; muted?: boolean; experimental?: boolean;
+  /** Marks the row as a Take Me There target. */
+  target?: TargetAttribute;
 }) {
   return (
     // Row gaps are margins rather than `gap-y`: the label needs a full gap under it when the grid stacks
     // on mobile, and the hint needs a tight one, which a single gap value can't give both.
-    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] items-center gap-x-4">
+    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] items-center gap-x-4" {...target}>
       {label === undefined
         // Holds the column open on wide screens only: on mobile the grid is one column, where an empty
         // cell would just be a gap above the control.
@@ -219,33 +228,45 @@ export function Row({ label, htmlFor, children, hint, top, info, muted, experime
 }
 
 /** A slider with its current value shown to the right. */
-export function ValueSlider({ id, value, onChange, min, max, step, format, ariaLabel }: {
+export function ValueSlider({ id, value, onChange, min, max, step, format, ariaLabel, valueClassName, disabled }: {
   id?: string; value: number; onChange: (v: number) => void; min: number; max: number; step: number;
-  format: (v: number) => string; ariaLabel?: string;
+  format: (v: number) => string; ariaLabel?: string; disabled?: boolean;
+  /** Overrides the value's width, for a narrow column. */
+  valueClassName?: string;
 }) {
   return (
     <div className="flex items-center gap-3">
-      <Slider id={id} aria-label={ariaLabel} className="flex-grow" value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0])} />
-      <span className="w-24 text-right text-label tabular-nums">{format(value)}</span>
+      <Slider id={id} aria-label={ariaLabel} className="flex-grow" value={[value]} min={min} max={max} step={step} disabled={disabled} onValueChange={(v) => onChange(v[0])} />
+      <span className={cn('w-24 text-right text-label tabular-nums', valueClassName)}>{format(value)}</span>
     </div>
   );
 }
 
 /** A checkbox row matching the settings tabs: right-anchored label + checkbox + secondary text beside it.
  *  `info` takes an affordance (e.g. `HintInfo`) rendered at the label boundary, so a row wanting the long
- *  explanation on demand doesn't have to be hand-built to get it. */
-export function CheckRow({ label, htmlFor, checked, onChange, hint, info, experimental }: {
+ *  explanation on demand doesn't have to be hand-built to get it.
+ *  `disabled` is for a row whose value is not the reader's to set yet — one still being read from a
+ *  server, or one a write is in flight for. The hint keeps its normal weight; the box alone dims. */
+export function CheckRow({ label, htmlFor, checked, onChange, hint, info, experimental, disabled, target }: {
   label: string; htmlFor: string; checked: boolean; onChange: (v: boolean) => void; hint: string;
-  info?: ReactNode; experimental?: boolean;
+  info?: ReactNode; experimental?: boolean; disabled?: boolean;
+  /** Marks the row as a Take Me There target. */
+  target?: TargetAttribute;
 }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] items-start gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,3fr)] items-start gap-4" {...target}>
       <RowLabel htmlFor={htmlFor} info={info} experimental={experimental}>{label}</RowLabel>
       <div className="flex items-start gap-2">
         {/* The box is shorter than the line of text beside it, so a `1lh` sleeve centers it on that line —
             top-aligning it instead leaves its center above the label's and reads as a row out of true. */}
         <span className="flex h-[1lh] shrink-0 items-center">
-          <Checkbox id={htmlFor} checked={checked} onCheckedChange={(c) => onChange(c === true)} className="shrink-0" />
+          <Checkbox
+            id={htmlFor}
+            checked={checked}
+            disabled={disabled}
+            onCheckedChange={(c) => onChange(c === true)}
+            className="shrink-0"
+          />
         </span>
         <Hint as="span">{hint}</Hint>
       </div>

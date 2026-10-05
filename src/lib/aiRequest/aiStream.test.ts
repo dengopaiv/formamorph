@@ -157,6 +157,61 @@ describe('streamAiRequest', () => {
     });
   });
 
+  async function rejectionOf(response: Response, url = spec.url): Promise<AiStreamError> {
+    const error = await collect(streamAiRequest({ ...spec, url }, { fetchImpl: fetchOf(response) })).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AiStreamError);
+    return error as AiStreamError;
+  }
+
+  const notFoundBody = JSON.stringify({
+    error: { message: 'model not found', type: 'invalid_request_error', param: 'model', code: 'model_not_found' },
+    request_id: 'req-7731',
+  });
+
+  it('puts the status, the server fields and the raw body in the details', async () => {
+    const error = await rejectionOf(new Response(notFoundBody, { status: 404 }));
+
+    expect(error).toMatchObject({ kind: 'http', status: 404, serverError: { message: 'model not found', parameter: 'model' } });
+    expect(error.details).toContain('Status: 404');
+    expect(error.details).toContain('Message: model not found');
+    expect(error.details).toContain('Param: model');
+    expect(error.details).toContain('Type: invalid_request_error');
+    expect(error.details).toContain('Code: model_not_found');
+    // The raw body keeps fields the parser drops.
+    expect(error.details).toContain(notFoundBody);
+  });
+
+  it('reads a numeric server code', async () => {
+    const error = await rejectionOf(new Response(JSON.stringify({ error: { message: 'Bad request', code: 400 } }), { status: 400 }));
+
+    expect(error.serverError?.code).toBe('400');
+    expect(error.details).toContain('Code: 400');
+  });
+
+  it('keeps a body that is not JSON as the raw response', async () => {
+    const error = await rejectionOf(new Response('<html>502 Bad Gateway</html>', { status: 502 }));
+
+    expect(error.serverError).toBeUndefined();
+    expect(error.details).toContain('Status: 502');
+    expect(error.details).toContain('<html>502 Bad Gateway</html>');
+  });
+
+  it('masks a key in the endpoint query string and leaves a keyless url unchanged', async () => {
+    const keyed = await rejectionOf(new Response('', { status: 401 }), 'https://api.example.test/v1/chat/completions?api_key=sk-live-123&region=eu');
+    expect(keyed.details).toContain('https://api.example.test/v1/chat/completions?api_key=[redacted]&region=eu');
+    expect(keyed.details).not.toContain('sk-live-123');
+
+    const plain = await rejectionOf(new Response('', { status: 401 }));
+    expect(plain.details).toContain(spec.url);
+  });
+
+  it('keeps request headers out of the details', async () => {
+    const error = await rejectionOf(new Response(notFoundBody, { status: 404 }));
+
+    expect(error.details).not.toContain('Authorization');
+    expect(error.details).not.toContain('Bearer');
+  });
+
   it('throws a typed no-body error when the response has no stream', async () => {
     await expect(collect(streamAiRequest(spec, { fetchImpl: fetchOf(streamingResponse([], { body: false })) })))
       .rejects.toMatchObject({ kind: 'no-body' });
@@ -357,5 +412,93 @@ describe('streamAiRequest', () => {
     const { timings } = doneOf(events).result;
     expect(timings.firstTokenAt).toBeNull();
     expect(timings.firstContentAt).toBeNull();
+  });
+
+  it('reassembles a tool call whose arguments arrive across frames', async () => {
+    const events = await collect(streamAiRequest(spec, {
+      fetchImpl: fetchOf(streamingResponse([
+        frame({ tool_calls: [{ index: 0, id: 'call_a', type: 'function', function: { name: 'get_entity', arguments: '' } }] }),
+        frame({ tool_calls: [{ index: 0, function: { arguments: '{"name":' } }] }),
+        frame({ tool_calls: [{ index: 0, function: { arguments: '"Bram"}' } }] }, 'tool_calls'),
+      ])),
+    }));
+
+    const { toolCalls, finishReason } = doneOf(events).result;
+    expect(toolCalls).toEqual([{ id: 'call_a', name: 'get_entity', arguments: '{"name":"Bram"}' }]);
+    expect(finishReason).toBe('tool_calls');
+  });
+
+  it('keeps two calls in one response apart by index, whatever order their frames interleave in', async () => {
+    const events = await collect(streamAiRequest(spec, {
+      fetchImpl: fetchOf(streamingResponse([
+        frame({ tool_calls: [
+          { index: 0, id: 'a', type: 'function', function: { name: 'get_entity', arguments: '{"name":' } },
+          { index: 1, id: 'b', type: 'function', function: { name: 'get_entity', arguments: '' } },
+        ] }),
+        frame({ tool_calls: [{ index: 1, function: { arguments: '{"name":"Odette"}' } }] }),
+        frame({ tool_calls: [{ index: 0, function: { arguments: '"Bram"}' } }] }),
+      ])),
+    }));
+
+    expect(doneOf(events).result.toolCalls).toEqual([
+      { id: 'a', name: 'get_entity', arguments: '{"name":"Bram"}' },
+      { id: 'b', name: 'get_entity', arguments: '{"name":"Odette"}' },
+    ]);
+  });
+
+  it('starts a new call on a frame without an index when it names a function, else appends to the last', async () => {
+    const events = await collect(streamAiRequest(spec, {
+      fetchImpl: fetchOf(streamingResponse([
+        frame({ tool_calls: [{ id: 'a', type: 'function', function: { name: 'one', arguments: '{' } }] }),
+        frame({ tool_calls: [{ function: { arguments: '}' } }] }),
+        frame({ tool_calls: [{ id: 'b', type: 'function', function: { name: 'two', arguments: '{}' } }] }),
+      ])),
+    }));
+
+    expect(doneOf(events).result.toolCalls).toEqual([
+      { id: 'a', name: 'one', arguments: '{}' },
+      { id: 'b', name: 'two', arguments: '{}' },
+    ]);
+  });
+
+  it('counts a tool-call frame as the first token, so think time spans a lookup', async () => {
+    let clock = 1000;
+    const events = await collect(streamAiRequest(spec, {
+      now: () => (clock += 10),
+      fetchImpl: fetchOf(streamingResponse([
+        frame({ tool_calls: [{ index: 0, id: 'a', type: 'function', function: { name: 'one', arguments: '{}' } }] }, 'tool_calls'),
+      ])),
+    }));
+
+    const { timings } = doneOf(events).result;
+    expect(timings.firstTokenAt).not.toBeNull();
+    expect(timings.firstContentAt).toBeNull();
+  });
+
+  it('emits no delta for a tool-call frame and reports an empty call list for a plain reply', async () => {
+    const events = await collect(streamAiRequest(spec, {
+      fetchImpl: fetchOf(streamingResponse([
+        frame({ tool_calls: [{ index: 0, id: 'a', type: 'function', function: { name: 'one', arguments: '{}' } }] }),
+      ])),
+    }));
+    expect(events.filter((e) => e.type === 'delta')).toHaveLength(0);
+
+    const plain = await collect(streamAiRequest(spec, { fetchImpl: fetchOf(streamingResponse([frame({ content: 'x' })])) }));
+    expect(doneOf(plain).result.toolCalls).toEqual([]);
+  });
+
+  it('records which reasoning field the server streamed, so a reply can echo it under the same name', async () => {
+    const named = await collect(streamAiRequest(spec, {
+      fetchImpl: fetchOf(streamingResponse([frame({ reasoning_content: 'r' }), frame({ content: 'x' })])),
+    }));
+    expect(doneOf(named).result.reasoningField).toBe('reasoning_content');
+
+    const other = await collect(streamAiRequest(spec, {
+      fetchImpl: fetchOf(streamingResponse([frame({ reasoning: 'r' })])),
+    }));
+    expect(doneOf(other).result.reasoningField).toBe('reasoning');
+
+    const none = await collect(streamAiRequest(spec, { fetchImpl: fetchOf(streamingResponse([frame({ content: 'x' })])) }));
+    expect(doneOf(none).result.reasoningField).toBeNull();
   });
 });

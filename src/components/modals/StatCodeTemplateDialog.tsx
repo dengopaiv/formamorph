@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Copy, Pencil, Plus, Trash2 } from 'lucide-react';
 import { ActionIcon } from '@/lib/actionIcons';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { downloadBlob } from '@/lib/downloadBlob';
 import { filesFrom } from '@/lib/importFiles';
 import { useResetOnOpen } from '@/lib/useResetOnOpen';
@@ -30,12 +31,17 @@ import {
   resolveSlotValue,
   validateSlotValues,
   isNameSlotType,
+  PERSONA_TRAIT_OWNER,
   templatesForTiming,
   type NameSlotType,
   type StatCodeTemplate,
   type TemplateSlot,
 } from '@/lib/statCodeTemplates';
 import { STAT_CODE_TIMINGS, TIMING_LABEL, type StatCodeTiming } from '@/lib/statCodeTiming';
+import { STAT_CODE_SURFACE } from '@/lib/statCodeSurface';
+import { keyedEntity, type CodeEntityNames, type CodeTraitPlace } from '@/lib/statCodeAnalysis';
+import { BreadcrumbPicker, type BreadcrumbPickerRow } from '@/components/ui/breadcrumb-picker';
+import { WORLD_BREADCRUMB } from '@/lib/traitGates';
 import {
   buildTemplatePack,
   deleteUserTemplate,
@@ -77,21 +83,94 @@ const productionRepository: StatTemplateRepository = {
   import: importTemplates,
 };
 
-/** The world's names a name slot of each type picks from. */
-type SlotNames = Record<NameSlotType, readonly string[]>;
+/** The world's names the name slots pick from, under their code names. */
+interface SlotNames {
+  stat: readonly Stat[];
+  /** The names `placeholders["X"]` reaches, under their Placeholders-tab folders. */
+  placeholder: readonly CodeTraitPlace[];
+  /** The world's own traits, which `traits` keys. */
+  trait: readonly CodeTraitPlace[];
+  entities: readonly CodeEntityNames[];
+}
 
-/** What a name slot's empty picker asks for. */
-const PICK_PROMPT: Record<NameSlotType, string> = {
-  stat: 'Pick a stat…', placeholder: 'Pick a placeholder…', trait: 'Pick a trait…',
+type SlotRow = BreadcrumbPickerRow<string>;
+
+/** What a name slot's empty picker asks for, and what its search field says. */
+const PROMPTS: Record<NameSlotType, { pick: string; search: string }> = {
+  stat: { pick: 'Pick a stat…', search: 'Search stats' },
+  placeholder: { pick: 'Pick a placeholder…', search: 'Search placeholders' },
+  trait: { pick: 'Pick a trait…', search: 'Search traits' },
+  entity: { pick: 'Pick an entity…', search: 'Search entities' },
 };
+
+/** Each name once, in first-seen order, as rows with no breadcrumb. */
+const plainRows = (names: readonly string[] | null): SlotRow[] =>
+  [...new Set(names)].map((name) => ({ key: name, value: name, name }));
+
+/** The items in their tab's order. */
+const inTabOrder = <T extends { tabPosition?: number }>(items: readonly T[]): T[] => items
+  .map((item, listed) => ({ item, listed }))
+  .sort((a, b) => (a.item.tabPosition ?? a.listed) - (b.item.tabPosition ?? b.listed))
+  .map(({ item }) => item);
+
+/** The keyed entities in Entities-tab order, each under its folders. A shared name lists the entity the sandbox keys. */
+const entityRows = (entities: readonly CodeEntityNames[]): SlotRow[] =>
+  inTabOrder(entities)
+    .filter((entity) => keyedEntity(entities, entity.name) === entity)
+    .map((entity) => ({ key: entity.id, value: entity.name, name: entity.name, breadcrumb: entity.folder }));
+
+/** One entity's traits in its own tree order, each under `lead` and then its own groups. */
+const traitRows = (entity: CodeEntityNames, lead: readonly string[]): SlotRow[] =>
+  inTabOrder(entity.traits).map((trait) => ({
+    key: `${entity.id}:${trait.id}`, value: trait.name, name: trait.name, breadcrumb: [...lead, ...trait.path],
+  }));
+
+/** Each persona entity's traits under its name, in Entities-tab order. A name two of them hold lists under both. */
+const personaTraitRows = (entities: readonly CodeEntityNames[]): SlotRow[] => inTabOrder(entities)
+  .filter((entity) => entity.persona)
+  .flatMap((entity) => traitRows(entity, entity.name ? [entity.name] : []));
+
+/** The answers with `slot` set to `value`. The trait slots tied to it clear, since they held the old entity's traits. */
+const withAnswer = (answers: Record<string, string>, slots: readonly TemplateSlot[], slot: TemplateSlot, value: string) => ({
+  ...answers,
+  ...Object.fromEntries(slots.filter((other) => other.owner === slot.name).map((other) => [other.name, ''])),
+  [slot.name]: value,
+});
+
+/** What a slot's picker offers, given the answers so far. A tied trait slot lists its owner's traits. */
+function slotOptions(slot: TemplateSlot, slots: readonly TemplateSlot[], values: Record<string, string>, names: SlotNames): SlotRow[] {
+  switch (slot.type) {
+    case 'stat':
+      return names.stat.map((stat) => ({ key: stat.id, value: stat.name, name: stat.name }));
+    case 'placeholder':
+      return names.placeholder.map((place) => ({ key: place.id, value: place.name, name: place.name, breadcrumb: place.path }));
+    case 'entity':
+      return entityRows(names.entities);
+    case 'trait': {
+      const owner = slots.find((other) => other.name === slot.owner && other.type === 'entity');
+      if (owner) {
+        const entity = keyedEntity(names.entities, resolveSlotValue(owner, values));
+        return entity ? traitRows(entity, []) : [];
+      }
+      if (slot.owner === PERSONA_TRAIT_OWNER) return personaTraitRows(names.entities);
+      return names.trait.map((trait) => ({
+        key: trait.id, value: trait.name, name: trait.name, breadcrumb: trait.path.length > 0 ? trait.path : WORLD_BREADCRUMB,
+      }));
+    }
+    case 'daypart':
+      return plainRows(DAYPART_OPTIONS);
+    default:
+      return plainRows(slot.options ?? []);
+  }
+}
 
 /** One control for one slot. Name and daypart slots pick from a list so the generated string is always
  *  a name the sandbox will actually match. */
-function SlotField({ slot, value, problem, names, onChange }: {
+function SlotField({ slot, value, problem, options, onChange }: {
   slot: TemplateSlot;
   value: string;
   problem?: string;
-  names: SlotNames;
+  options: readonly SlotRow[];
   onChange: (value: string) => void;
 }) {
   /** What the author is part-way through typing, or null when the field is showing its resolved value. */
@@ -99,11 +178,6 @@ function SlotField({ slot, value, problem, names, onChange }: {
   const fieldId = useId();
   const labelId = `${fieldId}-label`;
   const problemId = `${fieldId}-problem`;
-  const options = isNameSlotType(slot.type)
-    ? names[slot.type]
-    : slot.type === 'daypart'
-      ? [...DAYPART_OPTIONS]
-      : slot.options ?? [];
 
   return (
     <label htmlFor={fieldId} className="flex flex-col gap-1 min-w-0">
@@ -122,6 +196,18 @@ function SlotField({ slot, value, problem, names, onChange }: {
           onChange={(e) => { setTyping(e.target.value); onChange(e.target.value); }}
           onBlur={() => setTyping(null)}
         />
+      ) : isNameSlotType(slot.type) ? (
+        <BreadcrumbPicker
+          sections={[{ rows: options }]}
+          value={value}
+          onPick={onChange}
+          placeholder={PROMPTS[slot.type].pick}
+          searchPlaceholder={PROMPTS[slot.type].search}
+          id={fieldId}
+          ariaLabelledBy={labelId}
+          ariaInvalid={!!problem}
+          ariaDescribedBy={problem ? problemId : undefined}
+        />
       ) : (
         <Select value={value || undefined} onValueChange={onChange}>
           <SelectTrigger
@@ -130,11 +216,11 @@ function SlotField({ slot, value, problem, names, onChange }: {
             aria-invalid={!!problem}
             aria-describedby={problem ? problemId : undefined}
           >
-            <SelectValue placeholder={isNameSlotType(slot.type) ? PICK_PROMPT[slot.type] : 'Pick one…'} />
+            <SelectValue placeholder="Pick one…" />
           </SelectTrigger>
           <SelectContent>
             {options.length === 0 && <div className="px-2 py-1.5 text-meta text-muted-foreground">Nothing to pick</div>}
-            {options.map(option => <SelectItem key={option} value={option}>{option}</SelectItem>)}
+            {options.map(option => <SelectItem key={option.key} value={option.value}>{option.name}</SelectItem>)}
           </SelectContent>
         </Select>
       )}
@@ -164,13 +250,13 @@ function TemplateForm({ code, names, values, onChange }: {
             <SlotField
               key={slot.name}
               slot={slot}
-              names={names}
+              options={slotOptions(slot, parsed.slots, values, names)}
               // Read through the resolver rather than straight out of `values`: a slot the author has
               // only just typed into the code has no answer yet, and its declared default is what the
               // generated code below already shows for it.
               value={resolveSlotValue(slot, values)}
               problem={problems[slot.name]}
-              onChange={(value) => onChange(current => ({ ...current, [slot.name]: value }))}
+              onChange={(value) => onChange(current => withAnswer(current, parsed.slots, slot, value))}
             />
           ))}
         </div>
@@ -202,8 +288,9 @@ export function StatCodeTemplateDialog({
   currentStatId,
   hasExistingCode,
   onInsert,
-  placeholderNames = [],
-  traitNames = [],
+  placeholderPlaces = [],
+  traitPlaces = [],
+  entities = [],
   repository = productionRepository,
   fileTransfer,
 }: {
@@ -215,13 +302,15 @@ export function StatCodeTemplateDialog({
   /** Under their code names: what a slot fills in has to be what the run reaches. */
   stats: Stat[];
   /** Excluded from stat pickers — a stat built from itself is a mistake, and templates reach their own
-   *  value through `currentStatId` rather than by name. */
+   *  value through `self` rather than by name. */
   currentStatId?: string;
   hasExistingCode: boolean;
   /** What a placeholder slot's picker offers. */
-  placeholderNames?: readonly string[];
-  /** What a trait slot's picker offers. */
-  traitNames?: readonly string[];
+  placeholderPlaces?: readonly CodeTraitPlace[];
+  /** What an untied trait slot's picker offers. */
+  traitPlaces?: readonly CodeTraitPlace[];
+  /** What an entity slot and a tied trait slot offer. */
+  entities?: readonly CodeEntityNames[];
   onInsert: (code: string) => void;
   repository?: StatTemplateRepository;
   fileTransfer?: StatTemplateFileTransfer;
@@ -241,7 +330,7 @@ export function StatCodeTemplateDialog({
     try {
       setUserTemplates(await repository.list());
     } catch (error) {
-      toast.error(`Couldn’t read your templates: ${(error as Error).message}`);
+      toastError(error, { headline: `Couldn’t read your templates: ${(error as Error).message}` });
     }
   }, [repository]);
 
@@ -258,13 +347,14 @@ export function StatCodeTemplateDialog({
   const all = useMemo(() => [...builtIns, ...sortedUser], [builtIns, sortedUser]);
   const selected = all.find(template => template.id === selectedId) ?? all[0];
   const slotNames = useMemo<SlotNames>(() => ({
-    stat: stats.filter(stat => stat.id !== currentStatId).map(stat => stat.name).filter(Boolean),
-    placeholder: placeholderNames,
-    trait: traitNames,
-  }), [stats, currentStatId, placeholderNames, traitNames]);
+    stat: stats.filter(stat => stat.id !== currentStatId && stat.name),
+    placeholder: placeholderPlaces,
+    trait: traitPlaces,
+    entities,
+  }), [stats, currentStatId, placeholderPlaces, traitPlaces, entities]);
   // Every stat, not the pickable ones: a slot picker must not offer the stat being edited (a formula
-  // reading its own value from the list is a loop), but code written by hand reads it through
-  // `currentStatId` all the time, so its name belongs in the completions.
+  // reading its own value from the list is a loop), but code written by hand may read it by name, so its
+  // name belongs in the completions.
   const statNames = useMemo(
     () => stats.map(stat => stat.name).filter((name): name is string => !!name),
     [stats],
@@ -298,7 +388,7 @@ export function StatCodeTemplateDialog({
       setDraft(null);
       toast.success('Template saved');
     } catch (error) {
-      toast.error(`Couldn’t save: ${(error as Error).message}`);
+      toastError(error, { headline: `Couldn’t save: ${(error as Error).message}` });
     }
   };
 
@@ -309,7 +399,7 @@ export function StatCodeTemplateDialog({
       await refresh();
       setSelectedId(builtIns[0].id);
     } catch (error) {
-      toast.error(`Couldn’t delete: ${(error as Error).message}`);
+      toastError(error, { headline: `Couldn’t delete: ${(error as Error).message}` });
     }
   };
 
@@ -335,7 +425,7 @@ export function StatCodeTemplateDialog({
         ? `Imported ${added} template${added === 1 ? '' : 's'}`
         : 'Those templates are already in your library');
     } catch (error) {
-      toast.error((error as Error).message);
+      toastError(error, 'Couldn’t import those templates');
     }
   };
 
@@ -415,6 +505,7 @@ export function StatCodeTemplateDialog({
                 onChange={(code) => setDraft({ ...draft, code })}
                 label="Code"
                 ariaLabel="Template code"
+                surface={STAT_CODE_SURFACE}
                 statNames={statNames}
                 slots
                 className="flex-1"

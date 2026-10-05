@@ -11,7 +11,7 @@
 // restrictToFirstScrollableAncestor / restrictToVerticalAxis) clamps the horizontal delta and breaks
 // depth-based nesting (see TraitTree history), which is why this passes `restrictYToScrollAncestor` rather
 // than taking the shared layer's vertical-list default.
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { EditorRow, EditorRowList, TREE_INDENT, type EditorRowAction } from '@/components/EditorRow';
 import { X, Copy } from 'lucide-react';
 import {
@@ -77,6 +77,10 @@ export interface TreeRowSpec {
   removeTitle?: string;
   /** Absent on a fixed row, which offers no delete. */
   remove?: () => void;
+  /** Why the row can't be removed; shows the delete action unavailable with this tip. Read only without `remove`. */
+  removeBlocked?: string;
+  /** Tip of the dot that marks a row overriding its blueprint. */
+  overridden?: string;
   /** Absent on a fixed row, which offers no duplicate. */
   duplicate?: () => void;
   /** The row is derived from something else (an owner node read off an entity): it cannot be dragged, and
@@ -146,21 +150,40 @@ function TreeRow({ id, selectId, depth, spec, selected, onSelect, isCollapsed, t
       labelClass={spec.labelClass}
       meta={spec.meta}
       metaTitle={spec.metaTitle}
+      overridden={spec.overridden}
       actions={[
         ...(spec.actions ?? []),
         ...(spec.duplicate ? [{ icon: <Copy className="h-4 w-4" />, title: 'Duplicate', onClick: spec.duplicate }] : []),
-        ...(spec.remove ? [{ icon: <X className="h-4 w-4" />, title: spec.removeTitle ?? 'Delete', onClick: spec.remove }] : []),
+        ...(spec.remove ? [{ icon: <X className="h-4 w-4" />, title: spec.removeTitle ?? 'Delete', onClick: spec.remove }]
+          : spec.removeBlocked ? [{ icon: <X className="h-4 w-4" />, title: spec.removeTitle ?? 'Delete', onClick: () => {}, disabledReason: spec.removeBlocked }]
+          : []),
       ]}
     />
   );
 }
 
-export function SortableTree<N extends { id: string; depth: number }>({ adapter, selectedId, onSelect }: {
+export function SortableTree<N extends { id: string; depth: number }>({ adapter, selectedId, onSelect, revealSelected = false }: {
   adapter: SortableTreeAdapter<N>;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Expand the groups above a newly selected row, so a row selected from outside the tree shows. */
+  revealSelected?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // The last selection revealed. A selection whose row isn't drawn yet waits for the render that draws it.
+  const revealed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!revealSelected || !selectedId || revealed.current === selectedId) return;
+    const rows = adapter.getVisible(new Set());
+    const at = rows.findIndex((n) => (adapter.selectionId?.(n) ?? n.id) === selectedId);
+    if (at < 0) return;
+    revealed.current = selectedId;
+    const above = new Set<string>();
+    for (let i = at - 1, depth = rows[at].depth; i >= 0 && depth > 0; i--) {
+      if (rows[i].depth < depth) { above.add(rows[i].id); depth = rows[i].depth; }
+    }
+    setCollapsed((prev) => ([...above].some((id) => prev.has(id)) ? new Set([...prev].filter((id) => !above.has(id))) : prev));
+  }, [revealSelected, selectedId, adapter]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetLeft, setOffsetLeft] = useState(0);

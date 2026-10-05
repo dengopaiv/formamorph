@@ -109,6 +109,18 @@ describe('the document walk', () => {
     expect(letters.get('s-band')).toBe('B');
   });
 
+  it('letters a Unique chip in a custom prompt, after the ones in the overview prose', () => {
+    const letters = worldPlacementLetters({
+      worldOverview: {
+        systemPrompt: `Set in ${chip('town', 'ov-prose')}.`,
+        promptOverrides: { choicesPrompt: `Offer replies set in ${chip('town', 'ov-prompt')}.` },
+      } as never,
+      placeholders: [TOWN],
+    });
+    expect(letters.get('ov-prose')).toBe('A');
+    expect(letters.get('ov-prompt')).toBe('B');
+  });
+
   it('reads a world whose collections are absent without throwing', () => {
     expect(worldPlacementTexts({})).toEqual([]);
   });
@@ -193,6 +205,11 @@ describe('labelPlaceholders', () => {
   it('reads a lone chip bare and an embedded one braced', () => {
     expect(labelPlaceholders(chip('town', 't2'), placeholders, { letters })).toBe('Town Name (B)');
     expect(labelPlaceholders(`The ${chip('town', 't1')} Inn`, placeholders, { letters })).toBe('The {Town Name (A)} Inn');
+  });
+
+  it('reads the Player Name chip by its label, bare when lone and braced when embedded', () => {
+    expect(labelPlaceholders('{{user}}', placeholders, { letters })).toBe('Player Name');
+    expect(labelPlaceholders('Friend of {{user}}', placeholders, { letters })).toBe('Friend of {Player Name}');
   });
 
   it('shows a World chip by name, with no letter', () => {

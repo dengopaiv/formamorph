@@ -1,4 +1,6 @@
 import type { CatalogKind } from '@/lib/catalogKinds';
+import type { LikeCount } from '@/lib/likeCount';
+import type { SupporterFlair } from './supporter';
 
 /**
  * The public face of an account: what a stranger sees when they click a name.
@@ -15,14 +17,16 @@ export interface PublicProfile {
   createdAt: string;
   /** Their staff role, or null for an ordinary account. Public: being on the team is not a private fact. */
   role?: string | null;
+  /** Their Supporter Flair, or null for none. Absent from a server that predates it. */
+  supporter?: SupporterFlair | null;
   /** How many accounts follow them. Public; who they are is not. */
   followers: number;
   /**
    * What their published work has earned, across every kind.
    *
-   * Counted over the catalog rather than over what this reader may see, so an author's own profile says
-   * the same thing as the one they hand somebody else — their quarantined work is listed to them below
-   * with its own numbers, and sits out of these until it is back in the catalog.
+   * Counted over the catalog: their quarantined work is listed to them below with its own numbers, and
+   * sits out of these until it is back in the catalog. The server leaves out contest likes hidden from
+   * this reader, so the author and staff get a larger total than the public.
    */
   likes: number;
   downloads: number;
@@ -48,13 +52,15 @@ export interface ProfileCreation {
   kind: CatalogKind;
   /** The stored thumbnail's filename, or null when it has none. Cached by name; see `CachedThumbnail`. */
   thumbnailFile: string | null;
+  /** Whether the thumbnail is the server's stand-in, which Morph art replaces. */
+  placeholder: boolean;
   downloads: number;
   commentCount: number;
-  /** How many accounts have liked it. Never a control here — the profile lists work rather than rates it. */
-  likes: number;
-  /** When it last changed, as a server timestamp — also what the thumbnail cache is keyed against. */
+  /** What its like count shows to this reader. Never a control here — the profile lists work rather than rates it. */
+  likes: LikeCount;
+  /** When it last changed, as a server timestamp. The list is newest-first by this, and the thumbnail cache keys on it. */
   updatedAt: string;
-  /** When it was published, as a server timestamp. The list is newest-first by this. */
+  /** When it was published, as a server timestamp. */
   createdAt: string;
   /**
    * Whether it is currently hidden from the catalog.
@@ -72,6 +78,8 @@ export interface FollowedUser {
   avatarUrl: string | null;
   /** Their staff role, or null for an ordinary account. */
   role?: string | null;
+  /** Their Supporter Flair, or null for none. Absent from a server that predates it. */
+  supporter?: SupporterFlair | null;
   /** When the follow started — also the point the feed counts from. */
   followedAt: string;
 }
@@ -93,6 +101,8 @@ export interface FeedItem {
     avatarUrl: string | null;
     /** Their staff role, or null for an ordinary account. */
     role?: string | null;
+    /** Their Supporter Flair, or null for none. Absent from a server that predates it. */
+    supporter?: SupporterFlair | null;
   };
 }
 
@@ -114,6 +124,12 @@ export interface LikerRow {
   createdAt: string;
   /** When they liked, as a server timestamp. The list is newest-first by this. */
   likedAt: string;
+  /**
+   * When a Claim moved this like onto the account, or null when it was given as an account.
+   *
+   * `likedAt` stays the first press either way, so the pair reads as "liked then, arrived here later".
+   */
+  claimedAt?: string | null;
   /** The gap between the two, as the server counted it. Absent on a server that predates the field. */
   accountAgeAtLikeSeconds?: number;
   /**
@@ -143,6 +159,40 @@ export interface LikerAuditRow extends LikerRow {
   groupId: number | null;
   /** Whether this account acted from an address the listing's author also acted from. */
   linkedToAuthor: boolean;
+}
+
+/**
+ * One Anonymous Like on a listing, as the audit shows it.
+ *
+ * There is no account behind one, so the address it came from is the only thing that can tie it to
+ * anything else on the screen. It sits in the same groups the accounts do and reads as a row with no
+ * name: a time, the browser family, and whatever the grouping made of it.
+ */
+export interface AnonymousLikeRow {
+  /** When the like was given, as a server timestamp. The list is newest-first by this. */
+  likedAt: string;
+  /** Which browser family it came from, in the same words the linked-moments list uses. */
+  browserFamily: string | null;
+  /** Which shared-address group it belongs to, on the same numbering the account rows use. */
+  groupId: number | null;
+  /** Whether it came from an address the listing's author also acted from. */
+  linkedToAuthor: boolean;
+  /**
+   * What the removal names this row's address by: a digest the server can turn back into one address
+   * on this listing alone. Null once the retention sweep has emptied the hash, which leaves the row
+   * with nothing to remove it by on its own.
+   */
+  addressKey: string | null;
+}
+
+/** What either Anonymous Like removal answers with: what went, and the two numbers the screen shows. */
+export interface AnonymousLikesRemoved {
+  /** How many rows went. Zero means another moderator got there first. */
+  removed: number;
+  /** The listing's summed like count after the removal. */
+  likes: number;
+  /** How many Anonymous Likes the listing has left. */
+  anonymous: number;
 }
 
 /** One listing an account has liked, as the profile's Likes tab lists it. Staff-only, like `LikerRow`. */

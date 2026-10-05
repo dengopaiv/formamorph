@@ -4,6 +4,8 @@ import type { PlaceholderFinding, PlaceholderPick, PlaceholderSegment } from './
 import { phValueId, phValues } from '@/test/placeholderValues';
 import {
   resolvePlaceholders,
+  resolveEntityText,
+  resolveBearerText,
   encodePlaceholderToken,
   decodePlaceholderToken,
   encodePlaceholderPath,
@@ -21,6 +23,7 @@ import {
   remapPlaceholderIds,
   absorbPlaceholders,
   buildPlaceholderPreview,
+  drawOpenPlaceholderValues,
   drawPlaceholderOnce,
   drawPlaceholderSpans,
   reachablePlaceholderIds,
@@ -39,6 +42,8 @@ import {
   pruneSharedWeights,
   mergePlaceholderWeights,
   readPlaceholders,
+  parsePlaceholderText,
+  type OpenPlaceholderValue,
   type ResolveOptions,
 } from './placeholders';
 
@@ -71,6 +76,145 @@ describe('placeholders token codec', () => {
   it('detects presence', () => {
     expect(hasPlaceholders('plain text')).toBe(false);
     expect(hasPlaceholders(`eyes: ${tok('eye', 'world', 'p1')}`)).toBe(true);
+  });
+});
+
+describe('the Player Name chip in the placeholder pass', () => {
+  const eyes = P('eyes', ['green']);
+  const mixed = `{{user}} has ${tok('eyes', 'world', 'p1')} eyes. She trusts {{User}}'s word.`;
+
+  it('renders the persona name beside authored chips', () => {
+    expect(resolvePlaceholders(mixed, { placeholders: [eyes], rolls: {}, player: { name: 'Wren' } }))
+      .toBe("Wren has green eyes. She trusts Wren's word.");
+  });
+
+  it('renders "the player" in reference text with no persona, which is the default kind', () => {
+    expect(resolvePlaceholders(mixed, { placeholders: [eyes], rolls: {} }))
+      .toBe("The player has green eyes. She trusts the player's word.");
+  });
+
+  it('renders "you" in opening text with no persona', () => {
+    expect(resolvePlaceholders(mixed, { placeholders: [eyes], rolls: {}, player: { kind: 'opening' } }))
+      .toBe('You has green eyes. She trusts your word.');
+  });
+
+  it('renders a marker that a placeholder value carries', () => {
+    const friend = P('friend', ["{{user}}'s oldest friend"]);
+    expect(resolvePlaceholders(`Mara is ${tok('friend', 'world', 'p1')}.`, {
+      placeholders: [friend], rolls: {}, player: { name: 'Wren' },
+    })).toBe("Mara is Wren's oldest friend.");
+  });
+
+  it('counts as a chip, and parses as one that keeps its spelling', () => {
+    expect(hasPlaceholders('Hi {{ User }}.')).toBe(true);
+    expect(parsePlaceholderText(`Hi {{ User }} and ${tok('eyes', 'world', 'p1')}`)).toEqual([
+      { type: 'text', value: 'Hi ' },
+      { type: 'variable', token: '{{ User }}' },
+      { type: 'text', value: ' and ' },
+      { type: 'variable', token: tok('eyes', 'world', 'p1') },
+    ]);
+  });
+
+  it('reads as its label on design-time surfaces', () => {
+    expect(describePlaceholders('Hi {{user}}.', [])).toBe('Hi Player Name.');
+    expect(buildPlaceholderPreview('Hi {{user}}.', [])).toEqual({ '{{user}}': 'Player Name' });
+  });
+});
+
+describe('the Character Name chip in the placeholder pass', () => {
+  const eyes = P('eyes', ['green']);
+
+  it('renders the character in any spelling of the token, possessive as written', () => {
+    const text = `{{char}} has ${tok('eyes', 'world', 'p1')} eyes. {{ Char }}'s coat and {{CHAR}} smiles.`;
+    expect(resolvePlaceholders(text, { placeholders: [eyes], rolls: {}, character: 'Vos' }))
+      .toBe("Vos has green eyes. Vos's coat and Vos smiles.");
+  });
+
+  it('renders beside Player Name without either taking the other', () => {
+    expect(resolvePlaceholders('{{char}} greets {{user}}.', {
+      placeholders: [], rolls: {}, character: 'Vos', player: { name: 'Wren' },
+    })).toBe('Vos greets Wren.');
+  });
+
+  it('renders nothing with no owner, like a missing placeholder', () => {
+    expect(resolvePlaceholders('{{char}} waits.', { placeholders: [], rolls: {} })).toBe(' waits.');
+  });
+
+  it('renders a chip that a placeholder value carries', () => {
+    const title = P('title', ['{{char}} the Bold']);
+    expect(resolvePlaceholders(`Hail ${tok('title', 'world', 'p1')}.`, {
+      placeholders: [title], rolls: {}, character: 'Vos',
+    })).toBe('Hail Vos the Bold.');
+  });
+
+  it('counts as a chip and reads as its label on design-time surfaces', () => {
+    expect(hasPlaceholders('Hi {{ Char }}.')).toBe(true);
+    expect(describePlaceholders('Hi {{char}}.', [])).toBe('Hi Character Name.');
+    expect(buildPlaceholderPreview('Hi {{char}}.', [])).toEqual({ '{{char}}': 'Character Name' });
+  });
+
+  it('previews as the owner name an entity editor passes', () => {
+    expect(buildPlaceholderPreview('Hi {{char}} and {{ Char }}.', [], first, undefined, 'YoRHa 2B'))
+      .toEqual({ '{{char}}': 'YoRHa 2B', '{{ Char }}': 'YoRHa 2B' });
+  });
+
+  it('previews a chip in the owner name as the same draw the text reads', () => {
+    const hair = P('hair', ['Red', 'Blue']);
+    const chip = tok('hair', 'world', 'p1');
+    const picks = ['Blue', 'Red'];
+    let i = 0;
+    const out = buildPlaceholderPreview(`${chip} hair. {{char}} waits.`, [hair], () => picks[i++], undefined, `${tok('hair', 'world', 'p2')} Vos`);
+    expect(out).toEqual({ [chip]: 'Blue', '{{char}}': 'Blue Vos' });
+  });
+
+  it('previews as its label with an empty owner name, and leaves Player Name as its label', () => {
+    expect(buildPlaceholderPreview('{{char}} greets {{user}}.', [], first, undefined, ' '))
+      .toEqual({ '{{char}}': 'Character Name', '{{user}}': 'Player Name' });
+    expect(buildPlaceholderPreview('{{user}} waits.', [], first, undefined, 'Vos')).toEqual({ '{{user}}': 'Player Name' });
+  });
+});
+
+describe('resolveEntityText', () => {
+  const rank = P('rank', ['Captain']);
+  const vos = { name: `${tok('rank', 'world', 'p1')} Vos` };
+
+  it('fills Character Name with the owner name, resolved first', () => {
+    expect(resolveEntityText(vos, '{{char}} keeps the dock.', { placeholders: [rank], rolls: {} }))
+      .toBe('Captain Vos keeps the dock.');
+  });
+
+  it('reads the owner name as it stands now, so a rename shows at once', () => {
+    const opts = { placeholders: [rank], rolls: {} };
+    expect(resolveEntityText({ name: 'Mara' }, 'Ask {{char}}.', opts)).toBe('Ask Mara.');
+    expect(resolveEntityText({ name: 'Marisol' }, 'Ask {{char}}.', opts)).toBe('Ask Marisol.');
+  });
+
+  it('renders a chip inside the owner name as nothing, whatever character the caller set', () => {
+    expect(resolveEntityText({ name: 'Vos {{char}}' }, 'I am {{char}}.', {
+      placeholders: [], rolls: {}, character: 'Wren',
+    })).toBe('I am Vos.');
+  });
+
+  it('keeps Player Name rendering from the caller options', () => {
+    expect(resolveEntityText({ name: 'Vos' }, '{{char}} owes {{user}}.', {
+      placeholders: [], rolls: {}, player: { name: 'Wren' },
+    })).toBe('Vos owes Wren.');
+    expect(resolveEntityText({ name: 'Vos' }, '{{user}} owes {{char}}.', { placeholders: [], rolls: {} }))
+      .toBe('The player owes Vos.');
+  });
+});
+
+describe('resolveBearerText', () => {
+  it('fills Character Name with an entity bearer, as its own text does', () => {
+    expect(resolveBearerText({ name: 'Albus' }, '{{char}} swore the oath.', { placeholders: [], rolls: {}, player: { name: 'Wren' } }))
+      .toBe('Albus swore the oath.');
+  });
+
+  it('reads Character Name as the Player Name when the player bears the trait', () => {
+    expect(resolveBearerText(null, '{{char}} swore the oath.', { placeholders: [], rolls: {}, player: { name: 'Wren' } }))
+      .toBe('Wren swore the oath.');
+    expect(resolveBearerText(null, '{{char}} swore. Kneel to {{char}}’s oath.', { placeholders: [], rolls: {} }))
+      .toBe('The player swore. Kneel to the player’s oath.');
   });
 });
 
@@ -1209,6 +1353,155 @@ describe('author-time Preview of structured chips', () => {
   it('is deterministic under an injected picker', () => {
     const text = `${placed('molly', 'world', 'p1')} ${placed('molly', 'unique', 'u1')} ${placed('town', 'world', 'p2')}`;
     expect(buildPlaceholderPreview(text, DEMO, first)).toEqual(buildPlaceholderPreview(text, DEMO, first));
+  });
+});
+
+// The Values tab opens each chip on one value's raw text, so it needs to know which value the Preview drew.
+describe('drawOpenPlaceholderValues', () => {
+  const ids = (out: Record<string, OpenPlaceholderValue>) =>
+    Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.valueId]));
+
+  it('opens a Wildcard chip on the value the Preview drew', () => {
+    const t = placed('eyes', 'world', 'p1');
+    const pick: PlaceholderPick = (values) => values[1].text;
+    expect(drawOpenPlaceholderValues(t, DEMO, pick)).toEqual({
+      [t]: { placeholderId: 'eyes', valueId: phValueId('hazel'), text: 'hazel' },
+    });
+  });
+
+  it('opens a Variable and an Object on their first value', () => {
+    const v = placed('black', 'world', 'p1');
+    const o = placed('isasian', 'world', 'p2');
+    const out = drawOpenPlaceholderValues(`${v} ${o}`, DEMO, first);
+    expect(out[v]).toEqual({ placeholderId: 'black', valueId: phValueId('jet black'), text: 'jet black' });
+    expect(out[o]).toEqual({ placeholderId: 'isasian', valueId: phValueId(chip('hair', val('black'))), text: chip('hair', val('black')) });
+  });
+
+  it('keeps the raw text of a value, nested chips and all', () => {
+    const t = placed('molly', 'world', 'p1');
+    expect(drawOpenPlaceholderValues(t, DEMO, first)[t].text).toBe(chip('iswhite'));
+  });
+
+  it('opens a drilled chip on the value its leaf drew', () => {
+    const t = placed('molly', 'world', 'p1', slot('Hair'));
+    // Molly → isWhite → Hair (explicit Brown) → Brown draws its first value.
+    expect(ids(drawOpenPlaceholderValues(t, DEMO, first))).toEqual({ [t]: phValueId('chestnut') });
+  });
+
+  it('reads the same rolls the Preview reads', () => {
+    const { rolls, setRoll } = collector();
+    const a = placed('eyes', 'unique', 'u1');
+    const b = placed('eyes', 'unique', 'u2');
+    const shades = ['blue', 'green'];
+    let i = 0;
+    const preview = buildPlaceholderPreview(`${a} ${b}`, DEMO, () => shades[i++], { rolls, setRoll });
+    const open = drawOpenPlaceholderValues(`${a} ${b}`, DEMO, () => 'hazel', { rolls, setRoll });
+    expect([open[a].text, open[b].text]).toEqual([preview[a], preview[b]]);
+  });
+
+  it('opens a missing or empty placeholder on nothing', () => {
+    const missing = placed('ghost', 'world', 'p1');
+    const empty: Placeholder = { id: 'empty', name: 'Empty', values: [] };
+    const e = placed('empty', 'world', 'p2');
+    const out = drawOpenPlaceholderValues(`${missing} ${e}`, [...DEMO, empty], first);
+    expect(out[missing]).toBeUndefined();
+    expect(out[e]).toEqual({ placeholderId: 'empty', text: '' });
+  });
+
+  // The Values tab writes an off-list pin back to the value that laid it, so the draw has to name that value.
+  describe('on a pinned chip', () => {
+    // Lord's first value pins Town to a listed value and Ghost, which holds none, to text off any list.
+    const lord: Placeholder = {
+      id: 'lord',
+      name: 'Lord',
+      values: [
+        { id: 'v:Ash', text: 'Ash', pins: [
+          { placeholderId: 'town', value: 'Milbrook', valueId: phValueId('Milbrook') },
+          { placeholderId: 'ghost', value: 'Wisp' },
+        ] },
+        { id: 'v:Bram', text: 'Bram' },
+      ],
+    };
+    const ghost: Placeholder = { id: 'ghost', name: 'Ghost', values: [] };
+    const PINNED = [...DEMO, lord, ghost];
+    const draw = (text: string) => drawOpenPlaceholderValues(text, PINNED, first);
+
+    it('names the placeholder and value that laid the pin', () => {
+      const l = placed('lord', 'world', 'p1');
+      const t = placed('town', 'world', 'p2');
+      const out = draw(`${l} of ${t}`);
+      expect(out[t]).toEqual({
+        placeholderId: 'town',
+        valueId: phValueId('Milbrook'),
+        text: 'Milbrook',
+        pinned: true,
+        pinSource: { placeholderId: 'lord', valueId: 'v:Ash' },
+      });
+    });
+
+    it('names the source for a pin whose text is on no list', () => {
+      const l = placed('lord', 'world', 'p1');
+      const g = placed('ghost', 'world', 'p2');
+      const out = draw(`${l} and ${g}`);
+      expect(out[g]).toEqual({
+        placeholderId: 'ghost',
+        text: 'Wisp',
+        pinned: true,
+        pinSource: { placeholderId: 'lord', valueId: 'v:Ash' },
+      });
+    });
+
+    it('leaves an unpinned chip with no source', () => {
+      const t = placed('town', 'world', 'p1');
+      expect(draw(t)[t].pinSource).toBeUndefined();
+    });
+
+    it('reads a stepped-to text before the pin the draw lays itself', () => {
+      const l = placed('lord', 'world', 'p1');
+      const t = placed('town', 'world', 'p2');
+      const store = { rolls: {}, chosen: { world: { town: 'Harrow Point' } } };
+      expect(drawOpenPlaceholderValues(`${l} of ${t}`, PINNED, first, store)[t]).toEqual({
+        placeholderId: 'town', valueId: phValueId('Harrow Point'), text: 'Harrow Point',
+      });
+      expect(buildPlaceholderPreview(`${l} of ${t}`, PINNED, first, store)[t]).toBe('Harrow Point');
+    });
+
+    it('takes a stepped-to pin text whole on a placeholder with no values', () => {
+      const g = placed('ghost', 'world', 'p1');
+      const store = { rolls: {}, chosen: { world: { ghost: 'Shade' } } };
+      expect(buildPlaceholderPreview(g, PINNED, first, store)[g]).toBe('Shade');
+    });
+
+    it('lets a stepped-to pin mask an Object\'s join, as a pin does in play', () => {
+      const o = placed('isasian', 'world', 'p1');
+      const store = { rolls: {}, chosen: { world: { isasian: 'Nobody in particular' } } };
+      expect(buildPlaceholderPreview(o, PINNED, first, store)[o]).toBe('Nobody in particular');
+    });
+
+    it('keys a stepped-to text by placement under Unique, so one placement moves alone', () => {
+      const a = placed('town', 'unique', 'u1');
+      const b = placed('town', 'unique', 'u2');
+      const store = { rolls: {}, chosen: { unique: { u2: 'Harrow Point' } } };
+      const out = buildPlaceholderPreview(`${a} ${b}`, PINNED, first, store);
+      expect([out[a], out[b]]).toEqual(['Sedge Landing', 'Harrow Point']);
+    });
+
+    it('still lays the pins a stepped-to value carries', () => {
+      const l = placed('lord', 'world', 'p1');
+      const g = placed('ghost', 'world', 'p2');
+      // A step is read through the choice's own draw, so the value stepped to lays its pins as a roll would.
+      const store = { rolls: {}, chosen: { world: { lord: 'Ash' } } };
+      expect(buildPlaceholderPreview(`${l} and ${g}`, PINNED, first, store)[g]).toBe('Wisp');
+    });
+
+    it('resolves to the same text as before', () => {
+      const l = placed('lord', 'world', 'p1');
+      const g = placed('ghost', 'world', 'p2');
+      expect(buildPlaceholderPreview(`${l} and ${g}`, PINNED, first)).toEqual({
+        [l]: 'Ash',
+        [g]: 'Wisp',
+      });
+    });
   });
 });
 

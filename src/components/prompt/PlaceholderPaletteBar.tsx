@@ -8,9 +8,11 @@ import { placeholderCycleExclusions } from '@/lib/placeholderTree';
 import { usePaletteCollapsed } from '@/lib/usePaletteCollapsed';
 import { cn } from '@/lib/utils';
 import type { Placeholder } from '@/types';
-import { useChipInsertTarget } from './ChipInsertTarget';
-import { CHIP_DRAG_MIME } from './ChipDrag';
+import { CHIP_PALETTE_ATTR, useChipInsertTarget } from './ChipInsertTarget';
+import { startPaletteChipDrag } from './chipDragSource';
 import ChipRowHeading from './ChipRowHeading';
+import BuiltinMark from './BuiltinMark';
+import BlueprintMark from './BlueprintMark';
 
 /**
  * One palette of the world's placeholders for a whole editor panel, rather than an insert row on every
@@ -28,8 +30,8 @@ const PlaceholderPaletteBar = ({ placeholders, scopeId, className }: {
   className?: string;
 }) => {
   const [collapsed, setCollapsed] = usePaletteCollapsed();
-  const { insert, undo, ownerId } = useChipInsertTarget();
-  const vocab = usePlaceholderChipVocabulary(placeholders, scopeId);
+  const { insert, undo, ownerId, accepts } = useChipInsertTarget();
+  const vocab = usePlaceholderChipVocabulary(placeholders, scopeId, { builtins: true, anyField: true });
   const all = useMemo(() => vocab.palette(), [vocab]);
   // A rename edits the placeholder's own name; the chip may read it under an owner prefix.
   const bareName = (token: string) => placeholders.find((p) => p.id === decodePlaceholderToken(token)?.id)?.name ?? '';
@@ -46,10 +48,8 @@ const PlaceholderPaletteBar = ({ placeholders, scopeId, className }: {
   );
   const [renaming, setRenaming] = useState<string | null>(null);
 
-  // Inserting happens on mouse-down, so the first half of a double-click has already dropped a chip into the
-  // claimed field by the time the gesture turns out to be a rename. Taking it back through that field's own
-  // history leaves the text exactly as it was — the alternative, waiting to see whether a second click
-  // arrives, would put a delay on every insert to serve the rarer gesture.
+  // The first click of a double-click inserts normally; rename takes that insertion back through the field's
+  // own history rather than delaying every single-click insertion to wait for a possible second click.
   const startRename = (token: string) => {
     undo?.();
     setRenaming(token);
@@ -62,7 +62,7 @@ const PlaceholderPaletteBar = ({ placeholders, scopeId, className }: {
   return (
     // Insertable placeholders, not a field's contents — the find bar must not offer one of these as the
     // place a hit on a placeholder's name lives.
-    <div data-editor-find-skip className={cn('sticky top-0 z-10 -mx-1 mb-2 border-b bg-background/95 px-1 py-1.5 backdrop-blur', className)}>
+    <div data-editor-find-skip {...{ [CHIP_PALETTE_ATTR]: '' }} className={cn('sticky top-0 z-10 -mx-1 mb-2 border-b bg-background/95 px-1 py-1.5 backdrop-blur', className)}>
       <div className="flex items-start gap-2">
         {/* Open, the toggle is the chevron alone: the strip's first slot is worth more as a chip than as a
             word, and the tooltip and the accessible name still carry it. Closed, the word comes back with
@@ -81,10 +81,12 @@ const PlaceholderPaletteBar = ({ placeholders, scopeId, className }: {
         </Tip>
         {!collapsed && (
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-            {/* The rows come sectioned — loose, then each folder, then each owner. A section opens with its
-                heading, and a rule keeps a heading from claiming the loose chips after it. */}
+            {/* The rows come sectioned — Built-in, loose, then each folder, then each owner. A section opens
+                with its heading, and a rule keeps a heading from claiming the loose chips after it. */}
             {items.map((item, i) => {
               const opens = chipSectionOpens(items, i);
+              // Dimmed, not dropped, where the claimed field refuses it, so the strip never reflows.
+              const live = !!insert && (accepts?.(item.token) ?? true);
               return (
               <Fragment key={item.token}>
               {opens && i > 0 && <span aria-hidden className="mx-0.5 h-4 w-px self-center bg-border" />}
@@ -99,7 +101,9 @@ const PlaceholderPaletteBar = ({ placeholders, scopeId, className }: {
               />
             ) : (
               <Tip
-                tip={insert ? `Insert ${item.label}, or drag it into a field` : `Drag ${item.label} into a field, or click into one first`}
+                tip={live ? `Insert ${item.label}, or drag it into a field`
+                  : insert ? `Click into a field that takes ${item.label}`
+                    : `Drag ${item.label} into a field, or click into one first`}
                 labelsChild={false}
               >
                 <button
@@ -107,25 +111,23 @@ const PlaceholderPaletteBar = ({ placeholders, scopeId, className }: {
                   // Draggable even with no claimed field: dropping into one is its own way in, and needs no
                   // prior focus. Clicking still needs a target, so only that is disabled.
                   draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(CHIP_DRAG_MIME, item.token);
-                    e.dataTransfer.effectAllowed = 'copy';
-                  }}
+                  onDragStart={(event) => startPaletteChipDrag(event, item.token)}
                   // Not `disabled`: that would block the drag too. Clicking is what needs a claimed field, so
                   // only clicking goes inert — dimmed to say so, while the chip stays draggable.
-                  aria-disabled={!insert}
-                  // Keep the target field's focus and selection: the insert reads its caret to know where to land.
-                  // `detail > 1` is the second press of a double-click: that one is starting a rename, not
-                  // asking for another copy.
-                  onMouseDown={(e) => { e.preventDefault(); if (e.detail < 2) insert?.(item.token); }}
-                  onDoubleClick={vocab.rename ? () => startRename(item.token) : undefined}
+                  aria-disabled={!live}
+                  // Insert only after a completed click, so beginning a drag cannot commit the click path.
+                  // `detail > 1` is the second click of a double-click: that one starts a rename instead.
+                  onClick={(e) => { if (e.detail < 2 && live) insert?.(item.token); }}
+                  onDoubleClick={vocab.rename && !vocab.fixed?.(item.token) ? () => startRename(item.token) : undefined}
                   className={cn(
                     CHIP_BASE,
                     'border',
-                    insert ? 'cursor-pointer hover:brightness-95' : 'cursor-grab opacity-50',
+                    live ? 'cursor-pointer hover:brightness-95' : 'cursor-grab opacity-50',
                   )}
                   style={{ backgroundColor: item.color, color: '#000' }}
                 >
+                  {vocab.builtin?.(item.token) && <BuiltinMark />}
+                  {vocab.blueprint?.(item.token) && <BlueprintMark />}
                   {item.label}
                 </button>
               </Tip>

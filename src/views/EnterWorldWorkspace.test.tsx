@@ -4,7 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import EnterWorldWorkspace from './EnterWorldWorkspace';
 import type { DictionarySelectionItem } from '@/lib/dictionarySelection';
-import type { EntityMetadata, Trait } from '@/types';
+import {
+  emptyEntryDraft, entryDefaults, entryGateInput, withLocationPick, withPersonaPick, withSettledTraits,
+  type EntryDraft, type EntryTraitWorld,
+} from '@/lib/entryDraft';
+import { gateStates, settle, switchTrait, type SettleResult } from '@/lib/traitGates';
+import type { TraitCascade } from '@/components/game/SetupTraitList';
+import { namedStartLocation, offeredStartLocations, withoutPersona } from '@/lib/personaPick';
+import type { Entity, EntityMetadata, GameLocation, PersonaRef, Trait } from '@/types';
 
 const identity = (text: string) => text;
 const traitIdentity = (_trait: Trait, text: string) => text;
@@ -79,7 +86,7 @@ afterEach(() => {
 
 const groups = [
   { id: 'origin', name: 'Origin', parentId: null, order: 0, playerDescription: 'Where you came from.' },
-  { id: 'culture', name: 'Culture', parentId: 'origin', order: 0, playerDescription: 'What **shaped** you.', exclusive: true },
+  { id: 'culture', name: 'Culture', parentId: 'origin', order: 0, playerDescription: 'What **shaped** you.', maxPicks: 1 },
   { id: 'calling', name: 'Calling', parentId: 'culture', order: 0 },
   { id: 'discipline', name: 'Discipline', parentId: 'calling', order: 0 },
   { id: 'practice', name: 'Practice', parentId: 'discipline', order: 0 },
@@ -125,7 +132,7 @@ function Harness({ initialDictionaryItems = dictionaryItems, ...props }: Partial
       locations={[]}
       resolveText={identity}
       resolveTraitText={traitIdentity}
-      selectedTraits={selectedTraits}
+      selectedTraits={{ world: selectedTraits }}
       selectedLocationId={selectedLocationId}
       libraryEntities={libraryEntities}
       selectedEntityIds={selectedEntityIds}
@@ -242,29 +249,29 @@ describe('EnterWorldWorkspace', () => {
     render(<Harness onTraitSelect={onTraitSelect} />);
 
     expect(fireEvent.click(screen.getByText('Local'))).toBe(true);
-    expect(onTraitSelect).toHaveBeenLastCalledWith('local');
+    expect(onTraitSelect).toHaveBeenLastCalledWith('local', 'world');
     expect(onTraitSelect).toHaveBeenCalledTimes(1);
 
     onTraitSelect.mockClear();
     fireEvent.click(screen.getByRole('radio', { name: 'Local' }));
-    expect(onTraitSelect).toHaveBeenLastCalledWith('local');
+    expect(onTraitSelect).toHaveBeenLastCalledWith('local', 'world');
     expect(onTraitSelect).toHaveBeenCalledTimes(1);
 
     onTraitSelect.mockClear();
     await user.click(screen.getByRole('radio', { name: 'Outsider' }));
-    expect(onTraitSelect).toHaveBeenLastCalledWith('outsider');
+    expect(onTraitSelect).toHaveBeenLastCalledWith('outsider', 'world');
     expect(onTraitSelect).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: /Practice/ }));
     expect(screen.getByRole('checkbox', { name: 'Artisan' })).not.toBeChecked();
     onTraitSelect.mockClear();
     await user.click(screen.getByText('Artisan'));
-    expect(onTraitSelect).toHaveBeenLastCalledWith('artisan');
+    expect(onTraitSelect).toHaveBeenLastCalledWith('artisan', 'world');
     expect(onTraitSelect).toHaveBeenCalledTimes(1);
 
     onTraitSelect.mockClear();
     await user.click(screen.getByRole('checkbox', { name: 'Artisan' }));
-    expect(onTraitSelect).toHaveBeenLastCalledWith('artisan');
+    expect(onTraitSelect).toHaveBeenLastCalledWith('artisan', 'world');
     expect(onTraitSelect).toHaveBeenCalledTimes(1);
   });
 
@@ -534,6 +541,38 @@ describe('EnterWorldWorkspace', () => {
   });
 });
 
+describe('Begin and group minimums', () => {
+  const counted = groups.map((g) => (g.id === 'culture' ? { ...g, minPicks: 1 } : g.id === 'practice' ? { ...g, minPicks: 1 } : g));
+
+  it('stays disabled while any group is short, on any page, and enables once every group meets its minimum', async () => {
+    const user = userEvent.setup();
+    render(<Harness traitGroups={counted} />);
+    const begin = screen.getByRole('button', { name: 'Start game' });
+    expect(begin).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /^Practice/ }));
+    expect(screen.getByText('Choose 1 more trait')).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Artisan' }));
+    expect(begin).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: /^Culture/ }));
+    await user.click(screen.getByRole('radio', { name: 'Local' }));
+    expect(begin).toBeDisabled();
+  });
+
+  it('leaves out a page with no row the player sees, and still holds Begin for its short group', () => {
+    const omens = { id: 'omens', name: 'Omens', parentId: null, order: 2, minPicks: 1 };
+    const unseen: Trait[] = [
+      { id: 'sign', name: 'Sign', groupId: 'omens', order: 0, mode: 'alwaysOn', requires: [{ kind: 'trait', id: 'outsider' }], statChanges: [] },
+      { id: 'veil', name: 'Veil', groupId: 'practice', order: 1, mode: 'hidden', statChanges: [] },
+    ];
+    render(<Harness traitGroups={[...groups, omens]} traits={[...traits, ...unseen]} />);
+    expect(screen.queryByRole('button', { name: /^Omens/ })).toBeNull();
+    expect(within(screen.getByRole('button', { name: /^Practice/ })).getByLabelText('0 of 1 selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
+  });
+});
+
 describe('Enter World library inspection', () => {
   it('stages every narrow detail entry offscreen and cancels replaced or resized entries', () => {
     const containers = mockContainerWidths(1000, 680);
@@ -753,5 +792,364 @@ describe('Enter World library inspection', () => {
     });
     await user.click(within(details).getByRole('button', { name: 'Back to Additions' }));
     expect(screen.getByRole('searchbox', { name: 'Search Library Additions' })).toHaveFocus();
+  });
+});
+
+const personas = libraryEntities.map(({ id, name, image }) => ({ id, name, image }));
+
+// The host's side of the one-role rule: a persona pick drops that entity from the added characters.
+function PersonaHarness(props: Partial<ComponentProps<typeof EnterWorldWorkspace>>) {
+  const [persona, setPersona] = useState<PersonaRef>({ source: 'none' });
+  const [selectedEntityIds, setSelectedEntityIds] = useState(new Set<string>());
+  return (
+    <Harness
+      personas={personas}
+      persona={persona}
+      onPersonaChange={(ref) => {
+        setPersona(ref);
+        setSelectedEntityIds((current) => withoutPersona(current, ref));
+      }}
+      selectedEntityIds={selectedEntityIds}
+      onEntityToggle={(id, selected) => setSelectedEntityIds((current) => {
+        const next = new Set(current);
+        if (selected) next.add(id); else next.delete(id);
+        return next;
+      })}
+      {...props}
+    />
+  );
+}
+
+describe('the Persona category', () => {
+  it('opens first and lists None and each persona with its portrait and name', () => {
+    render(<PersonaHarness />);
+    expect(screen.getByRole('heading', { name: 'Persona' })).toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: 'World setup categories' });
+    expect(within(nav).getAllByRole('button')[0]).toHaveTextContent('Persona');
+    expect(screen.getByRole('radio', { name: 'None' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Mara Vale' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Quiet Cartographer' })).toBeInTheDocument();
+    expect(document.querySelector('img[src="data:image/png;base64,portrait"]')).toBeInTheDocument();
+  });
+
+  it('is hidden when no persona is available', () => {
+    render(<PersonaHarness personas={[]} />);
+    expect(screen.queryByRole('button', { name: 'Persona' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'None' })).not.toBeInTheDocument();
+  });
+
+  it('removes a picked persona from the characters', async () => {
+    const user = userEvent.setup();
+    render(<PersonaHarness />);
+    await user.click(screen.getByRole('button', { name: 'Library Additions' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Include Mara Vale' }));
+    await user.click(screen.getByRole('button', { name: 'Persona' }));
+    // An added character leaves the picker until it is removed again.
+    expect(screen.queryByRole('radio', { name: 'Mara Vale' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Library Additions' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Include Mara Vale' }));
+    await user.click(screen.getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'Quiet Cartographer' }));
+    await user.click(screen.getByRole('button', { name: 'Library Additions' }));
+    expect(screen.queryByRole('checkbox', { name: 'Include Quiet Cartographer' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Include Mara Vale' })).not.toBeChecked();
+  });
+
+  it('removes an added character from the picker', async () => {
+    const user = userEvent.setup();
+    render(<PersonaHarness />);
+    await user.click(screen.getByRole('button', { name: 'Library Additions' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Include Quiet Cartographer' }));
+    await user.click(screen.getByRole('button', { name: 'Persona' }));
+    expect(screen.queryByRole('radio', { name: 'Quiet Cartographer' })).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Mara Vale' })).toBeInTheDocument();
+  });
+});
+
+const worldEntities: Entity[] = [
+  { id: 'warden', name: 'Harbor Warden', aiDescription: '', persona: true, locations: ['inn', 'dock'] },
+  { id: 'drifter', name: 'Road Drifter', aiDescription: '', persona: true, locations: ['road'], startingLocationId: 'road' },
+];
+const worldLocations: GameLocation[] = [
+  { id: 'gate', name: 'Town Gate', description: '', isStarting: true },
+  { id: 'road', name: 'Old Road', description: '' },
+  { id: 'dock', name: 'Harbor Dock', description: '', isStarting: true },
+];
+const worldPersonas = worldEntities.map((entity) => (
+  { id: entity.id, name: entity.name, startsAt: namedStartLocation(entity, worldLocations)?.name }
+));
+
+// The host's side of the pick rules, through the same draft functions the main menu uses.
+function WorldPersonaHarness(props: Partial<ComponentProps<typeof EnterWorldWorkspace>>) {
+  const [draft, setDraft] = useState(emptyEntryDraft);
+  const context = { worldEntities, locations: worldLocations };
+  return (
+    <Harness
+      worldPersonas={worldPersonas}
+      personas={personas}
+      persona={draft.persona}
+      onPersonaChange={(ref) => setDraft((current) => withPersonaPick(current, ref, context))}
+      locations={offeredStartLocations(draft.persona, context)}
+      selectedLocationId={draft.locationId}
+      onLocationChange={(id) => setDraft((current) => withLocationPick(current, id))}
+      {...props}
+    />
+  );
+}
+
+describe('world personas in the Persona category', () => {
+  it("lists None, then the world's personas and the library personas under their own headings", () => {
+    render(<WorldPersonaHarness />);
+    const picker = screen.getByRole('radiogroup', { name: 'Persona' });
+    const order = [...picker.querySelectorAll('[role="radio"], h3')].map((el) => el.getAttribute('aria-label') ?? el.textContent);
+    expect(order).toEqual(['None', 'From This World', 'Harbor Warden', 'Road Drifter', 'Your Personas', 'Mara Vale', 'Quiet Cartographer']);
+  });
+
+  it('shows the category for world personas alone, with no library heading', () => {
+    render(<WorldPersonaHarness personas={[]} />);
+    expect(screen.getByRole('heading', { name: 'From This World' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Your Personas' })).not.toBeInTheDocument();
+  });
+
+  it('preselects the starting location of a picked world persona, and the location stays editable', async () => {
+    const user = userEvent.setup();
+    render(<WorldPersonaHarness />);
+    await user.click(screen.getByRole('radio', { name: 'Harbor Warden' }));
+    await user.click(screen.getByRole('button', { name: 'Starting Location' }));
+    expect(screen.getByRole('radio', { name: 'Harbor Dock' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: 'Town Gate' }));
+    expect(screen.getByRole('radio', { name: 'Town Gate' })).toBeChecked();
+  });
+
+  it('leaves a hand-chosen location in place', async () => {
+    const user = userEvent.setup();
+    render(<WorldPersonaHarness />);
+    await user.click(screen.getByRole('button', { name: 'Starting Location' }));
+    await user.click(screen.getByRole('radio', { name: 'Town Gate' }));
+    await user.click(screen.getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'Harbor Warden' }));
+    await user.click(screen.getByRole('button', { name: 'Starting Location' }));
+    expect(screen.getByRole('radio', { name: 'Town Gate' })).toBeChecked();
+  });
+
+  it('says where a persona that names its start begins', () => {
+    render(<WorldPersonaHarness />);
+    const drifter = screen.getByRole('radio', { name: 'Road Drifter' }).closest('div')!;
+    expect(within(drifter).getByText('Starts at Old Road')).toBeInTheDocument();
+    const warden = screen.getByRole('radio', { name: 'Harbor Warden' }).closest('div')!;
+    expect(within(warden).queryByText(/Starts at/)).not.toBeInTheDocument();
+  });
+
+  it('lists an unflagged start only while its persona is picked, and a switch away drops it', async () => {
+    const user = userEvent.setup();
+    render(<WorldPersonaHarness />);
+    await user.click(screen.getByRole('button', { name: 'Starting Location' }));
+    expect(screen.queryByRole('radio', { name: 'Old Road' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'Road Drifter' }));
+    await user.click(screen.getByRole('button', { name: 'Starting Location' }));
+    expect(screen.getByRole('radio', { name: 'Old Road' })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'None' }));
+    await user.click(screen.getByRole('button', { name: 'Starting Location' }));
+    expect(screen.queryByRole('radio', { name: 'Old Road' })).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Random' })).toBeChecked();
+  });
+});
+
+describe('EnterWorldWorkspace cast pages', () => {
+  const owned = (id: string, extra: Partial<Trait> = {}): Trait => ({ id, name: id[0].toUpperCase() + id.slice(1), statChanges: [], ...extra });
+  const ash: Entity = {
+    id: 'ash', name: 'Ash', persona: true, images: ['data:image/png;base64,ash'], playerDescription: 'A grey wolf.',
+    traitPlacement: { groupId: 'origin', order: 1 },
+    traits: [owned('tamed', { isDefault: true }), owned('guard', { requires: [{ kind: 'playingAs', id: 'ash' }] })],
+  };
+  const bob: Entity = { id: 'bob', name: 'Bob', persona: true, traits: [owned('gruff')] };
+  const castWorld: EntryTraitWorld = { traits, traitGroups: groups, entities: [ash, bob], library: [] };
+  const optionOf = (e: Entity) => ({ id: e.id, name: e.name });
+
+  function CastHarness({ persona: initialPersona = { source: 'world', entityId: 'ash' } as PersonaRef, cast = castWorld }: {
+    persona?: PersonaRef; cast?: EntryTraitWorld;
+  }) {
+    const [draft, setDraft] = useState<EntryDraft>(() => ({
+      ...emptyEntryDraft(), ...entryDefaults(cast, initialPersona), persona: initialPersona,
+    }));
+    const [categoryIndex, setCategoryIndex] = useState(0);
+    const [cascade, setCascade] = useState<TraitCascade | null>(null);
+    const input = entryGateInput(cast, draft);
+    const ownerOf = (id: string) => input.owners.find((o) => o.id === id)!;
+    const settled = (base: EntryDraft, result: SettleResult, because: string) => {
+      setDraft(withSettledTraits(base, result));
+      const off = result.turnedOff.map((r) => ownerOf(r.ownerId).traits.find((t) => t.id === r.traitId)!.name);
+      setCascade(off.length ? { off, because } : null);
+    };
+    return (
+      <Harness
+        traits={[...cast.traits]}
+        traitGroups={[...cast.traitGroups]}
+        traitEntities={cast.entities}
+        resolveEntityText={(_entity, text) => text}
+        // The bearer the workspace hands over is the Character Name in a trait's own text.
+        resolveTraitText={(_trait, text, bearer) => text.replace('{{char}}', bearer?.name ?? 'you')}
+        selectedTraits={{ ...draft.ownedTraitIds, world: draft.traitIds }}
+        onTraitSelect={(id, ownerId) => {
+          const result = switchTrait(input, ownerId, id, draft.cascadeOffTraitIds);
+          if (result) settled(draft, result, id);
+        }}
+        traitGates={gateStates(input)}
+        traitCascade={cascade}
+        onDismissTraitCascade={() => setCascade(null)}
+        worldPersonas={cast.entities.filter((e) => e.persona).map(optionOf)}
+        persona={draft.persona}
+        onPersonaChange={(ref) => {
+          const next = { ...draft, persona: ref };
+          settled(next, settle(entryGateInput(cast, next), next.cascadeOffTraitIds), ref.source === 'none' ? 'None' : ref.entityId);
+        }}
+        categoryIndex={categoryIndex}
+        onCategoryChange={setCategoryIndex}
+      />
+    );
+  }
+
+  const nav = () => screen.getByRole('navigation', { name: 'World setup categories' });
+
+  it("opens an entity's page with its portrait, name, description and owned traits, defaults picked", async () => {
+    const user = userEvent.setup();
+    render(<CastHarness />);
+    await user.click(within(nav()).getByRole('button', { name: /^Ash/ }));
+    const main = screen.getByRole('main');
+    expect(within(main).getByRole('heading', { name: /^Ash/ })).toBeInTheDocument();
+    expect(within(main).getByTestId('persona-portrait').querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,ash');
+    expect(within(main).getByTestId('persona-portrait')).toHaveClass('aspect-[2/3]');
+    expect(within(main).getByText('A grey wolf.')).toBeInTheDocument();
+    expect(within(main).getByRole('checkbox', { name: 'Tamed' })).toBeChecked();
+    expect(within(main).getByRole('checkbox', { name: 'Guard' })).not.toBeDisabled();
+  });
+
+  it('places a world entity node where the author put it, with the user icon, and ends the top level with the rest', () => {
+    render(<CastHarness />);
+    const text = nav().textContent!;
+    // Ash sits in Origin after Culture's branch; Bob, unplaced, ends the top level.
+    expect(text.indexOf('Origin')).toBeLessThan(text.indexOf('Practice'));
+    expect(text.indexOf('Practice')).toBeLessThan(text.indexOf('Ash'));
+    expect(text.indexOf('Ash')).toBeLessThan(text.indexOf('Bob'));
+    const ashRow = within(nav()).getByRole('button', { name: /^Ash/ });
+    expect(ashRow).toHaveStyle({ paddingLeft: '20px' });
+    expect(within(nav()).getByRole('button', { name: /^Bob/ })).toHaveStyle({ paddingLeft: '8px' });
+    expect(ashRow.querySelector('svg.lucide-user')).not.toBeNull();
+  });
+
+  it('marks the played entity "You" in its place, and moves the mark on a persona switch', async () => {
+    const user = userEvent.setup();
+    render(<CastHarness />);
+    expect(within(nav()).getByRole('button', { name: /^Ash/ })).toHaveTextContent('You');
+    expect(within(nav()).getByRole('button', { name: /^Bob/ })).not.toHaveTextContent('You');
+
+    await user.click(within(nav()).getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'Bob' }));
+    expect(within(nav()).getByRole('button', { name: /^Ash/ })).not.toHaveTextContent('You');
+    await user.click(within(nav()).getByRole('button', { name: /^Bob/ }));
+    expect(within(screen.getByRole('main')).getByRole('heading', { name: /^Bob/ })).toHaveTextContent('You');
+  });
+
+  it("disables Begin while an entity bearer's group is short, and enables it once that bearer picks enough", async () => {
+    const bonded = {
+      ...ash, traitGroups: [{ id: 'bond', name: 'Bond', parentId: null, minPicks: 1 }],
+      traits: [...ash.traits!, owned('wild', { groupId: 'bond' })],
+    };
+    const user = userEvent.setup();
+    render(<CastHarness cast={{ ...castWorld, entities: [bonded, bob] }} />);
+    const begin = screen.getByRole('button', { name: 'Start game' });
+    expect(begin).toBeDisabled();
+    await user.click(within(nav()).getByRole('button', { name: /^Bond/ }));
+    await user.click(screen.getByRole('checkbox', { name: 'Wild' }));
+    expect(begin).toBeEnabled();
+  });
+
+  it('locks a "playing as" owned trait after a switch away, with the banner on its page, and brings it back on the return', async () => {
+    const user = userEvent.setup();
+    render(<CastHarness />);
+    await user.click(within(nav()).getByRole('button', { name: /^Ash/ }));
+    await user.click(screen.getByRole('checkbox', { name: 'Guard' }));
+    expect(screen.getByRole('checkbox', { name: 'Guard' })).toBeChecked();
+
+    await user.click(within(nav()).getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'Bob' }));
+    await user.click(within(nav()).getByRole('button', { name: /^Ash/ }));
+    expect(screen.getByRole('checkbox', { name: 'Guard' })).toBeDisabled();
+    expect(screen.getByText('Requires playing as Ash')).toBeInTheDocument();
+    expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent('Turned off Guard, because of bob.');
+
+    await user.click(within(nav()).getByRole('button', { name: 'Persona' }));
+    await user.click(screen.getByRole('radio', { name: 'Ash' }));
+    await user.click(within(nav()).getByRole('button', { name: /^Ash/ }));
+    expect(screen.getByRole('checkbox', { name: 'Tamed' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Guard' })).toBeChecked();
+  });
+
+  describe('with links', () => {
+    // Blueprints › Classes holds Paladin (default) and Wizard. Ash links Classes, Bob links Paladin, and the
+    // Custom Persona entity links Wizard for a player with no world persona.
+    const blueprints = { id: 'blueprints', name: 'Blueprints', parentId: null, order: 2, system: 'blueprints' as const };
+    const classes = { id: 'classes', name: 'Classes', parentId: 'blueprints', order: 0, maxPicks: 1 };
+    const link = (id: string, originalId: string, kind: 'trait' | 'group') =>
+      ({ id, originalId, kind, originalName: originalId, groupId: null, order: 5 });
+    const linked: EntryTraitWorld = {
+      traits: [
+        ...traits,
+        owned('paladin', { groupId: 'classes', order: 0, isDefault: true, playerDescription: '{{char}} keeps an oath.' }),
+        owned('wizard', { groupId: 'classes', order: 1 }),
+      ],
+      traitGroups: [...groups, blueprints, classes],
+      entities: [
+        { ...ash, traitLinks: [link('l-ash', 'classes', 'group')] },
+        { ...bob, traitLinks: [link('l-bob', 'paladin', 'trait')] },
+        { id: 'you', name: 'Wanderer', customPersona: true, traitLinks: [link('l-you', 'wizard', 'trait')] },
+      ],
+      library: [],
+    };
+    const NONE: PersonaRef = { source: 'none' };
+
+    it("shows a bearer's linked group as its own page under the bearer, defaults picked, and never at the top level", async () => {
+      const user = userEvent.setup();
+      render(<CastHarness cast={linked} persona={NONE} />);
+      const names = within(nav()).getAllByRole('button').map((b) => b.textContent ?? '');
+      expect(names.filter((n) => n.startsWith('Classes'))).toHaveLength(1);
+      expect(names.some((n) => n.startsWith('Blueprints'))).toBe(false);
+      expect(names.indexOf(names.find((n) => n.startsWith('Ash'))!)).toBeLessThan(names.indexOf(names.find((n) => n.startsWith('Classes'))!));
+      await user.click(within(nav()).getByRole('button', { name: /^Classes/ }));
+      const main = screen.getByRole('main');
+      expect(within(main).getByRole('radio', { name: 'Paladin' })).toBeChecked();
+      expect(within(main).getByRole('radio', { name: 'Wizard' })).not.toBeChecked();
+      expect(within(main).getByText('Ash keeps an oath.')).toBeInTheDocument();
+      // Bob's link to Paladin lands on Bob's own page, as a second row of the one original.
+      await user.click(within(nav()).getByRole('button', { name: /^Bob/ }));
+      expect(within(screen.getByRole('main')).getByRole('checkbox', { name: 'Paladin' })).toBeChecked();
+      expect(within(screen.getByRole('main')).getByText('Bob keeps an oath.')).toBeInTheDocument();
+    });
+
+    it("changes one bearer's pick without touching another bearer's row of the same original", async () => {
+      const user = userEvent.setup();
+      render(<CastHarness cast={linked} persona={NONE} />);
+      await user.click(within(nav()).getByRole('button', { name: /^Classes/ }));
+      await user.click(screen.getByRole('radio', { name: 'Wizard' }));
+      expect(screen.getByRole('radio', { name: 'Wizard' })).toBeChecked();
+      expect(screen.getByRole('radio', { name: 'Paladin' })).not.toBeChecked();
+      await user.click(within(nav()).getByRole('button', { name: /^Bob/ }));
+      expect(within(screen.getByRole('main')).getByRole('checkbox', { name: 'Paladin' })).toBeChecked();
+    });
+
+    it("lists the Custom Persona entity's node under None, its links on its page, and drops it under a world persona", async () => {
+      const user = userEvent.setup();
+      render(<CastHarness cast={linked} persona={NONE} />);
+      expect(within(nav()).queryByRole('button', { name: /^General/ })).toBeNull();
+      await user.click(within(nav()).getByRole('button', { name: /^Wanderer/ }));
+      expect(within(screen.getByRole('main')).getByRole('checkbox', { name: 'Wizard' })).toBeInTheDocument();
+      await user.click(within(nav()).getByRole('button', { name: 'Persona' }));
+      expect(screen.queryByRole('radio', { name: 'Wanderer' })).toBeNull();
+      await user.click(screen.getByRole('radio', { name: 'Ash' }));
+      expect(within(nav()).queryByRole('button', { name: /^Wanderer/ })).toBeNull();
+      expect(within(nav()).getByRole('button', { name: /^Ash/ })).toHaveTextContent('You');
+    });
   });
 });

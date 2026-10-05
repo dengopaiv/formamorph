@@ -12,7 +12,7 @@ const worldOverview = {
 } as unknown as WorldOverview;
 
 vi.mock('@/contexts/GameDataContext', () => ({
-  useGameData: () => ({ worldOverview, updateWorldOverview: vi.fn() }),
+  useGameData: () => ({ worldOverview, updateWorldOverview: vi.fn(), entities: [] }),
 }));
 
 // The real panel is a three.js/WebGL surface; this test is about the bytes leaving it, so stand in a shell
@@ -49,7 +49,7 @@ const openPreview = async () => {
   const user = userEvent.setup();
   render(<WorldOverviewManager />);
   await user.click(screen.getByRole('button', { name: 'Preview' }));
-  const exportButton = await screen.findByRole('button', { name: /Export Avatar/ });
+  const exportButton = await screen.findByRole('button', { name: /^Export$/ });
   await waitFor(() => expect(exportButton).toBeEnabled());
   return { user, exportButton };
 };
@@ -102,7 +102,7 @@ describe('exporting the world editor\'s player avatar', () => {
     render(<WorldOverviewManager />);
     await user.click(screen.getByRole('button', { name: 'Preview' }));
 
-    const exportButton = await screen.findByRole('button', { name: /Export Avatar/ });
+    const exportButton = await screen.findByRole('button', { name: /^Export$/ });
     expect(exportButton).toBeDisabled();
     release(new Response(AVATAR_BYTES));
     await waitFor(() => expect(exportButton).toBeEnabled());

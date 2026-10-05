@@ -13,6 +13,7 @@ export type StoredEntityRecord = StoredRecord<Entity>;
 /** Singleton owning the local character library (IndexedDB `entitiesDB`/`entities`). The CRUD lives in
  *  `LibraryStore`; this names the operations in character terms. Default-exported as one shared instance. */
 class EntityStorageService {
+  private readonly listeners = new Set<(id: string) => void>();
   private readonly store = new LibraryStore<Entity, EntityMetadata>({
     dbName: 'entitiesDB',
     storeName: 'entities',
@@ -31,7 +32,10 @@ class EntityStorageService {
         name: labelPlaceholders(record.name, placeholders, { letters: record.data ? entityPlacementLetters(record.data) : EMPTY_LETTERS }),
         description: describePlaceholders(record.data?.playerDescription ?? '', placeholders) || undefined,
         image: primaryImage(record.data),
-        tags: record.data?.tags ?? [],
+        tags: record.libraryDetails?.tags ?? record.data?.tags ?? [],
+        author: record.libraryDetails?.author,
+        libraryDetails: record.libraryDetails,
+        ...(record.data?.persona ? { persona: true } : {}),
         createdAt: record.createdAt,
         lastAccessed: record.lastAccessed,
         // The community link travels with the metadata: the library grid never shows it, but the download
@@ -70,13 +74,25 @@ class EntityStorageService {
   }
 
   /** Upsert a character by `id`; `createdAt` is sticky (stamped once), `lastAccessed` bumped each store. */
-  storeEntity(entity: StoredEntityRecord): Promise<void> {
-    return this.store.store(entity);
+  async storeEntity(entity: StoredEntityRecord): Promise<void> {
+    await this.store.store(entity);
+    this.notify(entity.id);
   }
 
   /** Remove a character from the library by `id`. */
-  deleteEntity(id: string): Promise<void> {
-    return this.store.delete(id);
+  async deleteEntity(id: string): Promise<void> {
+    await this.store.delete(id);
+    this.notify(id);
+  }
+
+  /** Call `listener` with the id of each entity stored or deleted. Returns the unsubscribe. */
+  subscribe(listener: (id: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private notify(id: string) {
+    for (const listener of this.listeners) listener(id);
   }
 }
 

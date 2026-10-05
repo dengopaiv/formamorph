@@ -28,6 +28,8 @@ vi.mock('@/contexts/GameDataContext', () => ({
     stats: [store.stat],
     placeholders: store.placeholders,
     traits: [],
+    traitGroups: [],
+    entities: [],
     placementLetters: new Map(),
     placeholderOwners: new Map(),
     updateStat: (next: Stat) => {
@@ -232,9 +234,13 @@ describe('the code field’s stat names', () => {
       await waitFor(() => expect(store.stat.code).toBe(typed.slice(0, i + 1)));
     }
 
-    await waitFor(() => expect(popup()).toBeTruthy());
-    expect(within(popup()!).getByText('Beast Power')).toBeInTheDocument();
-    expect(within(popup()!).queryByText('Wolf Power')).toBeNull();
+    // The popup opened for an earlier key stays up until the re-query lands, so wait for the list of names.
+    const list = await waitFor(() => {
+      const open = popup();
+      expect(open && within(open).getByText('Beast Power')).toBeTruthy();
+      return open!;
+    });
+    expect(within(list).queryByText('Wolf Power')).toBeNull();
   });
 });
 

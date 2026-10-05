@@ -1,8 +1,69 @@
 # 🔗 Linked Content
+<!-- keywords: chain icon meaning, master copy, one character many worlds, what is linking, shared originals -->
 
 How a world's entities and dictionaries follow a library item, and what that link does at each step: editing, updating, publishing, downloading, and repair.
 
 > The same story, in short, is the `?` beside the **Linked** badge in the [World Editor](WorldEditor) and in the title bar of **Update Available** and **Update This World**.
+
+## How to Link a Copy to Your Library
+<!-- keywords: save entity, sync, connect, share between worlds, reuse, item, attach to original, use character elsewhere, same character two worlds, store for later, bind to master, keep copies matching, reattach -->
+<!-- route: worldEditor -->
+
+1. In the World Editor, open the entity or dictionary.
+2. Select **Save to Library**. The copy is saved as a library item and follows it.
+
+For an independent copy of an item you already have, open the copy's menu and select **Link to Library Item…**, then pick the item.
+
+## How to Update a Linked Copy
+<!-- keywords: sync, refresh, new version, get changes, outdated, behind, pull, see differences, diff, merge edits, stale copy, overwrite with original, bring up to date, preserve my edits -->
+<!-- route: mainMenu -->
+
+1. In the library, right-click the entity or dictionary tile. Or, in the World Editor, open the linked copy's menu.
+2. Select **Check for Updates**. If a world is behind, **Update Available** opens.
+3. To compare a world first, select **View Changes**.
+4. For each world, pick **Update**, **Use Author's**, **Keep Mine** or **Unlink**.
+5. Select **Apply Updates**.
+
+A linked copy of your own item also updates the next time you open its world.
+
+## How to Publish Linked Content
+<!-- keywords: required, dependencies, include, share, upload, entities with world, bundle together, prerequisites, ship characters along, pack lorebooks in, hidden from store, refused retry, requirements list -->
+<!-- route: publish.world -->
+
+1. On the main menu, select your world.
+2. Select **Publish World**.
+3. Under **Linked Content**, check **Include as required** for each item that should download with the world.
+4. For a source of yours with no listing yet, pick **Public** or **Unlisted**. It publishes first.
+5. Select **Publish**.
+6. If a source is refused, read the reason and select **Retry**.
+
+## How to Offer an Entity or Dictionary as an Add-on
+<!-- keywords: extra, optional, dlc, mod, share, compatible, expansion pack, plugin, addon, fan made extension, submit to someones world, character pack, bonus content -->
+<!-- route: publish -->
+
+1. In the library, open the entity or dictionary.
+2. Select **Publish**.
+3. Set **Listing** to **Public**. An **Unlisted** listing can't be an add-on.
+4. Under **Compatible Worlds**, check **Offer as add-on** for each world.
+5. Select **Publish**. The world's author then reviews the offer.
+
+## How to Review Add-ons for Your World
+<!-- keywords: approve, decline, accept, reject, moderate, offers, pending submissions, deny a request, allow fan content, curate extras, vet contributions, endorse, incoming requests -->
+<!-- route: manageAddons -->
+
+1. In Community Creations, find your own published world.
+2. Select **Manage Add-ons**.
+3. **Show** starts on **Needs Attention**. Set each offer to **Approved**, **Unreviewed** or **Declined**. **Mark Reviewed** accepts a changed source and keeps your answer.
+4. Select **Save Changes**.
+
+## How to Repair a Missing Source
+<!-- keywords: broken link, fix, deleted, relink, error, unlink, unable to start world, play button disabled, author took it down, orphaned copy, dead reference, no longer exists, swap for another -->
+<!-- route: worldEditorBench.issues -->
+
+1. In the World Editor, open the [Test Bench](Test-Bench#issues)'s **Issues** list.
+2. Select **Check Sources**.
+3. For each copy with a missing source, pick **Replace from Library**, **Unlink and Keep Content** or **Remove from World**.
+4. Select **Apply** on that copy.
 
 ---
 
@@ -15,10 +76,11 @@ How a world's entities and dictionaries follow a library item, and what that lin
 | **Independent copy** | A copy that follows nothing. |
 | **Local replacement** | A linked copy of another author's item that you edited. No update overwrites it. |
 | **Source** | The published listing a copy follows. |
-| **Add-on** | A published entity or dictionary offered for a world, which a player installs by choice. |
+| **Add-on** | A published entity or dictionary offered for a world, which a player downloads by choice. |
 | **Bundled content** | The entities and dictionaries an imported world file carries whose library items are not on this machine. |
 
 ## Linked Copies
+<!-- keywords: chain symbol, edits spread everywhere, change one changes all, detach a copy, remap variables, map missing places, link status, pending save meaning, edited someone elses item -->
 
 A **linked copy** follows a **library item**. When you save the library item, every linked copy of it receives the change the next time you open its world. An independent copy follows nothing.
 
@@ -72,6 +134,7 @@ The step lists one row per open reference under **Placeholders** and **Locations
 Each copy remembers what its references resolve to here. A later update from the source reaches the same Placeholders even when the source has renamed them. If you delete a Placeholder a copy is connected to, the World Doctor raises a warning that names the copy. **Save Connections…** in the copy's menu reopens the step, so you can point the reference somewhere else.
 
 ## Updates
+<!-- keywords: upgrade a world, conflict with my edits, side by side compare, skip this version, keeps asking again, partly failed, newly needed items, dropped requirements -->
 
 ### Update Available
 
@@ -106,6 +169,7 @@ Choosing **Update an existing copy** on a community world opens **Update This Wo
 **Apply Updates** runs the whole world in one write. **Cancel** applies none of it. A source that does not download leaves its copy on the content you already had, with **Retry** for that row, while the world and everything else updates. **Download a copy** never opens the review.
 
 ## Publishing
+<!-- keywords: private listing, visibility setting, not searchable, bake into world, offer pending removal, needs attention list, official versus fan extras, dependencies go first -->
 
 ### Publishing a World
 
@@ -143,6 +207,7 @@ Your own published world card in Community Creations gains **Manage Add-ons**. I
 Every change waits as **Pending change** until **Save Changes**. **Discard Changes** puts it back.
 
 ## Downloading
+<!-- keywords: optional extras, what comes along, works with which worlds, partial failure, tick boxes before getting -->
 
 ### Downloading a World
 
@@ -154,13 +219,13 @@ A community world's details window lists what it brings under **Linked Content**
 | **Approved Add-ons** | The world's author approved it. | Yes, one checkbox each. |
 | **Community Add-ons** | Its own author offered it. The world's author has not reviewed it. | Yes, one checkbox each. |
 
-The download button counts what the press installs, so it reads **Download World + 3 Items**. Downloading places every item in your library and links the world's own copies to them. Each copy opens in the World Editor as **Linked** with its source named.
+The download button counts what the press downloads, so it reads **Download World + 3 Items**. Downloading places every item in your library and links the world's own copies to them. Each copy opens in the World Editor as **Linked** with its source named.
 
 A required item that does not download leaves the world out of your library and names what failed. **Retry** finishes it, and what already downloaded is kept. An add-on that does not download leaves the world ready and gets its own **Retry**.
 
 ### A Listing's Compatible Worlds
 
-An entity's or a dictionary's details window lists the worlds it is offered for under **Compatible Worlds**, in three groups: **Approved**, **Unreviewed**, and **Declined by the world author**. Only the entity's or dictionary's own author sees the declined group. Pressing a world opens that world's listing. Downloading the entity or dictionary installs it alone. Each world stays a download of its own.
+An entity's or a dictionary's details window lists the worlds it is offered for under **Compatible Worlds**, in three groups: **Approved**, **Unreviewed**, and **Declined by the world author**. Only the entity's or dictionary's own author sees the declined group. Pressing a world opens that world's listing. Downloading the entity or dictionary gets only that item. Each world stays a download of its own.
 
 ### Importing a World File
 
@@ -175,13 +240,27 @@ A world file bundles its entities and dictionaries, and records what each linked
 > [!NOTE]
 > **The file's content always wins.** A copy whose source you already have follows your own item and arrives as a local replacement.
 
-An entity or dictionary file carries the entity or dictionary and the worlds it is offered for. If the file's source is already in your library, Import opens that item's update review with the file as the incoming revision. Every import works with no connection.
+### Importing an Entity or Dictionary File
+
+An entity or dictionary file carries the entity or dictionary and the worlds it is offered for. For the import steps, see [How to Import an Entity](Library#how-to-import-an-entity) and [How to Import a Dictionary](Library#how-to-import-a-dictionary).
+
+When you import one file that names worlds or a source, a review opens first, titled **Import Entity** or **Import Dictionary**. Select the worlds you want, then the **Import Entity** or **Import Dictionary** button. **Cancel** imports nothing.
+
+| Section | What it does |
+|---|---|
+| **Add to Your Worlds** | One checkbox per world you have. Each checked world gets a linked copy of the library item. |
+| **Worlds You Do Not Have** | **Open Listing** opens that world in Community Creations, so you can download it. It needs a connection. |
+
+A file that names no worlds says so, and the import adds it to your library only.
+
+If the file's source is already in your library, **Update Available** opens instead, with the file as the incoming revision. When you import several files at once, no review opens: each file goes into your library as it is.
 
 ## Repairs
+<!-- keywords: greyed out buttons, world locked, blocked from starting, verify links online, taken down by author, erased from my library, swap in replacement, reuploaded item -->
 
 ### Check Sources
 
-The Test Bench's **Issues** list gains **Check Sources**. It asks the server about every library item this world's copies follow. Formamorph asks only when you press it, so an installed world stays playable with no connection.
+The Test Bench's **Issues** list gains **Check Sources**. It asks the server about every library item this world's copies follow. Formamorph asks only when you press it, so a downloaded world stays playable with no connection.
 
 | Result | Meaning |
 |---|---|

@@ -1,29 +1,58 @@
 import AuthService from './AuthService';
+import { codedResponseError, readFailure, responseError } from './responseError';
 import type { CatalogKindQuery } from '@/lib/catalogKinds';
 import { API_BASE_URL } from '@/lib/apiBase';
 import type { PublishPayload } from '@/lib/publishPayload';
 import { PUBLISH_LIMITS, measurePublishBytes, publishLimitRefusal } from '@/lib/publishLimits';
 import { openDatabase, promisifyRequest } from '@/lib/idb';
-import { migrateCarriedPlaceholders, migrateWorld } from '@/lib/version';
+import { migrateCarriedPlaceholders } from '@/lib/version';
 import { contentHash } from '@/lib/contentHash';
 import { describePlaceholders } from '@/lib/placeholders';
 import { allPlaceholders } from '@/lib/placeholderHomes';
-import { readDeletedDefaultWorlds, tombstoneDefaultWorld, type DefaultWorldSeed } from '@/lib/defaultWorlds';
+import { readDeletedDefaultWorlds, seedWorldData, tombstoneDefaultWorld, type DefaultWorldSeed } from '@/lib/defaultWorlds';
 import { changelogOf, type ChangelogDraft, type ChangelogEntry } from '@/lib/listingChangelog';
 import type { ReviewState, WorldAssociation } from '@/lib/compatibleWorlds';
 import type { ListingVisibility } from '@/lib/publishLinks';
 import type { AddonRow, DependencyRow } from '@/lib/worldDependencies';
 import type { SourceCheckStatus } from '@/lib/sourceChecks';
-import type { ContentLink, LikerAuditRow, LikerRow, VrmLicense, WorldMetadata } from '@/types';
+import type { LikeState } from '@/lib/likeCount';
+import type {
+  AnonymousLikeRow, AnonymousLikesRemoved, ContentLink, LikerAuditRow, LikerRow, VrmLicense, WorldMetadata,
+} from '@/types';
+import {
+  INSTALL_HEADER_NAME, installHeaderInUse, noteInstallHeaderRefused, readerInstallId, storedInstallId,
+} from '@/lib/anonymousLikes';
 
 /**
  * What a conditional catalog fetch answers with: a fresh snapshot and the tag to store beside it, the
  * word that the local copy still stands, or the error that stopped the request.
  */
 export type CatalogFetch =
-  | { status: 'fresh'; data: unknown[]; tag: string | null }
+  | { status: 'fresh'; data: unknown[]; tag: string | null; anonymousLikes: boolean }
   | { status: 'unchanged' }
   | { status: 'error'; error: string };
+
+/** A like reply: the reader's state, and the count as the reader may see it. */
+type LikeReply = LikeState & { liked: boolean };
+
+/**
+ * A press the server would not take, named by its code.
+ *
+ * The code and not the wording, so each refusal gets the answer it deserves: the cap is worth a message,
+ * a switched-off server sends the guest to sign-in, and a listing that has gone quiet needs nothing said
+ * about it.
+ */
+export class AnonymousLikeRefused extends Error {
+  readonly code: string;
+  readonly details: string;
+
+  constructor(code: string, message: string, details = '') {
+    super(message);
+    this.name = 'AnonymousLikeRefused';
+    this.code = code;
+    this.details = details;
+  }
+}
 
 /**
  * What one listing says about itself beyond its row: its history, an Avatar's license, and the
@@ -32,6 +61,8 @@ export type CatalogFetch =
  */
 export interface ListingDetails {
   changelog: ChangelogEntry[] | null;
+  /** Whether this server takes a like from somebody who is not signed in. False against an older one. */
+  anonymousLikes: boolean;
   modelLicense?: VrmLicense;
   visibility?: ListingVisibility;
   /** The listing ids a world requires today, resolved or not. */
@@ -39,6 +70,12 @@ export interface ListingDetails {
   /** The worlds a component is offered for today, with the world author's answer to each. */
   compatibleWorlds?: WorldAssociation[];
 }
+
+/** One listing read: its details, word that this reader may not see it, or no answer at all. */
+export type ListingDetailsRead =
+  | { status: 'ok'; details: ListingDetails }
+  | { status: 'gone' }
+  | { status: 'unreachable' };
 
 /** The publish refused because this author already has an entry in the contest. */
 export const CONTEST_ALREADY_ENTERED = 'CONTEST_ALREADY_ENTERED';
@@ -98,10 +135,12 @@ export interface StoredWorldRecord {
 }
 
 
-/** Result of a default-world seed/update pass: ids that failed to load, and display names that were
- *  auto-updated in place (so the caller can notify the player). */
+/** Result of a default-world seed/update pass: ids that failed to load, the error behind each (named by
+ *  its id, the caught error as its cause), and display names that were auto-updated in place (so the
+ *  caller can notify the player). */
 export interface DefaultWorldSyncResult {
   failed: string[];
+  errors: Error[];
   updated: string[];
 }
 
@@ -131,6 +170,56 @@ class WorldStorageService {
     // No eager open: every operation awaits `ensureInitialized` first, so opening here only adds an
     // import-time IndexedDB touch — which throws an unhandled rejection in test files that import this
     // module without a fake IndexedDB. Lazy init matches ModelStorageService.
+  }
+
+  /**
+   * Who is asking, in the one header the server reads to answer it.
+   *
+   * A session or an Install, never both: the account route is what a signed-in client presses, and an
+   * Install header beside a token would name a second reader of the same request. A guest sends the
+   * Install so the catalog and the listing come back with their hearts already filled.
+   *
+   * A guest names no Install where nothing may name one: on the website, and on a server that has
+   * refused the header once already.
+   */
+  private readerHeaders(): Record<string, string> {
+    if (AuthService.isAuthenticated()) return { Authorization: `Bearer ${AuthService.token}` };
+
+    const install = readerInstallId();
+    return install ? { [INSTALL_HEADER_NAME]: install } : {};
+  }
+
+  /**
+   * Fetch, and once more without the Install header when the request never reached the server.
+   *
+   * A server whose CORS allow list omits the Install header refuses the preflight, and the browser
+   * reports that as a network failure. Offline looks the same. Asking again without the header tells
+   * the two apart: an answer means the header was the whole problem, and the session stops sending it,
+   * which costs the guest their like and nothing else. Two failures mean the network, and the caller
+   * sees exactly what it saw before this existed.
+   *
+   * The refusal is only recorded when the second request answers, and not when it answers with a fault
+   * of the server's own. A dead network and a bad minute must neither cost a guest their hearts for the
+   * rest of the session.
+   *
+   * @param url - Where to ask
+   * @param init - The request, whose headers decide whether there is anything to fall back from
+   */
+  private async installFallbackFetch(
+    url: string,
+    init: RequestInit & { headers: Record<string, string> },
+  ): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      if (init.signal?.aborted || !(INSTALL_HEADER_NAME in init.headers)) throw error;
+
+      const headers = { ...init.headers };
+      delete headers[INSTALL_HEADER_NAME];
+      const response = await fetch(url, { ...init, headers });
+      if (response.status < 500) noteInstallHeaderRefused();
+      return response;
+    }
   }
 
   /** Open the IndexedDB connection (idempotent — no-op once `db` is set). */
@@ -191,6 +280,27 @@ class WorldStorageService {
       createdAt: world.createdAt,
       lastAccessed: world.lastAccessed
     }));
+  }
+
+  /**
+   * Where one stored world came from: its listing and when this copy was downloaded.
+   *
+   * The whole record is read and only these two fields are handed back, so a caller that needs the
+   * provenance never holds a world's megabytes of embedded art. A world stored by any other route has no
+   * listing, which is exactly the answer.
+   *
+   * @param worldId - The local record's id
+   * @returns The listing link, empty when the world has none or the record is gone
+   */
+  async getWorldListingLink(worldId: string): Promise<{ sourceId?: string; downloadedAt?: string }> {
+    await this.ensureInitialized();
+    if (!worldId) return {};
+
+    const transaction = this.db!.transaction([this.storeName], 'readonly');
+    const record = await promisifyRequest<{ sourceId?: string; downloadedAt?: string } | undefined>(
+      transaction.objectStore(this.storeName).get(worldId),
+    );
+    return { sourceId: record?.sourceId, downloadedAt: record?.downloadedAt };
   }
 
   /**
@@ -450,6 +560,7 @@ class WorldStorageService {
     );
 
     const failed: string[] = [];
+    const errors: Error[] = [];
     const updated: string[] = [];
     await Promise.all(
       defaultWorlds.map(async world => {
@@ -471,25 +582,8 @@ class WorldStorageService {
             if (existing.dirty || existing.sourceHash === hash) return;
           }
 
-          const worldData = JSON.parse(raw);
-
-          // Preserve every authored section by passing the parsed world through untouched — `migrateWorld`
-          // spreads it (so present and future sections survive) and folds the legacy flat `dictionary` into
-          // books. Only `id` and a default `worldOverview` are stamped. storeWorld read-merges sticky local
-          // fields (createdAt, sourceId) and keeps `dirty` false for an unedited update.
-          const data = migrateWorld({
-            ...worldData,
-            id: world.id,
-            worldOverview: worldData.worldOverview || {
-              name: world.defaultName,
-              description: `Default ${world.defaultName} world`,
-              author: '',
-              thumbnail: '',
-              bgm: null,
-              systemPrompt: '',
-              use3DModel: true,
-            },
-          });
+          // storeWorld keeps sticky local fields (createdAt, sourceId) and a false `dirty` on this update.
+          const data = seedWorldData(JSON.parse(raw), world);
           const fullWorld = {
             id: world.id,
             name: data.worldOverview?.name || world.defaultName,
@@ -505,10 +599,11 @@ class WorldStorageService {
         } catch (error) {
           console.error(`Error loading world ${world.id}:`, error);
           failed.push(world.id); // Skip this world but continue with others; report it as failed.
+          errors.push(new Error(world.id, { cause: error }));
         }
       }),
     );
-    return { failed, updated };
+    return { failed, errors, updated };
   }
 
   /**
@@ -580,22 +675,27 @@ class WorldStorageService {
    */
   async fetchCatalog(tag?: string | null): Promise<CatalogFetch> {
     try {
-      const headers: Record<string, string> = {};
-      if (AuthService.isAuthenticated()) {
-        headers['Authorization'] = `Bearer ${AuthService.token}`;
-      }
+      const headers = this.readerHeaders();
       // `no-store` and not `reload`: `reload` sends `Cache-Control: no-cache`, which the server reads
       // as an end-to-end reload and answers `200` with the whole body however well the tag matches.
-      const init: RequestInit = tag
-        ? { headers: { ...headers, 'If-None-Match': tag }, cache: 'no-store' }
+      const init = tag
+        ? { headers: { ...headers, 'If-None-Match': tag }, cache: 'no-store' as RequestCache }
         : { headers };
 
-      const response = await fetch(`${this.API_URL}/worlds?page=1&limit=1000&kind=all`, init);
+      const response = await this.installFallbackFetch(`${this.API_URL}/worlds?page=1&limit=1000&kind=all`, init);
       if (response.status === 304) return { status: 'unchanged' };
       if (!response.ok) throw new Error('Failed to fetch worlds');
 
       const body = await response.json();
-      return { status: 'fresh', data: body.data || [], tag: response.headers.get('ETag') };
+      // Absent against a server that predates the feature, which reads as off — the same answer the
+      // route itself gives there, so the heart behaves one way rather than two. Off too where nothing
+      // may name an Install, because a like this reader cannot address is no like on offer.
+      return {
+        status: 'fresh',
+        data: body.data || [],
+        tag: response.headers.get('ETag'),
+        anonymousLikes: installHeaderInUse() && body.anonymousLikes === true,
+      };
     } catch (error) {
       console.error('Error fetching the world catalog:', error);
       return { status: 'error', error: (error as Error).message };
@@ -666,10 +766,129 @@ class WorldStorageService {
       body: JSON.stringify({ liked }),
     });
 
+    if (!response.ok) throw await responseError(response, 'Failed to change that');
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || body.message || 'Failed to change that');
 
-    return body.data as { liked: boolean; likes: number };
+    return body.data as LikeReply;
+  }
+
+  /**
+   * Like a listing as this Install, or take that like back.
+   *
+   * The same press as {@link setRemoteWorldLiked} with no account behind it. It answers the same shape,
+   * so the heart and the number beside it are patched from one place either way.
+   *
+   * A refusal carries a code, and each one deserves a different answer, so it throws
+   * {@link AnonymousLikeRefused} rather than a plain error. One refusal is not a refusal at all: the
+   * listing is liked by the account that claimed this Install, which the server answers 200 with, so it
+   * reaches the caller as the state it is.
+   *
+   * @param worldId - The listing's server id
+   * @param liked - True to like it, false to take it back
+   * @returns The new state and count
+   */
+  async setAnonymousWorldLiked(worldId: string, liked: boolean) {
+    const install = readerInstallId();
+    const response = await this.installFallbackFetch(`${this.API_URL}/worlds/${worldId}/anonymous-like`, {
+      method: 'PUT',
+      headers: {
+        ...(install ? { [INSTALL_HEADER_NAME]: install } : {}),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ liked }),
+    });
+
+    if (!response.ok) {
+      const { body, message, details } = await readFailure(response, 'Failed to change that');
+      throw new AnonymousLikeRefused(typeof body.code === 'string' ? body.code : '', message, details);
+    }
+    const body = await response.json().catch(() => ({}));
+
+    return body.data as LikeReply;
+  }
+
+  /**
+   * What the in-game like prompt needs to know about a listing before it shows.
+   *
+   * The same listing request {@link fetchListingDetails} makes, read for two other fields: whether this
+   * reader already likes it, and whether the server takes a like from somebody who is not signed in. The
+   * server fills the liked flag for a guest from the Install header, so it answers for both readers.
+   *
+   * Separate from `fetchListingDetails` because of what the two do with a refusal. That one answers null
+   * either way, and the prompt has to tell the two apart: a listing that has gone quiet is answered and
+   * never asked about again, while a dead network is not the player's fault and must leave the question
+   * open for a later turn.
+   *
+   * `ownListing` answers for a signed-in reader, whose account the response's author is compared against.
+   * A guest has no account to compare, so their own listing is the server's to refuse on the press.
+   *
+   * @param worldId - The listing's server id
+   * @returns The reader's state, the word that the listing is not theirs to see, or that nothing answered
+   */
+  async fetchListingLikeState(worldId: string): Promise<
+    | { status: 'ok'; liked: boolean; ownListing: boolean; anonymousLikes: boolean }
+    | { status: 'gone' }
+    | { status: 'unreachable' }
+  > {
+    try {
+      const response = await this.installFallbackFetch(`${this.API_URL}/worlds/${worldId}`, {
+        headers: this.readerHeaders(),
+      });
+      // Only the two refusals that mean the listing is not this reader's to see are an answer. A 500, a
+      // 429 or anything else is the server having a bad day, and reading that as "gone" would spend the
+      // one ask a player gets on a deploy that was over a minute later.
+      if (response.status === 403 || response.status === 404) return { status: 'gone' };
+      if (!response.ok) return { status: 'unreachable' };
+
+      const body = await response.json();
+      const me = AuthService.getCurrentUser();
+      const author = body.data?.author;
+      return {
+        status: 'ok',
+        liked: body.data?.liked === true,
+        ownListing: Boolean(me && author && (author.id === me.id || author.username === me.username)),
+        // Absent against a server that predates the feature, which reads as off — the same answer the
+        // route itself gives there. Off too where nothing may name an Install.
+        anonymousLikes: installHeaderInUse() && body.anonymousLikes === true,
+      };
+    } catch {
+      return { status: 'unreachable' };
+    }
+  }
+
+  /**
+   * Move this Install's Anonymous Likes onto the account now signed in.
+   *
+   * The one request that carries a session and an Install together, because joining them is what it is
+   * for. Everywhere else the two would name two readers of one answer; here they name the account the
+   * marks go to and the Install they come from.
+   *
+   * A copy of the app that has never needed an Install has no marks to move, so it asks nothing. Making
+   * an id to ask with would link a fresh Install to the account and move nothing.
+   *
+   * The server runs this in one transaction and repeating it changes nothing, so a caller may call it on
+   * every sign-in rather than remembering whether it has.
+   *
+   * @returns How many marks became account Likes. Zero is the ordinary answer
+   */
+  async claimAnonymousLikes(): Promise<number> {
+    // Nothing to move where nothing may name an Install: the website never made marks, and a server
+    // that refuses the header would refuse this request's preflight too.
+    const install = installHeaderInUse() ? storedInstallId() : null;
+    if (!install) return 0;
+
+    const response = await fetch(`${this.API_URL}/users/me/anonymous-likes/claim`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${AuthService.token}`,
+        [INSTALL_HEADER_NAME]: install,
+      },
+    });
+
+    if (!response.ok) throw await responseError(response, 'Failed to claim those likes');
+    const body = await response.json().catch(() => ({}));
+
+    return Number(body.data?.claimed) || 0;
   }
 
   /**
@@ -690,8 +909,8 @@ class WorldStorageService {
       body: JSON.stringify({ days }),
     });
 
+    if (!response.ok) throw await responseError(response, 'Failed to quarantine this');
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || body.message || 'Failed to quarantine this');
 
     return body.data as { quarantinedAt: string; quarantineExpiresAt: string; quarantineExtended: boolean };
   }
@@ -707,15 +926,12 @@ class WorldStorageService {
       headers: { 'Authorization': `Bearer ${AuthService.token}` },
     });
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || body.message || 'Failed to release this');
-    }
+    if (!response.ok) throw await responseError(response, 'Failed to release this');
   }
 
   /** Fetch a page of comments for a published world; auth is optional. Never throws — errors resolve to
    *  a `{success:false}` shape. */
-  async fetchComments(worldId: string, page = 1, limit = 20) {
+  async fetchComments(worldId: string, page = 1, limit = 20, signal?: AbortSignal) {
     try {
       const headers: Record<string, string> = {};
       if (AuthService.isAuthenticated()) {
@@ -723,7 +939,7 @@ class WorldStorageService {
       }
       const response = await fetch(
         `${this.API_URL}/worlds/${worldId}/comments?page=${page}&limit=${limit}`,
-        { headers },
+        { headers, signal },
       );
       if (!response.ok) throw new Error('Failed to fetch comments');
       const responseData = await response.json();
@@ -734,7 +950,7 @@ class WorldStorageService {
         total: responseData.total || 0,
       };
     } catch (error) {
-      console.error('Error fetching comments:', error);
+      if (!signal?.aborted) console.error('Error fetching comments:', error);
       return { success: false, error: (error as Error).message, data: [] as unknown[], total: 0, pagination: {} };
     }
   }
@@ -752,10 +968,7 @@ class WorldStorageService {
       },
       body: JSON.stringify({ content }),
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || 'Failed to post comment');
-    }
+    if (!response.ok) throw await responseError(response, 'Failed to post comment', ['message']);
     const responseData = await response.json();
     return responseData.data || responseData;
   }
@@ -781,10 +994,7 @@ class WorldStorageService {
       },
       body: JSON.stringify({ content }),
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || errorData.message || 'Failed to save the comment');
-    }
+    if (!response.ok) throw await responseError(response, 'Failed to save the comment');
     const responseData = await response.json();
     return responseData.data || responseData;
   }
@@ -802,10 +1012,7 @@ class WorldStorageService {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${AuthService.token}` },
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || errorData.message || 'Failed to delete the comment');
-    }
+    if (!response.ok) throw await responseError(response, 'Failed to delete the comment');
   }
 
   /**
@@ -820,30 +1027,47 @@ class WorldStorageService {
    * @param worldId - The listing's server id
    */
   async fetchListingDetails(worldId: string): Promise<ListingDetails | null> {
+    const read = await this.readListingDetails(worldId);
+    return read.status === 'ok' ? read.details : null;
+  }
+
+  /**
+   * The same read as {@link fetchListingDetails}, telling a listing this reader may not see apart from
+   * a request that got no answer. A 403 or 404 is gone; any other refusal or a thrown fetch is unreachable.
+   *
+   * @param worldId - The listing's server id
+   * @param signal - Cancels the read, which then answers unreachable
+   */
+  async readListingDetails(worldId: string, signal?: AbortSignal): Promise<ListingDetailsRead> {
     try {
-      const headers: Record<string, string> = {};
-      if (AuthService.isAuthenticated()) {
-        headers['Authorization'] = `Bearer ${AuthService.token}`;
-      }
-      const response = await fetch(`${this.API_URL}/worlds/${worldId}?includeChangelog=true`, { headers });
-      if (!response.ok) return null;
+      const headers = this.readerHeaders();
+      const response = await this.installFallbackFetch(
+        `${this.API_URL}/worlds/${worldId}?includeChangelog=true`,
+        { headers, signal },
+      );
+      if (response.status === 403 || response.status === 404) return { status: 'gone' };
+      if (!response.ok) return { status: 'unreachable' };
 
       const body = await response.json();
 
       // The relationship fields are absent against a server that has never heard of them, which is what
       // keeps the Linked Content and Compatible Worlds sections empty there rather than wrong.
       return {
-        changelog: changelogOf(body.data),
-        modelLicense: body.data?.modelLicense,
-        visibility: body.data?.visibility,
-        requiredDependencies: (body.data?.requiredDependencies ?? []).map(
-          (row: { id?: string } | string) => (typeof row === 'string' ? row : String(row?.id ?? '')),
-        ).filter(Boolean),
-        compatibleWorlds: body.data?.compatibleWorlds ?? [],
+        status: 'ok',
+        details: {
+          changelog: changelogOf(body.data),
+          anonymousLikes: installHeaderInUse() && body.anonymousLikes === true,
+          modelLicense: body.data?.modelLicense,
+          visibility: body.data?.visibility,
+          requiredDependencies: (body.data?.requiredDependencies ?? []).map(
+            (row: { id?: string } | string) => (typeof row === 'string' ? row : String(row?.id ?? '')),
+          ).filter(Boolean),
+          compatibleWorlds: body.data?.compatibleWorlds ?? [],
+        },
       };
     } catch (error) {
-      console.error('Error fetching the listing:', error);
-      return null;
+      if (!signal?.aborted) console.error('Error fetching the listing:', error);
+      return { status: 'unreachable' };
     }
   }
 
@@ -894,10 +1118,7 @@ class WorldStorageService {
     }
     const response = await fetch(`${this.API_URL}${path}`, { headers });
     if (response.status === 404 && absent !== undefined) return absent;
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || body.message || fallback);
-    }
+    if (!response.ok) throw await responseError(response, fallback);
     return (await response.json()).data as T;
   }
 
@@ -961,10 +1182,7 @@ class WorldStorageService {
       body: JSON.stringify({ reviewState }),
     });
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || body.message || 'Failed to save this decision');
-    }
+    if (!response.ok) throw await responseError(response, 'Failed to save this decision');
   }
 
   /**
@@ -1004,10 +1222,7 @@ class WorldStorageService {
       headers: { 'Authorization': `Bearer ${AuthService.token}` },
     });
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || body.message || 'Failed to delete the entry');
-    }
+    if (!response.ok) throw await responseError(response, 'Failed to delete the entry');
   }
 
   /** The half `createChangelogEntry` and `updateChangelogEntry` share: same body, same auth, same refusal. */
@@ -1028,10 +1243,7 @@ class WorldStorageService {
       body: JSON.stringify({ title: draft.title.trim(), body: draft.body.trim(), date: draft.date }),
     });
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || body.message || fallbackError);
-    }
+    if (!response.ok) throw await responseError(response, fallbackError);
 
     const body = await response.json();
 
@@ -1114,17 +1326,15 @@ class WorldStorageService {
           // about relationships leaves the listing's own exactly as they are.
           ...(payload.visibility ? { visibility: payload.visibility } : {}),
           ...(payload.requiredDependencies ? { requiredDependencies: payload.requiredDependencies } : {}),
-          ...(payload.compatibleWorlds ? { compatibleWorlds: payload.compatibleWorlds } : {})
+          ...(payload.compatibleWorlds ? { compatibleWorlds: payload.compatibleWorlds } : {}),
+          ...(payload.models ? { models: payload.models } : {})
         })
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
         // The refusal carries a `code` when a policy blocked it; attach it so the caller can open the
         // right dialog instead of matching on error text.
-        const failure = new Error(errorData.message || errorData.error || 'Failed to publish') as Error & { code?: string };
-        if (errorData.code) failure.code = errorData.code;
-        throw failure;
+        throw await codedResponseError(response, 'Failed to publish', ['message', 'error']);
       }
 
       // The listing itself, not the envelope around it: what the caller wants is its id and its fresh
@@ -1156,14 +1366,7 @@ class WorldStorageService {
       headers: { Authorization: `Bearer ${AuthService.token}` },
     });
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      const failure = new Error(
-        body.error || body.message || 'Failed to withdraw the entry',
-      ) as Error & { code?: string };
-      if (body.code) failure.code = body.code;
-      throw failure;
-    }
+    if (!response.ok) throw await codedResponseError(response, 'Failed to withdraw the entry');
   }
 
   /**
@@ -1176,17 +1379,21 @@ class WorldStorageService {
    * @param worldId - The listing's server id
    * @returns The full like count, and as many likers as the server will send
    */
-  async fetchLikers(worldId: string): Promise<{ total: number; rows: LikerRow[] }> {
+  async fetchLikers(worldId: string): Promise<{ total: number; rows: LikerRow[]; anonymous: number }> {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/likes`, {
       headers: { 'Authorization': `Bearer ${AuthService.token}` },
     });
 
+    if (!response.ok) throw await responseError(response, 'Failed to load who liked this');
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || body.message || 'Failed to load who liked this');
 
-    const data = body.data as { total?: number; rows?: LikerRow[] } | undefined;
+    const data = body.data as { total?: number; rows?: LikerRow[]; anonymous?: number } | undefined;
 
-    return { total: Number(data?.total) || 0, rows: data?.rows ?? [] };
+    return {
+      total: Number(data?.total) || 0,
+      rows: data?.rows ?? [],
+      anonymous: Number(data?.anonymous) || 0,
+    };
   }
 
   /**
@@ -1195,20 +1402,87 @@ class WorldStorageService {
    * Asked for only when somebody opens the audit, never with the list: the server writes an audit row
    * per call, so counting the likes on a listing would otherwise file a look at everyone who gave one.
    *
+   * Anonymous Likes come back beside the accounts and in the same grouping. They are half of what a
+   * listing's number counts, so an audit that read only the account side would miss a flood entirely.
+   *
    * @param worldId - The listing's server id
-   * @returns The full like count, and the rows with their group and author link
+   * @returns The full like count, the account rows with their group and author link, how many
+   *   Anonymous Likes the listing has, and as many of their rows as the server will send
    */
-  async fetchLikersAudit(worldId: string): Promise<{ total: number; rows: LikerAuditRow[] }> {
+  async fetchLikersAudit(worldId: string): Promise<{
+    total: number;
+    rows: LikerAuditRow[];
+    anonymous: number;
+    anonymousRows: AnonymousLikeRow[];
+  }> {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/likes/audit`, {
       headers: { 'Authorization': `Bearer ${AuthService.token}` },
     });
 
+    if (!response.ok) throw await responseError(response, 'Failed to audit these likes');
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || body.message || 'Failed to audit these likes');
 
-    const data = body.data as { total?: number; rows?: LikerAuditRow[] } | undefined;
+    const data = body.data as {
+      total?: number;
+      rows?: LikerAuditRow[];
+      anonymous?: number;
+      anonymousRows?: AnonymousLikeRow[];
+    } | undefined;
 
-    return { total: Number(data?.total) || 0, rows: data?.rows ?? [] };
+    return {
+      total: Number(data?.total) || 0,
+      rows: data?.rows ?? [],
+      anonymous: Number(data?.anonymous) || 0,
+      anonymousRows: data?.anonymousRows ?? [],
+    };
+  }
+
+  /**
+   * Take one address's Anonymous Likes off a listing. Staff only.
+   *
+   * Keyed by the address the audit named, never by the group number beside it: the number is assigned
+   * by scan order and would point somewhere else by the time somebody presses it.
+   *
+   * @param worldId - The listing's server id
+   * @param addressKey - The address as the audit row carries it
+   * @returns What went, the listing's new like count, and its remaining Anonymous Like count
+   */
+  async removeAnonymousLikeGroup(worldId: string, addressKey: string): Promise<AnonymousLikesRemoved> {
+    return this.deleteAnonymousLikes(
+      `${this.API_URL}/worlds/${worldId}/anonymous-likes/address/${encodeURIComponent(addressKey)}`
+    );
+  }
+
+  /**
+   * Take every Anonymous Like off a listing. Staff only.
+   *
+   * The blunt half of the pair, for a flood old enough that the retention sweep has emptied the
+   * addresses behind it and left the narrow removal nothing to act on.
+   *
+   * @param worldId - The listing's server id
+   * @returns What went, the listing's new like count, and its remaining Anonymous Like count
+   */
+  async removeAnonymousLikes(worldId: string): Promise<AnonymousLikesRemoved> {
+    return this.deleteAnonymousLikes(`${this.API_URL}/worlds/${worldId}/anonymous-likes`);
+  }
+
+  /** The DELETE both Anonymous Like removals make, which differ only in what they aim at. */
+  private async deleteAnonymousLikes(url: string): Promise<AnonymousLikesRemoved> {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+    });
+
+    if (!response.ok) throw await responseError(response, 'Failed to remove those Anonymous Likes');
+    const body = await response.json().catch(() => ({}));
+
+    const data = body.data as AnonymousLikesRemoved | undefined;
+
+    return {
+      removed: Number(data?.removed) || 0,
+      likes: Number(data?.likes) || 0,
+      anonymous: Number(data?.anonymous) || 0,
+    };
   }
 
   /**
@@ -1227,8 +1501,8 @@ class WorldStorageService {
       { method: 'DELETE', headers: { 'Authorization': `Bearer ${AuthService.token}` } }
     );
 
+    if (!response.ok) throw await responseError(response, 'Failed to remove that like');
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || body.message || 'Failed to remove that like');
 
     return Number((body.data as { likes?: number } | undefined)?.likes) || 0;
   }

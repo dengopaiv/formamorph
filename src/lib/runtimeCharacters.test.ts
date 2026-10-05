@@ -6,8 +6,10 @@ import {
   cleanDiscoveredDescription,
   selectReachableVisitors,
   pruneDiscoveredToHistory,
+  pickedAtStart,
   INITIAL_SOURCE_TURN_ID,
 } from './runtimeCharacters';
+import { drawUnseenOpening, openingPool } from './openings';
 import { entityIdsAt } from './entityPresence';
 import { buildEntityContext } from './locationContext';
 import type { ChatMessage, DiscoveredEntity, Entity, GameLocation } from '@/types';
@@ -142,7 +144,7 @@ describe('cleanDiscoveredDescription', () => {
   it('cuts an echoed prompt-scaffold tail (the Thorne leak)', () => {
     const raw =
       "Thorne stands at his full imposing height, his greatsword held with casual confidence.\n\n" +
-      "The passage they appeared in:\nAldric crouches low, fingers splayed. \"It's mechanical. Some kind of";
+      "The passage they first appeared in:\nAldric crouches low, fingers splayed. \"It's mechanical. Some kind of";
     expect(cleanDiscoveredDescription(raw, 'Thorne')).toBe(
       'Thorne stands at his full imposing height, his greatsword held with casual confidence.',
     );
@@ -171,7 +173,7 @@ describe('cleanDiscoveredDescription', () => {
   });
 
   it('still cuts a "Character name:" echo that comes AFTER the description', () => {
-    const raw = 'A quiet healer with steady hands.\n\nCharacter name: Mira\nThe passage they appeared in: ...';
+    const raw = 'A quiet healer with steady hands.\n\nCharacter name: Mira\nThe passage they first appeared in: ...';
     expect(cleanDiscoveredDescription(raw, 'Mira')).toBe('A quiet healer with steady hands.');
   });
 
@@ -189,7 +191,7 @@ describe('cleanDiscoveredDescription', () => {
   });
 
   it('returns empty when nothing usable remains', () => {
-    expect(cleanDiscoveredDescription('The passage they appeared in:\nsomething', 'X')).toBe('');
+    expect(cleanDiscoveredDescription('The passage they first appeared in:\nsomething', 'X')).toBe('');
     expect(cleanDiscoveredDescription('   ', 'X')).toBe('');
   });
 });
@@ -223,5 +225,29 @@ describe('discoveredAsEntities', () => {
   it('never mutates the stored discovery record', () => {
     discoveredAsEntities(discovered);
     expect('locations' in discovered[0].entity).toBe(false);
+  });
+});
+
+describe('pickedAtStart', () => {
+  const world = { name: 'W', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '', use3DModel: false, tags: [],
+    openings: [{ id: 'w1', text: 'The world opens.', kind: 'action' as const }] };
+  const bard: Entity = { id: 'bard', name: 'Bard', openings: [{ id: 'b1', text: 'The bard tunes up.', kind: 'narration' }] };
+  // A character met later in play, given an opening so the rebuild has a wrong row it could pick up.
+  const stranger: Entity = { id: 'stranger', name: 'Stranger', openings: [{ id: 's1', text: 'A stranger nods.', kind: 'action' }] };
+
+  it('rebuilds a loaded save’s page-one pool from the entities seeded at the initial turn', () => {
+    const saved: DiscoveredEntity[] = JSON.parse(JSON.stringify([
+      { entity: bard, locationId: 'dock', sourceTurnId: INITIAL_SOURCE_TURN_ID },
+      { entity: stranger, locationId: 'dock', sourceTurnId: 'turn-3' },
+    ]));
+    const pool = openingPool({ overview: world, startingLocationId: 'dock', picked: pickedAtStart(saved) });
+    expect(pool.map((e) => e.opening.text)).toEqual(['The bard tunes up.']);
+    expect(drawUnseenOpening(pool, [], () => 0.5).opening.text).toBe('The bard tunes up.');
+  });
+
+  it('falls back to the world’s pool on a save with no seeded entities', () => {
+    const saved: DiscoveredEntity[] = [{ entity: stranger, locationId: 'dock', sourceTurnId: 'turn-3' }];
+    const pool = openingPool({ overview: world, startingLocationId: 'dock', picked: pickedAtStart(saved) });
+    expect(pool.map((e) => e.opening.text)).toEqual(['The world opens.']);
   });
 });

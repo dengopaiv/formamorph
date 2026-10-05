@@ -7,10 +7,11 @@ import type { Entity, Placeholder, PlayerStat, Trait, WorldOverview } from '@/ty
 import { phValues } from '@/test/placeholderValues';
 import { statCodeCompletions, statCodeDiagnostics } from './statCodeAnalysis';
 import { statCodeName, statCodeNamed } from './statCodeNames';
-import { placeholderPathAt, placeholderPathLabel, placeholderPathMap } from './statCodePaths';
+import { placeholderPathLabel, placeholderPathMap, walkPlaceholderPath } from './statCodePaths';
 import type { PlaceholderOwners } from './placeholderHomes';
 import { checkStatCode } from './testBench/statCodeCheck';
 import { runStatCodeTurn } from './statCodeTurn';
+import { entityTraitNames } from './statCodeTraits';
 import { STAT_CODE_TIMINGS, type StatCodeTiming } from './statCodeTiming';
 import { runRules, type RuleWorld } from './testBench/rules';
 
@@ -46,7 +47,7 @@ async function nameInSandbox(rolled: string, timing: StatCodeTiming): Promise<st
     asks: [],
     regenApplied: {},
     clock: {},
-    traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+    bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
     statNameOf: (stat) => stat.name,
     traitNameOf: (trait) => trait.name,
     placeholders: { placeholders: [beast, probe], rolls: { world: { 'ph-beast': rolled } } },
@@ -118,7 +119,7 @@ async function traitNamesInSandbox(rolled: string, timing: StatCodeTiming): Prom
     asks: [],
     regenApplied: {},
     clock: {},
-    traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [fury], groups: [] } },
+    bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [fury], groups: [] } },
     statNameOf: (stat) => stat.name,
     traitNameOf: (trait) => trait.name,
     placeholders: { placeholders: [beast, probe], rolls: { world: { 'ph-beast': rolled } } },
@@ -174,6 +175,68 @@ describe.each(STAT_CODE_TIMINGS)('one trait code name across the sandbox, the co
 });
 
 /**
+ * An entity's name carries chips the same way, and the sandbox, the completions and the editor's checks have
+ * to spell it alike. Two entities share one code name, so the later one's key is the one all three agree on.
+ */
+const rider: Entity = { id: 'e-rider', name: '{{ph:ph-beast:world:p1}} Rider', traits: [{ ...fury, id: 'rider-fury', name: 'Fury' }] };
+const lateRider: Entity = { id: 'e-rider-2', name: '{{ph:ph-beast:world:p1}} Rider', traits: [{ ...fury, id: 'late-fury', name: 'Calm' }] };
+
+/** The keys the sandbox gives `entities`, and the trait keys under the shared name, read back through a pin. */
+async function entityKeysInSandbox(rolled: string, timing: StatCodeTiming): Promise<string> {
+  const reader = stat({
+    id: 's1', name: 'Reader',
+    ...inBox(timing, 'placeholders.Probe.pin(Object.keys(entities).map((n) => n + ":" + Object.keys(entities[n].traits)).join("|"));'),
+  });
+  const entities = [rider, lateRider];
+  const out = await runStatCodeTurn({
+    timing,
+    stats: [reader],
+    enabled: {},
+    previous: [reader],
+    asks: [],
+    regenApplied: {},
+    clock: {},
+    bearers: {
+      acquired: [], disabledTraitIds: [], appliedValues: {}, entities,
+      world: {
+        traits: [], groups: [], entities, persona: { source: 'none' },
+        bearers: entities.map((e) => ({ id: e.id, name: e.name, traits: e.traits ?? [], groups: [] })),
+      },
+    },
+    statNameOf: (stat) => stat.name,
+    traitNameOf: (trait) => trait.name,
+    placeholders: { placeholders: [beast, probe], rolls: { world: { 'ph-beast': rolled } } },
+  });
+  return String(out.pinWrites['ph-probe']);
+}
+
+describe.each(STAT_CODE_TIMINGS)('one entity code name across the sandbox, the completions and the editor (%s box)', (timing) => {
+  const editorEntities = entityTraitNames({ traits: [], traitGroups: [], entities: [rider, lateRider] }, [beast, probe]);
+
+  it('keys the sandbox on the code name whatever the playthrough rolled, the later entity winning', async () => {
+    const keys = await entityKeysInSandbox('Wolf', timing);
+    expect(keys).toBe(await entityKeysInSandbox('Bear', timing));
+    expect(keys).toBe('Beast Rider:Calm');
+  });
+
+  it('offers that same name and the winner’s traits in the completions', () => {
+    const code = 'entities[""]';
+    const offered = statCodeCompletions(code, code.indexOf('""') + 1, { entities: editorEntities })?.options.map((o) => o.label);
+    expect(offered).toEqual(['Beast Rider']);
+    const dotted = "entities['Beast Rider'].traits.";
+    const traits = statCodeCompletions(dotted, dotted.length, { entities: editorEntities })?.options.map((o) => o.label);
+    expect(traits).toEqual(['Calm']);
+  });
+
+  it('warns on the shared name in the editor, and underlines the rolled spelling', () => {
+    const check = (lookup: string) =>
+      statCodeDiagnostics(`return entities[${JSON.stringify(lookup)}].name;`, { entities: editorEntities }).map((d) => d.message);
+    expect(check('Beast Rider')).toEqual(['2 entities are named “Beast Rider”. This reads the last one authored.']);
+    expect(check('Wolf Rider')).toEqual([expect.stringContaining('Unknown entity name “Wolf Rider”')]);
+  });
+});
+
+/**
  * A placeholder is reached by the path the editor shows, and four surfaces have to spell that path the same
  * way: the sandbox builds the map from it, the completions offer it, the editor checks it, and the bench
  * reports what a write missed by it. The sandbox's own keys are read back through a pin; the rest are held
@@ -188,8 +251,10 @@ const owners: PlaceholderOwners = new Map([
   ['molly-hair', { kind: 'entity', id: 'e-molly', name: 'Molly' }],
   ['shade', { kind: 'entity', id: 'e-molly', name: 'Molly' }],
 ]);
+/** What the editor knows of the cast: Molly, with no traits. */
+const editorOptions = { placeholders: { list: scoped, owners }, entities: [{ id: 'e-molly', name: 'Molly', traits: [], persona: false }] };
 
-/** One stat's `code` run over the scoped fixture, and the pins it left, by placeholder id. */
+/** One stat's `code` run over the scoped fixture, with Molly in the cast, and the pins it left, by placeholder id. */
 async function runScoped(code: string, timing: StatCodeTiming): Promise<Record<string, string | string[] | null>> {
   const only = stat({ id: 's1', name: 'Reader', ...inBox(timing, code) });
   const out = await runStatCodeTurn({
@@ -200,7 +265,7 @@ async function runScoped(code: string, timing: StatCodeTiming): Promise<Record<s
     asks: [],
     regenApplied: {},
     clock: {},
-    traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+    bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, entities: [molly], world: { traits: [], groups: [] } },
     statNameOf: (stat) => stat.name,
     traitNameOf: (trait) => trait.name,
     placeholders: { placeholders: scoped, owners, rolls: { world: {} } },
@@ -211,7 +276,7 @@ async function runScoped(code: string, timing: StatCodeTiming): Promise<Record<s
 /** The keys the sandbox itself builds, read back through a pin: the top level, then Molly's own. */
 async function pathKeysInSandbox(timing: StatCodeTiming): Promise<string> {
   const pins = await runScoped(
-    'placeholders.Probe.pin(Object.keys(placeholders).join("|") + "/" + Object.keys(placeholders.Molly).join("|"));',
+    'placeholders.Probe.pin(Object.keys(placeholders).join("|") + "/" + Object.keys(entities.Molly.placeholders).join("|"));',
     timing,
   );
   return String(pins['ph-probe']);
@@ -229,48 +294,43 @@ function benchPathFindings(lookup: string, timing: StatCodeTiming): Promise<stri
 }
 
 describe.each(STAT_CODE_TIMINGS)('one placeholder path across the sandbox, the completions, the editor and the bench (%s box)', (timing) => {
-  it('keys the sandbox by the owner node and its placeholders, the world’s own row beside them', async () => {
-    // The world's Hair wins the bare name; Molly's is reached through her node, which lists only what she owns.
-    expect(await pathKeysInSandbox(timing)).toBe('Hair|Probe|Molly|Shade/Hair');
+  it('keys the sandbox by the world’s own rows, and Molly’s entry by what she owns', async () => {
+    expect(await pathKeysInSandbox(timing)).toBe('Hair|Probe/Hair');
   });
 
-  it('offers those same keys in the completions, at the top level and under the owner node', async () => {
-    const top = (await pathKeysInSandbox(timing)).split('/')[0].split('|');
-    const options = { placeholders: { list: scoped, owners } };
-    const offered = statCodeCompletions('return placeholders.', 'return placeholders.'.length, options)
-      ?.options.map((option) => option.label) ?? [];
-    for (const key of top) expect(offered).toContain(key);
-    // The exact path leads, because `Hair` alone reaches only one of the two.
-    expect(offered[0]).toBe('Molly.Hair');
-    const under = 'return placeholders.Molly.';
-    expect(statCodeCompletions(under, under.length, options)?.options.map((option) => option.label)).toEqual(['Hair']);
+  it('offers those same keys in the completions, at the top level and under Molly’s entry', async () => {
+    const [top, own] = (await pathKeysInSandbox(timing)).split('/').map((keys) => keys.split('|'));
+    const offered = (doc: string) => statCodeCompletions(doc, doc.length, editorOptions)?.options.map((option) => option.label) ?? [];
+    expect(offered('return placeholders.')).toEqual(top);
+    expect(offered('return entities.Molly.placeholders.')).toEqual(own);
   });
 
   it('lets the bench find that same path, and report the one no entry answers', async () => {
-    expect(await benchPathFindings('placeholders.Molly.Hair.Shade', timing)).toEqual([]);
-    const [missed] = await benchPathFindings('placeholders.Molly.Hiar', timing);
+    expect(await benchPathFindings('entities.Molly.placeholders.Hair.Shade', timing)).toEqual([]);
+    const [missed] = await benchPathFindings('entities.Molly.placeholders.Hiar', timing);
     expect(missed).toContain('Molly › Hiar');
   });
 
   it('lands a pin through the path on the child alone, by its id', async () => {
-    expect(await runScoped('placeholders.Molly.Hair.Shade.pin("silver");', timing)).toEqual({ shade: 'silver' });
+    expect(await runScoped('entities.Molly.placeholders.Hair.Shade.pin("silver");', timing)).toEqual({ shade: 'silver' });
   });
 
   it('derives every one of those names from the one exported resolver', async () => {
     const map = placeholderPathMap({ list: scoped, owners });
-    const top = (await pathKeysInSandbox(timing)).split('/')[0].split('|');
+    const [top] = (await pathKeysInSandbox(timing)).split('/').map((keys) => keys.split('|'));
     expect([...map.keys.keys()]).toEqual(top);
-    expect(placeholderPathLabel(placeholderPathAt(map, ['Molly', 'Hair', 'Shade'])!.path)).toBe('Molly › Hair › Shade');
+    const { node } = walkPlaceholderPath(map, ['Hair', 'Shade'], map.owners.get('e-molly') ?? null);
+    expect(placeholderPathLabel(node!.path)).toBe('Molly › Hair › Shade');
   });
 });
 
 /** The editor's own reader over the scoped fixture, which is timing-blind: one box's text is all it sees. */
 describe('the editor reads a placeholder path the way the sandbox keys it', () => {
   it('checks that same path, and underlines no other spelling of it', () => {
-    const options = { placeholders: { list: scoped, owners } };
-    const check = (lookup: string) => statCodeDiagnostics(`${lookup}.pin("x");`, options).map((d) => d.message);
-    expect(check('placeholders.Molly.Hair.Shade')).toEqual([]);
-    expect(check('placeholders.Molly.Shade')).toHaveLength(1);
+    const check = (lookup: string) => statCodeDiagnostics(`${lookup}.pin("x");`, editorOptions).map((d) => d.message);
+    expect(check('entities.Molly.placeholders.Hair.Shade')).toEqual([]);
+    expect(check('entities.Molly.placeholders.Shade')).toHaveLength(1);
+    expect(check('placeholders.Molly.Hair.Shade')).toHaveLength(1);
   });
 });
 
@@ -318,7 +378,7 @@ describe('a stat with code in both boxes', () => {
         asks: [],
         regenApplied: {},
         clock: {},
-        traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+        bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
         statNameOf: (entry) => entry.name,
         traitNameOf: (entry) => entry.name,
         placeholders: { placeholders: [probe], rolls: { world: {} } },
@@ -327,5 +387,63 @@ describe('a stat with code in both boxes', () => {
     };
     expect(await pinFrom('before')).toBe('before');
     expect(await pinFrom('after')).toBe('after');
+  });
+});
+
+/** Two dictionaries share one code name, so a lookup reads the later one and the editor says so. */
+describe('two dictionaries sharing a code name', () => {
+  const dictionaries = [{ id: 'd1', name: 'Weather' }, { id: 'd2', name: 'Weather' }, { id: 'd3', name: 'Tides' }];
+  const check = (code: string) => statCodeDiagnostics(code, { placeholders: { list: [], dictionaries } }).map((d) => d.message);
+  const warning = '2 dictionaries are named “Weather”. This reads the last one authored.';
+
+  it('warns on the entry itself', () => {
+    expect(check("return dictionaries['Weather'].name;")).toEqual([warning]);
+  });
+
+  it('warns once on a placeholder path through the entry', () => {
+    expect(check('return dictionaries.Weather.placeholders.Sky.value;')).toContain(warning);
+  });
+
+  it('stays quiet for a name one dictionary owns', () => {
+    expect(check("return dictionaries['Tides'].name;")).toEqual([]);
+  });
+});
+
+describe('two entities sharing a code name under a placeholder path', () => {
+  it('warns on the path through the entry', () => {
+    const entities = [{ id: 'a', name: 'Mira', persona: false, traits: [] }, { id: 'b', name: 'Mira', persona: false, traits: [] }];
+    const found = statCodeDiagnostics('return entities.Mira.placeholders.Sky.value;', { entities, placeholders: { list: [] } }).map((d) => d.message);
+    expect(found).toContain('2 entities are named “Mira”. This reads the last one authored.');
+  });
+});
+
+describe.each(STAT_CODE_TIMINGS)('one dictionary code name across the sandbox, the completions and the editor (%s box)', (timing) => {
+  const books = [{ id: 'd1', name: '{{ph:ph-beast:world:p1}} Lore' }, { id: 'd2', name: '{{ph:ph-beast:world:p1}} Lore' }];
+
+  async function keysInSandbox(rolled: string): Promise<string> {
+    const reader = stat({ id: 's1', name: 'Reader', ...inBox(timing, 'placeholders.Probe.pin(Object.keys(dictionaries).join("|"));') });
+    const out = await runStatCodeTurn({
+      timing, stats: [reader], enabled: {}, previous: [reader], asks: [], regenApplied: {}, clock: {},
+      bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+      statNameOf: (s) => s.name, traitNameOf: (t) => t.name,
+      placeholders: { placeholders: [beast, probe], dictionaries: books, rolls: { world: { 'ph-beast': rolled } } },
+    });
+    return String(out.pinWrites['ph-probe']);
+  }
+
+  it('keys the sandbox on the code name whatever the playthrough rolled', async () => {
+    expect(await keysInSandbox('Wolf')).toBe(await keysInSandbox('Bear'));
+    expect(await keysInSandbox('Wolf')).toBe('Beast Lore');
+  });
+
+  it('offers that name once, and warns on the shared one', () => {
+    const named = books.map((b) => ({ id: b.id, name: statCodeName(b.name, [beast, probe]) }));
+    const code = 'dictionaries[""]';
+    const offered = statCodeCompletions(code, code.indexOf('""') + 1, { placeholders: { list: [beast, probe], dictionaries: named } })
+      ?.options.map((o) => o.label);
+    expect(offered).toEqual(['Beast Lore']);
+    const found = statCodeDiagnostics("return dictionaries['Beast Lore'].name;", { placeholders: { list: [beast, probe], dictionaries: named } })
+      .map((d) => d.message);
+    expect(found).toEqual(['2 dictionaries are named “Beast Lore”. This reads the last one authored.']);
   });
 });

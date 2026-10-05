@@ -11,6 +11,8 @@ import { PlaceholderSessionProvider } from '@/contexts/PlaceholderSessionContext
 import { setGameplayText } from '@/lib/gameplayTextStore';
 import { pageAssistantIndex } from '@/lib/turnHistory';
 import { LeftPanel, MiddlePanel, RightPanel } from '@/components/game/GamePanels';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { defaultSystemPrompt } from '@/components/game/GamePrompts';
 import type { AITurnResult, ChatMessage, GameState, PlayerStat, Stat, Trait, World } from '@/types';
 
 /**
@@ -227,6 +229,7 @@ function renderPanel<P extends object>(
   let props = { ...defaults, ...overrides };
 
   const tree = () => (
+    <TooltipProvider>
     <SettingsProvider>
       <GameDataProvider>
         {/* Gameplay reads the playthrough's placeholder rolls from the session, same as in the app. */}
@@ -239,6 +242,7 @@ function renderPanel<P extends object>(
         </PlaceholderSessionProvider>
       </GameDataProvider>
     </SettingsProvider>
+    </TooltipProvider>
   );
 
   const view = render(tree());
@@ -327,8 +331,13 @@ export function renderLeftPanel(
   overrides: Partial<LeftPanelProps> = {},
   options: PanelHarnessOptions = {},
 ): PanelHarness<LeftPanelProps> {
-  const defaults: LeftPanelProps = { entities: [], onEntityClick: vi.fn() };
+  const defaults: LeftPanelProps = { entities: [], onEntityClick: vi.fn(), narrationPrompt: defaultSystemPrompt };
   return renderPanel(defaults, overrides, options, (props) => <LeftPanel {...props} />);
+}
+
+/** Render any in-game node, such as a hook probe, under the same providers and staging as the panels. */
+export function renderInGame(node: ReactNode, options: PanelHarnessOptions = {}): PanelHarness<object> {
+  return renderPanel({}, {}, options, () => node);
 }
 
 /** Render the stats/traits/location panel over a staged playthrough. */
@@ -339,10 +348,32 @@ export function renderRightPanel(
   const defaults: RightPanelProps = {
     onLocationClick: vi.fn(),
     onToggleTrait: vi.fn(),
+    onPersonaChange: vi.fn(),
+    traitCascade: null,
+    onDismissTraitCascade: vi.fn(),
+    onRegenerateStats: vi.fn(),
+    sceneImageJob: null,
     language: '',
     setLanguage: vi.fn(),
   };
   return renderPanel(defaults, overrides, options, (props) => <RightPanel {...props} />);
+}
+
+/**
+ * Element measurement for the Chat body, which jsdom lacks: every size reads 0 there, so the virtualizer
+ * would mount no turns. The scroller reports a viewport tall enough to hold every staged turn, and each turn
+ * a fixed height. The virtualizer reads `offsetWidth`/`offsetHeight` for both. Returns the restore.
+ */
+export function stubChatLayout(): () => void {
+  const height = (el: HTMLElement) => (el.hasAttribute('data-chat-scroller') ? 100_000 : 120);
+  const realHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+  const realWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get(this: HTMLElement) { return height(this); } });
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 600 });
+  return () => {
+    if (realHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', realHeight);
+    if (realWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', realWidth);
+  };
 }
 
 /** jsdom gaps the panels hit on mount: `matchMedia` (theme, mobile layout, reduced motion) and the endpoint

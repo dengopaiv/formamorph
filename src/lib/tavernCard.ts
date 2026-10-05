@@ -1,14 +1,10 @@
-// Import a SillyTavern / Character-Card character embedded in a PNG. Such cards store the card JSON base64'd
-// in a PNG text chunk — `ccv3` (Character Card V3) preferred, else `chara` (V2/V1). We map only the fields a
-// Formamorph world entity has a home for: name, and description + personality + scenario → `aiDescription`.
-// The chat-runtime fields (first_mes, mes_example, greetings, system_prompt, …) have no narrative-entity
-// equivalent and are dropped. An embedded `character_book` lorebook is offered separately to the dictionary
-// library. See the MIT Character Card V3 spec (credited in THIRD-PARTY-NOTICES.md).
+// SillyTavern JSON/PNG cards; the Character Card V3 spec is credited in THIRD-PARTY-NOTICES.md.
 
 import { randomUUID } from "@/lib/uuid";
-import type { Entity, Dictionary } from '@/types';
+import type { Entity, Dictionary, Opening, LibraryDetails } from '@/types';
 import { readPngTextChunks } from './sdMetadata';
 import { convertLorebook } from './lorebookImport';
+import { canonicalBuiltins } from './builtinPlaceholders';
 
 /** The subset of card fields we read. V2/V3 nest these under `data`; V1 is flat. */
 interface TavernData {
@@ -16,7 +12,18 @@ interface TavernData {
   description?: unknown;
   personality?: unknown;
   scenario?: unknown;
+  first_mes?: unknown;
+  alternate_greetings?: unknown;
   character_book?: unknown;
+  creator?: unknown;
+  tags?: unknown;
+  avatar?: unknown;
+}
+
+export interface TavernImport {
+  entity: Entity;
+  book: Dictionary | null;
+  libraryDetails: LibraryDetails;
 }
 
 /** Decode a base64 string as UTF-8 (the card JSON is UTF-8, so `atob` alone would mangle non-ASCII). */
@@ -24,13 +31,6 @@ function decodeBase64Utf8(b64: string): string {
   const binary = atob(b64.trim());
   const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
   return new TextDecoder('utf-8').decode(bytes);
-}
-
-/** `{{char}}` → the character's name, `{{user}}` → "the player"; other macros are left untouched. */
-function substituteMacros(text: string, name: string): string {
-  return text
-    .replace(/\{\{\s*char\s*\}\}/gi, name)
-    .replace(/\{\{\s*user\s*\}\}/gi, 'the player');
 }
 
 /** The card's field object (unwrapping the V2/V3 `data` envelope), or null if the PNG carries no card. */
@@ -52,25 +52,72 @@ function readCardData(bytes: Uint8Array): TavernData | null {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-/** Build an entity from card fields: name, and description + personality + scenario folded into `aiDescription`. */
+/** Build an entity from card fields: name, description + personality + scenario folded into `aiDescription`,
+ *  and the greetings as openings. Both macros stay in entity text as chips, so a rename reaches them. */
 function cardToEntity(data: TavernData): Entity {
   const name = str(data.name) || 'Imported Character';
   const parts: string[] = [];
   if (str(data.description)) parts.push(str(data.description));
   if (str(data.personality)) parts.push(`Personality: ${str(data.personality)}`);
   if (str(data.scenario)) parts.push(`Scenario: ${str(data.scenario)}`);
-  const aiDescription = substituteMacros(parts.join('\n\n'), name);
-  return { id: randomUUID(), name, ...(aiDescription ? { aiDescription } : {}) };
+  const aiDescription = canonicalBuiltins(parts.join('\n\n'));
+  const openings = cardOpenings(data);
+  return { id: randomUUID(), name, ...(aiDescription ? { aiDescription } : {}), ...(openings.length ? { openings } : {}) };
+}
+
+/** The first message, then each alternate greeting, as Narration rows at the default weight. */
+function cardOpenings(data: TavernData): Opening[] {
+  const alternates: unknown[] = Array.isArray(data.alternate_greetings) ? data.alternate_greetings : [];
+  return [data.first_mes, ...alternates]
+    .map(str)
+    .filter(Boolean)
+    .map((text) => ({ id: randomUUID(), text: canonicalBuiltins(text), kind: 'narration' }));
 }
 
 /**
  * Read a SillyTavern character PNG into an entity plus its embedded lorebook (if any). Returns null when the
- * bytes carry no recognizable card chunk. The caller sets `entity.image` from the PNG's own pixels.
+ * bytes carry no recognizable card chunk. The caller sets the portrait from the PNG's own pixels.
  */
-export function readTavernCard(bytes: Uint8Array): { entity: Entity; book: Dictionary | null } | null {
+export function readTavernCard(bytes: Uint8Array): TavernImport | null {
   const data = readCardData(bytes);
   if (!data) return null;
+  return convertCard(data);
+}
+
+function convertCard(data: TavernData): TavernImport {
   const entity = cardToEntity(data);
-  const book = data.character_book ? convertLorebook({ character_book: data.character_book }, entity.name) : null;
-  return { entity, book };
+  // A book entry has no owning entity, so it names the character as plain text.
+  const book = data.character_book
+    ? convertLorebook({ character_book: data.character_book }, { fallbackName: entity.name, character: entity.name })
+    : null;
+  const author = str(data.creator);
+  const tags = Array.isArray(data.tags) ? [...new Set(data.tags.map(str).filter(Boolean))] : [];
+  return { entity, book, libraryDetails: { ...(author ? { author } : {}), tags } };
+}
+
+/** Read a standalone V1/V2/V3 card, keeping an HTTP(S) avatar as a linked portrait. */
+export function readTavernJson(text: string): TavernImport | null {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  if ('formamorphKind' in obj) return null;
+  let data: TavernData;
+  if ('spec' in obj) {
+    if (obj.spec !== 'chara_card_v2' && obj.spec !== 'chara_card_v3') return null;
+    if (!obj.data || typeof obj.data !== 'object' || Array.isArray(obj.data)) return null;
+    data = obj.data as TavernData;
+  } else {
+    if (!['description', 'personality', 'scenario', 'first_mes', 'mes_example']
+      .some((key) => typeof obj[key] === 'string')) return null;
+    data = obj;
+  }
+  if (!str(data.name)) return null;
+  const result = convertCard(data);
+  const avatar = str(data.avatar);
+  try {
+    const url = new URL(avatar);
+    if (url.protocol === 'https:' || url.protocol === 'http:') result.entity.images = [avatar];
+  } catch { /* Missing or malformed avatar leaves the portrait empty. */ }
+  return result;
 }

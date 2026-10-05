@@ -91,11 +91,17 @@ export interface TriggersProps {
   onSemanticChange: (on: boolean) => void;
 }
 
-/** The Opening instrument's bundle: the fresh-game view-model and its one action. */
+/** The Opening instrument's bundle: the fresh-game view-model and its actions. */
 export interface OpeningProps {
   data: OpeningData;
   /** Draw fresh values for the unpinned placeholders. */
   onReroll: () => void;
+  /** Show the fresh game at another member of the start pool. */
+  onStartChange: (startLocationId: string) => void;
+  /** Show the fresh game as another world persona, or as None with null. */
+  onPersonaChange: (personaId: string | null) => void;
+  /** Show another row of the opening pool, by its key. */
+  onOpeningChange: (openingKey: string) => void;
 }
 
 /** The desktop header's placement toggle. Absent on mobile, whose full panel is the sheet either way. */
@@ -111,8 +117,9 @@ export interface BenchPopoverProps {
   onClose: () => void;
   issues: IssuesProps;
   onFixRule: (ruleId: string) => void;
-  /** The compact way on to the full panel — embedded or docked on desktop, the sheet on mobile. */
-  onOpenPanel: () => void;
+  /** The compact way on to the full panel — embedded or docked on desktop, the sheet on mobile. Absent while
+   *  the panel is suspended. */
+  onOpenPanel?: () => void;
 }
 
 /** One bundle per Instrument plus the bench chrome, so adding an Instrument adds a bundle, not a prop row. */

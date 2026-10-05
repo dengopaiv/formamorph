@@ -1,7 +1,8 @@
 import { randomUUID } from "@/lib/uuid";
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
-import { defaultSystemPrompt, defaultNarrationUserPrompt, defaultRecapUserPrompt, defaultRehydrateUserPrompt, defaultOocDirectivePrompt, defaultChoicesPrompt, defaultStatUpdatesPrompt, defaultLocationChangePrompt, defaultThinkingPrompt, defaultSummaryPrompt, defaultChoicesUserPrompt, defaultStatUpdatesUserPrompt, defaultLocationChangeUserPrompt, defaultSummaryUserPrompt, defaultDiaryPrompt, defaultDirectorPrompt, defaultDirectorUserPrompt, defaultCharacterPrompt, defaultStoryboardPrompt, defaultNowLinePrompt, defaultTimePassedPrompt, defaultTimePassedUserPrompt, defaultOpeningTimePrompt, defaultOpeningTimeUserPrompt, defaultSceneTagsPrompt, defaultSceneTagsUserPrompt } from '../components/game/GamePrompts';
-import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_PARALLEL_REQUESTS, DEFAULT_LOCAL_GPU_DEVICE, DEFAULT_LOCAL_AUTO_LOAD, DEFAULT_GEN_TEMPERATURE, DEFAULT_GEN_TOP_P, DEFAULT_GEN_REPETITION_PENALTY, DEFAULT_GEN_TOP_K, DEFAULT_GEN_MIN_P, DEFAULT_THEME_COLOR, BASE_THEME_COLOR, THEME_COLORS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, FONT_OPTIONS, SYSTEM_FONT_STACK, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, NARRATION_FONT_OPTIONS, fontStack, fontSizeAdjust, DEFAULT_UPDATE_CHANNEL, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_CONTINUE_CHOICE, CONTINUE_CHOICE_MODES, type ContinueChoiceMode, type ThemeColor, type FontChoice, type NarrationFont, type UpdateChannel } from './settingsDefaults';
+import { PROMPT_TEXT_DEFAULTS } from '../components/game/GamePrompts';
+import { EXPERIMENTAL_PROMPT_VALUES } from '../components/game/ExperimentalPrompts';
+import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_PARALLEL_REQUESTS, DEFAULT_LOCAL_GPU_DEVICE, DEFAULT_LOCAL_AUTO_LOAD, DEFAULT_GEN_TEMPERATURE, DEFAULT_GEN_TOP_P, DEFAULT_GEN_REPETITION_PENALTY, DEFAULT_GEN_TOP_K, DEFAULT_GEN_MIN_P, DEFAULT_THEME_COLOR, BASE_THEME_COLOR, THEME_COLORS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, FONT_OPTIONS, SYSTEM_FONT_STACK, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, DEFAULT_QUOTE_COLOR, DEFAULT_QUOTE_ITALIC, DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_COLOR_DARK, NARRATION_FONT_OPTIONS, fontStack, fontSizeAdjust, DEFAULT_UPDATE_CHANNEL, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_CONTINUE_CHOICE, DEFAULT_IMAGE_ATTACHMENTS, CONTINUE_CHOICE_MODES, DEFAULT_NARRATION_LAYOUT, NARRATION_LAYOUTS, DEFAULT_TOOLS_ENABLED, type ContinueChoiceMode, type NarrationLayout, type ThemeColor, type FontChoice, type NarrationFont, type UpdateChannel } from './settingsDefaults';
 import { isDesktop } from '../lib/imageGen/desktop';
 import type { ImageProviderId } from '../lib/imageGen';
 import { useLocalLlmStatus } from '../lib/useLocalLlmStatus';
@@ -15,22 +16,24 @@ import {
 } from '../lib/imageEndpointPresets';
 import {
   textEndpointPresetCodec, emptyStore as emptyTextStore, presetStoreFromEnv as textPresetStoreFromEnv,
-  DEFAULT_TEXT_PRESET_ID, DEFAULT_TEXT_ENDPOINT_VALUES, BUILTIN_ENGINE_PRESET_ID, builtinTextPresets,
+  DEFAULT_TEXT_PRESET_ID, DEFAULT_TEXT_ENDPOINT_VALUES, BUILTIN_ENGINE_PRESET_ID, builtinTextPresets, textPresetName, canonicalPresetId, isDemoAI,
   activeValues as textActiveValues, isBuiltInActive as isTextBuiltInActive,
   valuesForId as textValuesForId,
   isEngineActive as isTextEngineActive, setActive as textSetActive,
   addPreset as textAddPreset, renamePreset as textRenamePreset, deletePreset as textDeletePreset,
   resetPreset as textResetPreset, updateValue as textUpdateValue, updateSamplerOverride as textUpdateSamplerOverride,
-  updateMaxOutputOverride as textUpdateMaxOutputOverride,
+  updateMaxOutputOverride as textUpdateMaxOutputOverride, editPreset as textEditPreset,
   type TextEndpointPresetStore, type TextEndpointValues, type TextEndpointValueKey,
 } from '../lib/textEndpointPresets';
 import type { EndpointSampler } from '../lib/endpointSamplers';
 import type { RejectedEndpointOverride } from '../lib/aiRequest/rejectedOverride';
-import { fetchContextLength } from '../lib/contextLength';
+import { fetchContextLength, detectedContextCodec, type DetectedContextEntry } from '../lib/contextLength';
 import { normalizeEndpointUrl } from '../lib/endpointUrl';
 import { registerDevHook } from '../lib/devRouter';
-import { usePersistentState, stringCodec, boolCodec, intCodec, floatCodec, nullableIntCodec } from '../lib/usePersistentState';
+import { usePersistentState, stringCodec, boolCodec, intCodec, floatCodec } from '../lib/usePersistentState';
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
+import { useRootSnapshot, readRootMode } from '../lib/useRootSnapshot';
+import { parseHex6 } from '../lib/hslColor';
 import {
   resolveFontTuning, fontTuningVars, fontTuningMapCodec, withFontTuning,
   APP_TUNING_PREFIX, NARRATION_TUNING_PREFIX, type FontTuning, type FontTuningMap,
@@ -45,26 +48,32 @@ import {
 import {
   emptyStore, presetStoreCodec, activeValues, isBuiltInActive, activeStyle, BUILTIN_PRESETS,
   setActive as setActivePreset, addPreset as addPresetOp, renamePreset as renamePresetOp, deletePreset as deletePresetOp, resetPreset as resetPresetOp, updateValue,
-  activeSamplers, activeReasoning, activeReasoningBudget, activeVerbatim, activePromptEndpoints,
-  updateSamplers, updateReasoning, updateReasoningBudget, updateVerbatim, updatePromptEndpoints, foldTuningIntoUserPresets,
-  addFullPreset, replacePreset,
-  type PromptPresetStore, type PromptValues, type VerbatimMap, type PromptPreset, type ReasoningMap,
+  activeSamplers, activeReasoning, activeReasoningBudget, activeMaxOutput, activeAttachments, activeVerbatim, activePromptEndpoints,
+  updateSamplers, updateReasoning, updateReasoningBudget, updateMaxOutput, updateAttachments, updateVerbatim, updatePromptEndpoints, foldTuningIntoUserPresets,
+  addFullPreset, replacePreset, putDownloadedPreset, EMPTY_OVERVIEW, activeOverview, storedOverview, updateOverview, markEdited, linkPreset,
+  userToolsCodec, saveUserTool, deleteUserTool, activeEnabledTools, setToolEnabled as setToolEnabledOp, dropToolEverywhere,
+  builtinToolSwitchesCodec, activeBuiltinId, setBuiltinToolEnabled, dropToolFromBuiltins, type BuiltinToolSwitches,
+  type PromptPresetStore, type PresetDownloadLink, type PresetOverview, type PromptValues, type VerbatimMap, type PromptPreset, type ReasoningMap,
 } from '../lib/promptPresets';
 import { buildSharedPreset, type SharedPreset, type ImportedPreset } from '../lib/promptPresetShare';
+import { clampMaxOutput, isMaxOutputKind, shippedMaxOutput } from '../lib/promptMaxOutput';
 import { resolvePinnedPreset } from '../lib/worldPromptPreset';
 import { buildStyledValues } from '../lib/sectionStyle';
 import { defaultPromptSampler, type PromptSamplerMap, type PromptSampler } from '../lib/promptSamplers';
 import {
-  resolvePromptEndpoint, endpointSignature, routedPresetId,
+  resolvePromptEndpoint, endpointSignature, routedPresetId, routeMap,
   setPromptEndpoint as setRoutedEndpoint,
   type ResolvedPromptEndpoint,
 } from '../lib/promptEndpoints';
-import type { AIRequestType } from '../types';
+import type { AIRequestType, CatalogToolOverrides, Tool } from '../types';
+import { TOOL_CATALOG, isCatalogToolId } from '../lib/tools/toolCatalog';
+import { planPresetTools } from '../lib/tools/toolPack';
+import { catalogOverridesCodec, saveCatalogOverride, withCatalogOverrides } from '../lib/tools/catalogOverrides';
 import type { ParagraphLimit } from '../lib/outputLength';
 import {
-  resolveReasoningCapability, mergeReasoningCapability, isReasoningEngaged, parseReasoningSetting,
+  resolveReasoningCapability, storedAfterResolve, reasoningRereadsPerSession, isReasoningEngaged, parseReasoningSetting,
   parsePromptReasoningSetting, resolveReasoningSetting, resolvePromptReasoningSetting, DEFAULT_REASONING_SETTING,
-  parseReasoningCapability, reasoningNeedsResolve, UNKNOWN_REASONING_CAPABILITY,
+  parseReasoningCapability, reasoningNeedsResolve, reasoningAwaitingProof, UNKNOWN_REASONING_CAPABILITY,
   type PromptReasoning, type ReasoningSetting, type PromptReasoningSetting, type ReasoningCapability,
   type ReasoningEffortField,
 } from '../lib/reasoningEffort';
@@ -72,12 +81,19 @@ import {
   observeReply, observationAnswer, observationMayCorrect, type ReasoningObservation,
 } from '../lib/reasoningObservation';
 import type { SettingsTabId } from '@/components/modals/settingsTabs';
+import type { SurfaceRoute } from '@/lib/surface/surfaceRoute';
+import { useMountedRef } from '@/lib/useMountedRef';
 
 /** A request to open the Settings modal at a given tab (and, for `endpoints`, a given sub-tab). The nonce
  *  distinguishes two identical requests so the second one still re-opens the modal. */
 export interface SettingsOpenRequest {
   tab: SettingsTabId;
   endpointTab?: string;
+  nonce: string;
+}
+
+/** A request to open a surface by route, from the help window. The nonce tells two requests for one route apart. */
+export interface SurfaceOpenRequest extends SurfaceRoute {
   nonce: string;
 }
 
@@ -166,6 +182,12 @@ function seedTextPresetStore(): TextEndpointPresetStore {
   return { activeId: toggleOn ? id : DEFAULT_TEXT_PRESET_ID, presets: [{ id, name: 'Custom', values: stashed }] };
 }
 
+/** A stored custom color: `#rrggbb`, or empty for unset. Anything else reads as unset. */
+const nullableHexCodec = {
+  parse: (raw: string): string | null => parseHex6(raw),
+  serialize: (value: string | null): string => value ?? '',
+};
+
 /** First-run default theme color. Honors an OS high-contrast request — but only while the user is still
  *  following the OS for appearance (light/dark = "system", the theme provider's default): if they've
  *  explicitly picked light or dark, they're customizing, so we don't force High Contrast on them. Applied
@@ -185,40 +207,11 @@ function preloadFont(stack: string): Promise<unknown> {
   return document.fonts.load(`1em ${family}`).catch(() => {});
 }
 
-/** The canonical shipped prompt text — authored in markdown headers; the built-in styles derive from it. */
-const PROMPT_TEXT_DEFAULTS: PromptValues = {
-  systemPrompt: defaultSystemPrompt,
-  narrationUserPrompt: defaultNarrationUserPrompt,
-  recapUserPrompt: defaultRecapUserPrompt,
-  rehydrateUserPrompt: defaultRehydrateUserPrompt,
-  oocDirectivePrompt: defaultOocDirectivePrompt,
-  choicesPrompt: defaultChoicesPrompt,
-  statUpdatesPrompt: defaultStatUpdatesPrompt,
-  locationChangePromptText: defaultLocationChangePrompt,
-  thinkingPrompt: defaultThinkingPrompt,
-  summaryPrompt: defaultSummaryPrompt,
-  diaryPrompt: defaultDiaryPrompt,
-  directorPrompt: defaultDirectorPrompt,
-  directorUserPrompt: defaultDirectorUserPrompt,
-  characterPrompt: defaultCharacterPrompt,
-  storyboardPrompt: defaultStoryboardPrompt,
-  choicesUserPrompt: defaultChoicesUserPrompt,
-  statUpdatesUserPrompt: defaultStatUpdatesUserPrompt,
-  locationChangeUserPrompt: defaultLocationChangeUserPrompt,
-  summaryUserPrompt: defaultSummaryUserPrompt,
-  nowLinePrompt: defaultNowLinePrompt,
-  timePassedPrompt: defaultTimePassedPrompt,
-  timePassedUserPrompt: defaultTimePassedUserPrompt,
-  openingTimePrompt: defaultOpeningTimePrompt,
-  openingTimeUserPrompt: defaultOpeningTimeUserPrompt,
-  sceneTagsPrompt: defaultSceneTagsPrompt,
-  sceneTagsUserPrompt: defaultSceneTagsUserPrompt,
-};
-
-/** Each read-only built-in preset's values, its section style applied to the canonical text (markdown =
- *  identity). Keyed by preset id for O(1) resolution of the active built-in. */
+/** Built-in prompt values keyed by preset id, with each preset's section style applied. */
 const BUILTIN_VALUES: Record<string, PromptValues> = Object.fromEntries(
-  BUILTIN_PRESETS.map((b) => [b.id, buildStyledValues(PROMPT_TEXT_DEFAULTS, b.style)]),
+  BUILTIN_PRESETS.map((b) => [b.id, buildStyledValues(
+    b.id === 'experimental' ? EXPERIMENTAL_PROMPT_VALUES : PROMPT_TEXT_DEFAULTS, b.style,
+  )]),
 );
 
 /** One-time migration folding the formerly-global per-prompt tuning (samplers, reasoning, verbatim-turns)
@@ -256,6 +249,23 @@ function migratePromptTuning() {
     localStorage.removeItem(`${APP_ID}_${key}`);
   }
   localStorage.setItem(MARK, '1');
+}
+
+/** A shared preset as stored content: missing prompt keys take the defaults, tuning only when included. */
+function importedPresetContent(imported: ImportedPreset, name: string, includeTuning: boolean): Omit<PromptPreset, 'id'> {
+  return {
+    name,
+    values: { ...buildStyledValues(PROMPT_TEXT_DEFAULTS, imported.style), ...imported.values },
+    style: imported.style,
+    ...(includeTuning && imported.samplers ? { samplers: imported.samplers } : {}),
+    ...(includeTuning && imported.reasoning ? { reasoning: imported.reasoning } : {}),
+    ...(includeTuning && imported.reasoningBudget ? { reasoningBudget: imported.reasoningBudget } : {}),
+    ...(includeTuning && imported.maxOutput ? { maxOutput: imported.maxOutput } : {}),
+    ...(includeTuning && imported.attachments ? { attachments: imported.attachments } : {}),
+    ...(includeTuning && imported.verbatim ? { verbatim: imported.verbatim } : {}),
+    ...(imported.overview ? { overview: imported.overview } : {}),
+    ...(imported.enabledTools ? { enabledTools: imported.enabledTools } : {}),
+  };
 }
 
 /**
@@ -424,6 +434,10 @@ function useProvideSettings() {
   // Ollama), harmless on serial endpoints (they queue). Turn off if a VRAM-tight local engine slows or OOMs
   // under concurrent decodes.
   const [concurrentTurnRequests, setConcurrentTurnRequests] = usePersistentState<boolean>(`${APP_ID}_concurrentTurnRequests`, true, boolCodec);
+  // Lets the player attach images to an action. Off hides every attachment control and sends no image.
+  const [imageAttachments, setImageAttachments] = usePersistentState<boolean>(`${APP_ID}_imageAttachments`, DEFAULT_IMAGE_ATTACHMENTS, boolCodec);
+  // Master switch over every prompt's Tools; the endpoint capability gate still applies when on.
+  const [toolsEnabled, setToolsEnabled] = usePersistentState<boolean>(`${APP_ID}_toolsEnabled`, DEFAULT_TOOLS_ENABLED, boolCodec);
   // Autosave the world's single autosave slot after every completed turn (starting with the opening). On by default.
   const [autosaveEnabled, setAutosaveEnabled] = usePersistentState<boolean>(`${APP_ID}_autosaveEnabled`, true, boolCodec);
   // Lazily write a per-character first-person diary entry for each turn's participants as turns age out.
@@ -536,7 +550,11 @@ function useProvideSettings() {
   const activeModelName = modelName;
 
   // Context window (tokens): auto-detected from the active endpoint, with an optional manual override.
-  const [detectedContextWindow, setDetectedContextWindow] = usePersistentState<number | null>(`${APP_ID}_detectedContextWindow`, null, nullableIntCodec);
+  // Stored with the `endpoint|model` it came from, so another endpoint never inherits it.
+  const [detectedContextEntry, setDetectedContextEntry] = usePersistentState<DetectedContextEntry | null>(
+    `${APP_ID}_detectedContextWindow`, null, detectedContextCodec);
+  const activeContextSig = endpointSignature(activeEndpointUrl, activeModelName);
+  const detectedContextWindow = detectedContextEntry?.sig === activeContextSig ? detectedContextEntry.tokens : null;
   const [detectStatus, setDetectStatus] = useState<DetectStatus>('idle');
 
   // Desktop bundled-model runtime. Only meaningful when the local engine is active (desktop + no custom
@@ -582,21 +600,23 @@ function useProvideSettings() {
     : DEFAULT_CONTEXT_WINDOW;
 
   const detectReqRef = useRef(0);
+  // The request id still matches after an unmount, so it alone cannot stop a late answer.
+  const mountedRef = useMountedRef();
   const detectContextWindow = useCallback(async (force = false) => {
     // Token this probe so a slow one for a since-abandoned endpoint can't overwrite a newer endpoint's
     // detected window: switching A→B fires a new probe (higher token), and A's late result is discarded.
     const reqId = ++detectReqRef.current;
     setDetectStatus('detecting');
     const detected = await fetchContextLength(activeEndpointUrl, activeApiToken, activeModelName);
-    if (reqId !== detectReqRef.current) return; // superseded by a newer detect
+    if (!mountedRef.current || reqId !== detectReqRef.current) return; // superseded by a newer detect
     if (detected !== null) {
-      setDetectedContextWindow(detected);
+      setDetectedContextEntry({ sig: activeContextSig, tokens: detected });
       if (force) setContextWindowOverride(null); // snap the field back to the detected value
       setDetectStatus('success');
     } else {
       setDetectStatus(force ? 'error' : 'idle'); // auto-attempts fail quietly
     }
-  }, [activeEndpointUrl, activeApiToken, activeModelName, setDetectedContextWindow, setContextWindowOverride]);
+  }, [activeEndpointUrl, activeApiToken, activeModelName, activeContextSig, setDetectedContextEntry, setContextWindowOverride, mountedRef]);
 
   // Auto-detect on connect (custom endpoint only); debounced so editing the URL doesn't fire per keystroke.
   useEffect(() => {
@@ -628,7 +648,8 @@ function useProvideSettings() {
       },
       serialize: (v) => JSON.stringify(v),
     });
-  const reasoningCapability = reasoningCapabilityCache[reasoningCapabilitySig] ?? null;
+  // A signature with no probe answer yet has no record.
+  const reasoningCapability = (reasoningCapabilityCache[reasoningCapabilitySig] as ReasoningCapability | undefined) ?? null;
 
   /** One record into the cache, dropping the oldest entry once the cache is over its cap. */
   const storeCapability = useCallback(
@@ -639,9 +660,18 @@ function useProvideSettings() {
       return next;
     }, []);
 
+  // Aborts on unmount: a resolve still in flight stops, and a late answer writes no state.
+  const unmountRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    unmountRef.current = controller;
+    return () => controller.abort();
+  }, []);
+
   /** Folds a fresh record onto whatever the cache held, so a source that just answered outranks it. */
   const cacheReasoningCapability = useCallback((sig: string, record: ReasoningCapability) => {
-    setReasoningCapabilityCache((prev) => storeCapability(prev, sig, mergeReasoningCapability(prev[sig] ?? null, record)));
+    if (unmountRef.current?.signal.aborted) return;
+    setReasoningCapabilityCache((prev) => storeCapability(prev, sig, storedAfterResolve(prev[sig] ?? null, record)));
   }, [setReasoningCapabilityCache, storeCapability]);
 
   // Which endpoint-and-model pairs this session has already resolved. A resolve that answers nothing, or
@@ -664,14 +694,19 @@ function useProvideSettings() {
     effort: ReasoningEffortField | null,
   ) => {
     const sig = endpointSignature(target.url, target.model);
+    const prior = reasoningObservationsRef.current[sig];
     const observation = observeReply(reasoningText, content, effort);
-    const before = observationAnswer(reasoningObservationsRef.current[sig]);
+    const before = observationAnswer(prior);
     const answer = observationAnswer(observation);
     // A reply that settles nothing never erases one that did. A turn fires several calls at once and the
     // bookkeeping ones ship switched off, so the last reply in is routinely the least informative one.
     if (answer === null && before !== null) return;
+    // A reply that first parts its reasoning out answers the budget question on a dialect that advertises
+    // nothing, even where the reasons answer has not moved. An inline think block and a separate reasoning
+    // field both read as reasoning, so without this the second kind never wakes the resolve.
+    const proved = observation.sawSeparateReasoning && !prior?.sawSeparateReasoning;
     reasoningObservationsRef.current[sig] = observation;
-    if (answer !== before) setReasoningObserved((n) => n + 1);
+    if (answer !== before || proved) setReasoningObserved((n) => n + 1);
   }, []);
 
   const resolveActiveCapability = useCallback(async () => {
@@ -681,13 +716,13 @@ function useProvideSettings() {
     const record = await resolveReasoningCapability(
       { url: activeEndpointUrl, token: activeApiToken, model: activeModelName },
       fetch,
-      { observation: reasoningObservationsRef.current[sig] },
+      { observation: reasoningObservationsRef.current[sig], stored: reasoningCapability, signal: unmountRef.current?.signal },
     );
     // A resolve that answered nothing is not an answer. Release the signature so a server that was down
     // during the debounce is asked again, rather than staying unresolved for the rest of the session.
     if (!record) { resolvedSignatures.current.delete(sig); return; }
     cacheReasoningCapability(sig, record);
-  }, [activeEndpointUrl, activeApiToken, activeModelName, cacheReasoningCapability]);
+  }, [activeEndpointUrl, activeApiToken, activeModelName, reasoningCapability, cacheReasoningCapability]);
 
 
   const [thinkingMode, setThinkingMode] = usePersistentState<ThinkingMode>(`${APP_ID}_thinkingMode`, 'off', {
@@ -709,6 +744,15 @@ function useProvideSettings() {
   // context field + setter name; values derive from the active preset (Default = read-only shipped text),
   // and setters patch the active preset (a no-op under Default). See src/lib/promptPresets.ts.
   const [presetStore, setRawPresetStore] = usePersistentState<PromptPresetStore>(`${APP_ID}_promptPresets`, emptyStore, presetStoreCodec);
+  // The player's own Tools, one list for every preset; each preset stores only which Tools it switches on.
+  const [userTools, setUserTools] = usePersistentState<Tool[]>(`${APP_ID}_tools`, [], userToolsCodec);
+  // The player's switches on built-in presets, whose prompt text stays read-only.
+  const [builtinToolSwitches, setBuiltinToolSwitches] = usePersistentState<BuiltinToolSwitches>(`${APP_ID}_builtinPresetTools`, {}, builtinToolSwitchesCodec);
+  // The player's Availability edits to catalog Tools, for every preset; the shipped definitions never change.
+  const [catalogOverrides, setCatalogOverrides] = usePersistentState<CatalogToolOverrides>(`${APP_ID}_toolCatalogOverrides`, {}, catalogOverridesCodec);
+  const catalogTools = useMemo(() => withCatalogOverrides(TOOL_CATALOG, catalogOverrides), [catalogOverrides]);
+  // Every Tool a request can be offered, in list order: the catalog, then the player's own.
+  const allTools = useMemo(() => [...catalogTools, ...userTools], [catalogTools, userTools]);
 
   // A world can be pinned to a preset for the duration of play (see lib/worldPromptPreset). GameViewer sets
   // this on load and clears it on unmount; it is session state, never persisted — the player's global
@@ -742,40 +786,50 @@ function useProvideSettings() {
       return { ...fn({ ...s, activeId: pinned }), activeId: s.activeId };
     });
   }, [setRawPresetStore, sessionPresetId]);
+  /** `setPresetStore` for an edit to a preset's content, the active one unless `id` names another. A linked
+   *  preset the edit changes is marked dirty. */
+  const editPresetStore = useCallback((fn: (s: PromptPresetStore) => PromptPresetStore, id?: string) => {
+    setPresetStore((s) => markEdited(s, fn(s), id ?? s.activeId, new Date().toISOString()));
+  }, [setPresetStore]);
 
   const promptValues = useMemo(() => activeValues(effectiveStore, BUILTIN_VALUES), [effectiveStore]);
   const {
     systemPrompt, narrationUserPrompt, recapUserPrompt, rehydrateUserPrompt, oocDirectivePrompt, choicesPrompt, statUpdatesPrompt, locationChangePromptText, thinkingPrompt, summaryPrompt,
     diaryPrompt, directorPrompt, directorUserPrompt, characterPrompt, storyboardPrompt,
     choicesUserPrompt, statUpdatesUserPrompt, locationChangeUserPrompt, summaryUserPrompt, nowLinePrompt, timePassedPrompt, timePassedUserPrompt,
-    openingTimePrompt, openingTimeUserPrompt, sceneTagsPrompt, sceneTagsUserPrompt,
+    openingTimePrompt, openingTimeUserPrompt, sceneTagsPrompt, sceneTagsUserPrompt, discoverEntityPrompt, discoverEntityUserPrompt,
+    milestoneSelectPrompt, milestoneSelectUserPrompt,
   } = promptValues;
-  const setSystemPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'systemPrompt', v));
-  const setNarrationUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'narrationUserPrompt', v));
-  const setRecapUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'recapUserPrompt', v));
-  const setRehydrateUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'rehydrateUserPrompt', v));
-  const setOocDirectivePrompt = (v: string) => setPresetStore((s) => updateValue(s, 'oocDirectivePrompt', v));
-  const setChoicesPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'choicesPrompt', v));
-  const setStatUpdatesPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'statUpdatesPrompt', v));
-  const setLocationChangePromptText = (v: string) => setPresetStore((s) => updateValue(s, 'locationChangePromptText', v));
-  const setThinkingPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'thinkingPrompt', v));
-  const setSummaryPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'summaryPrompt', v));
-  const setDiaryPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'diaryPrompt', v));
-  const setDirectorPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'directorPrompt', v));
-  const setDirectorUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'directorUserPrompt', v));
-  const setCharacterPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'characterPrompt', v));
-  const setStoryboardPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'storyboardPrompt', v));
-  const setChoicesUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'choicesUserPrompt', v));
-  const setStatUpdatesUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'statUpdatesUserPrompt', v));
-  const setLocationChangeUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'locationChangeUserPrompt', v));
-  const setSummaryUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'summaryUserPrompt', v));
-  const setNowLinePrompt = (v: string) => setPresetStore((s) => updateValue(s, 'nowLinePrompt', v));
-  const setTimePassedPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'timePassedPrompt', v));
-  const setTimePassedUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'timePassedUserPrompt', v));
-  const setOpeningTimePrompt = (v: string) => setPresetStore((s) => updateValue(s, 'openingTimePrompt', v));
-  const setOpeningTimeUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'openingTimeUserPrompt', v));
-  const setSceneTagsPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'sceneTagsPrompt', v));
-  const setSceneTagsUserPrompt = (v: string) => setPresetStore((s) => updateValue(s, 'sceneTagsUserPrompt', v));
+  const setSystemPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'systemPrompt', v));
+  const setNarrationUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'narrationUserPrompt', v));
+  const setRecapUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'recapUserPrompt', v));
+  const setRehydrateUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'rehydrateUserPrompt', v));
+  const setOocDirectivePrompt = (v: string) => editPresetStore((s) => updateValue(s, 'oocDirectivePrompt', v));
+  const setChoicesPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'choicesPrompt', v));
+  const setStatUpdatesPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'statUpdatesPrompt', v));
+  const setLocationChangePromptText = (v: string) => editPresetStore((s) => updateValue(s, 'locationChangePromptText', v));
+  const setThinkingPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'thinkingPrompt', v));
+  const setSummaryPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'summaryPrompt', v));
+  const setDiaryPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'diaryPrompt', v));
+  const setDirectorPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'directorPrompt', v));
+  const setDirectorUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'directorUserPrompt', v));
+  const setCharacterPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'characterPrompt', v));
+  const setStoryboardPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'storyboardPrompt', v));
+  const setChoicesUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'choicesUserPrompt', v));
+  const setStatUpdatesUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'statUpdatesUserPrompt', v));
+  const setLocationChangeUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'locationChangeUserPrompt', v));
+  const setSummaryUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'summaryUserPrompt', v));
+  const setMilestoneSelectPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'milestoneSelectPrompt', v));
+  const setMilestoneSelectUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'milestoneSelectUserPrompt', v));
+  const setNowLinePrompt = (v: string) => editPresetStore((s) => updateValue(s, 'nowLinePrompt', v));
+  const setTimePassedPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'timePassedPrompt', v));
+  const setTimePassedUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'timePassedUserPrompt', v));
+  const setOpeningTimePrompt = (v: string) => editPresetStore((s) => updateValue(s, 'openingTimePrompt', v));
+  const setOpeningTimeUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'openingTimeUserPrompt', v));
+  const setSceneTagsPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'sceneTagsPrompt', v));
+  const setSceneTagsUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'sceneTagsUserPrompt', v));
+  const setDiscoverEntityPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'discoverEntityPrompt', v));
+  const setDiscoverEntityUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'discoverEntityUserPrompt', v));
 
   // Preset-scoped tuning derives from the active preset (built-ins → empty → defaults); setters patch the
   // active preset and no-op under a built-in, mirroring the text setters above.
@@ -787,6 +841,8 @@ function useProvideSettings() {
     [promptReasoningSettings],
   );
   const promptReasoningBudget = useMemo(() => activeReasoningBudget(effectiveStore), [effectiveStore]);
+  const promptMaxOutput = useMemo(() => activeMaxOutput(effectiveStore), [effectiveStore]);
+  const promptAttachments = useMemo(() => activeAttachments(effectiveStore), [effectiveStore]);
   const promptEndpoints = useMemo(() => activePromptEndpoints(effectiveStore), [effectiveStore]);
   const setPromptEndpoint = useCallback(
     (kind: AIRequestType, id: string | null) =>
@@ -803,14 +859,25 @@ function useProvideSettings() {
     [thinkingMode, reasoningEffort, promptReasoning],
   );
 
-  // Resolve the endpoint's capability record once reasoning is actually engaged, and only when the cache
-  // has nothing better: no record at all, or one whose answers only the cache vouches for (a record stored
-  // before this session's sources existed). Debounced so editing the URL doesn't fire per keystroke.
+  // The Tools the active preset switches on (Settings → Tools).
+  const enabledTools = useMemo(() => activeEnabledTools(effectiveStore, builtinToolSwitches), [effectiveStore, builtinToolSwitches]);
+  // A prompt offers a Tool, so play needs the tools answer before it sends any.
+  const toolsOffered = useMemo(
+    () => allTools.some((tool) => enabledTools[tool.id] === true && tool.offeredTo.length > 0),
+    [allTools, enabledTools],
+  );
+
+  // Resolve the endpoint's capability record once reasoning is engaged or a prompt offers a Tool, and only
+  // when the cache has nothing better: no record at all, one whose answers only the cache vouches for (a
+  // record stored before this session's sources existed), or one with no tools answer. An LM Studio record
+  // is read again once per session, since another loaded model may answer for the same name. Debounced so editing
+  // the URL doesn't fire per keystroke.
   useEffect(() => {
-    if (!reasoningEngaged || !reasoningNeedsResolve(reasoningCapability)) return;
+    if (!(reasoningEngaged || toolsOffered)) return;
+    if (!reasoningNeedsResolve(reasoningCapability) && !reasoningRereadsPerSession(reasoningCapability)) return;
     const id = setTimeout(() => { void resolveActiveCapability(); }, 1200);
     return () => clearTimeout(id);
-  }, [reasoningEngaged, reasoningCapability, resolveActiveCapability]);
+  }, [reasoningEngaged, toolsOffered, reasoningCapability, resolveActiveCapability]);
 
   // A reply that settled the reasons question re-runs the chain with that observation in hand, so the Native
   // Reasoning controls follow what the player can see happening without a reload. Once per signature and
@@ -821,15 +888,20 @@ function useProvideSettings() {
     const sig = reasoningCapabilitySig;
     const observation = reasoningObservationsRef.current[sig];
     const answer = observationAnswer(observation);
-    if (answer === null || !observationMayCorrect(reasoningCapability)) return;
-    const key = `${sig}|${answer}`;
+    // A reply that parted its reasoning out answers the budget question on a dialect that advertises
+    // nothing, which `observationMayCorrect` says nothing about: that guard is about the reasons answer
+    // alone. So such a reply gets its resolve even where an advertisement or the catalog already answered
+    // reasons, and the key carries the proof so an earlier inline reply has not already spent it.
+    const proves = observation?.sawSeparateReasoning === true && reasoningAwaitingProof(reasoningCapability);
+    if (!proves && (answer === null || !observationMayCorrect(reasoningCapability))) return;
+    const key = `${sig}|${answer}|${observation?.sawSeparateReasoning ?? false}`;
     if (observedSignatures.current.has(key)) return;
     observedSignatures.current.add(key);
     const controller = new AbortController();
     void resolveReasoningCapability(
       { url: activeEndpointUrl, token: activeApiToken, model: activeModelName },
       fetch,
-      { observation, signal: controller.signal },
+      { observation, stored: reasoningCapability, signal: controller.signal },
     ).then((record) => {
       if (record && !controller.signal.aborted) cacheReasoningCapability(sig, record);
     }).catch(() => { /* an unreachable endpoint surfaces as a request failure, not here */ });
@@ -845,24 +917,41 @@ function useProvideSettings() {
     [genTemperature, genRepetitionPenalty],
   );
   const setPromptSamplerCustom = useCallback((kind: AIRequestType, sampler: PromptSampler, custom: boolean) => {
-    setPresetStore((s) => updateSamplers(s, (prev) => {
+    editPresetStore((s) => updateSamplers(s, (prev) => {
       // Seed the custom value with the built-in default so it always starts as a real number, never undefined.
       const value = prev[kind]?.[sampler]?.value ?? defaultPromptSampler(kind, sampler, globalForSampler(sampler), true)!;
       return { ...prev, [kind]: { ...prev[kind], [sampler]: { custom, value } } };
     }));
-  }, [globalForSampler, setPresetStore]);
+  }, [globalForSampler, editPresetStore]);
   const setPromptSamplerValue = useCallback((kind: AIRequestType, sampler: PromptSampler, value: number) => {
-    setPresetStore((s) => updateSamplers(s, (prev) => ({
+    editPresetStore((s) => updateSamplers(s, (prev) => ({
       ...prev,
       [kind]: { ...prev[kind], [sampler]: { custom: prev[kind]?.[sampler]?.custom ?? true, value } },
     })));
-  }, [setPresetStore]);
+  }, [editPresetStore]);
   const setPromptReasoning = useCallback((kind: AIRequestType, value: PromptReasoningSetting) => {
-    setPresetStore((s) => updateReasoning(s, kind, value));
-  }, [setPresetStore]);
+    editPresetStore((s) => updateReasoning(s, kind, value));
+  }, [editPresetStore]);
   const setPromptReasoningBudget = useCallback((kind: AIRequestType, value: number) => {
-    setPresetStore((s) => updateReasoningBudget(s, kind, value));
-  }, [setPresetStore]);
+    editPresetStore((s) => updateReasoningBudget(s, kind, value));
+  }, [editPresetStore]);
+  // The custom value is seeded from the shipped cap, so switching the row on starts where Auto was.
+  const setPromptMaxOutputCustom = useCallback((kind: AIRequestType, custom: boolean) => {
+    if (!isMaxOutputKind(kind)) return;
+    editPresetStore((s) => updateMaxOutput(s, (prev) => ({
+      ...prev, [kind]: { custom, value: prev[kind]?.value ?? shippedMaxOutput(kind) },
+    })));
+  }, [editPresetStore]);
+  const setPromptMaxOutputValue = useCallback((kind: AIRequestType, value: number) => {
+    if (!isMaxOutputKind(kind)) return;
+    editPresetStore((s) => updateMaxOutput(s, (prev) => ({
+      ...prev, [kind]: { custom: prev[kind]?.custom ?? true, value: clampMaxOutput(value) },
+    })));
+  }, [editPresetStore]);
+
+  const setPromptAttachments = useCallback((kind: AIRequestType, include: boolean) => {
+    editPresetStore((s) => updateAttachments(s, (prev) => ({ ...prev, [kind]: include })));
+  }, [editPresetStore]);
 
   // Preset management (Settings → Prompts selector).
   const activePresetId = effectiveStore.activeId;
@@ -886,7 +975,7 @@ function useProvideSettings() {
     // Built from the effective values, so "save as new" while pinned copies what is actually running.
     setRawPresetStore((s) => {
       const from = pinnedPresetId ? { ...s, activeId: pinnedPresetId } : s;
-      const next = addPresetOp(from, id, name, activeValues(from, BUILTIN_VALUES), activeStyle(from));
+      const next = addPresetOp(from, id, name, activeValues(from, BUILTIN_VALUES), activeStyle(from), storedOverview(from), activeEnabledTools(from, builtinToolSwitches));
       return pinnedPresetId ? { ...next, activeId: s.activeId } : next;
     });
     if (pinnedPresetId) {
@@ -895,33 +984,92 @@ function useProvideSettings() {
     }
     return id;
   };
-  const renamePreset = (id: string, name: string) => setPresetStore((s) => renamePresetOp(s, id, name));
+  // The name is the listing name, so a rename is an edit.
+  const renamePreset = (id: string, name: string) => editPresetStore((s) => renamePresetOp(s, id, name), id);
+  // Null under a built-in, which has no Overview; the setter no-ops there like the tuning setters.
+  const presetOverview = useMemo(() => activeOverview(effectiveStore), [effectiveStore]);
+  const setPresetOverview = useCallback(
+    (patch: Partial<PresetOverview>) => editPresetStore((s) => updateOverview(s, patch)),
+    [editPresetStore],
+  );
+  // Tool setters (Settings → Tools). A built-in preset's switch lands in its own store; a deleted Tool leaves every preset.
+  // A catalog Tool saves only its Availability, as a global override.
+  const saveTool = useCallback((tool: Tool) => {
+    if (isCatalogToolId(tool.id)) setCatalogOverrides((o) => saveCatalogOverride(o, tool));
+    else setUserTools((ts) => saveUserTool(ts, tool));
+  }, [setCatalogOverrides, setUserTools]);
+  const deleteTool = useCallback((id: string) => {
+    setUserTools((ts) => deleteUserTool(ts, id));
+    setRawPresetStore((s) => dropToolEverywhere(s, id));
+    setBuiltinToolSwitches((m) => dropToolFromBuiltins(m, id));
+  }, [setUserTools, setRawPresetStore, setBuiltinToolSwitches]);
+  const activeBuiltin = activeBuiltinId(effectiveStore);
+  const setToolEnabled = useCallback((id: string, on: boolean) => {
+    if (activeBuiltin) setBuiltinToolSwitches((m) => setBuiltinToolEnabled(m, activeBuiltin, id, on));
+    else editPresetStore((s) => setToolEnabledOp(s, id, on));
+  }, [activeBuiltin, setBuiltinToolSwitches, editPresetStore]);
   const deletePreset = (id: string) => setPresetStore((s) => deletePresetOp(s, id));
-  const resetPreset = (id: string) => setPresetStore((s) => {
+  const resetPreset = (id: string) => editPresetStore((s) => {
     const style = s.presets.find((p) => p.id === id)?.style ?? 'markdown';
     return resetPresetOp(s, id, buildStyledValues(PROMPT_TEXT_DEFAULTS, style));
-  });
+  }, id);
+  const linkPresetToListing = useCallback(
+    (id: string, listingId: string, sourceUpdatedAt?: string, author?: { id?: string; name?: string }) =>
+      setRawPresetStore((s) => linkPreset(s, id, {
+        sourceId: listingId,
+        ...(sourceUpdatedAt ? { sourceUpdatedAt } : {}),
+        ...(author?.id ? { sourceAuthorId: author.id } : {}),
+        ...(author?.name ? { sourceAuthorName: author.name } : {}),
+      })),
+    [setRawPresetStore],
+  );
   // Share (export/import). Export materializes the selected preset (built-ins → concrete text, empty tuning);
   // import adds a new preset or overwrites one by id, optionally including the shared tuning.
   const activePresetName = BUILTIN_PRESETS.find((b) => b.id === effectiveStore.activeId)?.name
     ?? effectiveStore.presets.find((p) => p.id === effectiveStore.activeId)?.name ?? 'Preset';
   const exportActivePreset = (appVersion: string): SharedPreset =>
-    buildSharedPreset({ name: activePresetName, style: activeSectionStyle, values: promptValues, samplers: promptSamplers, reasoning: promptReasoningSettings, reasoningBudget: promptReasoningBudget, verbatim: verbatimMap }, appVersion);
+    buildSharedPreset({ name: activePresetName, style: activeSectionStyle, values: promptValues, samplers: promptSamplers, reasoning: promptReasoningSettings, reasoningBudget: promptReasoningBudget, maxOutput: promptMaxOutput, attachments: promptAttachments, verbatim: verbatimMap, overview: storedOverview(effectiveStore), enabledTools, tools: userTools }, appVersion);
+  // Plans against a ref so two imports before a re-render see each other's additions.
+  const latestUserTools = useRef(userTools);
+  latestUserTools.current = userTools;
+  const mergeImportedTools = useCallback((imported: ImportedPreset): { preset: ImportedPreset; scriptToolAdded: boolean } => {
+    const plan = planPresetTools(latestUserTools.current, imported.tools ?? [], randomUUID);
+    if (plan.added.length) {
+      latestUserTools.current = [...latestUserTools.current, ...plan.added];
+      setUserTools((ts) => plan.added.reduce((held, tool) => saveUserTool(held, tool), ts));
+    }
+    const enabled = { ...imported.enabledTools, ...plan.enabled };
+    return { preset: { ...imported, ...(Object.keys(enabled).length ? { enabledTools: enabled } : {}) }, scriptToolAdded: plan.hasScript };
+  }, [setUserTools]);
   const importPreset = (imported: ImportedPreset, opts: { includeTuning: boolean; name: string; overwriteId?: string }): string => {
-    const style = imported.style;
-    const values = { ...buildStyledValues(PROMPT_TEXT_DEFAULTS, style), ...imported.values };
-    const content: Omit<PromptPreset, 'id'> = {
-      name: opts.name, values, style,
-      ...(opts.includeTuning && imported.samplers ? { samplers: imported.samplers } : {}),
-      ...(opts.includeTuning && imported.reasoning ? { reasoning: imported.reasoning } : {}),
-      ...(opts.includeTuning && imported.reasoningBudget ? { reasoningBudget: imported.reasoningBudget } : {}),
-      ...(opts.includeTuning && imported.verbatim ? { verbatim: imported.verbatim } : {}),
-    };
+    const content = importedPresetContent(mergeImportedTools(imported).preset, opts.name, opts.includeTuning);
     if (opts.overwriteId) { const target = opts.overwriteId; setPresetStore((s) => replacePreset(s, target, content)); return target; }
     const id = randomUUID();
     setPresetStore((s) => addFullPreset(s, id, content));
     return id;
   };
+  /**
+   * Store a community listing's preset under `id`, adding it or replacing the held copy in place so world and
+   * folder pins keep resolving. Tuning always comes along, missing prompt keys take the defaults, and a blank
+   * Author credits the uploader. The selection is left alone. Embedded Tools merge as on a file import.
+   */
+  const storeDownloadedPreset = useCallback(
+    (id: string, imported: ImportedPreset, link: PresetDownloadLink, name: string): { scriptToolAdded: boolean } => {
+      const overview = imported.overview ?? EMPTY_OVERVIEW;
+      const uploader = link.sourceAuthorName?.trim() ?? '';
+      const author = overview.author.trim() ? overview.author : uploader;
+      const { preset, scriptToolAdded } = mergeImportedTools(imported);
+      const content: Omit<PromptPreset, 'id'> = {
+        ...importedPresetContent(preset, name, true),
+        ...(imported.overview || author ? { overview: { ...overview, author } } : {}),
+        ...link,
+      };
+      // Raw, not pin-aware: the store op never touches the selection, and a download is not an edit.
+      setRawPresetStore((s) => putDownloadedPreset(s, id, content));
+      return { scriptToolAdded };
+    },
+    [mergeImportedTools, setRawPresetStore],
+  );
   // Whether each optional per-turn request is sent (replaces the legacy "type DISABLED" body hack).
   const [choicesEnabled, setChoicesEnabled] = usePersistentState<boolean>(`${APP_ID}_choicesEnabled`, true, boolCodec);
   // The hard-coded "continue" pseudo-choice offered under the generated ones (no AI request of its own).
@@ -935,6 +1083,11 @@ function useProvideSettings() {
     serialize: (v: ContinueChoiceMode): string => v,
   };
   const [continueChoiceMode, setContinueChoiceMode] = usePersistentState<ContinueChoiceMode>(`${APP_ID}_continueChoiceEnabled`, DEFAULT_CONTINUE_CHOICE, continueChoiceCodec);
+  const narrationLayoutCodec = {
+    parse: (r: string): NarrationLayout => (NARRATION_LAYOUTS.some((l) => l.value === r) ? (r as NarrationLayout) : DEFAULT_NARRATION_LAYOUT),
+    serialize: (v: NarrationLayout): string => v,
+  };
+  const [narrationLayout, setNarrationLayout] = usePersistentState<NarrationLayout>(`${APP_ID}_narrationLayout`, DEFAULT_NARRATION_LAYOUT, narrationLayoutCodec);
   const [statUpdatesEnabled, setStatUpdatesEnabled] = usePersistentState<boolean>(`${APP_ID}_statUpdatesEnabled`, true, boolCodec);
   const [locationChangeEnabled, setLocationChangeEnabled] = usePersistentState<boolean>(`${APP_ID}_locationChangeEnabled`, true, boolCodec);
   // When on, a detected in-scope move is applied immediately instead of prompting a "Move to X?" confirmation.
@@ -953,12 +1106,12 @@ function useProvideSettings() {
   const statUpdatesVerbatimTurns = verbatimMap.statUpdates ?? 3;
   const locationChangeVerbatimTurns = verbatimMap.locationChange ?? 3;
   const summaryVerbatimTurns = verbatimMap.summary ?? 3;
-  const setNarrationVerbatimTurns = (n: number) => setPresetStore((s) => updateVerbatim(s, 'narration', n));
-  const setThinkingVerbatimTurns = (n: number) => setPresetStore((s) => updateVerbatim(s, 'thinking', n));
-  const setChoicesVerbatimTurns = (n: number) => setPresetStore((s) => updateVerbatim(s, 'choices', n));
-  const setStatUpdatesVerbatimTurns = (n: number) => setPresetStore((s) => updateVerbatim(s, 'statUpdates', n));
-  const setLocationChangeVerbatimTurns = (n: number) => setPresetStore((s) => updateVerbatim(s, 'locationChange', n));
-  const setSummaryVerbatimTurns = (n: number) => setPresetStore((s) => updateVerbatim(s, 'summary', n));
+  const setNarrationVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'narration', n));
+  const setThinkingVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'thinking', n));
+  const setChoicesVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'choices', n));
+  const setStatUpdatesVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'statUpdates', n));
+  const setLocationChangeVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'locationChange', n));
+  const setSummaryVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'summary', n));
   // Hide every "Generate with AI" image affordance app-wide. Global (not per-preset) so the user can turn
   // image generation off entirely without losing their endpoint configs.
   const [imageGenDisabled, setImageGenDisabled] = usePersistentState<boolean>(`${APP_ID}_imageGenDisabled`, false, boolCodec);
@@ -1041,24 +1194,38 @@ function useProvideSettings() {
   const textEndpointPresets = textPresetStore.presets.map((p) => ({ id: p.id, name: p.name }));
   const activeTextEndpointPresetId = textPresetStore.activeId;
   const activeTextEndpointPresetIsBuiltIn = textIsBuiltInActive;
-  const activeTextEndpointPresetName = activeTextEndpointPresetIsBuiltIn
-    ? 'Default'
-    : textPresetStore.presets.find((p) => p.id === textPresetStore.activeId)?.name ?? 'Default';
+  const activeTextEndpointPresetName = textPresetName(textPresetStore, textPresetStore.activeId);
+  const activeTextEndpointIsDemoAI = isDemoAI({
+    endpointId: canonicalPresetId(textPresetStore, textPresetStore.activeId),
+    endpoint: textValues.endpoint,
+  });
   const selectTextEndpointPreset = (id: string) => setTextPresetStore((s) => textSetActive(s, id));
-  const addTextEndpointPreset = (name: string) => {
+  /** A new preset copied from `source`, with its overrides off. `select` makes it the active preset. */
+  const addTextEndpointPresetFrom = (name: string, source: (s: TextEndpointPresetStore) => TextEndpointValues, select: boolean) => {
     const id = randomUUID();
     setTextPresetStore((s) => {
-      const source = textActiveValues(s);
+      const values = source(s);
       return textAddPreset(s, id, name, {
-        ...source,
-        maxOutputOverride: { ...source.maxOutputOverride, enabled: false },
+        ...values,
+        maxOutputOverride: { ...values.maxOutputOverride, enabled: false },
         samplerOverrides: Object.fromEntries(
-          Object.entries(source.samplerOverrides).map(([sampler, override]) => [sampler, { ...override, enabled: false }]),
-        ) as typeof source.samplerOverrides,
-      });
+          Object.entries(values.samplerOverrides).map(([sampler, override]) => [sampler, { ...override, enabled: false }]),
+        ) as typeof values.samplerOverrides,
+      }, { select });
     });
     return id;
   };
+  /** Add a copy of the active preset and select it. */
+  const addTextEndpointPreset = (name: string) => addTextEndpointPresetFrom(name, textActiveValues, true);
+  /** Add a copy of the preset `from` names. The active preset stays. */
+  const copyTextEndpointPreset = (name: string, from: string) => addTextEndpointPresetFrom(name, (s) => textValuesForId(s, from), false);
+  /** The values of the preset `id` names, active or not. */
+  const textEndpointValuesFor = useCallback((id: string) => textValuesForId(textPresetStore, id), [textPresetStore]);
+  /** Change the preset `id` names, active or not. Built-ins keep their connection fields. */
+  const editTextEndpointPreset = useCallback(
+    (id: string, change: (values: TextEndpointValues) => Partial<TextEndpointValues>) => setTextPresetStore((s) => textEditPreset(s, id, change)),
+    [setTextPresetStore],
+  );
   const renameTextEndpointPreset = (id: string, name: string) => setTextPresetStore((s) => textRenamePreset(s, id, name));
   // Routes naming the deleted preset are left alone rather than swept out of every prompt preset: a ghost id
   // already resolves as Use Active Endpoint wherever it's read, and ids are UUIDs, so none is ever recycled.
@@ -1079,13 +1246,25 @@ function useProvideSettings() {
     });
   // Signatures already probed this session, so a miss fires one probe rather than one per request.
   const routedProbedRef = useRef<Set<string>>(new Set());
+  const rememberRoutedContext = useCallback((sig: string, detected: number) => setRoutedContextCache((prev) => {
+    const next = { ...prev, [sig]: detected };
+    const keys = Object.keys(next);
+    if (keys.length > REASONING_CACHE_CAP) delete next[keys[0]];
+    return next;
+  }), [setRoutedContextCache]);
 
   /**
    * Everything one prompt kind needs to build its request. An unpinned kind returns exactly the active
    * endpoint state, so the pre-routing path is untouched; a pinned one resolves its preset and looks up
    * that target's cached capabilities, kicking off a probe the first time a signature is unknown.
    */
-  const resolveEndpointForKind = useCallback((kind: AIRequestType): ResolvedPromptEndpoint & {
+  const activeEndpointState = useMemo(() => ({
+    activeId: textPresetStore.activeId,
+    values: textValues, isBuiltIn: textIsBuiltInActive, localEngine: localModelActive,
+    maxTokens: activeMaxTokens, engineMaxTokens: localMaxTokens, engineModelId: engineState.modelId ?? '',
+  }), [textPresetStore.activeId, textValues, textIsBuiltInActive, localModelActive, activeMaxTokens, localMaxTokens, engineState.modelId]);
+
+  const resolveEndpointForKind = useCallback((kind: AIRequestType, routes?: readonly string[]): ResolvedPromptEndpoint & {
     /** Chat-completions URL, normalized the same way the active endpoint is. */
     url: string;
     /** Display name of the preset this resolved to, whether pinned or followed. */
@@ -1093,22 +1272,23 @@ function useProvideSettings() {
     contextWindow: number;
     reasoning: ReasoningCapability;
   } => {
-    const resolved = resolvePromptEndpoint(kind, promptEndpoints, textPresetStore, {
-      activeId: textPresetStore.activeId,
-      values: textValues, isBuiltIn: textIsBuiltInActive, localEngine: localModelActive,
-      maxTokens: activeMaxTokens, engineMaxTokens: localMaxTokens, engineModelId: engineState.modelId ?? '',
-    });
+    const map = routes ? routeMap(kind, routes, textPresetStore) : promptEndpoints;
+    const resolved = resolvePromptEndpoint(kind, map, textPresetStore, activeEndpointState);
     const url = normalizeEndpointUrl(resolved.endpoint);
     const presetName = resolved.presetId === null
       ? activeTextEndpointPresetName
-      : resolved.presetId === DEFAULT_TEXT_PRESET_ID
-        ? 'Default'
-        : textPresetStore.presets.find((p) => p.id === resolved.presetId)?.name ?? 'Default';
-    // The bundled engine always takes a token budget, whatever detection says about the rest of the record.
+      : textPresetName(textPresetStore, resolved.presetId);
+    // The bundled engine always takes a token budget and always spells it its own way, whatever detection
+    // says about the rest of the record it shares with the active endpoint.
     const withEngineBudget = (record: ReasoningCapability | null): ReasoningCapability => {
       const base = record ?? UNKNOWN_REASONING_CAPABILITY;
       if (!resolved.localEngine) return base;
-      return { ...base, budget: true, sources: { ...base.sources, budget: 'engine' } };
+      return {
+        ...base,
+        budget: true,
+        dialect: 'engine',
+        sources: { ...base.sources, budget: 'engine', dialect: 'engine' },
+      };
     };
     if (resolved.presetId === null) {
       return { ...resolved, url, presetName, contextWindow, reasoning: withEngineBudget(reasoningCapability) };
@@ -1120,21 +1300,20 @@ function useProvideSettings() {
       routedProbedRef.current.add(sig);
       if (routedContextCache[sig] === undefined) {
         void fetchContextLength(url, resolved.apiToken, resolved.model).then((detected) => {
-          if (detected === null) return;
-          setRoutedContextCache((prev) => {
-            const next = { ...prev, [sig]: detected };
-            const keys = Object.keys(next);
-            if (keys.length > REASONING_CACHE_CAP) delete next[keys[0]];
-            return next;
-          });
+          if (detected === null || unmountRef.current?.signal.aborted) return;
+          rememberRoutedContext(sig, detected);
         }).catch(() => { /* an unreachable routed endpoint surfaces as a request failure, not here */ });
       }
-      if (reasoningNeedsResolve(reasoningCapabilityCache[sig]) && !resolvedSignatures.current.has(sig)) {
+      const routedStored = reasoningCapabilityCache[sig];
+      if ((reasoningNeedsResolve(routedStored) || reasoningRereadsPerSession(routedStored)) && !resolvedSignatures.current.has(sig)) {
         resolvedSignatures.current.add(sig);
         void resolveReasoningCapability(
           { url, token: resolved.apiToken, model: resolved.model },
           fetch,
-          { observation: reasoningObservationsRef.current[sig] },
+          {
+            observation: reasoningObservationsRef.current[sig], stored: reasoningCapabilityCache[sig],
+            signal: unmountRef.current?.signal,
+          },
         ).then((record) => {
           if (!record) { resolvedSignatures.current.delete(sig); return; }
           cacheReasoningCapability(sig, record);
@@ -1156,10 +1335,45 @@ function useProvideSettings() {
       reasoning: withEngineBudget(reasoningCapabilityCache[sig] ?? null),
     };
   }, [
-    promptEndpoints, textPresetStore, textValues, textIsBuiltInActive, localModelActive, activeMaxTokens,
+    promptEndpoints, textPresetStore, activeEndpointState,
     contextWindow, reasoningCapability, routedContextCache, reasoningCapabilityCache, localContextSize,
-    localMaxTokens, engineState.modelId, activeTextEndpointPresetName, setRoutedContextCache, cacheReasoningCapability,
+    activeTextEndpointPresetName, rememberRoutedContext, cacheReasoningCapability,
   ]);
+
+  /** The routed-cache signature of the preset `id` names. */
+  const presetSignature = useCallback((id: string) => {
+    const values = textValuesForId(textPresetStore, id);
+    return { values, sig: endpointSignature(normalizeEndpointUrl(values.endpoint), values.model) };
+  }, [textPresetStore]);
+  /** The context window detected for a preset that is not the active one, or null. */
+  const detectedContextWindowFor = useCallback(
+    (id: string): number | null => routedContextCache[presetSignature(id).sig] ?? null,
+    [routedContextCache, presetSignature],
+  );
+  /** Ask a preset that is not the active one for its context window, and remember the answer. */
+  const detectContextWindowFor = useCallback(async (id: string): Promise<number | null> => {
+    const { values, sig } = presetSignature(id);
+    const detected = await fetchContextLength(normalizeEndpointUrl(values.endpoint), values.apiToken, values.model);
+    if (detected !== null && !unmountRef.current?.signal.aborted) rememberRoutedContext(sig, detected);
+    return detected;
+  }, [presetSignature, rememberRoutedContext]);
+
+  // Engine claims from outside the prompt presets: Formaquestion's routes.
+  const [engineClaims, setEngineClaims] = useState<ReadonlySet<string>>(() => new Set());
+  /** Mark the bundled engine as wanted, or not, for one owner. */
+  const claimEngine = useCallback((owner: string, wanted: boolean) => setEngineClaims((current) => {
+    if (current.has(owner) === wanted) return current;
+    const next = new Set(current);
+    if (wanted) next.add(owner);
+    else next.delete(owner);
+    return next;
+  }), []);
+
+  // The Demo AI notice follows the narration model; the routing of other kinds has no effect.
+  const narrationIsDemoAI = useMemo(
+    () => isDemoAI(resolvePromptEndpoint('narration', promptEndpoints, textPresetStore, activeEndpointState)),
+    [promptEndpoints, textPresetStore, activeEndpointState],
+  );
 
   /**
    * Whether the bundled engine should be running: it's the active endpoint, or some prompt is routed to it.
@@ -1168,6 +1382,7 @@ function useProvideSettings() {
    */
   const engineWanted = isDesktop() && (
     localModelActive ||
+    engineClaims.size > 0 ||
     Object.keys(promptEndpoints).some(
       (k) => routedPresetId(k as AIRequestType, promptEndpoints, textPresetStore) === BUILTIN_ENGINE_PRESET_ID,
     )
@@ -1259,6 +1474,36 @@ function useProvideSettings() {
     return () => { cancelled = true; };
   }, [narrationFont, narrationScale, narrationLineHeight, narrationTuning.scale]);
 
+  // Quote Color: the dialogue span is always in the story text, so the root attribute is what paints it.
+  // Off leaves the span with nothing to read and the narration reads as plain prose.
+  const [quoteColor, setQuoteColor] = usePersistentState<boolean>(`${APP_ID}_quoteColor`, DEFAULT_QUOTE_COLOR, boolCodec);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (quoteColor) root.setAttribute('data-quote-color', '');
+    else root.removeAttribute('data-quote-color');
+  }, [quoteColor]);
+
+  // Quote Italic reads the same always-present span, through its own root attribute.
+  const [quoteItalic, setQuoteItalic] = usePersistentState<boolean>(`${APP_ID}_quoteItalic`, DEFAULT_QUOTE_ITALIC, boolCodec);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (quoteItalic) root.setAttribute('data-quote-italic', '');
+    else root.removeAttribute('data-quote-italic');
+  }, [quoteItalic]);
+
+  // A custom quote color per mode. The active mode's value overrides the theme token on the root; with
+  // none set, the CSS falls back to `--dialogue`.
+  const [quoteColorLight, setQuoteColorLight] = usePersistentState<string | null>(`${APP_ID}_quoteColorLight`, DEFAULT_QUOTE_COLOR_LIGHT, nullableHexCodec);
+  const [quoteColorDark, setQuoteColorDark] = usePersistentState<string | null>(`${APP_ID}_quoteColorDark`, DEFAULT_QUOTE_COLOR_DARK, nullableHexCodec);
+  const quoteColorMode = useRootSnapshot(readRootMode);
+  const activeQuoteColor = quoteColorMode === 'dark' ? quoteColorDark : quoteColorLight;
+  const setActiveQuoteColor = quoteColorMode === 'dark' ? setQuoteColorDark : setQuoteColorLight;
+  useEffect(() => {
+    const root = document.documentElement;
+    if (activeQuoteColor) root.style.setProperty('--dialogue-custom', activeQuoteColor);
+    else root.style.removeProperty('--dialogue-custom');
+  }, [activeQuoteColor]);
+
   // Font tunings → CSS variables. The app-wide set comes from the global font; the narration pane carries
   // its own set (its font's, or the global font's when it inherits). The skew attribute gates a rule that
   // would otherwise make every italic run inline-block — see index.css.
@@ -1284,11 +1529,26 @@ function useProvideSettings() {
     setSettingsRequest({ tab, endpointTab, nonce: randomUUID() });
   }, []);
   const clearSettingsRequest = useCallback(() => setSettingsRequest(null), []);
+  // A pending "open this surface" request. The view that can host it acts on it and clears it.
+  const [surfaceRequest, setSurfaceRequest] = useState<SurfaceOpenRequest | null>(null);
+  const requestSurface = useCallback((route: SurfaceRoute) => setSurfaceRequest({ ...route, nonce: randomUUID() }), []);
+  // DEV-only: send a Take Me There request without an answer (`window.__fmDev.requestSurface({ id, target })`).
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    return registerDevHook('requestSurface', requestSurface);
+  }, [requestSurface]);
+  // Clears only the request it names, so a newer one sent during a prompt survives the old one's answer.
+  const clearSurfaceRequest = useCallback((nonce: string) => {
+    setSurfaceRequest((current) => (current?.nonce === nonce ? null : current));
+  }, []);
 
   const value = {
     settingsRequest,
     requestSettings,
     clearSettingsRequest,
+    surfaceRequest,
+    requestSurface,
+    clearSurfaceRequest,
     bgmEnabled,
     setBgmEnabled,
     themeColor,
@@ -1303,6 +1563,17 @@ function useProvideSettings() {
     setNarrationScale,
     narrationLineHeight,
     setNarrationLineHeight,
+    quoteColor,
+    setQuoteColor,
+    quoteItalic,
+    setQuoteItalic,
+    quoteColorLight,
+    setQuoteColorLight,
+    quoteColorDark,
+    setQuoteColorDark,
+    quoteColorMode,
+    activeQuoteColor,
+    setActiveQuoteColor,
     language,
     setLanguage,
     paragraphLimit,
@@ -1361,6 +1632,10 @@ function useProvideSettings() {
     setAiClock,
     concurrentTurnRequests,
     setConcurrentTurnRequests,
+    imageAttachments,
+    setImageAttachments,
+    toolsEnabled,
+    setToolsEnabled,
     autosaveEnabled,
     setAutosaveEnabled,
     characterDiaries,
@@ -1390,16 +1665,24 @@ function useProvideSettings() {
     localMaxTokens,
     setLocalMaxTokens,
     engineWanted,
+    claimEngine,
     builtinTextEndpointPresets,
     textEndpointPresets,
     activeTextEndpointPresetId,
     activeTextEndpointPresetIsBuiltIn,
     activeTextEndpointPresetName,
+    activeTextEndpointIsDemoAI,
+    narrationIsDemoAI,
     selectTextEndpointPreset,
     addTextEndpointPreset,
+    copyTextEndpointPreset,
     renameTextEndpointPreset,
     deleteTextEndpointPreset,
     resetTextEndpointPreset,
+    textEndpointValuesFor,
+    editTextEndpointPreset,
+    detectedContextWindowFor,
+    detectContextWindowFor,
     activeEndpointUrl,
     activeApiToken,
     activeModelName,
@@ -1463,6 +1746,8 @@ function useProvideSettings() {
     setChoicesEnabled,
     continueChoiceMode,
     setContinueChoiceMode,
+    narrationLayout,
+    setNarrationLayout,
     statUpdatesEnabled,
     setStatUpdatesEnabled,
     locationChangeEnabled,
@@ -1498,6 +1783,11 @@ function useProvideSettings() {
     setPromptReasoning,
     promptReasoningBudget,
     setPromptReasoningBudget,
+    promptMaxOutput,
+    setPromptMaxOutputCustom,
+    setPromptMaxOutputValue,
+    promptAttachments,
+    setPromptAttachments,
     thinkingPrompt,
     setThinkingPrompt,
     summaryPrompt,
@@ -1518,6 +1808,10 @@ function useProvideSettings() {
     setStatUpdatesUserPrompt,
     locationChangeUserPrompt,
     setLocationChangeUserPrompt,
+    milestoneSelectPrompt,
+    setMilestoneSelectPrompt,
+    milestoneSelectUserPrompt,
+    setMilestoneSelectUserPrompt,
     summaryUserPrompt,
     nowLinePrompt,
     setNowLinePrompt,
@@ -1533,6 +1827,10 @@ function useProvideSettings() {
     setSceneTagsPrompt,
     sceneTagsUserPrompt,
     setSceneTagsUserPrompt,
+    discoverEntityPrompt,
+    setDiscoverEntityPrompt,
+    discoverEntityUserPrompt,
+    setDiscoverEntityUserPrompt,
     setSummaryUserPrompt,
     promptPresets,
     builtinPresets,
@@ -1548,8 +1846,21 @@ function useProvideSettings() {
     renamePreset,
     deletePreset,
     resetPreset,
+    presetOverview,
+    setPresetOverview,
+    catalogTools,
+    userTools,
+    allTools,
+    enabledTools,
+    saveTool,
+    deleteTool,
+    setToolEnabled,
     exportActivePreset,
+    linkPresetToListing,
     importPreset,
+    storeDownloadedPreset,
+    /** Every user preset with its community link, for the browser to find a listing's copy. */
+    userPromptPresets: presetStore.presets,
     imageGenDisabled,
     setImageGenDisabled,
     sceneImageAuto,
@@ -1628,6 +1939,15 @@ export const useSettings = () => {
   }
   return context;
 };
+
+/** The passed source, else the live settings. A source lets a component run outside a `SettingsProvider`. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function useSettingsSource<T>(source: T | undefined): T | SettingsContextValue {
+  const context = useContext(SettingsContext);
+  if (source) return source;
+  if (!context) throw new Error('useSettingsSource needs a source or a SettingsProvider');
+  return context;
+}
 
 /** Provides all persisted user settings (see `useSettings`); runs one-time localStorage migrations and
  *  seeds the prompt/image preset stores on first render. */

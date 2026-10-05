@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildLocationContext, buildEntityContext, buildSublocationsContext, buildSublocationEntitiesContext,
   buildReachableLocationsContext, buildReachableEntitiesContext,
-  navigableDestinations, buildDestinationsContext, sublocationEntityIds, reachableEntityIds, renderEntityRoster,
+  navigableDestinations, navigableDestinationEntries, buildDestinationsContext, sublocationEntityIds, reachableEntityIds, renderEntityRoster,
   buildParentLocationContext, buildSceneEntitiesContext, scenePresentHere,
 } from "./locationContext";
 import { NONE_PLACEHOLDER } from "./promptFallbacks";
@@ -69,7 +69,8 @@ describe("buildLocationContext", () => {
 
   it("prefers aiSummary when preferSummary is set", () => {
     const out = buildLocationContext(location, { preferSummary: true });
-    expect(out).toContain("description: A towering stone gate.");
+    expect(out).toContain("summary: A towering stone gate.");
+    expect(out).not.toContain("description:");
     expect(out).not.toContain("portcullis raised");
   });
 
@@ -231,7 +232,7 @@ describe("navigableDestinations / buildDestinationsContext", () => {
   const eelhouse: GameLocation = { id: "eel", name: "Eelhouse", parentId: "hamlet" };
   const landing: GameLocation = { id: "landing", name: "Landing" }; // top-level
   const locs = [green, cottage, eelhouse, landing];
-  const greenLanding: Connection = { id: "c1", from: "green", to: "landing", twoWay: true };
+  const greenLanding: Connection = { id: "c1", a: "green", b: "landing", aToB: {}, bToA: {} };
   const conns = [greenLanding];
 
   // The same hamlet, with the containing location actually present in the world.
@@ -268,7 +269,7 @@ describe("navigableDestinations / buildDestinationsContext", () => {
   });
 
   it("skips a Connection pointing at a location the world no longer has", () => {
-    const dangling: Connection = { id: "c9", from: "green", to: "gone", twoWay: true };
+    const dangling: Connection = { id: "c9", a: "green", b: "gone", aToB: {}, bToA: {} };
     const names = navigableDestinations(green, [green, cottage, eelhouse], [dangling]).map((l) => l.name).sort();
     expect(names).toEqual(["Cottage", "Eelhouse"]);
   });
@@ -279,7 +280,7 @@ describe("navigableDestinations / buildDestinationsContext", () => {
   });
 
   it("a one-way Connection is offered at its start and absent at its end", () => {
-    const drop: Connection = { id: "c2", from: "green", to: "landing", twoWay: false };
+    const drop: Connection = { id: "c2", a: "green", b: "landing", aToB: {} };
     expect(navigableDestinations(green, locs, [drop]).map((l) => l.name)).toContain("Landing");
     expect(navigableDestinations(landing, locs, [drop])).toEqual([]);
   });
@@ -287,7 +288,7 @@ describe("navigableDestinations / buildDestinationsContext", () => {
   it("a one-way Connection between siblings replaces their free travel, both ways", () => {
     // ADR-0002: the pair's implicit link is gone, so Cottage cannot walk back to Green even though the
     // containment tree would otherwise hand it that trip for nothing.
-    const oneWay: Connection = { id: "c3", from: "green", to: "cottage", twoWay: false };
+    const oneWay: Connection = { id: "c3", a: "green", b: "cottage", aToB: {} };
     expect(navigableDestinations(green, nested, [oneWay]).map((l) => l.name).sort())
       .toEqual(["Cottage", "Eelhouse", "Hamlet"]);
     expect(navigableDestinations(cottage, nested, [oneWay]).map((l) => l.name).sort())
@@ -295,7 +296,7 @@ describe("navigableDestinations / buildDestinationsContext", () => {
   });
 
   it("a one-way Connection to a child replaces the way back up", () => {
-    const chute: Connection = { id: "c4", from: "hamlet", to: "green", twoWay: false };
+    const chute: Connection = { id: "c4", a: "hamlet", b: "green", aToB: {} };
     expect(navigableDestinations(hamlet, nested, [chute]).map((l) => l.name).sort())
       .toEqual(["Cottage", "Eelhouse", "Green"]);
     // Green keeps its siblings but loses the parent it no longer has an implicit link to.
@@ -318,7 +319,7 @@ describe("navigableDestinations / buildDestinationsContext", () => {
   });
 
   it("trails a Connection's travel hint on its destination line, and only its own", () => {
-    const portal: Connection = { id: "c5", from: "green", to: "landing", twoWay: true, aiHint: "the shimmering portal" };
+    const portal: Connection = { id: "c5", a: "green", b: "landing", aToB: { hint: "the shimmering portal" }, bToA: { hint: "the shimmering portal" } };
     const out = buildDestinationsContext(green, locs, [portal], { preferSummary: true });
     expect(out).toContain("Landing — via the shimmering portal");
     expect(out).toContain("Cottage: A blue-doored cottage.\n"); // an implicit neighbor carries no suffix
@@ -328,6 +329,38 @@ describe("navigableDestinations / buildDestinationsContext", () => {
     expect(md).toContain("- **Landing** — via the shimmering portal");
     const xml = buildDestinationsContext(green, locs, [portal], { format: "xml" });
     expect(xml).toContain("<via>the shimmering portal</via>");
+  });
+
+  it("tags a list item's text as summary only when its authored summary won", () => {
+    const xml = buildDestinationsContext(green, locs, conns, { preferSummary: true, format: "xml" });
+    expect(xml).toContain("<summary>A blue-doored cottage.</summary>");
+    expect(buildDestinationsContext(green, locs, conns, { format: "xml" })).not.toContain("<summary>");
+  });
+
+  describe("a hint for each direction", () => {
+    const hintTo = (from: GameLocation, to: GameLocation, connections: Connection[]) =>
+      navigableDestinationEntries(from, locs, connections).find((e) => e.location.id === to.id)?.hint;
+
+    it("gives each trip the hint of the leg it travels", () => {
+      const steps: Connection = {
+        id: "c6", a: "green", b: "landing", aToB: { hint: "down the steps" }, bToA: { hint: "up the steps" },
+      };
+      expect(hintTo(green, landing, [steps])).toBe("down the steps");
+      expect(hintTo(landing, green, [steps])).toBe("up the steps");
+      expect(buildDestinationsContext(landing, locs, [steps])).toContain("Green — via up the steps");
+    });
+
+    it("gives no hint to a leg without one, even when the other leg has one", () => {
+      const oneSided: Connection = { id: "c7", a: "green", b: "landing", aToB: { hint: "down the steps" }, bToA: {} };
+      expect(hintTo(landing, green, [oneSided])).toBeUndefined();
+      expect(buildDestinationsContext(landing, locs, [oneSided])).not.toContain("via");
+    });
+
+    it("offers no return trip on a one-way Connection whose leg has a hint", () => {
+      const drop: Connection = { id: "c8", a: "landing", b: "green", bToA: { hint: "down the steps" } };
+      expect(hintTo(green, landing, [drop])).toBe("down the steps");
+      expect(navigableDestinationEntries(landing, locs, [drop])).toEqual([]);
+    });
   });
 });
 
@@ -388,7 +421,8 @@ describe("buildEntityContext", () => {
 
   it("prefers aiSummary for entities when preferSummary is set", () => {
     const out = buildEntityContext(location, [guard], { preferSummary: true });
-    expect(out).toContain("  description: A burly scarred guard.");
+    expect(out).toContain("  summary: A burly scarred guard.");
+    expect(out).not.toContain("description:");
     expect(out).not.toContain("full plate");
   });
 
@@ -401,6 +435,58 @@ describe("buildEntityContext", () => {
   it("returns the placeholder when nobody belongs to the location", () => {
     const elsewhere: GameLocation = { ...location, id: "loc-empty" };
     expect(buildEntityContext(elsewhere, [guard])).toBe(NONE_PLACEHOLDER);
+  });
+
+  describe("owned traits in force", () => {
+    // A wolf with a temperament group; Tamed and Calm are in force, Scarred is owned but not active.
+    const wolf: Entity = {
+      id: "wolf", name: "Ash", aiDescription: "A gray wolf.", aiSummary: "A gray wolf.", locations: ["loc1"],
+      traitGroups: [{ id: "temper", name: "Temperament", aiDescription: "How Ash meets strangers.", parentId: null }],
+      traits: [
+        { id: "calm", name: "Calm", groupId: "temper", aiDescription: "Ash waits before acting.", statChanges: [] },
+        { id: "tamed", name: "Tamed", aiDescription: "Ash obeys the player.", statChanges: [], order: 0 },
+        { id: "scarred", name: "Scarred", aiDescription: "An old wound across the muzzle.", statChanges: [], order: 1 },
+      ],
+    };
+    const ownedTraits = { wolf: ["tamed", "calm"] };
+
+    it("gives each trait's AI description under its name in the full context", () => {
+      const out = renderEntityRoster(["wolf"], [wolf], { ownedTraits });
+      expect(out).toBe(
+        "Ash\n" +
+        "  description: A gray wolf.\n" +
+        "  traits:\n" +
+        "    Tamed: Ash obeys the player.\n" +
+        "    Temperament:\n" +
+        "      How Ash meets strangers.\n" +
+        "      Calm: Ash waits before acting.\n",
+      );
+    });
+
+    it("nests the traits the same way in markdown and xml", () => {
+      const md = renderEntityRoster(["wolf"], [wolf], { ownedTraits, format: "markdown" });
+      expect(md).toContain("  - **traits:**\n    - **Tamed:** Ash obeys the player.\n    - **Temperament:** How Ash meets strangers.\n      - **Calm:** Ash waits before acting.\n");
+      const xml = renderEntityRoster(["wolf"], [wolf], { ownedTraits, format: "xml" });
+      expect(xml).toContain("  <traits>\n    <trait>\n      <name>Tamed</name>\n      <description>Ash obeys the player.</description>\n    </trait>\n");
+      expect(xml).toContain("  </traits>\n</entity>\n");
+    });
+
+    it("gives the summary one line of trait names, in tree order", () => {
+      const out = renderEntityRoster(["wolf"], [wolf], { ownedTraits, preferSummary: true });
+      expect(out).toBe("Ash\n  summary: A gray wolf.\n  traits: Tamed, Calm\n");
+      expect(renderEntityRoster(["wolf"], [wolf], { ownedTraits, preferSummary: true, format: "xml" }))
+        .toContain("  <traits>Tamed, Calm</traits>\n");
+    });
+
+    it("leaves out an owned trait that is not in force, and the whole line when none is", () => {
+      expect(renderEntityRoster(["wolf"], [wolf], { ownedTraits })).not.toContain("Scarred");
+      expect(renderEntityRoster(["wolf"], [wolf], { ownedTraits: { wolf: [] } })).not.toContain("traits");
+      expect(renderEntityRoster(["wolf"], [wolf])).not.toContain("traits");
+    });
+
+    it("keeps the name-only content to names", () => {
+      expect(renderEntityRoster(["wolf"], [wolf], { ownedTraits, nameOnly: true })).toBe("Ash");
+    });
   });
 
   it("skips a rostered id that resolves to no entity, and is N/A when none of them do", () => {
@@ -423,6 +509,28 @@ describe("buildEntityContext", () => {
     expect(buildEntityContext(location, [guard])).not.toContain("also known as");
     expect(buildEntityContext(location, [{ ...guard, aliases: [] }])).not.toContain("also known as");
     expect(buildEntityContext(location, [{ ...guard, aliases: ["  "] }])).not.toContain("also known as");
+  });
+
+  it("renders pronouns after the aliases in each format", () => {
+    const she = { ...guard, aliases: ["Em"], pronouns: " she/her " };
+    expect(buildEntityContext(location, [she])).toContain("  also known as: Em\n  pronouns: she/her\n");
+    expect(buildEntityContext(location, [she], { format: "markdown" }))
+      .toContain("  - **also known as:** Em\n  - **pronouns:** she/her\n");
+    expect(buildEntityContext(location, [she], { format: "xml" }))
+      .toContain("  <aliases>Em</aliases>\n  <pronouns>she/her</pronouns>\n");
+  });
+
+  it("renders an entity with no pronouns exactly as one without the field", () => {
+    for (const format of ["simple", "markdown", "xml"] as const) {
+      const bare = buildEntityContext(location, [guard], { format });
+      expect(buildEntityContext(location, [{ ...guard, pronouns: "" }], { format })).toBe(bare);
+      expect(buildEntityContext(location, [{ ...guard, pronouns: "  " }], { format })).toBe(bare);
+      expect(bare).not.toContain("pronouns");
+    }
+  });
+
+  it("never sends the Persona mark to the AI", () => {
+    expect(buildEntityContext(location, [{ ...guard, persona: true }])).toBe(buildEntityContext(location, [guard]));
   });
 
   it("never emits editor-only grouping fields (groupId/order) to the AI", () => {

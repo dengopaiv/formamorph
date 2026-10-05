@@ -79,6 +79,47 @@ describe('reading a profile', () => {
   });
 });
 
+describe('reading somebody’s creations', () => {
+  const row = (over: Record<string, unknown>) => ({
+    _id: 'e1', name: 'Wren', kind: 'entity', thumbnail_file: 'stand-in.png',
+    updated_at: '2026-03-14T00:00:00.000Z', created_at: '2026-03-14T00:00:00.000Z', ...over,
+  });
+
+  it('reads whether the thumbnail is the server’s stand-in', async () => {
+    signedIn(null);
+    respondWith([row({ placeholder: true }), row({ _id: 'e2', placeholder: false })]);
+
+    const [flagged, drawn] = await UserService.fetchCreations('u1');
+
+    expect(flagged.placeholder).toBe(true);
+    expect(drawn.placeholder).toBe(false);
+  });
+
+  it('reads a row from a server without the flag as real art', async () => {
+    signedIn(null);
+    respondWith([row({})]);
+
+    const [creation] = await UserService.fetchCreations('u1');
+
+    expect(creation.placeholder).toBe(false);
+  });
+
+  it('reads each row\'s like count as this reader may see it', async () => {
+    signedIn(null);
+    respondWith([
+      row({ likesHidden: true }),
+      row({ likes: 12, likesPrivate: true }),
+      row({ likes: 3 }),
+    ]);
+
+    const [hidden, own, plain] = await UserService.fetchCreations('u1');
+
+    expect(hidden.likes).toEqual({ visibility: 'hidden' });
+    expect(own.likes).toEqual({ visibility: 'private', likes: 12 });
+    expect(plain.likes).toEqual({ visibility: 'public', likes: 3 });
+  });
+});
+
 describe('reading a profile by name', () => {
   /** A refusal the way the server sends one. */
   const refuse = (status: number, error: string) =>

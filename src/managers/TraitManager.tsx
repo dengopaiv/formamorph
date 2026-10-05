@@ -1,26 +1,51 @@
-import { useEffect, type ReactNode } from 'react';
-import { useGameData } from '@/contexts/GameDataContext';
+import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { bearerPreview } from '@/lib/ownedTraitsInPlay';
+import { useTraitStore } from '@/contexts/TraitStoreContext';
 import { useEditingDraft } from '@/lib/useEditingDraft';
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2 } from "lucide-react";
+import { Trash2, User } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { PanelTabsList } from "@/components/ui/panel-tabs";
+import { PanelTabContent, PanelTabs } from "@/components/ui/panel-tabs";
+import type { SurfaceLedgerName } from "@/components/ui/surface";
 import PlaceholderField, { PlaceholderNameField } from '@/components/prompt/PlaceholderField';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
 import { PlaceholderPinRows } from '@/components/editor/PlaceholderPinRows';
+import { TraitRequiresField } from '@/components/editor/TraitRequiresField';
 import { useRenameField } from '@/lib/useCodeRename';
 import { statCodeName } from '@/lib/statCodeNames';
 import { labelPlaceholders } from '@/lib/placementLetters';
-import { traitConflicts, type TraitConflict } from '@/lib/traitEffects';
+import { isAlwaysOn, traitConflicts, type TraitConflict } from '@/lib/traitEffects';
+import { OptionSwitcher } from '@/components/SettingsRows';
+import { updateOwnedTrait } from '@/lib/ownedTraits';
+import { canOwnStatTraits, hasStatEffects } from '@/lib/traitTree';
 import { useEditorMode } from '@/lib/editorMode';
 import { HelpButton } from '@/components/HelpButton';
 import { Hint, Meta } from '@/components/ui/typography';
 import { traitPanelTabsFor, traitTabForField, type TraitPanelTab } from '@/views/traitPanelTabs';
-import type { FocusFieldHint, Placeholder, PlaceholderPin, Trait, StatChange, TraitStatToggle } from '@/types';
+import { FieldReset, LabelRow } from '@/components/editor/BlueprintReset';
+import type {
+  Entity, FocusFieldHint, Placeholder, PlaceholderPin, Trait, StatChange, TraitLinkFields, TraitRequirement, TraitStatToggle,
+} from '@/types';
+
+/** A link's edit of one trait it brings: which fields it overrides, which of those the blueprint changed
+ *  since, and where a whole-trait write and a field reset go. */
+export interface TraitLinkEdit {
+  bearerId: string;
+  overridden: readonly (keyof TraitLinkFields)[];
+  stale: readonly (keyof TraitLinkFields)[];
+  write: (next: Trait) => void;
+  reset: (field: keyof TraitLinkFields) => void;
+  defaultHint: string;
+}
+
+const MODE_OPTIONS = [
+  { value: 'optional', label: 'Optional', hint: 'Lets the player choose it' },
+  { value: 'alwaysOn', label: 'Always On', hint: 'Turns on whenever its requirements hold, and the player can’t switch it' },
+  { value: 'hidden', label: 'Hidden', hint: 'Acts as Always On, but the player never sees it. The AI does.' },
+] as const;
 
 /** Names another trait that claims the same target, and says which way the tie falls. Silent when nothing
  *  else claims it — the common case, where an extra line would just be noise. */
@@ -51,25 +76,73 @@ const ConflictNote = ({ conflict, placeholders, onOpen }: {
   );
 };
 
+/** The line under a bearer's stat sections: when its stat effects apply, or that they never do. The Custom
+ *  Persona entity's traits are the player's, so it gets none. */
+export function BearerStatNote({ bearer }: { bearer: Entity }) {
+  if (bearer.customPersona) return null;
+  return <Hint>{bearer.persona ? 'Stat changes apply only when you play as them' : "Stat changes don't apply to entities"}</Hint>;
+}
+
 /**
- * Right-panel editor for one trait: its fields split across Details, Stats and Pins.
+ * Right-panel editor for one trait: its fields split across Details, Availability, Stats and Pins.
  *
  * The panel remounts per trait, so the chosen tab is the editor's to hold and arrives as a prop. Pins is
- * Advanced only, which leaves Simple mode two tabs and a strip either way.
+ * Advanced only.
  *
  * `focusField` is the search target the find bar just navigated to. A hit on a tab that isn't showing has no
  * field to mark, so the panel opens the owning tab; the same hint the other three panels take.
+ *
+ * `onOpenTrait` also takes a trait group's id, which the Traits tab selects the same way.
+ *
+ * An `owner` makes it that entity's trait: edits write to the entity, and the stat sections show on a persona
+ * or where the trait already has stat effects. Its "Owned by" line goes with `ownerLine` off, for a host whose
+ * heading already names the entity. A host that can open only some requirement targets says which through
+ * `requirementOpens`; the rest read as plain chips. A `link` edits the trait as that link reads it:
+ * overridable fields write the link's overrides and show a Reset while overridden, and the rest is read-only.
+ * Its own lines go in `detailsHeader` and `availabilityFooter`.
  */
-const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
+const TraitManager = ({
+  trait, owner, link, ownerLine = true, detailsHeader, availabilityFooter, onOpenTrait, onOpenEntity, requirementOpens, tab, onTabChange,
+  focusField, surfaceTabs,
+}: {
+  /** The tab ledger this panel reports under, for a host that has one. */
+  surfaceTabs?: SurfaceLedgerName;
   trait: Trait;
+  owner?: Entity;
+  link?: TraitLinkEdit;
+  ownerLine?: boolean;
+  detailsHeader?: ReactNode;
+  availabilityFooter?: ReactNode;
   onOpenTrait: (id: string) => void;
+  onOpenEntity?: (id: string) => void;
+  requirementOpens?: (requirement: TraitRequirement) => boolean;
   tab: TraitPanelTab;
   onTabChange: (tab: TraitPanelTab) => void;
   focusField?: FocusFieldHint | null;
 }) => {
-  const world = useGameData();
-  const { updateTrait, stats, placeholders, placementLetters, placeholderOwners, traits, traitGroups } = world;
-  const { draft: editingTrait, apply, setField: handleChange } = useEditingDraft<Trait>(trait, updateTrait);
+  const {
+    updateTrait, editEntity, stats, placeholders, placementLetters, placeholderOwners, traits, traitGroups, pinWorld, entities,
+  } = useTraitStore();
+  const ownerId = owner?.id;
+  // A link or an owned trait previews as its bearer's text: the bearer's name, copies and pins.
+  const bearer = link ? entities.find((e) => e.id === link.bearerId) : owner;
+  const bearerId = bearer?.id;
+  const preview = useMemo(
+    () => (bearerId ? bearerPreview({ traits, traitGroups, entities }, placeholders, placeholders, bearerId, trait.id) ?? undefined : undefined),
+    [bearerId, traits, traitGroups, entities, placeholders, trait.id],
+  );
+  // A link shows its original's text, which the world holds.
+  const traitField = useMemo(() => ({ owned: !!owner && !link }), [owner, link]);
+  const linkWrite = link?.write;
+  const write = useCallback(
+    (next: Trait) => (linkWrite ? linkWrite(next) : ownerId ? editEntity(ownerId, (e) => updateOwnedTrait(e, next)) : updateTrait(next)),
+    [linkWrite, ownerId, editEntity, updateTrait],
+  );
+  const readOnly = !!link;
+  const resetControl = (field: keyof TraitLinkFields, label: string) => (link?.overridden.includes(field)
+    ? <FieldReset field={label} stale={link.stale.includes(field)} onReset={() => link.reset(field)} />
+    : null);
+  const { draft: editingTrait, apply, setField: handleChange } = useEditingDraft<Trait>(trait, write);
   // Code reaches a trait by its code name, so the rename offer compares the two names the way code reads them.
   const rename = useRenameField({
     root: 'traits',
@@ -77,6 +150,7 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
     siblings: traits,
     ownId: trait.id,
     codeNameOf: (name) => statCodeName(name, placeholders),
+    traitId: trait.id,
   });
 
   const handleStatChangeAdd = () => {
@@ -107,6 +181,12 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
   const pins = editingTrait.placeholderPins ?? [];
   const setPins = (next: PlaceholderPin[]) => apply({ placeholderPins: next.length ? next : undefined });
 
+  const setRequires = (next: TraitRequirement[]) => apply({ requires: next.length ? next : undefined });
+  const openRequirement = (r: TraitRequirement) => {
+    if (r.kind === 'playingAs') onOpenEntity?.(r.id);
+    else onOpenTrait(r.id);
+  };
+
   const { advanced } = useEditorMode();
 
   // Before the reveal, which is a timer behind this render: the field it looks for has to be mounting by
@@ -118,62 +198,131 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
 
   if (!editingTrait) return null;
 
-  const tabs = traitPanelTabsFor(advanced);
+  // An owned trait has a Stats tab on a persona, or anywhere it already has stat effects to see and remove.
+  const statsShown = !owner || canOwnStatTraits(owner) || hasStatEffects(editingTrait);
+  const tabs = traitPanelTabsFor(advanced).filter((t) => statsShown || t.value !== 'stats');
+  const shownTab = tabs.some((t) => t.value === tab) ? tab : 'details';
 
   const detailsPanel = (
     <>
-      <div className="space-y-2">
+      {detailsHeader}
+      {owner && ownerLine && (
+        <div className="flex items-start gap-2 rounded-md border border-dashed p-2">
+          <User className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-label">
+              Owned by{' '}
+              <button
+                type="button"
+                className="font-semibold underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                onClick={() => onOpenEntity?.(owner.id)}
+              >
+                <PlaceholderText text={owner.name} placeholders={placeholders} />
+              </button>
+            </p>
+            <Hint>Describes them to the AI, and joins your traits when you play as them</Hint>
+          </div>
+        </div>
+      )}
+      <div data-tour-anchor="trait-name" className="space-y-2">
         <Label>Name</Label>
         <PlaceholderNameField
           value={editingTrait.name || ''}
           onChange={(v) => handleChange('name', v)}
           placeholders={placeholders}
+          trait={traitField}
           ariaLabel="Name"
-          onFocus={rename.onFocus}
-          onBlur={rename.onBlur}
-          onSubmit={rename.onSubmit}
+          readOnly={readOnly}
+          // Code reaches world traits only, so an owned trait's rename has nothing to rewrite.
+          {...(owner || link ? {} : { onFocus: rename.onFocus, onBlur: rename.onBlur, onSubmit: rename.onSubmit })}
         />
       </div>
       <PlaceholderField
         label="Player-Facing Description"
+        trait={traitField}
         value={editingTrait.playerDescription || ''}
         onChange={(v) => handleChange('playerDescription', v)}
         placeholders={placeholders}
+        ownerName={bearer?.name}
+        bearer={preview}
+        readOnly={readOnly}
         resizable
       />
       <PlaceholderField
         label="AI-Facing Description"
+        trait={traitField}
         value={editingTrait.aiDescription || ''}
         onChange={(v) => handleChange('aiDescription', v)}
         placeholders={placeholders}
+        ownerName={bearer?.name}
+        bearer={preview}
+        readOnly={readOnly}
         resizable
+        tourAnchor="trait-ai-description"
       />
-      <label className="flex items-center gap-2 cursor-pointer">
-        <Checkbox
-          checked={!!editingTrait.isDefault}
-          onCheckedChange={(c) => handleChange('isDefault', c === true)}
+    </>
+  );
+
+  const alwaysOn = isAlwaysOn(editingTrait);
+  const mode = editingTrait.mode ?? 'optional';
+  const availabilityPanel = (
+    <>
+      <div className="space-y-2">
+        <LabelRow reset={resetControl('mode', 'Mode')}>
+          <Label>Mode</Label>
+        </LabelRow>
+        <OptionSwitcher
+          value={mode}
+          onChange={(v) => apply({ mode: v === 'optional' ? undefined : v })}
+          options={MODE_OPTIONS}
+          ariaLabel="Mode"
         />
-        <span>Enabled by Default</span>
-        <Hint as="span">Selected when a new game starts.</Hint>
-      </label>
-      <label className="flex items-center gap-2 cursor-pointer">
-        <Checkbox
-          checked={!!editingTrait.playerToggle}
-          onCheckedChange={(c) => handleChange('playerToggle', c === true)}
-        />
-        <span>Player Can Toggle In-Game</span>
-        <Hint as="span">The player can turn it on or off from the Traits tab during play.</Hint>
-      </label>
+        <Hint>{MODE_OPTIONS.find((o) => o.value === mode)?.hint}</Hint>
+      </div>
+      {!alwaysOn && (
+        <>
+          <LabelRow reset={resetControl('isDefault', 'Enabled by Default')}>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={!!editingTrait.isDefault}
+                onCheckedChange={(c) => handleChange('isDefault', c === true)}
+              />
+              <span>Enabled by Default</span>
+              <Hint as="span">{link?.defaultHint ?? 'Selected when a new game starts'}</Hint>
+            </label>
+          </LabelRow>
+          <LabelRow reset={resetControl('playerToggle', 'Player Can Toggle In-Game')}>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={!!editingTrait.playerToggle}
+                onCheckedChange={(c) => handleChange('playerToggle', c === true)}
+              />
+              <span>Player Can Toggle In-Game</span>
+              <Hint as="span">The player can turn it on or off from the Traits tab during play</Hint>
+            </label>
+          </LabelRow>
+        </>
+      )}
+      <TraitRequiresField
+        trait={editingTrait}
+        onChange={setRequires}
+        onOpen={openRequirement}
+        opens={requirementOpens}
+        bearerId={link?.bearerId}
+        labelAside={resetControl('requires', 'Requires')}
+      />
+      {availabilityFooter}
     </>
   );
 
   const statsPanel = (
     <>
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
+      {owner && !link && <BearerStatNote bearer={owner} />}
+      <div data-tour-anchor="trait-stat-changes" className="space-y-2">
+        <LabelRow reset={resetControl('statChanges', 'Stat Changes')}>
           <Label>Stat Changes</Label>
           <HelpButton topicId="worldEditor.statChanges" className="h-6 w-6" />
-        </div>
+        </LabelRow>
         {editingTrait.statChanges.map((statChange, index) => (
           <div key={index} className="flex space-x-2">
             <Select
@@ -231,7 +380,7 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
         {statToggles.map((toggle, index) => (
           <div key={index} className="space-y-1">
           <div className="flex space-x-2">
-            <Select value={toggle.statId} onValueChange={(v) => updateStatToggle(index, { statId: v })}>
+            <Select value={toggle.statId} onValueChange={(v) => updateStatToggle(index, { statId: v })} disabled={readOnly}>
               <SelectTrigger>
                 <SelectValue placeholder="Select stat" />
               </SelectTrigger>
@@ -244,6 +393,7 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
             <Select
               value={toggle.enabled ? 'on' : 'off'}
               onValueChange={(v) => updateStatToggle(index, { enabled: v === 'on' })}
+              disabled={readOnly}
             >
               <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -254,6 +404,7 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
             <Button
               variant="ghost"
               size="icon"
+              disabled={readOnly}
               onClick={() => setStatToggles(statToggles.filter((_, i) => i !== index))}
             >
               <Trash2 className="h-4 w-4" />
@@ -262,9 +413,11 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
           <ConflictNote conflict={conflicts.stats[toggle.statId]} placeholders={placeholders} onOpen={onOpenTrait} />
           </div>
         ))}
-        <Button size="sm" onClick={() => setStatToggles([...statToggles, { statId: '', enabled: true }])}>
-          Add Stat Availability
-        </Button>
+        {!readOnly && (
+          <Button size="sm" onClick={() => setStatToggles([...statToggles, { statId: '', enabled: true }])}>
+            Add Stat Availability
+          </Button>
+        )}
       </div>
       )}
     </>
@@ -272,30 +425,31 @@ const TraitManager = ({ trait, onOpenTrait, tab, onTabChange, focusField }: {
 
   const pinsPanel = (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
+      <LabelRow reset={resetControl('placeholderPins', 'Placeholder Pins')}>
         <Label>Placeholder Pins</Label>
         <HelpButton topicId="worldEditor.placeholderPins" className="h-6 w-6" />
-      </div>
+      </LabelRow>
       <PlaceholderPinRows
         pins={pins}
         onChange={setPins}
         source={{ kind: 'trait', id: editingTrait.id }}
-        world={world}
+        world={pinWorld}
         placeholders={placeholders}
         onOpenTrait={onOpenTrait}
       />
     </div>
   );
 
-  const panels: Record<TraitPanelTab, ReactNode> = { details: detailsPanel, stats: statsPanel, pins: pinsPanel };
+  const panels: Record<TraitPanelTab, ReactNode> = {
+    details: detailsPanel, availability: availabilityPanel, stats: statsPanel, pins: pinsPanel,
+  };
 
   return (
-    <Tabs value={tab} onValueChange={(v) => onTabChange(v as TraitPanelTab)} className="space-y-4">
-      <PanelTabsList tabs={tabs} stripLabel="Trait Fields" />
+    <PanelTabs tabs={tabs} value={shownTab} onValueChange={onTabChange} stripLabel="Trait Fields" surfaceTabs={surfaceTabs}>
       {tabs.map((t) => (
-        <TabsContent key={t.value} value={t.value} className="space-y-4">{panels[t.value]}</TabsContent>
+        <PanelTabContent key={t.value} value={t.value}>{panels[t.value]}</PanelTabContent>
       ))}
-    </Tabs>
+    </PanelTabs>
   );
 };
 

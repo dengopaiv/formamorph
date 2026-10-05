@@ -81,6 +81,13 @@ native `title` these replaced never showed there either.
 > neighbor hands over instantly whatever that value is. What makes them one group is the shared provider,
 > so removing it is the mutation that turns this guard red.
 
+[chat-pin.spec.ts](e2e/chat-pin.spec.ts) — the Chat layout's scroll: a submit or Re-generate pins the turn to
+the viewport top, the view holds still through a long stream, and Jump to Latest shows, lands, and hides. A
+local server streams the reply in timed chunks, because `page.route` answers in one piece.
+
+> **Frames, not seconds.** Motion and stillness are counts of frames in which the offset moved. Each guard
+> was verified by putting its bug back and watching the test go red.
+
 [library-drag-parity.spec.ts](e2e/library-drag-parity.spec.ts) — the library board's drag, as twelve executable
 rules. It is a **parity** suite: every rule was measured against the library as it stood before the tile board
 landed, and the file is written against app-level observables only (thumbnail order by `alt`, bounding boxes,
@@ -116,6 +123,19 @@ Two caveats worth knowing:
   `mouse.wheel` reproduces the reflow (the list jumped 334 → 358px before the fix). Any future scroll
   spec has to use real input.
 
+[folder-fly-in.spec.ts](e2e/folder-fly-in.spec.ts) — the folder camera, in numbers. One recorder samples every
+animation frame of a fly-in and a fly-out on a scrolled library: the folder tile's rectangle in the library
+layer against the region's rectangle in the folder layer (one pixel apart, both directions), the sizes in
+between, the header's opacity and lift, and the left-out members' one shared opacity. A second group proves
+the clips in pixels. Each guard was verified by putting its fault back and watching the test go red.
+
+> **A clip is only proved by painted truth.** `getBoundingClientRect` reports an element's own box and knows
+> nothing about an ancestor's clip — a fix that widened one clip while an ancestor went on cutting at the
+> identical line passed exactly such a check and changed nothing on screen. `elementFromPoint` is no use
+> here either: the raised frame and the scroll viewport both carry `pointer-events: none` while the camera
+> runs, so a hit test returns neither layer. So the clip tests pause the camera on a frame, photograph a
+> strip, hide one layer, photograph the same strip again, and compare the two images.
+
 [site-pages.spec.ts](e2e/site-pages.spec.ts) — the formamorph.ai account pages: the login page inside a
 phone's width with no horizontal overflow, the register page and the not-found fallback, the palette,
 the shared Profile / Account Settings / Sign Out header at desktop and phone sizes, the one-time canceled
@@ -131,11 +151,32 @@ the open app without a reload, app sign-out reaches the site, and smaller app-to
 the storage listeners. The site-pages server proxies a second app below `/play/`, so every page shares the
 same test origin and `localStorage` just as it does on formamorph.ai.
 
+[anonymous-likes.spec.ts](e2e/anonymous-likes.spec.ts) — the two places a guest gives a like. In the
+community browser a press fills the heart and raises the count, and a reload finds it still filled,
+because the Install id in `localStorage` is what the stub server keys its rows by. In a game, a world
+downloaded from a listing asks once on the fifteenth turn, takes the like, and does not ask again. Each
+guard was verified by putting its fault back and watching the test go red.
+
+> **The fifteenth turn is reached by rebuilding the save, not by playing fifteen turns.** `buildLongSave`
+> puts the `whiteRoom` fixture one turn short of `LIKE_PROMPT_TURNS`, so one scripted turn is the
+> fifteenth. The fixture world is served with an id, and the download link (`sourceId`, `downloadedAt`)
+> goes onto the stored record rather than into the world, because it is wrapper metadata.
+
+> **A catch-all route over the API origin goes on first, so the named routes win.** Playwright matches
+> the most recently added handler, so anything the catch-all sees is a request the spec did not expect,
+> and it fails the run instead of reaching a real server. The origin comes from `E2E_API_URL` when the
+> runner sets one, because a pattern pinned to the live host would match nothing under that override.
+
+> **A card that paints nothing still passes `toBeVisible`.** `opacity: 0` keeps the box and the
+> visibility, so the card and the heart are both photographed twice — once as they stand, once with the
+> element hidden — and the two strips must differ. A hit test runs beside it for the other half: painted
+> and covered are different failures.
+
 ## The contest flow needs a server
 
 [contest-entry.spec.ts](e2e/contest-entry.spec.ts) publishes a world into a running contest and finds it
-again in the Contest tab — then, in a second flow, has an admin announce a podium with that entry on it
-and checks the place badge reaches the author's own library. It is the one spec that talks to a real
+again in the Contest tab — then, in a second flow, an admin builds a **tied** podium in the Podium dialog
+and the results are read back on the surfaces a player sees. It is the one spec that talks to a real
 [FormamorphServer](https://github.com/JakeJamesDev/FormamorphServer), so it **skips unless you point it at
 one** — `npm run test:e2e` on a machine without one reports it as a skip, never a failure.
 
@@ -166,15 +207,34 @@ in the future (`type: "contest"`, plus `title`, `bannerText`, `body`). The spec 
 Each flow registers its own account, because a contest takes one entry per creator — so the spec is
 repeatable, but the server's credential limiter (20 per 15 minutes per IP) caps a debugging loop.
 
-**The results half needs two more things**, and skips with a note when either is missing:
+**The results half needs three more things**, and skips with a note when any is missing:
 
 | Needs | Why | How |
 | --- | --- | --- |
 | An **admin** account | Only admins may announce results, and never their own entry — moderators are refused | The seeding recipe's `e2eadmin`; override with `E2E_ADMIN_USERNAME` / `E2E_ADMIN_PASSWORD` |
 | A contest that has not announced yet | The server refuses a second announcement | Seed a fresh contest for each run of this flow |
+| A **second entry** in that contest | A tie needs two worlds, and this run publishes one of them | Run the first flow against the same contest first — each run enters a fresh account's world |
 
-💡 With a second entry already in the contest, the flow awards this run's world **2nd place** rather
-than 1st — gold is the one place a badge that ignored the podium would still get right.
+The flow closes the contest itself, by moving its `endsAt` into the past through the admin API. Announcing
+is offered on a contest that has stopped taking entries, and this run publishes into one that is still
+open, so the window is moved rather than waited out.
+
+💡 **The podium is 1, 1, 2 when the contest holds a third entry.** Two worlds share 1st, and the newest
+other entry takes 2nd, so one run proves a shared place and a sole place. Run the first flow twice against
+the contest to seed it. With only two entries the podium is 1, 1, and the run's `podium` annotation says
+which one it built. The server must accept places with no gaps, or the 1, 1, 2 announce is refused.
+
+⚠️ **Re-seed rather than reuse.** The entry flow's catalog assertion narrows the grid to this run's
+author, and on a scratch server that has accumulated a few dozen listings across many runs it starts
+missing the listing it just published — measured at roughly one failure in three past about twenty-five
+entries, both before and after the catalog-sync work that landed beside this. On a server seeded fresh it
+passes every time. So throw the database away between sessions instead of resetting the contest in place.
+
+⚠️ **The credential budget.** This flow spends six of the server's twenty calls per quarter hour per
+address: one admin token in `beforeAll`, the account it registers, that account's sign-in and API token,
+the admin's sign-in for the dialog, and the author's sign-in again for the player surfaces. Two full runs
+inside fifteen minutes will hit the limiter, and a limited admin login reads as a skip with a note.
+Restarting the server clears the counter.
 
 ## CI
 

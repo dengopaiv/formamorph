@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { toast } from "react-toastify";
+import { toastError } from "@/lib/linkToast";
 import { UserPlus, UserMinus, Flag } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -8,6 +8,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
 import { RoleBadge } from "@/components/RoleBadge";
+import { cn } from "@/lib/utils";
+import { SupporterBadge } from "@/components/SupporterBadge";
+import { SUPPORTER_NAME_STYLES, flairTier } from "@/lib/supporterFlair";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserCreationsTab } from "@/components/community/UserCreationsTab";
 import { UserLikesTab } from "@/components/community/UserLikesTab";
@@ -73,6 +76,7 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
   const memberSince = profile ? parseServerDate(profile.createdAt)?.toLocaleDateString() : null;
   // Offered only to somebody who could act on it: following needs an account, and following yourself
   // would put your own work in your own news.
+  const tier = flairTier(profile?.supporter);
   const canFollow = Boolean(profile) && Boolean(myId) && profile?.id !== myId;
   // The same rule as following, for the same reason: reporting yourself is not a thing to offer.
   const canReport = reportsEnabled && Boolean(profile) && profile?.id !== myId;
@@ -87,7 +91,7 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
       // disagree about what just happened.
       setProfile({ ...profile, ...next });
     } catch (e) {
-      toast.error((e as Error).message || 'Failed to change that');
+      toastError(e, 'Failed to change that');
     } finally {
       setIsFollowBusy(false);
     }
@@ -106,18 +110,19 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
   return (
     <Dialog open={userId !== null} onOpenChange={onOpenChange}>
       {/* No description: a profile is the person, and a line explaining that would say nothing. */}
-      <DialogContent aria-describedby={undefined} className="sm:max-w-[460px]">
+      <DialogContent aria-describedby={undefined} className="gap-3 pb-3 sm:max-w-[460px] md:max-w-2xl">
         <DialogHeader className="sr-only">
           <DialogTitle>{name || 'Profile'}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col items-center gap-3 py-4 text-center min-w-0">
+        <div className="flex flex-col items-center gap-3 text-center min-w-0">
           {isLoading && !name ? (
             <Skeleton className="h-24 w-24 rounded-full" />
           ) : (
             <UserAvatar
               username={name}
               avatarUrl={profile?.avatarUrl}
+              supporter={profile?.supporter}
               size="xl"
               // An avatar's initial scales with its circle, not with the type scale, so no role fits.
               // eslint-disable-next-line no-restricted-syntax
@@ -127,7 +132,8 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
 
           <div className="min-w-0 space-y-1">
             <div className="flex items-center justify-center gap-2 min-w-0">
-              <h3 className="text-title font-semibold truncate">{name || 'Unknown'}</h3>
+              <h3 className={cn("text-title font-semibold truncate", tier && SUPPORTER_NAME_STYLES[tier])}>{name || 'Unknown'}</h3>
+              {tier && <SupporterBadge tier={tier} since={profile?.supporter?.since} />}
               <RoleBadge role={profile?.role} />
             </div>
 
@@ -181,8 +187,13 @@ export function UserProfileDialog({ userId, onOpenChange, fallbackUsername, onOp
 
             {/* Mounted only once the tab has been opened, so the fetch follows the click rather than
                 every staff member who looks somebody up — and kept mounted from then on, so switching
-                back to Creations and returning does not read the list a second time. */}
-            <TabsContent value="likes" forceMount={likesOpened ? true : undefined}>
+                back to Creations and returning does not read the list a second time. Radix never hides a
+                force-mounted panel, so it is hidden here while Creations is on show. */}
+            <TabsContent
+              value="likes"
+              forceMount={likesOpened ? true : undefined}
+              hidden={activeTab !== 'likes'}
+            >
               {likesOpened && (
                 <UserLikesTab
                   userId={userId}

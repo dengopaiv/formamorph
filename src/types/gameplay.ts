@@ -11,8 +11,31 @@ export interface DiscoveredEntity {
   sourceTurnId: string;
 }
 
+/** One image the player attached to an action, already downscaled and re-encoded. */
+export interface ImageAttachment {
+  id: string;
+  mime: string;
+  dataUrl: string;
+}
+
 /** The bounds a stat's own code set on it. Each is absolute; a field the code never set is absent. */
 export type CodeBounds = { min?: number; max?: number; regen?: number };
+
+/** Owner id → the traits a gate cascade turned off, which switch back on once their gate holds again. */
+export type CascadeOffTraitIds = Record<string, string[]>;
+
+/** One entity's owned traits in play: the ids chosen, and the chosen ones switched off. */
+export interface OwnedTraitState {
+  chosen: string[];
+  /** Absent ⇒ none. */
+  disabled?: string[];
+}
+
+/** Entity id → its owned trait state. Absent entity ⇒ nothing chosen. */
+export type OwnedTraitStates = Record<string, OwnedTraitState>;
+
+/** Entity id → the owned trait ids picked at the entry step. */
+export type OwnedTraitPicks = Record<string, string[]>;
 
 /** A stat during gameplay — a definition Stat whose live `value` is always a number.
  *
@@ -95,8 +118,14 @@ export interface VrmData {
   type: string;
   blob: Blob;
   size: number;
-  /** Portrait as a data URL: the file's embedded thumbnail, else one rendered on first view. */
+  /** The shown portrait as a data URL: the variant `thumbnailSource` picks, else whichever exists. */
   thumbnail?: string;
+  /** Which variant the card shows. Absent means `file`. */
+  thumbnailSource?: AvatarThumbnailSource;
+  /** The file's embedded image, card-sized. `null` when the file has none; absent until the file is read. */
+  fileThumbnail?: string | null;
+  /** The rendered head-and-shoulders portrait, cached after its first render. */
+  generatedThumbnail?: string;
   /** Absent on records stored before the library read metadata; resolved lazily, then kept. */
   license?: VrmLicense;
   /** Content hash for duplicate detection. Absent on records stored before hashing existed. */
@@ -128,6 +157,9 @@ export interface VrmLicense {
   modification?: 'prohibited' | 'allowModification' | 'allowModificationRedistribution';
 }
 
+/** Where an Avatar's card image comes from: the file's embedded image, or the rendered portrait. */
+export type AvatarThumbnailSource = 'file' | 'generated';
+
 /** Lightweight preview record for the model library grid and the character-model picker. Carries no blob, so
  *  the grid can render without holding every model's bytes. */
 export interface ModelMetadata extends CommunityLink {
@@ -136,6 +168,9 @@ export interface ModelMetadata extends CommunityLink {
   type: string;
   size: number;
   thumbnail?: string;
+  thumbnailSource?: AvatarThumbnailSource;
+  /** Whether the file carries an embedded image. Absent until the file has been read. */
+  hasFileThumbnail?: boolean;
   license?: VrmLicense;
   createdAt?: string;
   lastAccessed?: string;
@@ -164,6 +199,11 @@ export interface GameState {
    *  clamp is undone as fully as it was applied. Absent on saves written before it, which reverse by negating
    *  the authored change as they always did. */
   appliedTraitValues?: Record<string, Record<string, number>>;
+  /** Owner id → the traits a gate cascade turned off, which switch back on once their gate holds again. The
+   *  player's world traits sit under `world`. Absent ⇒ none. */
+  cascadeOffTraitIds?: CascadeOffTraitIds;
+  /** Each entity's owned traits. Absent ⇒ none. */
+  ownedTraits?: OwnedTraitStates;
   /** Absent ⇒ none. */
   codePins?: CodePins;
   /** The live scene list — who is physically present this turn, with alias/reveal state for the tab. Legacy
@@ -270,11 +310,25 @@ export interface SaveObject {
    *  image is over a megabyte. Kept out of the messages on purpose: everything that walks the history
    *  parses those, and a megabyte in one made the narration reveal crawl (see lib/sceneImages). */
   sceneImages?: Record<string, string[]>;
+  /** The images the player attached to actions, by turn id. Always written when there are any, so a save
+   *  is self-contained. Absent ⇒ none. Out of the messages for the same reason as `sceneImages`. */
+  actionAttachments?: Record<string, ImageAttachment[]>;
   /** v2.x memory editing: memories the player wrote by hand. `anchorTurn` is the message-history length
    *  at creation, which places the note chronologically among the digests. Never judged by the selector —
    *  a player-written memory rides until deleted. Absent (or empty) on older saves ⇒ none. */
   memoryNotes?: Array<{ id: string; text: string; anchorTurn: number }>;
+  /** Who the player plays in this playthrough (see lib/persona). Sits beside `dictionaries` and does not
+   *  rewind with an undo. Absent on saves written before personas ⇒ no persona. */
+  persona?: PersonaRef;
 }
+
+/** A save's persona choice: a world entity, a library entity, or an explicit None. Content is read live
+ *  from its source by id, never copied into the save. With a Custom Persona entity, None plays that
+ *  entity: the entered name replaces the entity's, and the entered description follows its own. */
+export type PersonaRef =
+  | { source: 'world'; entityId: string }
+  | { source: 'library'; entityId: string }
+  | { source: 'none'; name?: string; description?: string };
 
 /** Placeholder id → what stat code pinned it to: one text, or the list an Object pin holds. Masks the roll
  *  and every authored pin until code unpins it. */

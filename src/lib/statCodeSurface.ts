@@ -1,51 +1,48 @@
 /**
  * What stat code can actually reach: the names the QuickJS sandbox injects, the fields a marshalled stat
- * carries, and the built-ins the VM already has. One list, so completions, diagnostics and the help text
- * can't drift apart from each other.
+ * carries, and the built-ins the VM already has. `STAT_CODE_SURFACE` gathers them into the one list the
+ * editor, completions, diagnostics and help text read, so none of them can drift apart.
  *
  * This module *describes* the sandbox; it never widens it. Adding a name here does not expose it — the
  * exposure lives in `statCodeExecutor`, and a name added here that the executor doesn't inject would be
  * caught by the drift guard beside this file.
  */
 
-import { CODE_BOUND_FIELDS, DELTA_SOURCES, STAT_CLOCK_VARS, type DeltaSource } from '@/lib/statCodeExecutor';
+import { DELTA_SOURCES, type DeltaSource } from '@/lib/statCodeExecutor';
+import { STAT_CODE_SNIPPETS } from '@/lib/codeSnippets';
+import { nearestName, surfaceKnownNames, type CodeSurface, type SurfaceEntry } from '@/lib/codeSurface';
 import type { PlaceholderKindNoun } from '@/lib/placeholders';
 
-/** One reachable name and what an author needs to know about it. */
-export interface SurfaceEntry {
-  name: string;
-  /** The short right-hand hint — a type or a shape. */
-  detail: string;
-  /** The one-line explanation shown beside the entry. */
-  info: string;
-}
+/** An object's members as its completion detail: `{ a, b }`. */
+const shapeOf = (entries: readonly SurfaceEntry[]) => `{ ${entries.map((entry) => entry.name).join(', ')} }`;
 
-/** What each clock reading means. Keyed off the executor's own list so a rename there shows up as a
- *  missing description rather than a silently stale one. */
-const CLOCK_INFO: Record<(typeof STAT_CLOCK_VARS)[number], SurfaceEntry> = {
-  deltaHours: { name: 'deltaHours', detail: 'number', info: 'Story hours this turn consumed.' },
-  elapsedHours: { name: 'elapsedHours', detail: 'number', info: 'Total story hours at the end of this turn.' },
-  day: { name: 'day', detail: 'number', info: 'Day number at the end of this turn.' },
-  daypart: { name: 'daypart', detail: 'string', info: 'Daypart at the end of this turn — night, dawn, morning, midday, afternoon or evening.' },
-  startDay: { name: 'startDay', detail: 'number', info: 'Day number at the start of this turn.' },
-  startDaypart: { name: 'startDaypart', detail: 'string', info: 'Daypart at the start of this turn.' },
-};
+/** The fields on `clock.previous`: the story clock at the start of the turn. Read-only. */
+export const CLOCK_PREVIOUS_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'day', detail: 'number', info: 'Day number at the start of this turn.' },
+  { name: 'daypart', detail: 'string', info: 'Daypart at the start of this turn.' },
+];
+
+/** The members of `clock`: the story clock at the end of the turn, then `previous` for its start. Read-only. */
+export const CLOCK_MEMBERS: readonly SurfaceEntry[] = [
+  { name: 'day', detail: 'number', info: 'Day number at the end of this turn.' },
+  { name: 'daypart', detail: 'string', info: 'Daypart at the end of this turn — night, dawn, morning, midday, afternoon or evening.' },
+  { name: 'deltaHours', detail: 'number', info: 'Story hours this turn consumed.' },
+  { name: 'elapsedHours', detail: 'number', info: 'Total story hours at the end of this turn.' },
+  { name: 'previous', detail: shapeOf(CLOCK_PREVIOUS_FIELDS), info: 'The clock at the start of this turn: day and daypart.' },
+];
 
 /** Every name the sandbox injects into the program, in the order an author meets them. */
 export const SANDBOX_GLOBALS: readonly SurfaceEntry[] = [
   { name: 'self', detail: 'Stat', info: 'The stat this code belongs to. Write self.value to set its value.' },
   { name: 'stats', detail: 'object', info: 'Every stat in the world by name. Use stats["Two Words"] for a name with a space.' },
-  ...STAT_CLOCK_VARS.map((name) => CLOCK_INFO[name]),
-  { name: 'placeholders', detail: 'object', info: 'Every placeholder in the world. A bare name reaches the world’s own; write the path for an owned one, as in placeholders.Molly.Hair. Use placeholders["Two Words"] for a name with a space.' },
+  { name: 'clock', detail: shapeOf(CLOCK_MEMBERS), info: 'The story clock. Read-only.' },
+  { name: 'placeholders', detail: 'object', info: 'The world’s own placeholders by name. An entity’s or a dictionary’s are on its entry. Use placeholders["Two Words"] for a name with a space.' },
   { name: 'traits', detail: 'object', info: 'Every trait in the world by name. Use traits["Two Words"] for a name with a space.' },
+  { name: 'entities', detail: 'object', info: 'Every entity in play by name, with its own traits and placeholders. Use entities["Two Words"] for a name with a space.' },
+  { name: 'persona', detail: 'object', info: 'The entity the player plays, with its own traits and placeholders. Empty when the player plays no entity.' },
+  { name: 'dictionaries', detail: 'object', info: 'Every dictionary in play by name, with its own placeholders. A dictionary the player turned off isn’t listed. Use dictionaries["Two Words"] for a name with a space.' },
   { name: 'console', detail: 'object', info: 'Only console.log — output shows up in the browser console.' },
 ];
-
-/** Names the sandbox injects for older code but never offers or documents. */
-export const SANDBOX_UNDOCUMENTED_GLOBALS: readonly string[] = ['currentStatId'];
-
-/** An object's members as its completion detail: `{ a, b }`. */
-const shapeOf = (entries: readonly SurfaceEntry[]) => `{ ${entries.map((entry) => entry.name).join(', ')} }`;
 
 /** The fields on every member of `delta`. */
 export const DELTA_FIELDS: readonly SurfaceEntry[] = [
@@ -74,6 +71,7 @@ export const STAT_FIELDS: readonly SurfaceEntry[] = [
   { name: 'name', detail: 'string', info: 'The stat’s code name: the authored name, with each placeholder chip read as that placeholder’s own name.' },
   { name: 'type', detail: 'string', info: 'number, percentage, or whichever type the stat was given.' },
   { name: 'description', detail: 'string', info: 'The stat’s description text.' },
+  { name: 'enabled', detail: 'boolean', info: 'True when the stat is on. False when a trait switched it off, or for an unknown name. Read-only.' },
   { name: 'min', detail: 'number', info: 'Lower bound. Results are clamped to it. Write self.min to set it.' },
   { name: 'max', detail: 'number', info: 'Upper bound. Results are clamped to it. Write self.max to set it.' },
   { name: 'value', detail: 'number', info: 'Current value, with this turn’s AI change and regen applied. Write self.value to set it.' },
@@ -82,12 +80,9 @@ export const STAT_FIELDS: readonly SurfaceEntry[] = [
   { name: 'delta', detail: shapeOf(DELTA_MEMBERS), info: 'Every change this turn made to the stat, by source. Read-only.' },
 ];
 
-/** The fields on `self` that a write reaches. The host reads these back after the run; writes to any other
- *  field, or to another stat's entry, do nothing. A bound write holds until the code next runs. */
-export const SELF_WRITABLE_FIELDS: readonly string[] = ['value', ...CODE_BOUND_FIELDS];
+export { SELF_WRITABLE_FIELDS } from '@/lib/statCodeExecutor';
 
-/** The fields on a stat's `previous` — the whole stat as it stood at the start of this turn. Frozen, so
- *  a write reaches none of them. */
+/** The fields on a stat's `previous`: the whole stat as it stood at the start of this turn. Read-only. */
 export const PREVIOUS_FIELDS: readonly SurfaceEntry[] = [
   { name: 'id', detail: 'string', info: 'Unique id, at the start of this turn.' },
   { name: 'name', detail: 'string', info: 'The stat’s code name, at the start of this turn.' },
@@ -107,6 +102,8 @@ export const PREVIOUS_FIELDS: readonly SurfaceEntry[] = [
 export function placeholderEntryFields(kind: PlaceholderKindNoun): readonly SurfaceEntry[] {
   const list = kind === 'Object';
   return [
+    { name: 'id', detail: 'string', info: 'The placeholder’s unique id. Read-only.' },
+    { name: 'name', detail: 'string', info: 'The placeholder’s code name. Read-only.' },
     list
       ? { name: 'value', detail: 'string[]', info: 'The current values as a list. Pins are applied.' }
       : { name: 'value', detail: 'string', info: 'The text the placeholder reads as now, with pins applied.' },
@@ -120,14 +117,49 @@ export function placeholderEntryFields(kind: PlaceholderKindNoun): readonly Surf
   ];
 }
 
-/** The members of one entry in `traits`. */
+/** The members of one entry in `traits` and in an entity's `traits`. */
 export const TRAIT_ENTRY_FIELDS: readonly SurfaceEntry[] = [
-  { name: 'enabled', detail: 'boolean', info: 'Whether the player has the trait and it is on. Write it to switch the trait on or off, after this run.' },
-  { name: 'acquired', detail: 'boolean', info: 'True when the player has the trait, on or off. Read-only.' },
+  { name: 'enabled', detail: 'boolean', info: 'True when the trait is held and on. Write it to switch the trait on or off, after this run.' },
+  { name: 'acquired', detail: 'boolean', info: 'True when the trait is held, on or off. Read-only.' },
+  { name: 'id', detail: 'string', info: 'The trait’s unique id. Read-only.' },
+  { name: 'name', detail: 'string', info: 'The trait’s code name. Read-only.' },
+  { name: 'mode', detail: 'string', info: '"optional", "alwaysOn" or "hidden". Read-only.' },
+  { name: 'available', detail: 'boolean', info: 'True when the trait’s requirements hold for its owner now. Read-only.' },
+  { name: 'group', detail: 'string', info: 'The code name of the trait’s group. Empty when it has none. Read-only.' },
+  { name: 'playerToggle', detail: 'boolean', info: 'True when the player can switch the trait during play. Read-only.' },
 ];
 
-/** The one field on a `traits` entry that a write reaches. */
+/** The one field on a trait entry that a write reaches. */
 export const TRAIT_WRITABLE_FIELD = 'enabled';
+
+/** The members of `persona`. None takes a write; a trait switches through its own `enabled`. */
+export const PERSONA_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'id', detail: 'string', info: 'The persona entity’s unique id. Empty when the player plays no entity. Read-only.' },
+  { name: 'name', detail: 'string', info: 'The persona’s code name. Empty when the player plays no entity. Read-only.' },
+  { name: 'type', detail: 'string', info: 'The persona’s type text. Empty when it has none. Read-only.' },
+  { name: 'pronouns', detail: 'string', info: 'The persona’s pronouns text. Empty when it has none. Read-only.' },
+  { name: 'inScene', detail: 'boolean', info: 'True when the persona plays. False when the player plays no entity. Read-only.' },
+  { name: 'traits', detail: 'object', info: 'The persona’s own traits by name, owned or linked. Use persona.traits["Two Words"] for a name with a space.' },
+  { name: 'placeholders', detail: 'object', info: 'The persona’s own placeholders by name. Empty when the player plays no entity.' },
+];
+
+/** The members of one entry in `entities`. None takes a write; a trait switches through its own `enabled`. */
+export const ENTITY_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'id', detail: 'string', info: 'The entity’s unique id. Read-only.' },
+  { name: 'name', detail: 'string', info: 'The entity’s code name. Read-only.' },
+  { name: 'type', detail: 'string', info: 'The entity’s type text. Empty when it has none. Read-only.' },
+  { name: 'pronouns', detail: 'string', info: 'The entity’s pronouns text. Empty when it has none. Read-only.' },
+  { name: 'inScene', detail: 'boolean', info: 'True when the entity is in this turn’s scene. Read-only.' },
+  { name: 'traits', detail: 'object', info: 'The entity’s own traits by name, owned or linked. Use entities.Mira.traits["Two Words"] for a name with a space.' },
+  { name: 'placeholders', detail: 'object', info: 'The entity’s own placeholders by name. Use entities.Mira.placeholders["Two Words"] for a name with a space.' },
+];
+
+/** The members of one entry in `dictionaries`. None takes a write. */
+export const DICTIONARY_FIELDS: readonly SurfaceEntry[] = [
+  { name: 'id', detail: 'string', info: 'The dictionary’s unique id. Read-only.' },
+  { name: 'name', detail: 'string', info: 'The dictionary’s code name. Read-only.' },
+  { name: 'placeholders', detail: 'object', info: 'The dictionary’s own placeholders by name. Use dictionaries.Lore.placeholders["Two Words"] for a name with a space.' },
+];
 
 /** Built-ins the VM already has. Listed so a reference to one isn't flagged, and so completions offer the
  *  handful that stat code actually reaches for rather than everything a JS engine defines. */
@@ -139,7 +171,7 @@ export const SANDBOX_BUILTINS: readonly SurfaceEntry[] = [
   { name: 'Boolean', detail: 'function', info: 'Convert to true or false.' },
   { name: 'Array', detail: 'function', info: 'Array.isArray, Array.from.' },
   { name: 'Object', detail: 'function', info: 'Object.keys, Object.values, Object.entries.' },
-  { name: 'Date', detail: 'function', info: 'Real-world clock. The story clock is deltaHours and friends.' },
+  { name: 'Date', detail: 'function', info: 'Real-world clock. For story time, use clock.' },
   { name: 'parseInt', detail: 'function', info: 'Read a whole number out of a string.' },
   { name: 'parseFloat', detail: 'function', info: 'Read a decimal number out of a string.' },
   { name: 'isNaN', detail: 'function', info: 'Whether a value is not a number.' },
@@ -213,7 +245,7 @@ export const BUILTIN_MEMBERS: ReadonlyMap<string, readonly SurfaceEntry[]> = new
   ],
   Boolean: [],
   Date: [
-    { name: 'now', detail: '() => number', info: 'Real-world milliseconds since 1970. The story clock is elapsedHours.' },
+    { name: 'now', detail: '() => number', info: 'Real-world milliseconds since 1970. The story clock is clock.elapsedHours.' },
     { name: 'parse', detail: '(text) => number', info: 'Read a date string as milliseconds.' },
     { name: 'UTC', detail: '(y, m, ...) => number', info: 'Milliseconds for a date given in UTC parts.' },
   ],
@@ -226,59 +258,22 @@ export const LANGUAGE_NAMES: readonly string[] = [
   'ReferenceError', 'Symbol', 'Map', 'Set', 'Promise', 'RegExp', 'Function',
 ];
 
-/** Every name a reference is allowed to resolve to without the author having declared it. */
-export const SANDBOX_KNOWN_NAMES: ReadonlySet<string> = new Set([
-  ...SANDBOX_GLOBALS.map((entry) => entry.name),
-  ...SANDBOX_UNDOCUMENTED_GLOBALS,
-  ...SANDBOX_BUILTINS.map((entry) => entry.name),
-  ...LANGUAGE_NAMES,
-]);
-
-/** How far apart two names may be and still read as the same one mistyped. Scaled to length so short
- *  names don't suggest each other and long ones tolerate a slip. */
-const suggestionDistance = (name: string): number => (name.length <= 4 ? 1 : name.length <= 8 ? 2 : 3);
-
-/** Levenshtein distance with transposition, capped implicitly by the short strings involved. Two letters
- *  swapped counts as one slip rather than two, because that is the typo an author actually makes. */
-function editDistance(a: string, b: string): number {
-  const rows: number[][] = [Array.from({ length: b.length + 1 }, (_, index) => index)];
-  for (let i = 1; i <= a.length; i += 1) {
-    const row = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      row[j] = Math.min(
-        rows[i - 1][j] + 1,
-        row[j - 1] + 1,
-        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-        row[j] = Math.min(row[j], rows[i - 2][j - 2] + 1);
-      }
-    }
-    rows.push(row);
-  }
-  return rows[a.length][b.length];
-}
+/** Stat code's whole surface, as the editor and its reader take it. */
+export const STAT_CODE_SURFACE: CodeSurface = {
+  label: 'stat code',
+  globals: SANDBOX_GLOBALS,
+  builtins: SANDBOX_BUILTINS,
+  members: BUILTIN_MEMBERS,
+  languageNames: LANGUAGE_NAMES,
+  snippets: STAT_CODE_SNIPPETS,
+  missingReturn: 'This code never returns a number or writes self.value, so the stat keeps its value.',
+  statMaps: true,
+};
 
 /**
- * The surface name an unknown identifier was most likely meant to be, or null when nothing is close
+ * The stat-code name an unknown identifier was most likely meant to be, or null when nothing is close
  * enough to be worth suggesting. Case-insensitive, so `Stats` still points at `stats`.
  */
 export function nearestSurfaceName(name: string, extra: readonly string[] = []): string | null {
-  return nearestName(name, [...SANDBOX_KNOWN_NAMES, ...extra]);
-}
-
-/** The candidate `name` was most likely meant to be, or null when nothing is close enough. */
-export function nearestName(name: string, candidates: readonly string[]): string | null {
-  const limit = suggestionDistance(name);
-  let best: string | null = null;
-  let bestDistance = Infinity;
-  for (const candidate of candidates) {
-    if (candidate === name) return null;
-    const distance = editDistance(name.toLowerCase(), candidate.toLowerCase());
-    if (distance <= limit && distance < bestDistance) {
-      best = candidate;
-      bestDistance = distance;
-    }
-  }
-  return best;
+  return nearestName(name, [...surfaceKnownNames(STAT_CODE_SURFACE), ...extra]);
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { benchEditorWorld, clickFlask, clickOpenBench, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { asMobile, benchEditorWorld, clickFlask, clickOpenBench, renderWorldEditorBench } from '@/test/worldEditorBench';
 
 /**
  * Guards the Bench's three chromes through the real editor: the flask's quick-triage popover, the panel
@@ -59,18 +59,7 @@ const popoverShown = () => screen.queryByRole('button', { name: 'Open Test Bench
  *  animation, and jsdom runs no animations to finish. */
 const sheet = () => screen.getByRole('dialog', { name: 'Test Bench' });
 
-/** Report mobile to `useIsMobile`, which reads the width once and then the media query. */
-const realMatchMedia = window.matchMedia;
-const realWidth = window.innerWidth;
-const asMobile = () => {
-  window.innerWidth = 400;
-  window.matchMedia = ((query: string) => ({
-    matches: query.includes('max-width: 767px'),
-    media: query, onchange: null,
-    addEventListener: () => {}, removeEventListener: () => {},
-    addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
-  })) as unknown as typeof window.matchMedia;
-};
+let restoreViewport = () => {};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -78,8 +67,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  window.matchMedia = realMatchMedia;
-  window.innerWidth = realWidth;
+  restoreViewport();
+  restoreViewport = () => {};
 });
 
 describe('WorldEditor — the Bench Popover', () => {
@@ -160,7 +149,7 @@ describe('WorldEditor — the Publish Size bar', () => {
   });
 
   it('shows in the mobile sheet', async () => {
-    asMobile();
+    restoreViewport = asMobile();
     setup();
     await clickOpenBench();
     await waitFor(() => expect(sheet()).toHaveAttribute('data-state', 'open'));
@@ -228,7 +217,7 @@ describe('WorldEditor — where the full Bench sits', () => {
 
 describe('WorldEditor — the Bench on mobile', () => {
   it('keeps the popover and its badge while a finding lands on its item', async () => {
-    asMobile();
+    restoreViewport = asMobile();
     setup();
     await waitFor(() => expect(flask()).toHaveAccessibleName('Test Bench, 1 new finding'));
     await clickFlask();
@@ -241,7 +230,7 @@ describe('WorldEditor — the Bench on mobile', () => {
   });
 
   it('reaches the sheet through the same popover, and closes it to show an item', async () => {
-    asMobile();
+    restoreViewport = asMobile();
     setup();
     await clickFlask();
     // Quick triage first here too — the sheet covers the editor, so a small fix shouldn't need it.

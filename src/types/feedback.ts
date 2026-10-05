@@ -1,3 +1,5 @@
+import type { SupporterFlair } from './supporter';
+
 /** The two branches of the feedback tree. Mirrors the server's `CHECK` constraint. */
 export const FEEDBACK_TYPES = ['bug', 'suggestion'] as const;
 export type FeedbackType = (typeof FEEDBACK_TYPES)[number];
@@ -45,6 +47,8 @@ export interface FeedbackReporter {
    * promoted or demoted later never restyles a report already sent.
    */
   role?: string | null;
+  /** Their Supporter Flair, or null for none. Absent from a server that predates it. */
+  supporter?: SupporterFlair | null;
 }
 
 /** One piece of feedback — a bug report or a suggestion — as any reader of it sees it. */
@@ -92,6 +96,8 @@ export interface FeedbackComment {
      * signature on replies somebody has already read.
      */
     role?: string | null;
+    /** Their Supporter Flair, or null for none. Absent from a server that predates it. */
+    supporter?: SupporterFlair | null;
   };
 }
 

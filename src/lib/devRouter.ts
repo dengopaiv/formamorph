@@ -27,15 +27,20 @@ export interface DevRoute {
   /** Open the World Editor's Test Bench on this instrument. Its own slot rather than `subtab`, because
    *  the Bench sits beside the editor's tabs instead of inside one. */
   bench?: string;
+  /** Start the World Editor's Authoring Tour at this step id, on a new blank world. */
+  tour?: string;
   /** Canned world+save to boot mid-game (see `devFixtures.ts`). */
   fixture?: string;
   /** On-screen diagnostic overlay to pin over the app — `viewport` is the only one so far. */
   probe?: string;
   /** Which chrome variant to land in. `simple`/`advanced` for the World Editor and Settings; `page` for
-   *  Community Creations, which renders the browser as a full page instead of the app's modal. */
+   *  Community Creations, which renders the browser as a full page instead of the app's modal; `pages`/`chat`
+   *  for the game view's narration layout. */
   mode?: string;
   /** Open the landed-on surface in its full-screen shell, for surfaces that have one. */
   fullscreen?: string;
+  /** Stage attached images on the game view (see `DEV_MODAL_TABS.gameViewerAttach`). */
+  attach?: string;
 }
 
 /** Parse the current hash into a DevRoute, or null when it isn't a `#dev` hash. */
@@ -49,11 +54,14 @@ function parseHash(hash: string): DevRoute | null {
   const subtab = params.get('subtab');
   const surface = params.get('surface');
   const bench = params.get('bench');
+  const tour = params.get('tour');
   const fixture = params.get('fixture');
   const probe = params.get('probe');
   const mode = params.get('mode');
   const fullscreen = params.get('fullscreen');
+  const attach = params.get('attach');
   if (fullscreen) route.fullscreen = fullscreen;
+  if (attach) route.attach = attach;
   if (probe) route.probe = probe;
   if (mode) route.mode = mode;
   if (view) route.view = view;
@@ -62,6 +70,7 @@ function parseHash(hash: string): DevRoute | null {
   if (subtab) route.subtab = subtab;
   if (surface) route.surface = surface;
   if (bench) route.bench = bench;
+  if (tour) route.tour = tour;
   if (fixture) route.fixture = fixture;
   return route;
 }
@@ -93,14 +102,24 @@ export function useDevRoute(): DevRoute | null {
 }
 
 /** Install `window.__fmDev` (goto/route/clear). Returns a cleanup; a no-op outside DEV. Call once from App. */
+/**
+ * Seed the `#dev` hash from `VITE_DEV_ROUTE` (the query part, e.g. `modal=designSystem`) so a launch
+ * entry can land on a screen with no console call. A hash already in the URL wins.
+ */
+export function seedDevRouteFromEnv(query: string | undefined = import.meta.env.VITE_DEV_ROUTE): void {
+  if (!DEV || !query || window.location.hash) return;
+  window.location.hash = `#dev?${query.replace(/^#?dev\??/, '')}`;
+}
+
 export function installDevRouter(): () => void {
   if (!DEV) return () => {};
+  seedDevRouteFromEnv();
   const w = window as unknown as { __fmDev?: Record<string, unknown> };
   // Merge (don't replace) so imperative hooks registered by mounted providers (e.g. `setImage` from
   // SettingsContext) survive regardless of effect order — child effects run before this parent effect.
   w.__fmDev = Object.assign(w.__fmDev ?? {}, {
     /** Jump to a screen/modal/tab in one call — sets the `#dev` hash the consumers react to. */
-    goto(view?: string, opts?: { modal?: string; tab?: string; subtab?: string; surface?: string; bench?: string; fixture?: string; probe?: string; mode?: string; fullscreen?: boolean }) {
+    goto(view?: string, opts?: { modal?: string; tab?: string; subtab?: string; surface?: string; bench?: string; tour?: string; fixture?: string; probe?: string; mode?: string; fullscreen?: boolean; attach?: string }) {
       const params = new URLSearchParams();
       if (view) params.set('view', view);
       if (opts?.modal) params.set('modal', opts.modal);
@@ -108,9 +127,11 @@ export function installDevRouter(): () => void {
       if (opts?.subtab) params.set('subtab', opts.subtab);
       if (opts?.surface) params.set('surface', opts.surface);
       if (opts?.bench) params.set('bench', opts.bench);
+      if (opts?.tour) params.set('tour', opts.tour);
       if (opts?.fullscreen) params.set('fullscreen', '1');
       if (opts?.mode) params.set('mode', opts.mode);
       if (opts?.fixture) params.set('fixture', opts.fixture);
+      if (opts?.attach) params.set('attach', opts.attach);
       // A probe outlives the screen it was turned on over, so it carries across a goto unless replaced.
       const probe = opts?.probe ?? getDevRoute()?.probe;
       if (probe) params.set('probe', probe);

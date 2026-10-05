@@ -8,10 +8,14 @@ import { composePreviewValues, SAMPLE_PREVIEW_VALUES, SAMPLE_TURN } from './prev
 import { PARITY_PROMPTS } from './turnPipeline/parityTestInputs';
 import { allGroupedTabs } from './promptGroups';
 import type { ThinkingMode } from '@/contexts/SettingsContext';
+import { buildStyledValues } from './sectionStyle';
+import { renderPromptTemplate } from './promptTemplate';
+import { PROMPT_TEXT_KEYS } from './promptPresets';
 import {
   defaultSystemPrompt, defaultNarrationUserPrompt, defaultRecapUserPrompt,
   defaultNowLinePrompt, defaultRehydrateUserPrompt, defaultOocDirectivePrompt,
   INLINE_THINKING_DIRECTIVE,
+  PROMPT_TEXT_DEFAULTS,
 } from '@/components/game/GamePrompts';
 
 const SETTINGS: AnatomyPreviewSettings = {
@@ -89,6 +93,37 @@ const contextTextOf = (blocks: AnatomyBlock[], label: string) =>
   blocks.flatMap((b) => b.runs.filter((r) => r.contextLabel === label).map((r) => b.content.slice(r.start, r.end)));
 
 const MODES: ThinkingMode[] = ['off', 'precall', 'inline', 'staged'];
+
+describe('current built-in Headers through production request builders', () => {
+  it.each(['markdown', 'labels', 'xml'] as const)('%s: tiles every request and renders current user Headers', sectionStyle => {
+    const values = buildStyledValues(PROMPT_TEXT_DEFAULTS, sectionStyle);
+    const styled = (text: string) => {
+      const key = PROMPT_TEXT_KEYS.find(key => PROMPT_TEXT_DEFAULTS[key] === text);
+      return key ? values[key] : text;
+    };
+    const turn = { ...PROMPTS.turn };
+    for (const key of Object.keys(turn) as (keyof typeof turn)[]) turn[key] = styled(turn[key]);
+    const prompts: AnatomyPreviewPrompts = {
+      system: styled(PROMPTS.system), recap: styled(PROMPTS.recap), now: styled(PROMPTS.now), recall: styled(PROMPTS.recall),
+      turn,
+    };
+    for (const thinkingMode of MODES) {
+      for (const tab of allGroupedTabs()) {
+        const requests = hub(tab, {}, prompts, { sectionStyle, thinkingMode });
+        expect(requests.length, tab).toBeGreaterThan(0);
+        for (const request of requests) {
+          for (const block of request.blocks) expect(runsTile(block.content, block.runs)).toBe(true);
+        }
+      }
+    }
+    const choices = hub('choices', {}, prompts, { sectionStyle })[0];
+    const expected = renderPromptTemplate(values.choicesUserPrompt, valuesFor({ ...SETTINGS, sectionStyle }));
+    expect(choices.blocks.at(-1)?.content).toBe(expected);
+    expect(expected).toContain(sectionStyle === 'xml' ? '<the_scene_just_told_to_me_the_player_character>'
+      : sectionStyle === 'labels' ? 'THE SCENE JUST TOLD TO ME, THE PLAYER CHARACTER:'
+        : '## The Scene Just Told to Me, the Player Character');
+  });
+});
 
 describe('the narration hub', () => {
   it('opens with the system message and continues as an alternating conversation', () => {
@@ -250,10 +285,12 @@ describe('the narration hub under the output settings the player chose', () => {
   const systemText = (over: Partial<AnatomyPreviewSettings>) => preview({}, PROMPTS, over)[0].content;
 
   it('renders the system prompt in the section style the player picked', () => {
-    expect(systemText({ sectionStyle: 'markdown' })).toContain('## Formatting');
-    expect(systemText({ sectionStyle: 'xml' })).toContain('<formatting>');
-    expect(systemText({ sectionStyle: 'xml' })).not.toContain('## Formatting');
-    expect(systemText({ sectionStyle: 'labels' })).toContain('FORMATTING:');
+    const styledSystemText = (sectionStyle: AnatomyPreviewSettings['sectionStyle']) => preview({},
+      { ...PROMPTS, system: buildStyledValues(PROMPT_TEXT_DEFAULTS, sectionStyle).systemPrompt }, { sectionStyle })[0].content;
+    expect(styledSystemText('markdown')).toContain('## Formatting');
+    expect(styledSystemText('xml')).toContain('<formatting>');
+    expect(styledSystemText('xml')).not.toContain('## Formatting');
+    expect(styledSystemText('labels')).toContain('FORMATTING:');
   });
 
   it('reflects the markdown-output setting', () => {
@@ -353,6 +390,7 @@ const SYSTEM_TEMPLATE: Record<string, string> = {
   storyboard: 'storyboard', choices: 'choices', statupdates: 'statUpdates',
   location: 'locationChange', summary: 'summary', diary: 'diary',
   timepassed: 'timePassed', timeopening: 'openingTime', scenetags: 'sceneTags',
+  discover: 'discoverEntity', milestone: 'milestoneSelect',
 };
 
 /** The same prompts with one template swapped for a marker that still carries a chip, so both the authored
@@ -409,32 +447,58 @@ describe('the location hub follows the detection mode', () => {
     return {
       keys: requests.map((r) => r.key),
       narration: requests[0].blocks.some((b) => b.runs.some((r) => r.contextLabel === 'narration')),
+      caption: requests[0].caption,
     };
   };
 
   it('draws only the pre-narration request when the mode resolves the move up front', () => {
-    const { keys, narration } = narrationIn('location', true);
+    const { keys, narration, caption } = narrationIn('location', true);
     expect(keys).toEqual(['locationAuto']);
     // It runs before the story is written, so the narration chip has nothing to fill it with.
     expect(narration).toBe(false);
+    // The caption says when the pass is sent, since the description above it can't: that depends on the mode.
+    expect(caption).toBe('Sent before the narration. The move applies first, so the whole turn runs in the new place.');
   });
 
   it('draws only the post-narration request when the mode offers the move instead', () => {
-    const { keys, narration } = narrationIn('location', false);
+    const { keys, narration, caption } = narrationIn('location', false);
     expect(keys).toEqual(['locationSuggest']);
     expect(narration).toBe(true);
+    expect(caption).toBe('Sent after the narration. The move is offered, and you choose whether to take it.');
   });
 });
 
 describe('the fan-out hubs', () => {
-  it('draws one example subject and says so, rather than repeating the cast', () => {
+  it('draws one example subject and names it, rather than repeating the cast', () => {
     for (const tab of ['character', 'diary']) {
       const requests = hub(tab);
       expect(requests).toHaveLength(1);
-      expect(requests[0].caption).toContain('per character');
-      expect(requests[0].caption).toContain('Wren');
+      expect(requests[0].caption).toBe('This example is Wren.');
       expect(requests[0].blocks.map((b) => b.content).join('')).toContain('Wren');
     }
+  });
+
+  it('draws one character note and names its subject', () => {
+    const requests = hub('discover');
+    expect(requests.map((r) => r.type)).toEqual(['discoverEntity']);
+    expect(requests[0].caption).toBe('This example is Wren.');
+    const user = requests[0].blocks[requests[0].blocks.length - 1];
+    expect(user.content).toContain('Wren');
+    expect(user.runs.some((r) => r.chip === '<FIRST PASSAGE>')).toBe(true);
+  });
+});
+
+describe('the milestone selector hub', () => {
+  it('draws a request over a kept list and a fresh list, with the reply format appended and no caption', () => {
+    const requests = hub('milestone');
+    expect(requests.map((r) => r.type)).toEqual(['milestoneSelect']);
+    // When it is sent is the description's line; a caption here would say it twice.
+    expect(requests[0].caption).toBeUndefined();
+    const user = requests[0].blocks[requests[0].blocks.length - 1];
+    expect(user.content).toMatch(/^Moments already in memory, oldest first:\n1\. .+\n\nNew moments to judge:\n2\. .+\n3\. .+\n\nReply with three lines:/);
+    expect(user.runs.map((r) => r.chip ?? r.contextLabel)).toEqual(
+      expect.arrayContaining(['<REMEMBERED MOMENTS>', '<NEW MOMENTS>', 'reply-format']),
+    );
   });
 });
 

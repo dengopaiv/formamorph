@@ -1,7 +1,8 @@
 import { randomUUID } from '@/lib/uuid';
 import type { Codec } from './usePersistentState';
 import { isDesktop, DEFAULT_LOCAL_LLM_ENDPOINT } from '@/lib/imageGen/desktop';
-import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS } from '../contexts/settingsDefaults';
+import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, HOSTED_ENDPOINT } from '../contexts/settingsDefaults';
+import { normalizeEndpointUrl } from './endpointUrl';
 import {
   coerceEndpointSamplerOverrides,
   coerceEndpointMaxOutputOverride,
@@ -64,11 +65,39 @@ export const BUILTIN_ENGINE_VALUES: TextEndpointValues = {
   samplerOverrides: defaultEndpointSamplerOverrides(),
 };
 
+/** Whether an endpoint URL is the hosted service, in either the base or the completed spelling. */
+export function isHostedEndpoint(endpoint: string): boolean {
+  return normalizeEndpointUrl(endpoint) === normalizeEndpointUrl(HOSTED_ENDPOINT);
+}
+
+/** The preset a stored id resolves to. A ghost id reads as the Default preset, whose values it gets. */
+export function canonicalPresetId(store: TextEndpointPresetStore, id: string): string {
+  return isBuiltInPresetId(id) || store.presets.some((p) => p.id === id) ? id : DEFAULT_TEXT_PRESET_ID;
+}
+
+/** Whether a resolved endpoint is the Demo AI: the Default preset on the hosted service, never a user preset. */
+export function isDemoAI(resolved: { endpointId: string; endpoint: string }): boolean {
+  return resolved.endpointId === DEFAULT_TEXT_PRESET_ID && isHostedEndpoint(resolved.endpoint);
+}
+
+/** The Default preset's display name: the Demo AI on the hosted service, "Default" on a build that overrides it. */
+export function defaultPresetName(): string {
+  return isDemoAI({ endpointId: DEFAULT_TEXT_PRESET_ID, endpoint: DEFAULT_ENDPOINT }) ? 'Demo AI' : 'Default';
+}
+
 /** The read-only presets available on this platform, in dropdown order. */
 export function builtinTextPresets(): { id: string; name: string }[] {
+  const defaultPreset = { id: DEFAULT_TEXT_PRESET_ID, name: defaultPresetName() };
   return isDesktop()
-    ? [{ id: BUILTIN_ENGINE_PRESET_ID, name: 'Built-In Engine' }, { id: DEFAULT_TEXT_PRESET_ID, name: 'Default' }]
-    : [{ id: DEFAULT_TEXT_PRESET_ID, name: 'Default' }];
+    ? [{ id: BUILTIN_ENGINE_PRESET_ID, name: 'Built-In Engine' }, defaultPreset]
+    : [defaultPreset];
+}
+
+/** A preset's display name. A ghost id takes the Default preset's name, as it resolves to the Default values. */
+export function textPresetName(store: TextEndpointPresetStore, id: string): string {
+  return builtinTextPresets().find((b) => b.id === id)?.name
+    ?? store.presets.find((p) => p.id === id)?.name
+    ?? defaultPresetName();
 }
 
 /** Whether `id` is one of the read-only built-ins on this platform. */
@@ -205,11 +234,13 @@ export function setActive(store: TextEndpointPresetStore, id: string): TextEndpo
   return { ...store, activeId: id };
 }
 
-/** Add a user preset (a copy of `values`) and select it. */
-export function addPreset(store: TextEndpointPresetStore, id: string, name: string, values: TextEndpointValues): TextEndpointPresetStore {
+/** Add a user preset (a copy of `values`), and select it unless `select` is false. */
+export function addPreset(
+  store: TextEndpointPresetStore, id: string, name: string, values: TextEndpointValues, { select = true }: { select?: boolean } = {},
+): TextEndpointPresetStore {
   return {
     ...store,
-    activeId: id,
+    activeId: select ? id : store.activeId,
     presets: [...store.presets, { id, name, values: { ...values, samplerOverrides: coerceEndpointSamplerOverrides(values.samplerOverrides) } }],
   };
 }
@@ -277,5 +308,31 @@ export function updateValue<K extends TextEndpointValueKey>(store: TextEndpointP
   return {
     ...store,
     presets: store.presets.map((p) => (p.id === store.activeId ? { ...p, values: { ...p.values, [key]: value } } : p)),
+  };
+}
+
+/**
+ * Apply a change to the preset `id` names, active or not. The change reads that preset's current values. The
+ * built-ins keep their connection fields: the Default takes only sampler changes, the engine takes none.
+ */
+export function editPreset(
+  store: TextEndpointPresetStore,
+  id: string,
+  change: (values: TextEndpointValues) => Partial<TextEndpointValues>,
+): TextEndpointPresetStore {
+  if (id === BUILTIN_ENGINE_PRESET_ID) return store;
+  if (id !== DEFAULT_TEXT_PRESET_ID && !store.presets.some((p) => p.id === id)) return store;
+  const current = valuesForId(store, id);
+  const { samplerOverrides, ...fields } = change(current);
+  let next = store;
+  if (samplerOverrides) {
+    for (const sampler of Object.keys(samplerOverrides) as EndpointSampler[]) {
+      next = updateSamplerOverride(next, id, sampler, samplerOverrides[sampler]);
+    }
+  }
+  if (id === DEFAULT_TEXT_PRESET_ID || Object.keys(fields).length === 0) return next;
+  return {
+    ...next,
+    presets: next.presets.map((p) => (p.id === id ? { ...p, values: { ...p.values, ...fields } } : p)),
   };
 }

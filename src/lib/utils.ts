@@ -7,11 +7,23 @@ import { extendTailwindMerge } from "tailwind-merge"
 const FONT_SIZE_ROLES = ["display", "heading", "title", "body", "label", "helper", "meta"] as const
 
 const twMerge = extendTailwindMerge({
-  extend: { classGroups: { "font-size": [{ text: [...FONT_SIZE_ROLES] }] } },
+  extend: {
+    classGroups: {
+      "font-size": [{ text: [...FONT_SIZE_ROLES] }],
+      // The title scrims are images, not colors, so a `bg-*` color beside one must not drop it.
+      "bg-image": [{ bg: ["title-scrim", "title-scrim-top"] }],
+    },
+  },
 })
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+/** "a, b and c" — how one line names the handful of things it covers. No Oxford comma. */
+export function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }
 
 /** Escape a string for literal use inside a `RegExp`. */

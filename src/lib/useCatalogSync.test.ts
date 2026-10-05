@@ -1,7 +1,13 @@
+// @vitest-environment jsdom
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useCatalogSync } from './useCatalogSync';
 import { acceptAgeGate } from './ageGate';
+import { installId } from './anonymousLikes';
+import { markCatalogStale, resetCatalogStale } from './catalogStale';
+
+/** Who a signed-out reader is: their Install, because their liked marks are addressed by it. */
+const guest = () => `install:${installId()}`;
 
 vi.mock('react-toastify', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 vi.mock('@/lib/featureFlags', () => ({ COMMUNITY_ENABLED: true }));
@@ -9,11 +15,13 @@ vi.mock('@/lib/featureFlags', () => ({ COMMUNITY_ENABLED: true }));
 const cache = vi.hoisted(() => ({
   items: [] as Record<string, unknown>[],
   tag: null as { tag: string; reader: string } | null,
+  anonymousLikes: false,
   replace: null as null | ReturnType<typeof vi.fn>,
 }));
 vi.mock('@/lib/worldCatalog', () => ({
   getCatalog: async () => cache.items,
   getCatalogTag: async () => cache.tag,
+  getCatalogAnonymousLikes: async () => cache.anonymousLikes,
   replaceCatalog: (...args: unknown[]) => { cache.replace?.(...args); return Promise.resolve(); },
 }));
 
@@ -45,11 +53,13 @@ vi.mock('@/services/WorldStorageService', () => ({
 beforeEach(() => {
   cache.items = [];
   cache.tag = null;
+  cache.anonymousLikes = false;
   cache.replace = vi.fn();
   auth.user = null;
   server.resolve = null;
   server.sentTag = undefined;
   server.calls = 0;
+  resetCatalogStale();
   // The catalog is a listing of what other players published, so the hook waits on the age attestation.
   // Every case below is about what happens after that, so they arrive holding one.
   localStorage.clear();
@@ -62,9 +72,31 @@ afterEach(() => {
 
 const world = { id: 'w1', name: 'Sedge Landing' };
 
+/** A Claim with nothing in the air and nothing moved, which is what most of these cases want. */
+const idleClaim = {
+  settled: () => Promise.resolve(),
+  subscribe: () => () => {},
+  moved: () => 0,
+};
+
+/** A Claim whose marks the test moves by hand, so the reader hears about it the way the real one would. */
+const movingClaim = () => {
+  const listeners = new Set<() => void>();
+  let moves = 0;
+  return {
+    watch: {
+      settled: () => Promise.resolve(),
+      subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      moved: () => moves,
+    },
+    move: () => { moves += 1; listeners.forEach((l) => l()); },
+  };
+};
+
 describe('catalogSettled', () => {
   it('stays false while the refresh is in flight, even with a cached snapshot showing', async () => {
     cache.items = [world];
+    cache.tag = { tag: 'W/"abc"', reader: guest() };
     const { result } = renderHook(() => useCatalogSync(true));
 
     // The cached copy renders first — the exact window where a lookup miss must not be trusted.
@@ -94,7 +126,7 @@ describe('catalogSettled', () => {
 
   it('settles on an unchanged refresh, which is an answer like any other', async () => {
     cache.items = [world];
-    cache.tag = { tag: 'W/"abc"', reader: '' };
+    cache.tag = { tag: 'W/"abc"', reader: guest() };
     const { result } = renderHook(() => useCatalogSync(true));
     await waitFor(() => expect(server.resolve).not.toBeNull());
 
@@ -120,7 +152,7 @@ describe('catalogSettled', () => {
 describe('the freshness tag', () => {
   it('sends the tag stored beside a cached catalog', async () => {
     cache.items = [world];
-    cache.tag = { tag: 'W/"abc"', reader: '' };
+    cache.tag = { tag: 'W/"abc"', reader: guest() };
 
     renderHook(() => useCatalogSync(true));
 
@@ -130,7 +162,7 @@ describe('the freshness tag', () => {
 
   it('keeps the rendered rows and writes nothing when the server says nothing changed', async () => {
     cache.items = [world];
-    cache.tag = { tag: 'W/"abc"', reader: '' };
+    cache.tag = { tag: 'W/"abc"', reader: guest() };
     const { result } = renderHook(() => useCatalogSync(true));
     await waitFor(() => expect(server.resolve).not.toBeNull());
 
@@ -142,23 +174,33 @@ describe('the freshness tag', () => {
 
   it('replaces rows and tag together when the server answers fresh', async () => {
     cache.items = [world];
-    cache.tag = { tag: 'W/"old"', reader: '' };
+    cache.tag = { tag: 'W/"old"', reader: guest() };
     const fresh = { id: 'w2', name: 'Somewhere newer' };
     renderHook(() => useCatalogSync(true));
     await waitFor(() => expect(server.resolve).not.toBeNull());
 
-    await act(async () => server.resolve?.({ status: 'fresh', data: [fresh], tag: 'W/"new"' }));
+    await act(async () => server.resolve?.({ status: 'fresh', data: [fresh], tag: 'W/"new"', anonymousLikes: false }));
 
-    expect(cache.replace).toHaveBeenCalledWith([fresh], { tag: 'W/"new"', reader: '' });
+    expect(cache.replace).toHaveBeenCalledWith([fresh], { tag: 'W/"new"', reader: guest() }, false);
   });
 
   it('stores no tag when the server answers none, so an older server behaves as it always did', async () => {
     renderHook(() => useCatalogSync(true));
     await waitFor(() => expect(server.resolve).not.toBeNull());
 
-    await act(async () => server.resolve?.({ status: 'fresh', data: [world], tag: null }));
+    await act(async () => server.resolve?.({ status: 'fresh', data: [world], tag: null, anonymousLikes: false }));
 
-    expect(cache.replace).toHaveBeenCalledWith([world], null);
+    expect(cache.replace).toHaveBeenCalledWith([world], null, false);
+  });
+
+  it('names the Install in a guest\'s tag, so two guests on one machine never share hearts', async () => {
+    cache.items = [world];
+    cache.tag = { tag: 'W/"other-install"', reader: 'install:11111111-2222-4333-8444-555555555555' };
+
+    renderHook(() => useCatalogSync(true));
+
+    await waitFor(() => expect(server.calls).toBe(1));
+    expect(server.sentTag).toBeNull();
   });
 
   it('sends no tag when the cached catalog has none', async () => {
@@ -172,7 +214,7 @@ describe('the freshness tag', () => {
   });
 
   it('sends no tag when nothing is cached, since there is no copy for one to describe', async () => {
-    cache.tag = { tag: 'W/"orphan"', reader: '' };
+    cache.tag = { tag: 'W/"orphan"', reader: guest() };
 
     renderHook(() => useCatalogSync(true));
 
@@ -191,6 +233,19 @@ describe('the freshness tag', () => {
     expect(server.sentTag).toBeNull();
   });
 
+  it('never shows another reader\'s cached rows, which carry their private like counts', async () => {
+    // A staff reader's catalog, still on disk after they signed out and the app restarted.
+    cache.items = [{ ...world, likes: 12, likesPrivate: true }];
+    cache.tag = { tag: 'W/"staff"', reader: '42' };
+    auth.user = null;
+
+    const { result } = renderHook(() => useCatalogSync(true));
+
+    await waitFor(() => expect(server.calls).toBe(1));
+    expect(result.current.remoteWorlds).toEqual([]);
+    expect(result.current.isLoadingRemoteWorlds).toBe(true);
+  });
+
   it('sends the tag back to the reader it was stored for', async () => {
     cache.items = [world];
     cache.tag = { tag: 'W/"mine"', reader: '42' };
@@ -204,7 +259,7 @@ describe('the freshness tag', () => {
 
   it('sends no tag on a forced refresh, which asks for the list again on purpose', async () => {
     cache.items = [world];
-    cache.tag = { tag: 'W/"abc"', reader: '' };
+    cache.tag = { tag: 'W/"abc"', reader: guest() };
     const { result } = renderHook(() => useCatalogSync(false));
 
     await act(async () => { void result.current.loadCatalog(true); });
@@ -261,6 +316,83 @@ describe('the freshness tag', () => {
   });
 });
 
+describe('the likes a sign-in is still moving', () => {
+  it('asks for no catalog until the Claim has settled', async () => {
+    // Signing in changes the reader and starts a Claim at the same moment, and this refresh is what the
+    // change asked for. Ask too early and the answer is missing the hearts the Claim is turning into
+    // Likes, so a person who just signed in sees their own likes as somebody else's.
+    const held = { finish: null as null | (() => void) };
+    const watch = { ...idleClaim, settled: () => new Promise<void>((res) => { held.finish = res; }) };
+    renderHook(() => useCatalogSync(true, guest(), watch));
+
+    // Waited on, and still waiting: the request has not gone out.
+    await waitFor(() => expect(held.finish).not.toBe(null));
+    expect(server.calls).toBe(0);
+
+    await act(async () => { held.finish?.(); });
+
+    await waitFor(() => expect(server.calls).toBe(1));
+  });
+
+  it('asks straight away when nothing is in the air, which is every other visit', async () => {
+    renderHook(() => useCatalogSync(true));
+
+    await waitFor(() => expect(server.calls).toBe(1));
+  });
+
+  it('asks again, and asks unconditionally, when a Claim moves marks under an unchanged reader', async () => {
+    // The retry after a failed Claim runs on a session change that leaves the reader alone, so nothing
+    // else asks for the catalog again. The held copy predates the marks that moved, so its tag would
+    // have the server answer 'unchanged' and the moved hearts would stay wrong.
+    cache.items = [world];
+    cache.tag = { tag: 'W/"one"', reader: guest() };
+    const claim = movingClaim();
+    const { rerender } = renderHook(() => useCatalogSync(true, guest(), claim.watch));
+    await waitFor(() => expect(server.calls).toBe(1));
+    expect(server.sentTag).toBe('W/"one"');
+    await act(async () => server.resolve?.({ status: 'unchanged' }));
+
+    await act(async () => { claim.move(); });
+    rerender();
+
+    await waitFor(() => expect(server.calls).toBe(2));
+    expect(server.sentTag).toBe(null);
+  });
+
+  it('asks again on the next open when the Claim landed while it was closed', async () => {
+    cache.items = [world];
+    cache.tag = { tag: 'W/"one"', reader: guest() };
+    const claim = movingClaim();
+    const { rerender } = renderHook(
+      ({ open }) => useCatalogSync(open, guest(), claim.watch),
+      { initialProps: { open: true } },
+    );
+    await waitFor(() => expect(server.calls).toBe(1));
+    await act(async () => server.resolve?.({ status: 'unchanged' }));
+
+    rerender({ open: false });
+    await act(async () => { claim.move(); });
+    rerender({ open: true });
+
+    await waitFor(() => expect(server.calls).toBe(2));
+    expect(server.sentTag).toBe(null);
+  });
+
+  it('leaves the catalog alone for a Claim that moved nothing, which is the ordinary sign-in', async () => {
+    cache.items = [world];
+    cache.tag = { tag: 'W/"one"', reader: guest() };
+    const claim = movingClaim();
+    const { rerender } = renderHook(() => useCatalogSync(true, guest(), claim.watch));
+    await waitFor(() => expect(server.calls).toBe(1));
+    await act(async () => server.resolve?.({ status: 'unchanged' }));
+
+    // A Claim that moved nothing tells nobody, so nothing here changes.
+    rerender();
+
+    await waitFor(() => expect(server.calls).toBe(1));
+  });
+});
+
 describe('the age gate', () => {
   it('asks the server for nothing until the player has attested', async () => {
     localStorage.clear();
@@ -282,5 +414,86 @@ describe('the age gate', () => {
     rerender({ open: true });
 
     await waitFor(() => expect(server.resolve).not.toBeNull());
+  });
+});
+
+describe('whether this server takes a guest\'s like', () => {
+  it('answers from the cache before the refresh lands, so the heart is a control on the first frame', async () => {
+    cache.items = [world];
+    cache.anonymousLikes = true;
+
+    const { result } = renderHook(() => useCatalogSync(true));
+
+    await waitFor(() => expect(result.current.anonymousLikes).toBe(true));
+    expect(server.resolve).not.toBeNull();
+  });
+
+  it('follows the fresh response and stores it beside the rows', async () => {
+    const { result } = renderHook(() => useCatalogSync(true));
+    await waitFor(() => expect(server.resolve).not.toBeNull());
+
+    await act(async () => server.resolve?.({ status: 'fresh', data: [world], tag: null, anonymousLikes: true }));
+
+    expect(result.current.anonymousLikes).toBe(true);
+    expect(cache.replace).toHaveBeenCalledWith([world], null, true);
+  });
+
+  it('reads a server that says nothing as off', async () => {
+    // An older server has no such setting, and neither has its route.
+    cache.anonymousLikes = true;
+    const { result } = renderHook(() => useCatalogSync(true));
+    await waitFor(() => expect(server.resolve).not.toBeNull());
+
+    await act(async () => server.resolve?.({ status: 'fresh', data: [world], tag: null, anonymousLikes: false }));
+
+    expect(result.current.anonymousLikes).toBe(false);
+  });
+});
+
+describe('a setting the catalog carries', () => {
+  const world = { id: 'w1', title: 'One' };
+
+  it('has the catalog asked for again, unconditionally, when an administrator changes one', async () => {
+    // The reader has not changed and no Claim has moved a mark, so nothing else would ask. The tag beside
+    // the rows in hand would have the server answer 'unchanged' and the old flag would stand.
+    cache.items = [world];
+    cache.tag = { tag: 'W/"one"', reader: guest() };
+    const { rerender } = renderHook(() => useCatalogSync(true));
+    await waitFor(() => expect(server.calls).toBe(1));
+    expect(server.sentTag).toBe('W/"one"');
+    await act(async () => server.resolve?.({ status: 'unchanged' }));
+
+    await act(async () => { markCatalogStale(); });
+    rerender();
+
+    await waitFor(() => expect(server.calls).toBe(2));
+    expect(server.sentTag).toBe(null);
+  });
+
+  it('asks again on the next open when the change landed while the browser was closed', async () => {
+    cache.items = [world];
+    cache.tag = { tag: 'W/"one"', reader: guest() };
+    const { rerender } = renderHook(({ open }) => useCatalogSync(open), { initialProps: { open: true } });
+    await waitFor(() => expect(server.calls).toBe(1));
+    await act(async () => server.resolve?.({ status: 'unchanged' }));
+
+    rerender({ open: false });
+    await act(async () => { markCatalogStale(); });
+    rerender({ open: true });
+
+    await waitFor(() => expect(server.calls).toBe(2));
+    expect(server.sentTag).toBe(null);
+  });
+
+  it('leaves the catalog alone while nothing has been changed', async () => {
+    cache.items = [world];
+    cache.tag = { tag: 'W/"one"', reader: guest() };
+    const { rerender } = renderHook(() => useCatalogSync(true));
+    await waitFor(() => expect(server.calls).toBe(1));
+    await act(async () => server.resolve?.({ status: 'unchanged' }));
+
+    rerender();
+
+    await waitFor(() => expect(server.calls).toBe(1));
   });
 });

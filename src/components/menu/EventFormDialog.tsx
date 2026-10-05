@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { toast } from "react-toastify";
+import { toastError } from "@/lib/linkToast";
 import { ImagePlus, Megaphone, Move, Plus, Save, Trophy } from "lucide-react";
 import {
   Dialog,
@@ -19,7 +20,8 @@ import { plainVocabulary } from "@/lib/chipVocabulary";
 import { EventPosterBand } from "@/components/events/EventPosterBand";
 import { PosterPositionDialog } from "@/components/events/PosterPositionDialog";
 import { useResetOnOpen } from "@/lib/useResetOnOpen";
-import { adminEventState, fromLocalInputValue, toLocalInputValue } from "@/lib/adminEvents";
+import { fromLocalInputValue, toLocalInputValue } from "@/lib/adminEvents";
+import { eventState } from "@/lib/serverEvents";
 import { parsePosterColor, parsePosterPlacement } from "@/lib/posterStyle";
 import { IMAGE_UPLOAD_ACCEPT } from "@/lib/avatar";
 import EventService from "@/services/EventService";
@@ -107,7 +109,7 @@ export function EventFormDialog({ open, onOpenChange, editing = null, onSaved }:
   });
 
   const isContest = type === 'contest';
-  const started = editing ? adminEventState(editing) !== 'scheduled' : false;
+  const started = editing ? eventState(editing) !== 'scheduled' : false;
   const previewImage = pickedImage ?? storedImage;
 
   /** Read the picked file as the data URI the server stores it from. */
@@ -124,7 +126,7 @@ export function EventFormDialog({ open, onOpenChange, editing = null, onSaved }:
       setPosterPlacement(null);
       setPositioning(true);
     };
-    reader.onerror = () => toast.error('That image could not be read');
+    reader.onerror = () => toastError(reader.error, { headline: 'That image could not be read' });
     reader.readAsDataURL(file);
   };
 
@@ -179,7 +181,7 @@ export function EventFormDialog({ open, onOpenChange, editing = null, onSaved }:
       onSaved?.();
       onOpenChange(false);
     } catch (error) {
-      toast.error((error as Error).message || 'Failed to save the event');
+      toastError(error, 'Failed to save the event');
     } finally {
       setSaving(false);
     }

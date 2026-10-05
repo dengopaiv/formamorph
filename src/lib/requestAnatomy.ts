@@ -1,4 +1,5 @@
-import type { ChatMessage } from '@/types';
+import type { ChatMessage, RequestMessage } from '@/types';
+import { messageText } from '@/lib/aiRequest/imageParts';
 
 /**
  * Request Anatomy: the labeled map of one assembled request.
@@ -41,7 +42,9 @@ export type ContextLabel =
   | 'character-brief'
   | 'diary-brief'
   | 'intents'
-  | 'scene-cast';
+  | 'scene-cast'
+  | 'reply-format'
+  | 'placeholder';
 
 /**
  * One run of a message's content. `source` is the editor whose field the run came out of — the text itself
@@ -53,6 +56,8 @@ export interface AnatomyRun {
   end: number;
   source?: AnatomySource;
   chip?: string;
+  /** The placement has a Header, even when its resolved value is empty. */
+  section?: boolean;
   contextLabel?: ContextLabel;
 }
 
@@ -73,6 +78,7 @@ export interface AnatomyPiece {
   text: string;
   source?: AnatomySource;
   chip?: string;
+  section?: boolean;
   contextLabel?: ContextLabel;
   /** Keeps a zero-width run when a parsed chip resolves to empty text. */
   preserveWhenEmpty?: boolean;
@@ -86,7 +92,7 @@ export interface TiledRuns {
 }
 
 const sameLabel = (a: AnatomyPiece, b: AnatomyRun): boolean =>
-  a.source === b.source && a.chip === b.chip && a.contextLabel === b.contextLabel;
+  a.source === b.source && a.chip === b.chip && a.section === b.section && a.contextLabel === b.contextLabel;
 
 /**
  * Join pieces into one string and the runs covering it. Empty pieces vanish unless their parsed chip needs
@@ -108,6 +114,7 @@ export function tilePieces(pieces: AnatomyPiece[]): TiledRuns {
         end: content.length,
         ...(piece.source ? { source: piece.source } : {}),
         ...(piece.chip ? { chip: piece.chip } : {}),
+        ...(piece.section ? { section: true } : {}),
         ...(piece.contextLabel ? { contextLabel: piece.contextLabel } : {}),
       });
       continue;
@@ -130,6 +137,7 @@ export function tilePieces(pieces: AnatomyPiece[]): TiledRuns {
       end: content.length,
       ...(piece.source ? { source: piece.source } : {}),
       ...(piece.chip ? { chip: piece.chip } : {}),
+      ...(piece.section ? { section: true } : {}),
       ...(piece.contextLabel ? { contextLabel: piece.contextLabel } : {}),
     });
   }
@@ -142,6 +150,20 @@ export function tilePieces(pieces: AnatomyPiece[]): TiledRuns {
     else runs.push({ start, end: content.length });
   }
   return { content, runs };
+}
+
+/** Pieces with every run of three or more newlines cut to two, counted across piece boundaries, so a block
+ *  chip that renders nothing leaves one blank line rather than two. */
+export function collapseBlankLines(pieces: AnatomyPiece[]): AnatomyPiece[] {
+  let newlines = 0;
+  return pieces.map((piece) => {
+    let text = '';
+    for (const ch of piece.text) {
+      newlines = ch === '\n' ? newlines + 1 : 0;
+      if (newlines <= 2) text += ch;
+    }
+    return { ...piece, text };
+  });
 }
 
 /** Drop trailing whitespace from a tiled result, clamping the runs to what survives (the same `trimEnd`
@@ -158,6 +180,19 @@ export function trimEndTiled(tiled: TiledRuns): TiledRuns {
     runs.push({ ...run, end: Math.min(run.end, content.length) });
   }
   return { content, runs };
+}
+
+/** {@link trimEndTiled} at both ends. A run the trim erases is dropped; a zero-width run stays, at the start. */
+export function trimTiled(tiled: TiledRuns): TiledRuns {
+  const trimmed = trimEndTiled(tiled);
+  const cut = trimmed.content.length - trimmed.content.trimStart().length;
+  if (cut === 0) return trimmed;
+  const runs: AnatomyRun[] = [];
+  for (const run of trimmed.runs) {
+    if (run.end > run.start && run.end <= cut) continue;
+    runs.push({ ...run, start: Math.max(0, run.start - cut), end: Math.max(0, run.end - cut) });
+  }
+  return { content: trimmed.content.slice(cut), runs };
 }
 
 /** Whether `runs` cover `content` exactly — ordered, gapless, non-overlapping, ending at the end. The
@@ -184,10 +219,10 @@ export interface AnatomyBlock {
  * request layer prepends, so it takes `anatomy.system`; the rest take `anatomy.messages` in order. A
  * message with no runs renders unlabeled, which is what a pre-anatomy capture gets for all of them.
  */
-export function toAnatomyBlocks(messages: ChatMessage[], anatomy?: RequestAnatomy): AnatomyBlock[] {
+export function toAnatomyBlocks(messages: RequestMessage[], anatomy?: RequestAnatomy): AnatomyBlock[] {
   return messages.map((message, i) => ({
     role: message.role,
-    content: message.content,
+    content: messageText(message),
     runs: (i === 0 ? anatomy?.system : anatomy?.messages[i - 1]) ?? [],
   }));
 }
@@ -233,21 +268,26 @@ export const CONTEXT_LABELS: Record<ContextLabel, string> = {
   'diary-brief': 'Diary Brief',
   intents: 'Intents',
   'scene-cast': 'Scene Cast',
+  'reply-format': 'Reply Format',
+  placeholder: 'Placeholder',
 };
 
-/** What each assembled run is, in the player's own words — the chip's tooltip. */
+/** What each assembled run is, in the player's own words — the chip's tooltip. One sentence each, so a
+ *  jump tooltip can add its own sentence after a period. */
 export const CONTEXT_HINTS: Record<ContextLabel, string> = {
-  condensed: 'older turns, condensed by Memory Summaries',
-  notes: 'your own memory notes, as you wrote them',
-  recalled: 'the turn Scene Recall brought back, word-for-word',
-  'past-action': 'your action on a recent turn',
-  'past-narration': 'the narration that answered it, word-for-word',
-  action: 'your action, as you typed it',
-  'mode-directive': 'the instruction your Thinking mode adds',
-  'turn-plan': 'the plan this turn was given before it was written',
-  narration: 'the narration this turn produced',
-  'character-brief': 'who this character is, what they remember, and where the scene left them',
-  'diary-brief': 'who is writing, and the turn they are writing about',
-  intents: 'what each character said they want this turn',
-  'scene-cast': 'who is in frame for this picture',
+  condensed: 'Older turns, condensed by Memory Summaries',
+  notes: 'Your own memory notes, as you wrote them',
+  recalled: 'The turn Scene Recall brought back, word for word',
+  'past-action': 'Your action on a recent turn',
+  'past-narration': 'The narration that answered it, word for word',
+  action: 'Your action, as you typed it',
+  'mode-directive': 'The instruction your Thinking mode adds',
+  'turn-plan': 'The plan this turn was given before it was written',
+  narration: 'The narration this turn produced',
+  'character-brief': 'Who this character is, what they remember, and where the scene left them',
+  'diary-brief': "Who's writing, and the turn they're writing about",
+  intents: 'What each character said they want this turn',
+  'scene-cast': "Who's in frame for this picture",
+  'reply-format': 'The reply lines the answer is read from',
+  placeholder: 'A world placeholder, as this playthrough reads it',
 };

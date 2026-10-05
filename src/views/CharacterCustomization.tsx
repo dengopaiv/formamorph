@@ -17,7 +17,9 @@ import { usePlayerModelUrl } from '@/lib/usePlayerModelUrl';
 import { useBackStop } from '@/hooks/useBackStop';
 import { useVrmCustomization } from '@/lib/useVrmCustomization';
 import { DEFAULT_AVATAR_ID, DEFAULT_AVATAR_URL } from '@/lib/defaultAvatar';
-import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
+import { SurfaceLayer } from '@/components/ui/surface';
+import { targetAttribute } from '@/lib/surface/surfaceTargets';
 
 const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
   onCharacterCustomized: (data: CharacterData) => void;
@@ -56,7 +58,7 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
       setSelectedModelId(model.id);
     } catch (err) {
       console.error('Failed to add model', err);
-      toast.error('Could not save that player avatar (storage may be full).');
+      toastError(err, { headline: 'Could not save that player avatar (storage may be full).' });
     }
   };
 
@@ -65,7 +67,7 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
       await ModelStorageService.deleteModel(id);
     } catch (err) {
       // The library refuses to drop its last avatar; surface why rather than failing the click silently.
-      toast.error((err as Error).message);
+      toastError(err, 'Could not delete that player avatar.');
       return;
     }
     if (selectedModelId === id) setSelectedModelId(worldOverview?.customPlayerVRM ? 'world' : DEFAULT_AVATAR_ID);
@@ -110,7 +112,7 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
             {onBack
               ? <Button onClick={onBack} variant="outline" className="flex-1">Back</Button>
               : <Button onClick={onAbort} variant="destructive" className="flex-1">Abort</Button>}
-            <Button onClick={handleFinalize} className="flex-1">
+            <Button onClick={handleFinalize} className="flex-1" {...targetAttribute('avatar', 'finalize-character')}>
               Finalize Character
             </Button>
           </div>
@@ -151,6 +153,7 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
   if (isMobile) {
     return (
       <div className="relative flex app-viewport flex-col pt-[env(safe-area-inset-top)]">
+        <SurfaceLayer id="avatar" />
         {viewer}
         <MobileControlsDrawer title="Character Customization">{panel}</MobileControlsDrawer>
       </div>
@@ -159,6 +162,7 @@ const CharacterCustomization = ({ onCharacterCustomized, onBack, onAbort }: {
 
   return (
     <div className="flex app-viewport pt-[env(safe-area-inset-top)]">
+      <SurfaceLayer id="avatar" />
       {viewer}
       <Card className="w-1/3 m-4 flex flex-col overflow-hidden">
         <ScrollArea className="flex-1 min-h-0">

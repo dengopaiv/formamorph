@@ -19,12 +19,12 @@ Local copy contracts live in [settingsCopy.ts](../src/components/modals/settings
 | Role | Formamorph convention | Review route |
 | --- | --- | --- |
 | Label | Name the concept or action; use Title Case. Preserve official names and acronyms. No sentence-ending period. | Terminology review, then the label limits below |
-| Setting description | One complete, third-person sentence, at most 12 words, ending with a period. State the effect. | Descriptive writing; explicit subject and accurate effect |
+| Setting description | Verb-first or second person, at most 12 words. One sentence takes no period; two or more end with one. State the effect once, then the trade-off. | The help-line test below; accurate effect |
 | Instruction | Tell the reader which action to perform, using the imperative. | Procedural writing |
 | Status or error | State the observed result or inability. Separate any recovery instruction. | Descriptive sentence, then procedural sentence if necessary |
 | Extended help | Explain a cost, tradeoff, mechanism, or prerequisite. Divide explanations from numbered steps. | Review each passage according to its role |
 
-A tooltip inherits its purpose, not a special grammar exemption: an action tooltip is an instruction; an explanation is descriptive text. A confirmation combines a title, an explicit consequence, and identifiable action choices. Tutorials combine explanations and steps. Do not apply the setting-description voice or 12-word ceiling to all these surfaces.
+A tooltip inherits its purpose, not a special grammar exemption: an action tooltip is an instruction; an explanation follows the help-line test. A confirmation combines a title, an explicit consequence, and identifiable action choices. Tutorials combine explanations and steps. Do not apply the 12-word ceiling to all these surfaces.
 
 Additional setting detail belongs behind the information control. Do not repeat the row description there. Required action conditions or destructive consequences must also be visible where the action occurs; do not make a procedure depend on opening optional help. Review procedural notes under rule 5.5 rather than treating every information popover as a note.
 
@@ -36,7 +36,7 @@ Additional setting detail belongs behind the information control. Do not repeat 
 
 **New standalone label fragments:** `Font` is a noun identifier, not a descriptive sentence. The cited quoted-text rule does not establish a general grammar exemption for labels that we author. Rule 4.3 permits fragments in a particular vertical-list structure; a settings grid is not automatically that structure. **UNVERIFIED — standalone UI label-fragment grammar has not been confirmed with the standard's maintainers or a qualified STE reviewer.** Retain the local naming convention and mark label reviews as terminology/formatting only. Do not claim full compliance for these label examples. Resolve this applicability question before upgrading their verdict.
 
-**Setting descriptions:** Prefer `This setting changes the font.` to the subjectless `Changes the font.` Both are short, but only the former supplies an explicit subject. The complete form preserves third-person voice and the local ceiling. An initial third-person verb alone is not evidence of a complete sentence. Keep necessary articles; consult rule 4.5, page 1-4-8. No change to production copy or its tests is implied by these examples.
+**Setting descriptions:** Prefer `Changes the font` to `This setting changes the font.` The line beside a control reads as its caption: verb-first, no subject, and no period on one sentence. Full third-person sentences with an explicit subject are for status, error, and confirmation text, where rule 4.5, page 1-4-8, still applies. The [copy tests](../src/components/modals/settingsCopy.test.ts) enforce the period rule and the 12-word ceiling; the [prompt description tests](../src/lib/promptGroups.test.ts) and the [Anatomy hint tests](../src/lib/requestAnatomy.test.ts) share the period check through [copyShape.ts](../src/test/copyShape.ts).
 
 If a necessary explanation cannot satisfy both the local contract and STE, record the exact text, rule, and competing rewrites for a product-owner decision. Do not remove meaning, relax the full-STE target, or silently replace a domain name to make a check pass.
 
@@ -56,7 +56,7 @@ These entries preserve established concepts. Noun admission is assessed under ru
 | dictionary, entry | A dictionary is a set of entries. An entry holds Trigger Keywords and a Value. | World types; category 19 |
 | Trigger Keywords, Secondary Keywords, Value, Scan Depth | The entry panel's own labels. Quote them with their display casing. | [DictionaryManager.tsx](../src/managers/DictionaryManager.tsx); category 19 |
 | prompt, message | The prompt is the text sent to the AI for one turn. A message is one earlier action or narration that keyword scanning reads. | Settings copy and Scan Depth; category 19 |
-| activate, match, inject | Verbs for the entry mechanism. A keyword matches a message; a match activates the entry; an activated entry's Value is injected into the prompt. | [World Editor docs](WorldEditor.md); rule 1.12 technical verbs |
+| activate, match, inject | Verbs for the entry mechanism. A keyword matches a message; a match activates the entry; an activated entry's Value is injected into the prompt. | [World Editor docs](WorldEditor); rule 1.12 technical verbs |
 | setting, font, dialog, file | Respectively a configuration option, typeface choice, interface container, and stored data object. | Category 19; `font` also appears in category 15 |
 | model, token, reasoning | AI system, unit used by that system, and its reasoning output/process. Do not equate reasoning visibility with reasoning effort. | Settings copy; category 19 AI concepts |
 | cached images | Downloaded image copies in the remote-image cache, not embedded world images. | [remoteImageCache.ts](../src/lib/remoteImageCache.ts); category 19, two-word technical noun |
@@ -66,11 +66,11 @@ These entries preserve established concepts. Noun admission is assessed under ru
 | Before the AI, After the AI | The two code boxes, named for when they run in the turn. Before the AI runs before the prompt is built. After the AI runs after the AI's changes and Regen apply. | [statCodeTiming.ts](../src/lib/statCodeTiming.ts); named controls, rule 1.5 |
 | Test Code, Templates | The button under a code box that runs that box alone, and the menu that inserts a code template into it. | [StatCodeBox.tsx](../src/managers/StatCodeBox.tsx); named controls, rule 1.5 |
 | pin (verb), unpin (verb) | Code or the author fixes a placeholder to one value until the pin is removed. `pin(x)` in code; Pin in the editor. | [statCodeSurface.ts](../src/lib/statCodeSurface.ts); rule 1.12 technical verb, no approved verb names the hold-one-value operation |
-| switch (verb) | Code or the player turns a trait on or off through `enabled`. Only traits switch; stat fields are set. | [StatCodeGuide.md](StatCodeGuide.md); rule 1.12 technical verb, matches the trait checkbox |
+| switch (verb) | Code or the player turns a trait on or off through `enabled`. Only traits switch; stat fields are set. | [StatCodeGuide](StatCodeGuide); rule 1.12 technical verb, matches the trait checkbox |
 | listing | One published item on Community Creations. Distinct from the local copy it was published from, and from the world or library item it holds. | [publishPayload.ts](../src/lib/publishPayload.ts); category 19 |
 | source | The published listing a copy of an entity or a dictionary follows. A copy with no source is independent. | [publishLinks.ts](../src/lib/publishLinks.ts); category 19 |
 | required, Include as required | A world requires a source when downloading the world also downloads and links that source. Include as required is the checkbox that declares it. | [LinkedContentSection.tsx](../src/components/menu/LinkedContentSection.tsx); category 19, named control under rule 1.5 |
-| add-on, Offer as add-on | An add-on is a published entity or dictionary offered for a world, which a player installs by choice. Offer as add-on is the checkbox that declares it. Never write "add-on" for a required source. | [CompatibleWorldsSection.tsx](../src/components/menu/CompatibleWorldsSection.tsx); category 19, named control under rule 1.5 |
+| add-on, Offer as add-on | An add-on is a published entity or dictionary offered for a world, which a player downloads by choice. Offer as add-on is the checkbox that declares it. Never write "add-on" for a required source. | [CompatibleWorldsSection.tsx](../src/components/menu/CompatibleWorldsSection.tsx); category 19, named control under rule 1.5 |
 | Public, Unlisted | The two values of a listing's Listing choice. An unlisted listing is not in Community Creations and reaches a player only inside a world that requires it. Unlisted is not deleted and not private. | [CompatibleWorldsSection.tsx](../src/components/menu/CompatibleWorldsSection.tsx); named values under rule 1.5 |
 | library, library item | The library is the player's own stored entities, dictionaries, and avatars. A library item is one of them. A world's copy follows a library item or a listing, never the library. | [librarySources.ts](../src/lib/librarySources.ts); category 19 |
 | linked copy, independent copy | A linked copy is a world's entity or dictionary that follows a library item or a source. An independent copy follows nothing. Unlink turns a linked copy into an independent copy. | [linkedContent.ts](../src/lib/linkedContent.ts); category 19 |
@@ -84,12 +84,21 @@ For a new term, record its spelling, part of speech, exact product meaning, sour
 
 ### The help-line test
 
-A help line under a field, a tooltip, and a ⓘ popover are instructions, not prose. Before shipping one, check every word against two lists:
+A setting's brief line, a help line under a field, a tooltip, and a ⓘ popover follow Google's Material UX-writing pattern ([UX writing best practices](https://m3.material.io/foundations/content-design/style-guide/ux-writing-best-practices), [voice and tone](https://developers.google.com/style/tone)). Before shipping one, check it against four rules:
 
-- **Every noun is a label on the same screen or a term in the register above.** "The Value is injected into the prompt" passes: Value is a label, prompt is registered. "The text goes into the AI" fails: neither noun is defined.
-- **Every verb names the literal operation.** Match, activate, inject, scan, add, remove, show, hide, run, send, set, select. A verb that describes the effect by image fails: fire, drive, mute, live, stand in, appear in play, get out of the way, keep in reach.
+| Rule | Passes | Fails |
+| --- | --- | --- |
+| **Second person or no subject.** Start with the verb. Never "the app" or "Formamorph" as the subject, never "we". | `Saves every few minutes while you work` | `The app saves every few minutes`, `We save your work` |
+| **No on/off preamble.** The label is the on state. State the effect once, then the consequence or trade-off. | `Shorter intervals show changes sooner but use more data` | `When Auto-Save is on, the app saves… When it is off…` |
+| **Contractions, and the period rule.** One sentence takes no period. Two or more sentences end with one. | `You'll be signed out` | `You will be signed out.` |
+| **Common words, no figurative language.** "Trash", "badge", "bandwidth" pass. Metaphor, idiom, "simply", "easy", and exclamation marks fail. | `Sends requests to your model server` | `Points requests at your model server`, `Rides the narration history` |
 
-A line that fails either list is rewritten with the defined words, even when the rewrite reads flatter. The reader of a help line is looking for which control does what, and a defined word answers that where a pretty one does not. World text, narration, and readme prose keep their own voice; this test does not apply to them.
+Two more checks:
+
+- **No definition cadence.** Never `A [noun with a packed clause] is [noun]`. Write the action, with you as the subject or no subject.
+- **Named controls are bold**, in their on-screen casing, with their element type on first mention when the label is a common word: `The **Chips** tab shows your template`. Bare bold after that. Never quotation marks, never code font. A slot that renders plain text, such as a row description, keeps quotation marks, because bold can't render there.
+
+Labels keep Title Case. The brief line stays within 12 words. A ⓘ popover may run longer and takes periods wherever it has two or more sentences. World text, narration, and readme prose keep their own voice; this test does not apply to them.
 
 ### The technical register
 
@@ -126,7 +135,7 @@ These are proposed writing examples, not a record of shipped strings. Counts are
 | Role / surface | Example | Review and meaning check |
 | --- | --- | --- |
 | Settings label | `Font` | Product noun above. Title Case follows the local rule. Terminology/formatting reviewed; standalone-fragment grammar remains unverified. |
-| Setting description | `This setting changes the font.` (5) | Explicit third-person subject, present active verb, one effect, period, under 12 words. CHANGE (verb) means alteration, not replacement. Applies to the font choice in settings copy. |
+| Setting description | `Changes the font` (3) | Verb-first, no subject, one effect, one sentence so no period, under 12 words. CHANGE (verb) means alteration, not replacement. Applies to the font choice in settings copy. |
 | Action tooltip | `Select a font.` (3) | SELECT is an imperative choice among alternatives; `a` introduces the object. Appropriate for the font chooser, not an unlabeled control. |
 | Instruction | `Select “Font”.` (2) | Imperative SELECT; exact existing label as quoted target. Rules 5.3 and 8.6. Does not certify the target label's grammar. |
 | Error plus recovery | `Formamorph cannot open the file.` (5) / `Select a file.` (3) | CANNOT states inability; `open` is the registered computer operation. Use only when a file-open failure was observed and a file chooser remains available. Do not invent the cause or promise that another selection succeeds. |
@@ -158,7 +167,7 @@ Do not substitute dictionary alternatives mechanically. For example, `save` has 
 2. **Check vocabulary.** Apply rules 1.1–1.14 using the dictionary and term register. Record disputed meanings, verb forms, and proposed term categories. Do not label ordinary adjectives as technical nouns to bypass the dictionary.
 3. **Check grammar and structure.** Review multi-word nouns (section 2), verbs (section 3), and sentence construction (section 4). Then use section 5 for actions and section 6 for explanations. Check punctuation/counting (section 8) and writing practices (section 9), including consistent terminology.
 4. **Check the whole surface.** In procedures, verify order, prerequisites, and one action per step (5.1–5.5). In explanations, review information order and paragraph structure (6.1–6.6). Assess section 7 when real safety instructions are present; record why it is not applicable to ordinary settings copy instead of silently skipping it.
-5. **Check local requirements and meaning.** Count the rendered setting description separately against 12 words. Keep third person, a complete sentence, Title Case identifiers, and useful optional detail. Exercise the associated behavior before publishing a factual claim. Compare before/after meaning: object, timing, conditions, cost, persistence, failure, and recovery.
+5. **Check local requirements and meaning.** Count the rendered setting description separately against 12 words. Keep the help-line pattern (verb-first or second person, the period rule), Title Case identifiers, and useful optional detail. Exercise the associated behavior before publishing a factual claim. Compare before/after meaning: object, timing, conditions, cost, persistence, failure, and recovery.
 6. **Record a bounded verdict.** List the reviewed source edition, clauses and dictionary entries, technical-term decisions, local checks, behavior evidence, and every unresolved point. Use `reviewed against listed evidence`, `needs revision`, or `unverified`; explain each unverified item. Only claim full compliance after the entire applicable rule set and vocabulary have been reviewed with no unresolved items.
 
 For this example set, sections 1–6, 8, and 9 provide the review path; section 7 has no safety procedure to assess. No example requires a long noun cluster, passive clause, complex paragraph, or conditional work step. Future help can introduce any of these and must receive the corresponding review. This is applicability assessment, not a reduced STE subset.

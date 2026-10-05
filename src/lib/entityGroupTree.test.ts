@@ -68,6 +68,26 @@ describe('duplicateEntityNode', () => {
     expect(copy.name).toBe('a (Copy)');
   });
 
+  it('copies an entity’s openings under fresh ids, with the weights following them', () => {
+    const original: Entity = {
+      ...entity('a', null, 0),
+      openings: [
+        { id: 'o1', text: 'First.', kind: 'action' },
+        { id: 'o2', text: 'Second.', kind: 'narration' },
+      ],
+      openingWeights: { o2: 4 },
+    };
+    const { entities: e2, newId } = duplicateEntityNode([], [original], 'a');
+    const copy = e2.find((e) => e.id === newId)!;
+    const ids = (copy.openings ?? []).map((o) => o.id);
+    expect(copy.openings?.map((o) => [o.text, o.kind])).toEqual([['First.', 'action'], ['Second.', 'narration']]);
+    expect(ids).not.toContain('o1');
+    expect(ids).not.toContain('o2');
+    expect(copy.openingWeights).toEqual({ [ids[1]]: 4 });
+    // The original keeps its own.
+    expect(e2.find((e) => e.id === 'a')?.openings).toBe(original.openings);
+  });
+
   it('deep-copies a group subtree with fresh ids and remapped parents', () => {
     const groups = [group('races', null, 0), group('elves', 'races', 0)];
     const entities = [entity('synthia', 'elves', 0), entity('loner', null, 1)];
@@ -106,6 +126,13 @@ describe('duplicateEntityNode', () => {
     expect(descEyeP).not.toBe('p2');
     expect(descEyeP).not.toBe(nameP);
     expect(src.name).toContain(':p1}}'); // the original is untouched
+  });
+
+  it('drops the Custom Persona mark on the copy and keeps it on the original', () => {
+    const src: Entity = { ...entity('a', null, 0), customPersona: true };
+    const { entities: e2, newId } = duplicateEntityNode([], [src], 'a');
+    expect(e2.find((x) => x.id === newId)).not.toHaveProperty('customPersona');
+    expect(e2.find((x) => x.id === 'a')?.customPersona).toBe(true);
   });
 });
 
@@ -177,5 +204,22 @@ describe('duplicating an entity with placeholders of its own', () => {
     const original = e2.find((e) => e.id === 'molly')!;
     expect(original.placeholders![0].id).toBe('eyes');
     expect(original.name).toContain('{{ph:eyes:');
+  });
+});
+
+describe('duplicateEntityNode with owned traits', () => {
+  it('gives the copy fresh ids for what it owns, so no trait id is shared across owners', () => {
+    const owner: Entity = {
+      id: 'ash', name: 'Ash',
+      traitGroups: [{ id: 'g-bond', name: 'Bond', parentId: null }],
+      traits: [{ id: 't-tamed', name: 'Tamed', groupId: 'g-bond', statChanges: [], requires: [{ kind: 'playingAs', id: 'ash' }] }],
+    };
+    const { entities, newId } = duplicateEntityNode([], [owner], 'ash');
+    const copy = entities.find((e) => e.id === newId)!;
+    expect(copy.traits![0].requires).toEqual([{ kind: 'playingAs', id: newId }]);
+    expect(copy.traits![0].id).not.toBe('t-tamed');
+    expect(copy.traitGroups![0].id).not.toBe('g-bond');
+    expect(copy.traits![0].groupId).toBe(copy.traitGroups![0].id);
+    expect(entities.find((e) => e.id === 'ash')?.traits).toEqual(owner.traits);
   });
 });

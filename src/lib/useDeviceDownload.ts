@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import type { AvatarListingContent, Dictionary, Entity, World } from '@/types';
 import type { WorldRecord } from '@/components/WorldDetails';
 import WorldStorageService from '@/services/WorldStorageService';
@@ -12,6 +13,7 @@ import { exportEntityCard } from './entityFile';
 import { buildDictionaryFile } from './dictionaryFile';
 import { serializeWorldFile } from './worldFile';
 import { avatarListingBlob } from './avatarDownload';
+import { readLibraryDetails } from './contentAuthor';
 
 /**
  * What a listing's own file says about where it came from and which worlds it suits.
@@ -52,7 +54,7 @@ export function useDeviceDownload() {
         filename = `${world.worldOverview?.name || listing.name || 'rpg_world'}.json`;
       } else if (kind === 'entity') {
         const entity = content as Entity;
-        blob = await exportEntityCard(entity, undefined, await listingLinks(listingId, listing));
+        blob = await exportEntityCard(entity, undefined, await listingLinks(listingId, listing), readLibraryDetails(content, listing.author?.username));
         filename = `${entity.name || listing.name || 'character'}.webp`;
       } else if (kind === 'model') {
         // The `.vrm` file itself, not a JSON wrapper — the one kind whose device download is the raw asset.
@@ -60,7 +62,7 @@ export function useDeviceDownload() {
         filename = `${listing.name || 'avatar'}.vrm`;
       } else {
         const dictionary = content as Dictionary;
-        const file = buildDictionaryFile(dictionary, undefined, await listingLinks(listingId, listing));
+        const file = buildDictionaryFile(dictionary, undefined, await listingLinks(listingId, listing), readLibraryDetails(content, listing.author?.username));
         blob = await serializeJsonBlob(file, 2);
         filename = `${file.name || listing.name || 'dictionary'}.json`;
       }
@@ -69,7 +71,7 @@ export function useDeviceDownload() {
       toast.success(`"${listing.name || KIND_LABELS[kind].one}" downloaded successfully`);
     } catch (error) {
       console.error(`Error downloading ${kindOf(listing)} for device:`, error);
-      toast.error((error as Error).message || `Failed to download ${KIND_LABELS[kindOf(listing)].one.toLowerCase()}`);
+      toastError(error, `Failed to download ${KIND_LABELS[kindOf(listing)].one.toLowerCase()}`);
     } finally {
       activeDownloads.current.delete(listingId);
       setDownloadProgress((progress) => {

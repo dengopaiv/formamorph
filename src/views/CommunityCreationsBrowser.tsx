@@ -1,5 +1,7 @@
-import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useDeferredValue, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
+import { responseError } from '@/services/responseError';
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -7,19 +9,19 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Search, RotateCcw, ArrowDownWideNarrow, ArrowUpNarrowWide, ArrowLeft, X, SlidersHorizontal, ChevronDown,
-  Earth, User, BookOpen, PersonStanding, Globe, ShieldAlert, Trophy,
+  Globe, ShieldAlert, Trophy,
   type LucideIcon,
 } from "lucide-react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
-import { CATALOG_KINDS, KIND_LABELS, kindOf, type CatalogKind } from "@/lib/catalogKinds";
+import { CATALOG_KINDS, KIND_ICONS, KIND_LABELS, kindOf, kindHasThumbnail, showsMorphArt, type CatalogKind } from "@/lib/catalogKinds";
 import { BROWSE_TABS, BROWSE_TAB_LABELS, type BrowseTab } from "@/lib/browseTabs";
 import { listingId, listingRef, type ListingRef } from "@/lib/worldDependencies";
-import { contestPhase, placementsBy, entriesOf, orderContestEntries } from "@/lib/contests";
+import { contestPhase, placementsBy, entriesOf, orderContestEntries, type ContestPlacement } from "@/lib/contests";
 import { isContestEvent } from "@/lib/serverEvents";
 import { useContests } from "@/lib/useContests";
 import { ContestBar, ContestPodium } from "@/components/community/ContestBar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Pager } from "@/components/ui/pagination";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TokenAutocomplete } from "@/components/TokenAutocomplete";
@@ -28,11 +30,13 @@ import { cn } from "@/lib/utils";
 import { usePersistentState, boolCodec } from "@/lib/usePersistentState";
 import { CHIP_BASE } from "@/components/Chip";
 import { useCatalogSync } from "@/lib/useCatalogSync";
+import { useStableCallback } from "@/lib/useStableCallback";
 import { replaceCatalog, type CatalogWorld } from "@/lib/worldCatalog";
 import { useThumbnailPreload } from "@/lib/useCachedThumbnail";
 import { useContestWithdrawal } from "@/lib/useContestWithdrawal";
 import { useDownloadCoordinator, type DownloadPlan } from "@/lib/useDownloadCoordinator";
-import { useLibraryDownload } from "@/lib/useLibraryDownload";
+import { useLibraryDownload, type LibraryTarget } from "@/lib/useLibraryDownload";
+import type { PromptLibrary, PromptListingContent } from "@/lib/promptDownload";
 import { useDeviceDownload } from "@/lib/useDeviceDownload";
 import { useDownscalePrompt } from "@/lib/useDownscalePrompt";
 import EntityStorageService from "@/services/EntityStorageService";
@@ -64,13 +68,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TITLE_SCRIM } from "@/components/WorldCardShell";
+import { TITLE_SCRIM, WorldCardShell } from "@/components/WorldCardShell";
+import { cardLayoutFor, thumbAspectFor } from "@/lib/thumbAspect";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { useBackStop } from "@/hooks/useBackStop";
+import { SurfaceLayer } from "@/components/ui/surface";
 import { APP_COMMUNITY_CAPABILITIES, type CommunityBrowserCapabilities } from '@/lib/communityBrowserCapabilities';
-import WorldStorageService from '../services/WorldStorageService';
+import WorldStorageService, { AnonymousLikeRefused } from '../services/WorldStorageService';
+import { ADDRESS_CAP_REACHED, readerKey, refusalAnswer, setShellOffersGuestLikes } from '@/lib/anonymousLikes';
 import AuthService from '../services/AuthService';
 import { getDownloadState, type DownloadState } from '@/lib/downloadState';
 import { type WorldRecord } from "@/components/WorldDetails";
@@ -79,18 +86,18 @@ import { RemoteWorldCard } from "@/components/community/RemoteWorldCard";
 import { CommunityFilterBar } from "@/components/community/CommunityFilterBar";
 import { TutorialPopover } from "@/components/TutorialPopover";
 import { useTutorial } from "@/lib/tutorials";
+import { likeStateOf, optimisticLikeState, type LikeState } from "@/lib/likeCount";
 
 // Persisted preference to force the single-column (portrait) layout of the details modal at any width.
 // Key string kept as-is so an existing user's saved preference survives the rename.
 const COMMUNITY_BROWSER_MODAL_COLLAPSED_KEY = 'FORMAMORPH_discoverModalCollapsed';
 
-/** Icon for each catalog kind's row in the section switcher (rail on landscape, dropdown on portrait). */
-const SECTION_ICON_BY_KIND: Record<CatalogKind, LucideIcon> = {
-  world: Earth,
-  entity: User,
-  dictionary: BookOpen,
-  // The same figure the local library's Avatars tab wears, so one thing has one icon everywhere.
-  model: PersonStanding,
+/** One shared empty list, so a closed browser hands the grid the same identity every render. */
+const NO_ROWS: WorldRecord[] = [];
+
+/** The prompt target for a host without the preset store. `downloadFor` never hands it a listing. */
+const NO_PROMPT_LIBRARY: LibraryTarget<PromptListingContent> = {
+  kind: 'prompt', records: [], store: async () => {}, refresh: () => {},
 };
 
 /** A row in the section switcher: one per catalog kind, plus Contest while a contest exists. */
@@ -104,6 +111,10 @@ export interface CommunityListing {
   id: string;
   kind: CatalogKind;
 }
+
+/** One comparable value for a controlled listing, which separates no listing from an uncontrolled one. */
+const controlledKey = (listing: CommunityListing | null | undefined): string =>
+  (listing ? `${listing.kind}:${listing.id}` : String(listing));
 
 /**
  * Controls the actions a shell may expose without forking the shared browser.
@@ -134,18 +145,18 @@ const BrowserShell = ({ presentation, open, onOpenChange, children }: {
     if (!open) return null;
     return (
       <div className="fixed inset-0 z-50 flex flex-col bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
-        {children}
+        <SurfaceLayer id="community">{children}</SurfaceLayer>
       </div>
     );
   }
   if (presentation === 'embedded') {
     if (!open) return null;
-    return <div className="flex min-h-0 flex-1 flex-col bg-background">{children}</div>;
+    return <div className="flex min-h-0 flex-1 flex-col bg-background"><SurfaceLayer id="community">{children}</SurfaceLayer></div>;
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={undefined}
+      <DialogContent surface="community" aria-describedby={undefined}
         hideClose
         className="max-w-none w-screen h-dvh sm:max-w-none left-0 top-0 translate-x-0 translate-y-0 rounded-none sm:rounded-none p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] gap-0 flex flex-col data-[state=open]:!slide-in-from-top-0 data-[state=open]:!slide-in-from-left-0 data-[state=closed]:!slide-out-to-top-0 data-[state=closed]:!slide-out-to-left-0"
       >
@@ -188,6 +199,8 @@ interface CommunityCreationsBrowserProps {
   /** The tab to open on — the dev-router's (`#dev?modal=community&tab=entity`), or Contest when an
    *  event banner sent the player here. */
   initialTab?: BrowseTab;
+  /** Changes with each outside request, so a repeat request selects its tab again. */
+  requestKey?: string;
   /** A listing to open the details for, arriving from somewhere else — a notification feed row. */
   openListing?: { id: string; kind: string } | null;
   /** Fired once that listing has been opened, or found to be gone, so the host can clear its request. */
@@ -200,6 +213,8 @@ interface CommunityCreationsBrowserProps {
   onListingUnavailable?: (listing: CommunityListing) => void;
   /** A read-only action shown in this surface's selected listing details. */
   detailsAction?: React.ReactNode;
+  /** The preset store prompt listings download into. Absent offers no prompt download. */
+  promptLibrary?: PromptLibrary;
   /** Running community events, announced in the header the same way the main menu announces them. */
   events?: ServerEvent[];
   /** Open the place an event's content lives — the contest tab, for a contest. */
@@ -215,15 +230,23 @@ interface CommunityCreationsBrowserProps {
 const CommunityCreationsBrowser = ({
   open, onOpenChange, presentation = 'dialog', capabilities = APP_COMMUNITY_CAPABILITIES, filterPreferences, worlds, setWorlds, entities, dictionaries, models,
   refreshEntities, refreshDictionaries, refreshModels,
-  isAuthenticated, currentUser, onGuestLike, openImageViewer, initialTab, openListing, onListingOpened, listing: controlledListing,
-  onListingChange, onListingUnavailable, detailsAction,
+  isAuthenticated, currentUser, onGuestLike, openImageViewer, initialTab, requestKey, openListing, onListingOpened, listing: controlledListing,
+  onListingChange, onListingUnavailable, detailsAction, promptLibrary,
   events = [], onOpenEvent, openLikersOnMount = false, openManageAddonsOnMount = false,
 }: CommunityCreationsBrowserProps) => {
+  // Stated here rather than in an effect, because the catalog request below goes out in an effect of
+  // its own: a shell that sends its guests to sign-in is not an Install and must name none.
+  setShellOffersGuestLikes(capabilities.guestLikes);
+
   // The header's title element, which differs per shell (see PageHeading).
   const Heading = presentation === 'dialog' ? DialogTitle : PageHeading;
   // Catalog fetch/cache/sync (loads on open, refreshes in the background).
-  const catalogReader = isAuthenticated ? String(currentUser?.id ?? AuthService.token ?? '') : '';
-  const { remoteWorlds, setRemoteWorlds, isLoadingRemoteWorlds, isSyncingCatalog, catalogSettled, loadCatalog } = useCatalogSync(open, catalogReader);
+  // The same identity the catalog cache tag is stored under: a guest's hearts are their Install's.
+  const catalogReader = readerKey(isAuthenticated, currentUser?.id ?? AuthService.token);
+  const {
+    remoteWorlds, setRemoteWorlds, isLoadingRemoteWorlds, isSyncingCatalog, catalogSettled, loadCatalog,
+    anonymousLikes, setAnonymousLikes,
+  } = useCatalogSync(open, catalogReader);
   const [remoteWorldToDelete, setRemoteWorldToDelete] = useState<string | null>(null);
   // Set once someone else's item has been deleted, offering to tell its author why. The takedown itself
   // has already landed — declining leaves it removed and simply unexplained, as suspending does.
@@ -306,6 +329,8 @@ const CommunityCreationsBrowser = ({
     },
     refresh: refreshModels,
   });
+  // Prompt listings download into the preset store, which only the app host can reach.
+  const promptDownload = useLibraryDownload<PromptListingContent>(promptLibrary?.target ?? NO_PROMPT_LIBRARY);
   const deviceDownload = useDeviceDownload();
 
   /**
@@ -316,7 +341,8 @@ const CommunityCreationsBrowser = ({
    * importer written for a different shape.
    */
   const downloadFor = (kind: CatalogKind) => (
-    kind === 'entity' ? entityDownload : kind === 'dictionary' ? dictionaryDownload : kind === 'model' ? modelDownload : null
+    kind === 'entity' ? entityDownload : kind === 'dictionary' ? dictionaryDownload : kind === 'model' ? modelDownload
+      : kind === 'prompt' && promptLibrary ? promptDownload : null
   );
 
   /**
@@ -331,7 +357,7 @@ const CommunityCreationsBrowser = ({
     // A kind with no library holds no copy, so it is never downloaded and never out of date.
     return downloadFor(kind)?.downloadStateFor(record) ?? 'none';
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localCopiesBySource, entityDownload.copyBySource, dictionaryDownload.copyBySource, modelDownload.copyBySource]);
+  }, [localCopiesBySource, entityDownload.copyBySource, dictionaryDownload.copyBySource, modelDownload.copyBySource, promptDownload.copyBySource]);
 
   // Every in-flight bar, keyed by listing id — unique across kinds, so the four sources merge cleanly.
   const allDownloadProgress = {
@@ -339,6 +365,7 @@ const CommunityCreationsBrowser = ({
     ...entityDownload.downloadProgress,
     ...dictionaryDownload.downloadProgress,
     ...modelDownload.downloadProgress,
+    ...promptDownload.downloadProgress,
     ...deviceDownload.downloadProgress,
   };
 
@@ -351,6 +378,13 @@ const CommunityCreationsBrowser = ({
       return;
     }
     downloadFor(kind)?.startDownload(record);
+  };
+
+  /** Use This Preset for a prompt listing whose preset is downloaded; null for anything else. */
+  const presetUseFor = (record: WorldRecord | null) => {
+    const copy = record && promptLibrary && kindOf(record) === 'prompt' ? promptDownload.copyFor(record) : undefined;
+    if (!copy || !promptLibrary) return null;
+    return { active: promptLibrary.activeId === copy.id, onUse: () => promptLibrary.select(copy.id) };
   };
 
   /** Whether a listing of this kind can be saved into a local library at all. */
@@ -390,8 +424,23 @@ const CommunityCreationsBrowser = ({
     else onOpenEvent?.(event);
   }, [onOpenEvent]);
 
-  // A fresh shuffle seed each time the browser opens, so a live contest is re-ordered per visit but holds
-  // still while the reader is looking at it. The archive picked last time is dropped at the same moment:
+  const closeDetails = useCallback(() => {
+    setShowRemoteWorldDetailsModal(false);
+    if (controlledListing !== undefined) {
+      setSelectedRemoteWorld(null);
+      onListingChange?.(null);
+    }
+  }, [controlledListing, onListingChange]);
+
+  // A place chip opens the contest it names, on the card or over the details view.
+  const openContest = useCallback((contestId: string) => {
+    setSelectedContestId(contestId);
+    setBrowseTab('contest');
+    closeDetails();
+  }, [closeDetails]);
+
+  // A fresh shuffle seed each time the browser opens, so contest entries are re-ordered per visit until
+  // results are announced, but hold still while the reader is looking at them. The archive picked last time is dropped at the same moment:
   // the running contest is what a visit opens on, not whichever old one was last read.
   const [shuffleSeed, setShuffleSeed] = useState(() => Math.random());
   useEffect(() => {
@@ -405,7 +454,7 @@ const CommunityCreationsBrowser = ({
   // whichever tab the last visit was left on.
   useEffect(() => {
     if (open && initialTab) setBrowseTab(initialTab);
-  }, [open, initialTab]);
+  }, [open, initialTab, requestKey]);
 
   // A contest that ends up not being browsable — the read failed, or the router aimed here on a server
   // with no contests — leaves the reader on a tab with no trigger. Send them back to the catalog.
@@ -429,12 +478,15 @@ const CommunityCreationsBrowser = ({
   const withdrawal = useContestWithdrawal(useCallback((listingId: string) => {
     const released = remoteWorldsRef.current.map((record) => (
       String(record._id || record.id) === listingId
-        ? { ...record, contest_event_id: null, contestEventId: null }
+        ? { ...record, contest_event_id: null, contestEventId: null, likesPrivate: undefined }
         : record
     ));
     setRemoteWorlds(released);
     void replaceCatalog(released as CatalogWorld[]);
   }, [setRemoteWorlds]));
+
+  // Contest entries are worlds, so the contest tab keeps the stacked grid.
+  const gridLayout = browseTab === 'contest' ? 'stacked' : cardLayoutFor(thumbAspectFor(browseTab));
 
   const catalogInView = browseTab === 'contest'
     ? entriesOf(remoteWorlds, shownContest?.id)
@@ -442,14 +494,14 @@ const CommunityCreationsBrowser = ({
 
   const {
     searchQuery, applySearchInput, authorFilter, setAuthorFilter, tagFilter, setTagFilter,
-    tagMode, setTagMode, statusFilter, toggleStatus, clearFilters, activeFilterCount,
+    tagMode, setTagMode, modelFilter, setModelFilter, statusFilter, toggleStatus, clearFilters, activeFilterCount,
     sortField, setSortField, sortOrder, setSortOrder,
     sortUpdatesFirst, setSortUpdatesFirst, currentPage, setCurrentPage,
     hiddenWorldIds, hiddenTags, hiddenAuthors,
     hideRemoteWorld, hideRemoteTag, hideRemoteAuthor,
     setHiddenTagsList, setHiddenAuthorsList,
     resetHiddenWorlds, unhideWorld, hiddenWorldName,
-    allAuthors, allTags, filteredRemoteWorlds, totalPages, pagedRemoteWorlds,
+    allAuthors, allTags, allModels, filteredRemoteWorlds, totalPages, pagedRemoteWorlds,
   } = useCommunityBrowserFilters(
     catalogInView, downloadStateForRecord, open, browseTab,
     currentUser?.id ? String(currentUser.id) : undefined,
@@ -459,10 +511,25 @@ const CommunityCreationsBrowser = ({
 
   // One read for the whole page's stored thumbnails, so a page of seen cards paints together rather
   // than opening a database read per card.
-  useThumbnailPreload(pagedRemoteWorlds.map((w) => ({
+  useThumbnailPreload(pagedRemoteWorlds.filter((w) => kindHasThumbnail(kindOf(w)) && !showsMorphArt(w)).map((w) => ({
     file: w.thumbnail_file as string | null | undefined,
     updatedAt: w.updated_at as string | null | undefined,
   })));
+
+  // The first cards of an open render in a transition, so the window paints first and scroll, search,
+  // and close stay responsive. Closed reads as no rows: a reopen then commits the shell before the
+  // grid. Once cards are up, updates such as a like press render at once.
+  const gridRows = open ? pagedRemoteWorlds : NO_ROWS;
+  const lagRows = useDeferredValue(gridRows);
+  const gridSettled = useRef(false);
+  const deferredRows = gridSettled.current ? gridRows : lagRows;
+  const gridPending = deferredRows !== gridRows;
+  // Skeleton cards stand in until the first rows have rendered; the pager waits with them.
+  const gridLoading = isLoadingRemoteWorlds || (gridPending && deferredRows.length === 0);
+  useEffect(() => {
+    if (!open) gridSettled.current = false;
+    else if (!gridPending && gridRows.length > 0) gridSettled.current = true;
+  }, [open, gridPending, gridRows]);
 
   /** Whether anything is narrowing the grid — what tells an empty result from an empty catalog. */
   const anyFilterApplied = Boolean(searchQuery) || activeFilterCount > 0;
@@ -526,10 +593,7 @@ const CommunityCreationsBrowser = ({
         }
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to delete ${noun.toLowerCase()}`);
-      }
+      if (!response.ok) throw await responseError(response, `Failed to delete ${noun.toLowerCase()}`, ['message']);
 
       setRemoteWorlds(prev => prev.filter(w => (w._id || w.id) !== worldId));
       setRemoteWorldToDelete(null);
@@ -539,7 +603,7 @@ const CommunityCreationsBrowser = ({
       setTakedown(takedownTargetFor(record, currentUser?.id));
     } catch (error) {
       console.error('Error deleting remote item:', error);
-      toast.error((error as Error).message || `Failed to delete ${noun.toLowerCase()}`);
+      toastError(error, `Failed to delete ${noun.toLowerCase()}`);
     }
   };
 
@@ -566,31 +630,75 @@ const CommunityCreationsBrowser = ({
       // Someone else's work: they are owed an explanation of what to fix, and by when.
       setQuarantineNotice(quarantineTargetFor(updated, currentUser?.id));
     } catch (error) {
-      toast.error((error as Error).message || `Failed to quarantine the ${noun.toLowerCase()}`);
+      toastError(error, `Failed to quarantine the ${noun.toLowerCase()}`);
     } finally {
       setIsQuarantiningNow(false);
     }
   };
 
   /**
-   * Record a like, taking the count from the server's own answer.
+   * Show one listing's like state on every copy of its record.
    *
-   * Patched in place rather than re-synced, like a quarantine: the catalog arrives as one big request, and
-   * refetching it to learn one number would blank the grid — and re-sort it under the pointer when the
-   * reader is sorting by likes.
+   * The grid and the open details window each hold their own, so both are patched or the two contradict
+   * each other about the same heart. Patched in place rather than re-synced, like a quarantine: the
+   * catalog arrives as one big request, and refetching it to learn one number would blank the grid — and
+   * re-sort it under the pointer when the reader is sorting by likes.
+   */
+  const showLikeState = (worldId: string, state: LikeState) => {
+    // Every field is written, absent ones included, so a flag the new state drops does not linger.
+    const patch = likeStateOf(state);
+    setRemoteWorlds((prev) => prev.map((w) => ((w._id || w.id) === worldId ? { ...w, ...patch } : w)));
+    setSelectedRemoteWorld((prev) => (prev && (prev._id || prev.id) === worldId ? { ...prev, ...patch } : prev));
+  };
+
+  /**
+   * Record a like, from an account or from this copy of the app.
+   *
+   * The session picks the route: an account has one of its own, and a guest's like is addressed by the
+   * Install instead. The heart moves first and the count follows the server's answer, so the press reads
+   * as done while the request is still in the air. A hidden count gets no guessed number.
+   *
+   * A refusal puts the heart back. What is said about it depends on the code — see `refusalAnswer`.
    */
   const handleLike = async (world: WorldRecord, liked: boolean) => {
     dismissIfShowing('community-like');
     const worldId = String(world._id || world.id);
-    const state = await WorldStorageService.setRemoteWorldLiked(worldId, liked);
+    const before = likeStateOf(world);
 
-    setRemoteWorlds((prev) => prev.map((w) => ((w._id || w.id) === worldId
-      ? { ...w, liked: state.liked, likes: state.likes }
-      : w)));
-    // The open details modal holds its own copy of the record, so it needs the same patch to agree.
-    setSelectedRemoteWorld((prev) => (prev && (prev._id || prev.id) === worldId
-      ? { ...prev, liked: state.liked, likes: state.likes }
-      : prev));
+    showLikeState(worldId, optimisticLikeState(world, liked));
+
+    try {
+      const state = isAuthenticated
+        ? await WorldStorageService.setRemoteWorldLiked(worldId, liked)
+        : await WorldStorageService.setAnonymousWorldLiked(worldId, liked);
+      showLikeState(worldId, state);
+    } catch (error) {
+      showLikeState(worldId, before);
+      if (!(error instanceof AnonymousLikeRefused)) throw error;
+
+      switch (refusalAnswer(error.code)) {
+        case 'signIn':
+          // The operator switched the feature off since this catalog was read. The heart goes back to
+          // sending a guest to sign-in, and the next read of the setting agrees.
+          setAnonymousLikes(false);
+          onGuestLike?.(world);
+          return;
+        case 'cap':
+          toast.info(
+            <div className="flex flex-col items-start gap-2">
+              <span>{ADDRESS_CAP_REACHED} Log in to add yours.</span>
+              {onGuestLike && (
+                <Button size="sm" variant="secondary" onClick={() => onGuestLike(world)}>Login</Button>
+              )}
+            </div>,
+          );
+          return;
+        case 'silent':
+          return;
+        default:
+          throw error;
+      }
+    }
   };
 
   /**
@@ -617,7 +725,7 @@ const CommunityCreationsBrowser = ({
         : w)));
       toast.success(`${noun} released`);
     } catch (error) {
-      toast.error((error as Error).message || `Failed to release the ${noun.toLowerCase()}`);
+      toastError(error, `Failed to release the ${noun.toLowerCase()}`);
     }
   };
 
@@ -645,6 +753,9 @@ const CommunityCreationsBrowser = ({
     handleViewRemoteWorldDetails(found);
   };
 
+  // What a controlled surface last pointed at, so the effect below can tell a move apart from a repeat.
+  const lastControlledKey = useRef(controlledKey(controlledListing));
+
   // A listing named from outside — a notification feed row. The catalog is one request for every kind, so
   // there is nothing to fetch: switch to its tab and open it once the catalog is in hand. The list at
   // arrival may be last visit's snapshot (or still empty), so a lookup miss only counts once a refresh
@@ -656,8 +767,13 @@ const CommunityCreationsBrowser = ({
       return;
     }
     const requestedListing = controlledListing === undefined ? openListing : controlledListing;
+    // Only a move to no-listing closes the details. A controller that is still on none says so on every
+    // render, and a card click opens the details a render before its router reports the new path — so
+    // reading the value rather than the move would close what the click just opened.
+    const controlledMoved = controlledKey(controlledListing) !== lastControlledKey.current;
+    lastControlledKey.current = controlledKey(controlledListing);
     if (!requestedListing) {
-      if (controlledListing === null) {
+      if (controlledListing === null && controlledMoved) {
         setSelectedRemoteWorld(null);
         setShowRemoteWorldDetailsModal(false);
       }
@@ -710,7 +826,7 @@ const CommunityCreationsBrowser = ({
   const kindSections: SwitcherSection[] = CATALOG_KINDS.map((kind) => ({
     key: kind,
     label: BROWSE_TAB_LABELS[kind].many,
-    icon: SECTION_ICON_BY_KIND[kind],
+    icon: KIND_ICONS[kind],
   }));
   const sections: SwitcherSection[] = contests.length > 0
     ? [...kindSections, { key: 'contest', label: 'Contest', icon: Trophy }]
@@ -736,7 +852,7 @@ const CommunityCreationsBrowser = ({
         const active = browseTab === key;
         return (
           <React.Fragment key={key}>
-            {key === 'contest' && <div className="my-2 h-px bg-border" />}
+            {(key === 'prompt' || key === 'contest') && <div role="separator" className="my-2 h-hairline bg-border" />}
             <button
               onClick={() => setBrowseTab(key)}
               aria-current={active ? 'true' : undefined}
@@ -774,12 +890,15 @@ const CommunityCreationsBrowser = ({
       </SelectTrigger>
       <SelectContent>
         {sections.map(({ key, label, icon: Icon }) => (
-          <SelectItem key={key} value={key}>
-            <span className="flex items-center gap-2">
-              <Icon className="h-4 w-4 shrink-0" />
-              {label}
-            </span>
-          </SelectItem>
+          <React.Fragment key={key}>
+            {(key === 'prompt' || key === 'contest') && <SelectSeparator />}
+            <SelectItem value={key}>
+              <span className="flex items-center gap-2">
+                <Icon className="h-4 w-4 shrink-0" />
+                {label}
+              </span>
+            </SelectItem>
+          </React.Fragment>
         ))}
       </SelectContent>
     </Select>
@@ -795,13 +914,13 @@ const CommunityCreationsBrowser = ({
     >
     <div className="relative flex-grow min-w-[200px]">
       <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-      {/* `author:`/`tag:`/`status:` typed here become filter chips — see the hook's applySearchInput.
+      {/* `author:`/`tag:`/`status:`/`model:` typed here become filter chips — see the hook's applySearchInput.
           Enter finishes the token under the cursor, a space finishes it as you keep typing. */}
       <Input
         // The prefix hint is desktop-only: on mobile it outruns the field and hides the word "Search".
         placeholder={isMobile
           ? `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}…`
-          : `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}… or type author:, tag:, status:`}
+          : `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}… or type author:, tag:, ${browseTab === 'prompt' ? 'model:, ' : ''}status:`}
         className="pl-8"
         value={searchQuery}
         onChange={(e) => { dismissIfShowing('community-search-prefixes'); applySearchInput(e.target.value); }}
@@ -838,8 +957,8 @@ const CommunityCreationsBrowser = ({
     <EventBannerChips banners={banners} onOpenEvent={openEventFromBanner} />
   );
 
-  // A contest's entries are ordered by the contest, not by the reader: shuffled while it runs, by likes
-  // once it is judged. Offering a sort that the grid then overrides would be a control that lies.
+  // A contest's entries are ordered by the contest, not by the reader: shuffled until results are announced,
+  // then by likes. Offering a sort that the grid then overrides would be a control that lies.
   const sortControl = browseTab === 'contest' ? null : (
     <div className="flex items-center gap-1">
       <Select value={sortField} onValueChange={(v) => { setSortField(v); setCurrentPage(1); }}>
@@ -953,6 +1072,7 @@ const CommunityCreationsBrowser = ({
       clearFilters={clearFilters}
       allAuthors={allAuthors}
       allTags={allTags}
+      models={browseTab === 'prompt' ? { filter: modelFilter, setFilter: setModelFilter, options: allModels } : undefined}
       signedIn={isAuthenticated}
       centered={eventChips}
       trailing={updatesControl}
@@ -962,11 +1082,38 @@ const CommunityCreationsBrowser = ({
     </div>
   );
 
+  // Cards are memoized, so what they are handed keeps its identity across renders.
+  const viewCard = useStableCallback(handleViewRemoteWorldDetails);
+  const hideCardWorld = useStableCallback(hideRemoteWorld);
+  const hideCardAuthor = useStableCallback(hideRemoteAuthor);
+  const hideCardTag = useStableCallback(hideRemoteTag);
+  const downloadCard = useStableCallback(handleCardDownload);
+  const likeCard = useStableCallback(handleLike);
+  const guestLikeCard = useStableCallback((world: WorldRecord) => onGuestLike?.(world));
+  const releaseCard = useStableCallback(handleRelease);
+  const withdrawCard = useStableCallback((entry: WorldRecord) => withdrawal.ask({
+    id: String(entry._id || entry.id),
+    name: String(entry.name ?? 'That world'),
+  }));
+  const manageCardAddons = useStableCallback((own: WorldRecord) => setManagingAddons(listingRef(own)));
+  // Kept per row object, so an unchanged row keeps its placements too.
+  const placementsOf = useMemo(() => {
+    const byRow = new WeakMap<WorldRecord, ContestPlacement[]>();
+    return (world: WorldRecord) => {
+      let placements = byRow.get(world);
+      if (!placements) {
+        placements = placementsBy(world, contests);
+        byRow.set(world, placements);
+      }
+      return placements;
+    };
+  }, [contests]);
+
   return (
     <>
       {downscaleDialog}
 
-      {/* Updating an entity/dictionary replaces the single local copy, so an edited one asks first —
+      {/* Updating an entity, dictionary or preset replaces the single local copy, so an edited one asks first —
           there's no second copy for the edits to survive in (unlike worlds). ConfirmDialog holds its text
           while fading out, so the name doesn't vanish mid-animation. */}
       <ConfirmDialog
@@ -984,11 +1131,19 @@ const CommunityCreationsBrowser = ({
         description={`You've edited your copy of "${dictionaryDownload.dirtyConfirm?.name ?? ''}". Downloading again replaces it with the published version, and your changes are lost.`}
         onConfirm={dictionaryDownload.confirmDirtyDownload}
       />
+
+      <ConfirmDialog
+        open={!!promptDownload.dirtyConfirm}
+        onOpenChange={(v) => { if (!v) promptDownload.setDirtyConfirm(null); }}
+        title="Replace your edited preset?"
+        description={`You've edited your copy of "${promptDownload.dirtyConfirm?.name ?? ''}". Downloading again replaces it with the published version, and your changes are lost.`}
+        onConfirm={promptDownload.confirmDirtyDownload}
+      />
       {/* Community Creations browser, in whichever shell the host asked for */}
       <BrowserShell presentation={presentation} open={open} onOpenChange={onOpenChange}>
           {/* The kind switcher lives in the header and its results below it, so one root spans both.
               `contents` on the root and each panel leaves the dialog's own flex column untouched. */}
-          <Tabs value={browseTab} onValueChange={(v) => setBrowseTab(v as BrowseTab)} className="contents">
+          <Tabs surfaceTabs="community" value={browseTab} onValueChange={(v) => setBrowseTab(v as BrowseTab)} className="contents">
           {/* Header: back · title · search · refresh always visible. On mobile the sort/filter controls
               collapse behind a "Filters" toggle; on desktop they stay inline. */}
           <Collapsible open={filtersOpen} onOpenChange={setFiltersOpen} className="shrink-0 border-b">
@@ -1086,18 +1241,23 @@ const CommunityCreationsBrowser = ({
           {/* Scrollable results */}
           <TabsContent value={browseTab} className="contents">
           <ScrollArea className="flex-1 min-h-0">
-            {/* World grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 px-6 py-4">
-              {isLoadingRemoteWorlds ? (
-                Array(4).fill(0).map((_, index) => (
+            {/* World grid. Split cards are about twice as wide, so they take fewer columns. */}
+            <div className={cn(
+              'grid grid-cols-1 gap-4 px-6 py-4',
+              gridLayout === 'split' ? 'lg:grid-cols-2 xl:grid-cols-3' : 'sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5',
+            )}>
+              {gridLoading ? (
+                gridLayout === 'split' ? Array(4).fill(0).map((_, index) => (
+                  <WorldCardShell key={index} layout="split" loading name="" frameClassName="bg-card" />
+                )) : Array(4).fill(0).map((_, index) => (
                   <div key={index} className="relative w-full h-48 rounded-lg overflow-hidden">
                     <Skeleton className="w-full h-full" />
-                    <div className={cn('absolute bottom-0 left-0 right-0 p-2 pt-8', TITLE_SCRIM)}>
+                    <div className={cn('absolute bottom-0 left-0 right-0 p-2 pt-16', TITLE_SCRIM)}>
                       <Skeleton className="h-6 w-24" />
                     </div>
                   </div>
                 ))
-              ) : filteredRemoteWorlds.length === 0 ? (
+              ) : deferredRows.length === 0 ? (
                 <div className="col-span-full text-center py-12 text-muted-foreground">
                   {/* Filters now outlive the session, so an empty grid names them rather than reading as an
                       empty catalog. */}
@@ -1112,8 +1272,9 @@ const CommunityCreationsBrowser = ({
                       `No ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()} available. Be the first to publish one!`}
                 </div>
               ) : (
-                pagedRemoteWorlds.map((world) => {
+                deferredRows.map((world) => {
                   const worldId = world._id || world.id;
+                  const likeTutorial = tutorial?.id === 'community-like' && worldId === likeAnchorId ? tutorial : null;
                   return (
                     <RemoteWorldCard
                       key={worldId}
@@ -1122,33 +1283,29 @@ const CommunityCreationsBrowser = ({
                       downloadProgress={allDownloadProgress[worldId]}
                       isAuthenticated={isAuthenticated}
                       currentUser={currentUser}
-                      onView={handleViewRemoteWorldDetails}
-                      onHideWorld={capabilities.hiddenFilters ? hideRemoteWorld : undefined}
-                      onHideAuthor={capabilities.hiddenFilters ? hideRemoteAuthor : undefined}
-                      onHideTag={capabilities.hiddenFilters ? hideRemoteTag : undefined}
-                      onContextualDownload={capabilities.localLibrary && savesLocally(world) ? handleCardDownload : undefined}
+                      onView={viewCard}
+                      onHideWorld={capabilities.hiddenFilters ? hideCardWorld : undefined}
+                      onHideAuthor={capabilities.hiddenFilters ? hideCardAuthor : undefined}
+                      onHideTag={capabilities.hiddenFilters ? hideCardTag : undefined}
+                      onContextualDownload={capabilities.localLibrary && savesLocally(world) ? downloadCard : undefined}
                       onDeviceDownload={capabilities.deviceDownloads ? deviceDownload.download : undefined}
                       onDelete={capabilities.authorManagement ? setRemoteWorldToDelete : undefined}
-                      onLike={capabilities.likes ? handleLike : undefined}
-                      onGuestLike={capabilities.likes ? onGuestLike : undefined}
+                      onLike={capabilities.likes ? likeCard : undefined}
+                      onGuestLike={capabilities.likes && onGuestLike ? guestLikeCard : undefined}
+                      guestLikes={capabilities.likes && capabilities.guestLikes}
+                      serverTakesLikes={anonymousLikes}
                       onQuarantine={capabilities.moderation ? setQuarantining : undefined}
-                      onRelease={capabilities.moderation ? handleRelease : undefined}
-                      placements={placementsBy(world, contests)}
+                      onRelease={capabilities.moderation ? releaseCard : undefined}
+                      placements={placementsOf(world)}
+                      onOpenContest={openContest}
                       // Only where the entry is the subject, and only while it is still an entry: a
                       // decided contest keeps its podium, and the server refuses to release a placed world.
                       onWithdraw={capabilities.contestParticipation && browseTab === 'contest' && shownContest && contestPhase(shownContest) !== 'decided'
-                        ? (entry) => withdrawal.ask({
-                            id: String(entry._id || entry.id),
-                            name: String(entry.name ?? 'That world'),
-                          })
+                        ? withdrawCard
                         : undefined}
-                      onManageAddons={capabilities.authorManagement
-                        ? (own) => setManagingAddons(listingRef(own))
-                        : undefined}
-                      likeTutorial={
-                        tutorial?.id === 'community-like' && worldId === likeAnchorId ? tutorial : null
-                      }
-                      likeTutorialNav={tutorialNav}
+                      onManageAddons={capabilities.authorManagement ? manageCardAddons : undefined}
+                      likeTutorial={likeTutorial}
+                      likeTutorialNav={likeTutorial ? tutorialNav : undefined}
                     />
                   );
                 })
@@ -1159,7 +1316,7 @@ const CommunityCreationsBrowser = ({
 
           {/* Frozen footer: pagination */}
           <div className="shrink-0 border-t px-6 py-3">
-            {!isLoadingRemoteWorlds && filteredRemoteWorlds.length > 0 && (
+            {!gridLoading && filteredRemoteWorlds.length > 0 && (
               <Pager page={currentPage} pageCount={totalPages} onPageChange={setCurrentPage} />
             )}
           </div>
@@ -1178,13 +1335,8 @@ const CommunityCreationsBrowser = ({
 
       <RemoteWorldDetailsModal
         open={showRemoteWorldDetailsModal}
-        onOpenChange={(detailsOpen) => {
-          setShowRemoteWorldDetailsModal(detailsOpen);
-          if (!detailsOpen && controlledListing !== undefined) {
-            setSelectedRemoteWorld(null);
-            onListingChange?.(null);
-          }
-        }}
+        onOpenChange={(detailsOpen) => { if (detailsOpen) setShowRemoteWorldDetailsModal(true); else closeDetails(); }}
+        onOpenContest={openContest}
         world={selectedRemoteWorld}
         collapsed={communityBrowserModalCollapsed}
         onToggleCollapsed={toggleCommunityBrowserModalCollapsed}
@@ -1199,9 +1351,13 @@ const CommunityCreationsBrowser = ({
             : undefined
         }
         onDeviceDownload={capabilities.deviceDownloads ? deviceDownload.download : undefined}
+        presetUse={presetUseFor(selectedRemoteWorld)}
         currentUser={currentUser}
         onLike={handleLike}
         onGuestLike={capabilities.likes ? onGuestLike : undefined}
+        guestLikes={capabilities.guestLikes}
+        serverTakesLikes={anonymousLikes}
+        onAnonymousLikes={setAnonymousLikes}
         onLikesChanged={handleLikesChanged}
         openLikersOnMount={openLikersOnMount}
         contests={contests}

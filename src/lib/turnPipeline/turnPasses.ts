@@ -2,10 +2,11 @@ import type { ChatMessage } from '@/types';
 import type { TurnPassRecord, TurnPassRequest, TurnPlanInput, TurnMaterial, TurnPassSubject } from './turnPlan';
 import { renderPromptTemplate, renderPromptTemplateRuns, promptTemplatePieces } from '@/lib/promptTemplate';
 import {
-  tilePieces, trimEndTiled,
+  tilePieces, trimEndTiled, trimTiled, collapseBlankLines,
   type AnatomyPiece, type ContextLabel, type TiledRuns,
 } from '@/lib/requestAnatomy';
 import { NONE_PLACEHOLDER } from '@/lib/promptFallbacks';
+import { estimateTokens } from '@/lib/memoryUtils';
 import {
   buildCharacterUserMessage,
   buildDiaryUserMessage,
@@ -18,7 +19,10 @@ import { matchLocationResponse } from '@/lib/locationMatch';
 import { parseChoices } from '@/lib/choices';
 import { parseStatUpdates } from '@/lib/statChanges';
 import { parseTimeDelta, parseOpeningDaypart } from '@/lib/gameClock';
-import { cleanDiscoveredDescription, DISCOVER_NAME_LABEL, DISCOVER_PASSAGE_LABEL } from '@/lib/runtimeCharacters';
+import { cleanDiscoveredDescription, DISCOVER_LATER_LABEL, DISCOVER_PASSAGE_LABEL } from '@/lib/runtimeCharacters';
+import {
+  milestoneMomentValues, milestoneReplyFormat, parseIncrementalMilestoneReply, type IncrementalVerdict,
+} from '@/lib/milestoneMemory';
 import {
   hasOocDirective,
   stripOocDirectives,
@@ -32,9 +36,9 @@ import {
  */
 
 /**
- * Output caps per pass. The narration takes the request type's own default (null); every other pass pins
- * its own — sized for the verbose small tier (Rocinante 12B) so a cast list or an intent completes rather
- * than truncating mid-word; a cut cast member is lost from the whole turn.
+ * Output caps per pass. The narration takes the request type's own default (null); the stat and location
+ * passes size theirs from the world (below). The rest are sized for the verbose small tier (Rocinante 12B)
+ * so a cast list or an intent completes rather than truncating mid-word.
  */
 export const TURN_PASS_CAPS = {
   director: 320,
@@ -53,7 +57,18 @@ export const TURN_PASS_CAPS = {
   discoverEntity: 200,
   /** One line of tags: enough for a rich action line, not for prose. */
   sceneTags: 120,
+  /** A handful of short options; room for the last one on a verbose model. */
+  choices: 256,
+  /** Three short number lines. */
+  milestoneSelect: 300,
 } as const;
+
+/** One stat line (a name, a sign and a number) per live stat, plus slack for a stray word. */
+export const statUpdatesCap = (statCount: number): number => 16 * statCount + 16;
+
+/** The longest destination name the reply may echo, plus slack for quoting or a NONE. */
+export const locationChangeCap = (destinations: readonly string[]): number =>
+  estimateTokens(Math.max(0, ...destinations.map((name) => name.length))) + 8;
 
 /** What `<IN FRAME>` renders to when the turn put nobody in the picture. */
 export const SCENE_TAGS_EMPTY_CAST = 'nobody - an empty scene';
@@ -89,7 +104,7 @@ const labeledRequest = (
   base: Omit<TurnPassRequest, 'systemPrompt' | 'messages' | 'anatomy'>,
   system: TiledRuns,
   message: TiledRuns,
-): TurnPassRequest => ({
+): TurnPassRequest<ChatMessage> => ({
   ...base,
   systemPrompt: system.content,
   messages: [{ role: 'user', content: message.content }],
@@ -102,8 +117,6 @@ const isOpening = (input: TurnPlanInput): boolean => !input.isGameStarted;
  *  derails the other prompts, so they get the terse proxy instead. */
 export const effectiveActionFor = (input: TurnPlanInput): string =>
   isOpening(input) ? 'START GAME' : input.action;
-
-const user = (content: string): ChatMessage[] => [{ role: 'user', content }];
 
 /**
  * The four assemblies a pass shares with a caller that asks the same thing outside a turn — the idle
@@ -146,9 +159,23 @@ export const summaryUserTiled = (template: string, action: string, narration: st
 export const summaryUserMessage = (template: string, action: string, narration: string): string =>
   summaryUserTiled(template, action, narration).content;
 
-/** The discovery pass's user message: who to describe, and the passage they appeared in. */
-export const discoverUserMessage = (name: string, narration: string): string =>
-  `${DISCOVER_NAME_LABEL} ${name}\n\n${DISCOVER_PASSAGE_LABEL}\n${narration}`;
+/** A headed block chip's value: its header over the text, or nothing at all. */
+const headedBlock = (header: string, text: string): string => (text.trim() ? `${header}\n${text}` : '');
+
+/**
+ * The character note's user message. Blank lines left by an empty block collapse, and both ends are
+ * trimmed, so a rewrite with nothing later sends exactly what a first note sends.
+ */
+const discoverUserTiled = (template: string, subject: TurnPassSubject, firstPassage: string): TiledRuns =>
+  trimTiled(tilePieces(collapseBlankLines(promptTemplatePieces(
+    template,
+    {
+      '<CHARACTER NAME>': subject.name.trim(),
+      '<FIRST PASSAGE>': headedBlock(DISCOVER_PASSAGE_LABEL, firstPassage),
+      '<LATER MATERIAL>': headedBlock(DISCOVER_LATER_LABEL, (subject.laterMaterial ?? []).join('\n\n')),
+    },
+    { source: 'user-template', tokens: { '<FIRST PASSAGE>': 'narration' } },
+  ))));
 
 /**
  * A foreground post-narration request's label behavior. Dispatched together, the batch shows one steady
@@ -191,7 +218,7 @@ const locationAutoPass: TurnPassRecord<string | null> = {
   // Rendered against the pre-move context: no narration exists yet, and the move it decides is what
   // scopes every later pass.
   buildRequest: (input, material) => labeledRequest(
-    { type: 'locationChange', maxTokens: null, silent: false, quiet: false },
+    { type: 'locationChange', maxTokens: locationChangeCap(material.destinations), silent: false, quiet: false },
     systemTiled(input.prompts.locationChange, material.baseCtx),
     userTiled(input.prompts.locationChangeUser, { '<PLAYER ACTION>': material.action }),
   ),
@@ -212,7 +239,7 @@ const locationSuggestPass: TurnPassRecord<string | null> = {
     input.locationCount > 1 &&
     input.prompts.locationChange !== '',
   buildRequest: (input, material) => labeledRequest(
-    { type: 'locationChange', maxTokens: null, silent: false, quiet: quietInBatch(input) },
+    { type: 'locationChange', maxTokens: locationChangeCap(material.destinations), silent: false, quiet: quietInBatch(input) },
     systemTiled(input.prompts.locationChange, material.ctx),
     userTiled(input.prompts.locationChangeUser, {
       '<PLAYER ACTION>': material.action,
@@ -392,7 +419,7 @@ const choicesPass: TurnPassRecord<string[]> = {
   fanOut: false,
   isDue: (input) => input.settings.choicesEnabled,
   buildRequest: (input, material) => labeledRequest(
-    { type: 'choices', maxTokens: null, silent: false, quiet: quietInBatch(input) },
+    { type: 'choices', maxTokens: TURN_PASS_CAPS.choices, silent: false, quiet: quietInBatch(input) },
     choicesSystemTiled(input.prompts.choices, input.settings.language, {
       ...material.ctx,
       ...material.sceneEntityTokens,
@@ -414,7 +441,13 @@ const statUpdatesPass: TurnPassRecord<ReturnType<typeof parseStatUpdates>> = {
   // A world with no live stats would only get hallucinated stat names that match nothing.
   isDue: (input) => input.settings.statUpdatesEnabled && input.settings.statCount > 0,
   buildRequest: (input, material) => labeledRequest(
-    { type: 'statUpdates', maxTokens: null, silent: false, quiet: quietInBatch(input), statRequest: material.statRequest },
+    {
+      type: 'statUpdates',
+      maxTokens: statUpdatesCap(input.settings.statCount),
+      silent: false,
+      quiet: quietInBatch(input),
+      statRequest: material.statRequest,
+    },
     systemTiled(input.prompts.statUpdates, { ...material.ctx, ...material.statRequest?.context }),
     userTiled(input.prompts.statUpdatesUser, {
       '<PLAYER ACTION>': material.effectiveAction,
@@ -505,10 +538,10 @@ const diaryPass: TurnPassRecord<string> = {
 };
 
 /**
- * A lasting description for a participant the narration invented. The prompt is not a preset surface, so
- * it is sent as authored rather than rendered.
+ * A lasting description for a participant the narration invented. The idle drainer and the player's
+ * rewrite build theirs here too; a rewrite adds the subject's later material.
  */
-const discoverEntityPass: TurnPassRecord<string> = {
+export const discoverEntityPass: TurnPassRecord<string> = {
   id: 'discoverEntity',
   type: 'discoverEntity',
   stage: 'postNarration',
@@ -516,13 +549,11 @@ const discoverEntityPass: TurnPassRecord<string> = {
   isDue: (input) => input.settings.describeCharacters && input.settings.concurrentTurnRequests,
   buildRequest: (input, material) => {
     const subject = subjectOf(material);
-    return {
-      type: 'discoverEntity',
-      systemPrompt: input.prompts.discoverEntity,
-      messages: user(discoverUserMessage(subject.name, material.narration)),
-      maxTokens: TURN_PASS_CAPS.discoverEntity,
-      ...silentOn(material),
-    };
+    return labeledRequest(
+      { type: 'discoverEntity', maxTokens: TURN_PASS_CAPS.discoverEntity, ...silentOn(material) },
+      systemTiled(input.prompts.discoverEntity, material.ctx),
+      discoverUserTiled(input.prompts.discoverEntityUser, subject, material.narration),
+    );
   },
   parseResponse: (raw, material) => cleanDiscoveredDescription(raw, subjectOf(material).name),
 };
@@ -554,6 +585,49 @@ export const sceneTagsPass: TurnPassRecord<string> = {
     ),
   ),
   parseResponse: (raw) => raw,
+};
+
+const milestoneOf = (material: TurnMaterial): { kept: string[]; fresh: string[] } => {
+  if (!material.milestone) throw new Error('the milestone selector needs its kept and fresh lists');
+  return material.milestone;
+};
+
+/**
+ * Which older digests stay in long-term memory. The reply format rides after the template, out of the
+ * author's reach, because the parser depends on it.
+ *
+ * A pass record for its request assembly, not for the turn runner: the view runs the selector between
+ * turns, so it is absent from {@link TURN_PASSES}.
+ */
+export const milestoneSelectPass: TurnPassRecord<IncrementalVerdict | null> = {
+  id: 'milestoneSelect',
+  type: 'milestoneSelect',
+  stage: 'postNarration',
+  fanOut: false,
+  isDue: (input) => input.settings.memoryDigests,
+  buildRequest: (input, material) => {
+    const { kept, fresh } = milestoneOf(material);
+    // An empty kept list leaves blank lines behind; they collapse, as the character note's do.
+    const template = trimTiled(tilePieces(collapseBlankLines(promptTemplatePieces(
+      input.prompts.milestoneSelectUser,
+      milestoneMomentValues(kept, fresh),
+      { source: 'user-template', tokens: { '<REMEMBERED MOMENTS>': 'condensed', '<NEW MOMENTS>': 'condensed' } },
+    ))));
+    const format = milestoneReplyFormat(kept.length > 0);
+    const end = template.content.length;
+    return labeledRequest(
+      { type: 'milestoneSelect', maxTokens: TURN_PASS_CAPS.milestoneSelect, ...silentOn(material) },
+      systemTiled(input.prompts.milestoneSelect, material.baseCtx),
+      {
+        content: template.content + format,
+        runs: [...template.runs, { start: end, end: end + format.length, contextLabel: 'reply-format' }],
+      },
+    );
+  },
+  parseResponse: (raw, material) => {
+    const { kept, fresh } = milestoneOf(material);
+    return parseIncrementalMilestoneReply(raw, kept.length, fresh.length);
+  },
 };
 
 /**

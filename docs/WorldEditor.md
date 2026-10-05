@@ -1,529 +1,180 @@
 # 🛠️ World Editor
+<!-- keywords: build my own game, worldbuilding, scenario maker, create a setting, campaign creator, write own adventure -->
+<!-- route: worldEditor -->
 
-A guide to each tab in the World Editor — what it does, why it exists, and the settings that aren't obvious from the screen.
+A guide to each tab in the World Editor: what it does, why it exists, and the settings that aren't clear from the screen.
 
-> 💡 Every tab has a **?** button beside its search box with a short version of this page. This is the long version.
+> 💡 Every tab has a **?** button with a short version of its page. It sits at the right end of the row above the list. On every tab except **Overview**, that row also has the search box. These pages are the long version.
 
-Sections land here as each tab's help is written, so a tab missing below simply isn't documented yet.
+Each tab has its own page.
+
+| Page | Covers |
+|---|---|
+| [🌍 Overview](World-Editor-Overview) | The world's name, card, avatar, music and AI-facing text |
+| [🎬 Openings](World-Editor-Openings) | The ways a playthrough can start, on the world, each location and each entity |
+| [📊 Stats](World-Editor-Stats) | The numbers that describe the player |
+| [🎭 Entities](World-Editor-Entities) | The people, creatures and things in your world |
+| [🗺️ Locations](World-Editor-Locations) | The places, and how the story moves between them |
+| [🧬 Traits](World-Editor-Traits) | The choices a player makes before the story starts |
+| [📖 Dictionary](World-Editor-Dictionary) | Lore that reaches the AI only when a keyword brings it up |
+| [🧩 Placeholders](World-Editor-Placeholders) | Reusable text that can change with each playthrough |
+
+To check a world before you play it, see [🧪 Test Bench](Test-Bench).
+
+## How to Switch Editor Mode
+<!-- keywords: simple, advanced, more options, hidden settings, show all, expert, tab is missing, fields not showing, beginner view, basic layout, unlock extra tabs, power user, fewer options -->
+<!-- route: worldEditor#editor-mode -->
+
+1. Open a world in the World Editor.
+2. In the header, select **Simple** or **Advanced**.
+
+The app remembers your pick for every world. You can't switch while the Authoring Tour runs.
+
+## How to Find and Replace Text
+<!-- keywords: search, ctrl+f, rename everywhere, change all, swap a word, bulk rename, substitute, ctrl+h, mass edit, fix typo everywhere, global rename -->
+<!-- route: worldEditor#find-button -->
+
+1. Select the magnifier button in the header, or press **Ctrl+F**. Press **Ctrl+H** to open it with the replace row.
+2. Type in the **Find** box. Select **Match case** or **Match whole word** to narrow the search.
+3. Select **Next match** or **Previous match** to go through the results. The editor opens each one on its tab.
+4. To replace, open the replace row and type in the **Replace** box.
+5. Select **Replace** for this match, or **Replace all** for every match.
+
+## How to Restart the Authoring Tour
+<!-- keywords: tutorial, guide, walkthrough, help, intro, learn, onboarding, show me around, beginner lesson -->
+<!-- route: settings.data#start-authoring-tour -->
+
+1. Open **Settings**, then select the **Data** tab.
+2. Under **Authoring**, select **Start Authoring Tour**.
+
+The tour opens the World Editor on a new world. Your other worlds don't change.
+
+## How to Save or Discard Your Changes
+<!-- keywords: unsaved, cancel, undo, exit, leave, throw away, revert, keep, lost my work, close without storing, back out, abandon edits, quit editor, apply edits, back arrow -->
+<!-- route: worldEditor -->
+
+1. Select the back arrow at the top left of the editor.
+2. In the **Unsaved changes** dialog, select **Save & Exit** to keep your changes. Select **Exit Without Saving** to discard them.
+
+To save and stay in the editor, select **Save** at the bottom right.
+
+## Editor Modes
+<!-- keywords: difference between views, which tabs hidden, dot on button, lose data switching, stripped down, full feature set, default view -->
+
+The World Editor has two modes. **Simple** is the default.
+
+- **Simple** shows the fields a new world needs. It hides the **Placeholders** tab, the placeholder bar and **Optimize Images**.
+- **Advanced** shows every field.
+
+Simple mode also hides these panel tabs:
+
+| Panel | Hidden tabs |
+|---|---|
+| Entity | **Traits**, **Placeholders**, **Openings** |
+| Location | **Pins**, **Openings** |
+| Stat | **Descriptors**, **Code** |
+| Trait | **Pins** |
+| Dictionary entry | **Matching** |
+| Dictionary book | **Placeholders** |
+
+Each tab's page says which of its fields Simple mode hides. When a world uses a field Simple mode hides, a dot shows on **Advanced**.
+
+Switching to Simple mode doesn't remove anything. The hidden fields keep their values, and the AI still reads them.
+
+## Find and Replace
+<!-- keywords: swap text for chip, keyboard shortcuts, skip to next result, turn word into variable, undo a swap, confirm bulk change, shift+enter -->
+
+The find bar searches the whole world, on every tab the current mode shows. It matches chips by their label, name or values.
+
+- **Enter** goes to the next match. **Shift+Enter** goes to the previous one. **Esc** closes the bar.
+- **Replace all** asks first, and says how many matches and fields it changes.
+- A chip can't be replaced as text. Change it from its pop-out.
+- A field that can't hold a chip is skipped when you replace text with a placeholder.
+
+In Advanced mode, the replace row can put a placeholder chip in place of text. Select the swap button, then pick a placeholder in **Choose Placeholder**.
+
+To undo a replace, exit without saving. That also drops your other changes since the last save.
+
+## The Authoring Tour
+<!-- keywords: wizard, guided setup, use example button, next button stuck, end early, first world helper, in play pane, resume lesson -->
+<!-- route: worldEditorTour.world-name -->
+
+The Authoring Tour builds a new world with you, one field at a time. It runs in Simple mode.
+
+The tour first shows as an offer: **Take the Authoring Tour?** Select **Start Tour** or **No Thanks**.
+
+Each step points at one field. Fill it, or select **Use Example**, then select **Next**. **Next** waits until the field has a value. On desktop, the **In Play** pane shows where the field appears in play and what each prompt reads from it.
+
+The tour goes through the tabs in order: **Overview**, **Locations**, **Entities**, **Stats**, **Traits** and **Dictionary**. Its last steps show the **Advanced** switch and the Test Bench. Then select **Finish**, or **Play** to enter your world.
+
+- Each **Next** saves the world.
+- **End Tour** in the tour bar stops the tour. **Back to Tour** returns you to the current step.
+- If you delete an item the tour made, the tour goes back to the step that made it.
+
+## Saving and Discarding
+<!-- keywords: does it autosave, edits not kept, work disappeared, prompt on closing, new world vanished, manual saving, confirm exit -->
+
+Your edits stay in the editor until you select **Save**. Nothing saves by itself, except the Authoring Tour's steps. A new world isn't stored until its first save.
+
+When you leave with unsaved changes, the **Unsaved changes** dialog asks what to do:
+
+- **Save & Exit** saves, then closes the editor.
+- **Exit Without Saving** discards every change since the last save.
+- **Cancel** keeps you in the editor.
+
+## Help Buttons
+<!-- keywords: question mark, info icon, explain this tab, colored icon, short reference -->
+
+Every tab has a **?** button at the right end of its toolbar. It opens a short help window for that tab. **Learn more** opens the tab's page in this guide.
+
+A **?** you haven't opened yet shows in the accent color.
 
 ---
 
 ## Overview
 
-The world's own tab: its name, description, thumbnail and the AI-facing text that frames every turn. It is two columns rather than a list and a panel. On a phone they stack, left column first.
+The world's own tab: its name, description, thumbnail and the AI-facing text that frames every turn.
 
-### The left column — how your world is listed
+➡️ [World Editor: Overview](World-Editor-Overview)
 
-| Field | What it does |
-|---|---|
-| **World Name** | The title on the library card and in every menu. |
-| **Author** | Your name on the card. |
-| **Tags** | The words the community browser filters on. |
-| **Thumbnail** | The card's picture. **Generate with AI** sits under the frame and writes one from your description. |
-| **3D Player Avatar** | Gives this world a 3D avatar. The player can customize it before they start. |
-| **Custom Player Avatar** | **Advanced mode only.** Your own `.vrm` or `.glb` in place of the bundled model. **Preview** opens it; **Remove** returns to the default. |
-| **Background Music** | The track the world plays. Drop a file on the box, or click it to pick one. |
+## Openings
 
-### The right column — what you write
+An opening is one way a playthrough can start. The world, each location and each entity can have their own. A playable entity can have Self openings for a player who plays it.
 
-| Field | What it does |
-|---|---|
-| **World Description** | The blurb on the library card. Players read it before they play, so placeholders stay as plain text here. |
-| **Readme** | Two tabs. **Introduction** shows before the player makes any setup choices; **Gameplay** shows when they enter the world. Both take markdown. |
-| **System Prompt Addition** | Text added to the narrator's prompt on every turn of this world. |
-| **Custom Prompts** | **Advanced mode only.** Replaces the player's own narration, choices or stats prompt, plus the Opening Cue below. |
-
-### Opening Cue
-
-**Advanced mode only.** The text the player's input box opens pre-filled with when they press **Start Game**. Without one, every world opens on the same standard cue — a generic "write the opening scene" instruction. With one, your world's first turn is the one you designed.
-
-Switch the checkbox on and the field appears, ready to write what the opening turn should ask the narrator for. Switched off, the section is just its checkbox — a world opening on the standard cue costs you no space.
-
-> 💡 It is a **starting point, not a script.** The player still reads the cue in their input box and can tweak or replace it before sending. That is why there is no player-side opt-out: they already have the last word.
-
-| Behavior | What happens |
-|---|---|
-| **Opens on the standard cue** | The field shows the shipped cue, guardrails and all, so you edit from something that works. It keeps following it until your first edit. |
-| **First edit stores it** | Only a change you actually make is saved onto the world. Opening the field writes nothing. |
-| **Switching it off keeps the text** | The checkbox decides whether the cue is *used*; it never discards what you wrote. The field goes away, your words don't — switch it back on to find them. |
-| **Reset** | Drops your stored text and returns the field to following the standard cue. Asks first. |
-| **Blank falls back** | An applied cue that is empty or only spaces sends the standard cue instead, never an empty opening. |
-
-**Placeholder chips work here.** A Wildcard in the cue rolls per playthrough, so the same world can open on a different detail each time — and the player sees the rolled words, never the chip.
-
-> ⚠️ The whole cue is yours: nothing is appended to it. If you delete the "don't ask the player what to do" line the shipped cue carries, the AI may open by offering options — a separate step already does that. Edit from the template rather than starting from an empty field.
-
----
+➡️ [World Editor: Openings](World-Editor-Openings)
 
 ## Stats
 
-The numbers that describe your player — health, coin, reputation, whatever your world needs. Each stat holds a value between a **Min** and a **Max**, and the AI sees them on every turn.
+The numbers that describe your player. The AI sees them on every turn.
 
-### Why it exists
-
-Prose alone drifts. A stat is a fact the AI has to write around: it can't narrate you sprinting across a rooftop while your Stamina reads 4/100 without the number contradicting it.
-
-The narrator is explicitly told to let stats shape *how an action turns out* — a low stat as effort and cost, a high one as ease — and **not** to tabulate them or report their changes. A separate step handles the actual numbers. So stats steer the story without it reading like a character sheet.
-
-### What the AI sees
-
-Each stat's **Name** is always sent. The Stats chip in your prompt decides what accompanies it:
-
-| Piece | Adds |
-|---|---|
-| **Values** | The current value and its ceiling — `62/100`, or `62%` for a percentage stat |
-| **Status** | The matching Stat Descriptor — a word for the current level |
-| **Meaning** | The stat's **Description** — what it represents |
-
-With no piece selected, the line is just the stat's name.
-
-> ⚠️ Every stat is sent on **every turn**. Stats are one of the steadiest drains on your context budget — three meaningful stats beat a dozen decorative ones.
-
-### The fields
-
-| Field | What it does |
-|---|---|
-| **Name** | Also how the AI refers to the stat, and how stat changes are matched back to it. |
-| **Type** | **Number** (a range you set) or **Percentage** (pinned 0–100, shown everywhere as `N%`). Everything below works the same for both. (List exists in the data format but isn't currently offered.) |
-| **Description** | What the stat represents. Sent to the AI when the chip's **Meaning** piece is on. Takes placeholder chips. |
-| **Min** / **Max** | The range. Values are always clamped to it. A percentage stat locks these at 0 / 100 and hides Max — you set only its **Initial Value (%)**. |
-| **Initial Value** | Where the stat starts. Ignored when the stat has code. |
-| **Regen** | Added to the value once per turn, then clamped. Positive heals over time; negative bleeds. |
-| **Body Sliders** | Bind body morph sliders to this stat — its value, from Min to Max, drives each slider. Each slider belongs to only one stat. |
-
-### Stat Descriptors
-
-Descriptors turn a number into a word — `Winded`, `Exhausted` — which is what the AI receives when the chip's **Status** piece is on. A descriptor takes placeholder chips too, so a band can name the rolled town or the rolled rival.
-
-Each has a **threshold** and a **Description**. A coverage bar above the rows draws every band's real extent across Min→Max, marks where the stat starts, and shows the range above your top band in red — the range where the AI is told no status at all. Each row says what it covers underneath it.
-
-> ⚠️ **A threshold is the *top* of its band, and the lowest band the value fits in wins.** Descriptors are read low to high whatever order you list them in, so `30 → Barren` covers Min–30 and a `60` above it covers everything up to 60. Give your highest descriptor a threshold of your **Max**, or a value above it gets no descriptor at all.
-
-**Thresholds in: Raw | % of Max**
-
-| Setting | A threshold of `3` on a 0–10 stat means | Raise Max to 20 and… |
-|---|---|---|
-| **Raw** (default) | the value 3 | the band still ends at 3 |
-| **% of Max** | 3% of the way from Min to Max — the value 0.3 | the band rescales to 0.6 |
-
-Pick **Raw** for counters ("3 rockets is low") and **% of Max** for proportions ("the bottom 30% is low"). Switching converts your existing numbers, so no band moves at the moment you switch — the choice only decides what happens the next time you change the range. A **Percentage** stat is pinned to 0–100, where both readings are the same number, so it has no switch.
-
-### Prevent AI Changes
-
-Four checkboxes stop the AI moving a stat in one direction, while your world's own rules still can:
-
-| Checkbox | Blocks |
-|---|---|
-| **Don't Increase** | AI raising the value |
-| **Don't Decrease** | AI lowering the value |
-| **Don't Increase Max** | AI raising the ceiling |
-| **Don't Decrease Max** | AI lowering the ceiling |
-
-Percentage stats show only the first two — their ceiling is pinned at 100, so the AI can never move it.
-
-### Dynamic Value Calculation
-
-A stat can compute itself from the others. Write JavaScript that **returns a number**, and it recalculates each turn instead of using Initial Value. **Test Code** runs it immediately and shows the result or the error.
-
-Your code reads a copy of every stat and the story clock from an isolated sandbox — no page, no network, no other stat's code. The editor suggests what's in reach as you type and underlines what isn't.
-
-**A calculated stat ignores the AI.** Its value is recomputed every turn, so anything the AI writes is overwritten. The AI still *reads* the value and description normally.
-
-> 📘 Full reference: [Stat Code Guide](StatCodeGuide).
-
-### Getting started
-
-Start with two or three stats the story would genuinely turn on, each with a Min, Max and a couple of descriptors. Add Regen, locks and code only when a stat needs behavior the AI shouldn't be inventing.
-
----
+➡️ [World Editor: Stats](World-Editor-Stats)
 
 ## Entities
 
-The people, creatures and things that populate your world — a ferryman, an eel-smoker, a barred door. An entity belongs to one or more **Locations**, and the AI is handed the ones that could turn up where the player is.
+The people, creatures and things that populate your world.
 
-### Why it exists
-
-Left to itself, the narrator invents a stranger, names them, and forgets both by the next turn. An entity is a fixed, reusable character the story can return to — one the AI is reminded of every time the player is somewhere it lives.
-
-The default prompt introduces them under "Characters and things that **may** appear in this location". That hedge is a hint to the AI, not a rule the app enforces — nothing stops the narrator reaching for anyone on the list, and the wording is yours to change in the prompt editor.
-
-### What reaches the AI
-
-Assignment to a location is the entire gate: an entity in no location never reaches the AI at all.
-
-| Field | Sent? |
-|---|---|
-| **Name** | Always |
-| **Aliases** | Yes — as "also known as" |
-| **AI-Facing Description** | Yes — the main thing the AI knows |
-| **AI-Facing Summary** | Only in prompt slots that ask for the short form |
-| **Type** | Yes, as a plain field |
-| **Player-Facing Description** | **Never** |
-| Image, Image Tags, 3D model, group, order | Never |
-
-> 💡 **The two descriptions are disjoint, and that's the point.** The player only ever sees the Player-Facing one; the AI only ever sees the AI-Facing one. So the **AI-Facing Description** is where a secret lives — the narrator can act on it while the player stays in the dark. The default prompt even asks the narrator to hold a name back until the player would plausibly have learned it, though that's a request to the AI rather than something the app enforces.
-
-### Descriptions and summaries
-
-Three description fields, with distinct jobs:
-
-- **Player-Facing Description** — what the player reads on the entity's card. Never sent to the AI, so it costs no context; whatever you write here, the player simply knows.
-- **AI-Facing Description** — the full text the AI works from, and the player never sees it. This is the one that does the work, and the one a secret goes in.
-- **AI-Facing Summary** — a one-line version for slots where the full description is too long. **Blank is fine** — it falls back to the full description. The default prompt uses summaries for entities in *reachable* locations, and full descriptions for the player's current location.
-
-The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing Description.
-
-### Aliases
-
-Other names the entity goes by — a title, a nickname, an epithet. They do two jobs: the AI is told them as *"also known as"*, and the story parser counts the entity as **present** when the narration uses one, not just when it uses the real name.
-
-| | |
-|---|---|
-| **Case-Sensitive** | `Matron` matches "the Matron" and misses "the matron". Add every casing narration is likely to write. |
-| **Plural-aware** | `wolf` also matches "wolves", the same as names. |
-| **Whole Words** | `Em` won't fire inside "System". |
-
-> ⚠️ **Never start an alias with "the".** Narration puts a title at the start of a sentence constantly, and "The alpha…" won't match an alias written `the alpha`. Drop the article — `alpha` matches both positions.
-
-Two more worth knowing:
-
-- **Skip generic job titles.** `knight`, `alchemist`, `apprentice` will fire on any passing character of that trade and pull the wrong entity into the scene.
-- **Don't alias a role the story uses for someone off-page.** Quoted dialogue is excluded from presence detection, but plain narration isn't — so if the prose says *"she was sent by the Warchief"*, an alias of `Warchief` marks the Warchief present in a scene she isn't in.
-
-### Locations
-
-The link lives on the **entity**: one character's whereabouts is one field, however many places it turns up in. The location's own Entities picker is the same relationship seen from the other end — set it wherever you prefer.
-
-> ⚠️ **Deleting a location removes it from everyone who was there, silently.** The entities themselves survive — but one that was only in that location is now in no location, which means it never reaches the AI again. Nothing warns you, and the entity still looks fine in its own tab.
-
-The default prompt feeds entities from three places, as separate blocks: the player's **current location**, its **sub-locations**, and **reachable** locations.
-
-> ⚠️ Every entity at the player's location is sent **every turn**. A crowded location is a permanent context bill — two or three that the scene turns on beat a populated village.
-
-### Groups
-
-Folders for your own sanity. Nesting and order are editor-only and **never reach the AI** — entities feed the AI exactly as if ungrouped, so grouping can never change the story.
-
-### Images and models
-
-The image and 3D model are for the player's screen. **Image Tags** are booru tags used only for AI image generation — the ✨ toolbar can draft them from the description, and uploading an image with an embedded prompt offers to use it. None of this reaches the narrator.
-
-#### Upload or link
-
-Every image field takes either an uploaded file or a web address pasted into the **Or paste an image URL** box. The difference is where the picture lives:
-
-| | Uploaded | Linked |
-|---|---|---|
-| Stored in your world | Yes — full size counts toward the file | No — just the address |
-| Works offline | Always | After you've seen it once, or via **Make Available Offline** |
-| Survives the host going away | Always | No |
-
-**Link when your world has a lot of pictures** — a published world stays small no matter how many it carries. **Upload when it matters that the picture can't disappear.**
-
-A linked slot shows a 🔗 marker. Two of them are warnings worth reading:
-
-- **Expiring link** — Discord *attachment* links stop working after a while, so the picture will vanish for anyone playing later. Discord's permanent addresses (avatars, emojis, server icons) are fine.
-- **Display only** — that site won't let Formamorph download the picture. It shows normally online, but can't be saved for offline use or put into a character card. Uploading the file instead is the fix.
-
-> 💡 **Make Available Offline** in a world's details window downloads all its linked pictures at once, so the world is ready before you lose your connection.
-
-Exporting a world with linked pictures asks whether to keep the links (small file) or download them into it (works anywhere). Exporting a **character card** always downloads the portrait, because the card *is* the picture.
-
-### Getting started
-
-Write the AI-Facing Description first — it's the one that does the work, and it's safe to put things there the player shouldn't know yet. Add a Summary only if the entity turns up in reachable locations. Reach for the Player-Facing Description when you want the player to read something the AI has no use for.
-
----
+➡️ [World Editor: Entities](World-Editor-Entities)
 
 ## Locations
 
-The places your story happens. The player is always in exactly one, and it decides what the AI is told about the scene — the description, who's present, and where the story might go next.
+The places your story happens, and where the story can take the player.
 
-### Why it exists
-
-Without a fixed place the narrator drifts: the tavern becomes a street becomes a forest, and nothing stays put. A location is an anchor the AI is handed again on every turn.
-
-### Nesting is the AI's map, not the player's
-
-This is the part that surprises people.
-
-> 💡 **The player can travel anywhere, always.** The in-game location list offers **every** location in your world, unfiltered, no matter how you've arranged them. Nesting never gates a player's choice, and no arrangement can strand them.
-
-What nesting decides is where **the story** can take the player. When the AI reads an action as movement, it only considers places connected to where they already are:
-
-| From | The story can move them |
-|---|---|
-| A **top-level** location | Down into its own sub-locations |
-| A **sub-location** | Down into its children, **up** to its parent, and **sideways** to its siblings |
-
-…unless you've drawn a **Connection** between two places, which takes over that pair entirely — see [Connections](#connections) below.
-
-By default the story *offers* the move — a small **Move to _X_?** prompt with **Go** and **Dismiss** — rather than making it for you.
-
-Two consequences worth knowing:
-
-- **A flat list of top-level locations** gives the AI nothing to connect, so it never proposes a move. Travel becomes entirely player-driven — a legitimate design, just a deliberate one.
-- **A single-location world** never runs the router at all.
-
-If the AI's answer doesn't match a connected place, it's discarded and nothing is offered — the story can never teleport the player somewhere unconnected.
-
-### Building the tree
-
-A new location always arrives at the top level. Nesting it is a separate move, and there are three ways to make it:
-
-| | How |
-|---|---|
-| **List view** | Drag a row by its grip. Up and down reorder; **sideways sets depth** — one step right per level. A row can go at most one level deeper than the row above it. |
-| **Keyboard** | Tab to a row's grip, press **space** to lift it, then **↑ ↓** to move it through the list and **← →** to take it out of or into the row above. **Space** drops it, **escape** puts it back. |
-| **Canvas view** | Drag a box into another box. One that already holds something takes the drop on contact; over a **childless** box, hold still for half a second — it lights up to show it is armed, and releasing nests into it. Release without waiting and the box has only moved. |
-
-> 💡 **Deleting a parent never deletes the branch.** Its children move up to take its place, one level shallower.
-
-### What reaches the AI
-
-| Field | Sent? |
-|---|---|
-| **Name** | Always |
-| **AI-Facing Description** | Yes — the main thing the AI knows |
-| **AI-Facing Summary** | Only in prompt slots that ask for the short form |
-| **Player-Facing Description** | **Never** |
-| Background image, Image Tags, ambient sound, starting flag, nesting | Never |
-
-The default prompt gives the **narrator** the current location in full, and its sub-locations and reachable places as summaries.
-
-> ⚠️ **Only the narrator gets the full description.** The other steps — the choice writer, the continuity planner, the location router — are sent the **summary** of the current location too. So anything the AI must act on that lives *only* in the full description (a random-event list, a rule about the place) reaches the narrator and nobody else. Writing a summary is what switches those steps over: leave it blank and they fall back to the full text.
-
-> 💡 **The two descriptions are disjoint.** The player only ever sees the Player-Facing one; the AI only ever sees the AI-Facing one — so the AI-Facing Description is where a secret lives.
-
-The **✨ toolbar** beside AI-Facing Summary can draft it from your AI-Facing Description. Blank is fine — it falls back to the full description.
-
-### Entities
-
-The **Entities** picker lists who's at this location. Membership is stored on each entity, so editing here writes to their **Locations** — the same link, set from whichever end suits you.
-
-### Connections
-
-Nesting hands out travel for free, and it's always mutual. **Connections** are the deliberate version: a link between *any* two locations, wherever they sit in the tree.
-
-The **Connections** section on a location lists every link it's part of, seen from where you're standing:
-
-| Direction | Means |
-|---|---|
-| **Two-Way** | The story can move the player either way. This is what a new Connection starts as. |
-| **Outgoing** | The story can leave here for the other place — and can never bring them back. |
-| **Incoming** | The story can arrive here from the other place, but not go the other way. |
-
-Pick a place from the **Connect to…** dropdown and press **Add Connection**. The **Travel Hint** box is optional and goes to the AI — *through the shimmering portal*, *down the rope ladder* — so the story knows *how* the trip is made.
-
-> ⚠️ **A Connection replaces whatever free travel those two places had.** That's what makes a one-way link genuinely one-way, even between two sub-locations of the same place. The story is never offered the trip back — it isn't told not to take it, it simply never sees it.
-
-One Connection is one link, so it appears on **both** locations' panels — flipping it from either end moves the same record, and deleting it from either end deletes it once. Deleting a location deletes its Connections with it.
-
-> 💡 The player's own location list is still unfiltered — Connections steer the *story*, exactly like nesting does.
-
-### Starting location
-
-The checkbox marks a place a new game can begin. It does more than it looks:
-
-| Ticked | Result |
-|---|---|
-| **None** | The game starts at a **random location — any of them**. Rarely what you want. |
-| **One** | Every game starts there. |
-| **Several** | The player chooses between them before starting. |
-
-### Getting started
-
-Write the AI-Facing Description first — it's the one doing the work. Reach for nesting when you want the story to move the player on its own, add Connections where you want a link nesting can't express, and tick at least one starting location so new games don't begin somewhere arbitrary.
-
----
+➡️ [World Editor: Locations](World-Editor-Locations)
 
 ## Traits
 
-The choices that make one playthrough different from the next — *Scarred*, *Silver-Tongued*, *Afraid of Water*. The player picks their traits before the story starts, and the ones they take are described to the AI on every turn.
+The choices that make one playthrough different from the next.
 
-### Why it exists
-
-A trait is a durable fact about the character. Stats move constantly and the story moves with them; a trait stays put, so the narrator is handed the same truth on turn one and turn ninety. A stat says *how much*; a trait says *who you are*.
-
-> 💡 **Only chosen traits reach the AI.** A trait the player didn't take is sent nowhere and does nothing. Everything below applies to the ones they picked.
-
-### What the AI sees
-
-| Field | Sent? |
-|---|---|
-| **Name** | Always (it's the fallback when the AI description is blank) |
-| **AI-Facing Description** | Yes — what the AI is told the trait means |
-| **Player-Facing Description** | **Never** |
-| **Stat Changes** | **Never** |
-
-A blank **AI-Facing Description** falls back to just the trait's name — often enough for something self-explanatory like *Left-Handed*.
-
-> 💡 **Stat Changes are invisible to the AI.** It's told the player is *Sickly*; it's never told that cost them 20 Vigor. The number does its work through the stat itself, so write the description as a fact the narrator can act on — *"Flinches at open water"*, not *"-20 swimming"*.
-
-### Enabled by Default
-
-Pre-checks the trait on the selection screen. The player can still untick it — it's a default, not a requirement.
-
-### Stat Changes
-
-Each row adjusts one stat when the trait is taken: a stat, a number, and what to change.
-
-> ⚠️ **Every type is an adjustment, not a setting.** `+20` on a stat that starts at 50 gives 70, not 20.
-
-| Type | Effect |
-|---|---|
-| **Starting Value** | Shifts where the stat begins. |
-| **Min** | Raises the floor, pulling the value up with it if it's below. Can be lowered only far enough to undo another trait's raise — **never below the floor the stat was authored with**. |
-| **Max** | Moves the ceiling either way. Lowering it below the current value drags the value down too. |
-| **Regen** | Adds to what the stat recovers each turn. Negative bleeds. |
-
-Min and Max are deliberately asymmetric: a trait can take the ceiling anywhere, but can never push a stat below the range its author designed.
-
-### Groups
-
-Groups organize the list — and unlike organizational folders elsewhere, a trait group also **speaks to the AI**. Give a group an **AI-Facing Description** and it becomes a header above its chosen traits, letting you frame a whole set at once (*"Origin: where this life began"*). A group with no chosen traits inside it is skipped entirely.
-
-#### Exclusive
-
-Tick **Exclusive** when the group is a choice between options rather than a list to tick — a species, an origin, a starting class. It renders as radio buttons and holds the group to at most one trait: picking one drops the one you had. Clicking the trait you already chose clears it, so "none of these" stays reachable. In-game it works the same for switchable traits — turning one on retires its siblings.
-
-> 💡 **Give an exclusive group a default.** Mark one trait *Enabled by Default* so there's always a valid answer; without one, "nothing selected" is a state the AI has to interpret. If you mark two, the first in the list wins.
-
-### Getting started
-
-Name the trait, write one line of AI-Facing Description that reads as character rather than mechanics, and add Stat Changes only when the trait should also move a number. Leave the description blank for anything the name already says.
-
----
+➡️ [World Editor: Traits](World-Editor-Traits)
 
 ## Dictionary
 
-Your world's lorebook. Each **book** holds **entries**; an entry injects its content into the AI's prompt whenever one of its keywords appears in the text being scanned.
+Your world's lorebook. An entry reaches the AI when one of its keywords appears.
 
-### Why it exists
-
-The AI can't hold your whole world in mind at once — everything it knows on a given turn has to fit in a limited context window. Writing every detail into your world description spends that budget on every turn, whether it's relevant or not.
-
-The Dictionary is the alternative: lore sits on standby and costs nothing until something brings it up. Mention the Gloamwater, and the AI suddenly knows what it is.
-
-### What gets scanned
-
-The rule: **if the AI is told it, it can fire a trigger.** A **turn** is one action from you and the AI's reply. On each turn, Formamorph scans:
-
-| Scanned | Always? |
-|---|---|
-| **The scene as the AI receives it** — your location and the characters present, plus any nearby / sub-location detail your prompt sends | Always |
-| **Your notes** and the **action** you just took | Always |
-| **Earlier turns** — your actions and the AI's replies | Up to the entry's **Scan Depth** |
-
-> 💡 Keywords match **the exact wording the AI is given**. Where a block is sent as a *summary*, the summary is what's matched — so a keyword that appears only in an entity's full description won't fire if the AI was sent the short version. Check which form your prompt sends in **Settings → Output → Turn Extras**.
-
-Text that appears on **every** turn is deliberately **excluded** — your world description, stats, traits, and formatting guidance. Terms inside them would fire their entries constantly and defeat the point.
-
-Lore doesn't trigger other lore unless you ask it to: that's what **Recursive** is for.
-
-### The entry editor
-
-Select an entry to open it. **Trigger Keywords** and **Value** are the whole feature — everything else is there for a specific problem, and is safe to ignore until you hit one.
-
-**Options**
-
-| Checkbox | What it does |
-|---|---|
-| **Always Inject** | Skip the scan; send this entry every turn. Costs context every turn, so use sparingly. |
-| **Regex** | Treat keywords as regular expressions instead of plain text. |
-| **Whole Words** | Match on word boundaries, so *art* stops firing inside *cart*. |
-| **Case-Sensitive** | Off by default. |
-| **Recursive** | Lets the entry be fired by the content of entries that already activated, not just by the scene. |
-
-**Scan Depth** — how many earlier messages to search. Leave it blank (*all history*) to search everything; `0` searches only the current scene.
-
-**Secondary Keywords** — an extra condition on top of the trigger. *bridge* fires only if *toll* also appears in the scanned text.
-
-| Checkbox | What it does |
-|---|---|
-| **Require All** | Every secondary keyword must appear, not just one of them. |
-| **Exclude** | Inverts the test — the entry fires only when the secondary keywords are **missing**. |
-
-### Background and Foreground
-
-Each book splits its entries into two collapsible groups, **BACKGROUND** and **FOREGROUND**. They're two separate lore blocks in the system prompt, and an entry's group decides which one it joins. New entries land in Foreground.
-
-**To move an entry between them, drag it from one group into the other.** There's no dropdown — the groups are drop zones.
-
-By default Background sits earlier in the prompt than Foreground, but **you control placement**: both blocks are filled by prompt chips you can move in the prompt editor. If your prompt has no Background chip, those entries fall into Foreground instead.
-
-### Books
-
-Books group related entries. Their order sets the order entries are injected, and disabling a book mutes everything inside it at once.
-
-A book's **enabled** state is a *default*, not a lock. Before starting, players may see a step where they can toggle and reorder your books — alongside any dictionaries from their own library. That step only appears when there's a real choice to make: more than one book in the world, or at least one dictionary saved in the player's library.
-
-### Getting started
-
-Start with one book and a handful of plain keyword entries. Everything above exists for a specific problem — reach for it only when an entry fires when it shouldn't, or fails to fire when it should.
-
----
+➡️ [World Editor: Dictionary](World-Editor-Dictionary)
 
 ## Placeholders
 
-Reusable bits of world text you define once and drop into your writing as chips — an eye color, a street name, a deity. Each has a **Name** and a list of **Values**, and everywhere its chip appears, it resolves to one of those values when the story runs.
+Reusable bits of world text you define once and place as chips.
 
-### Why it exists
-
-So a world can vary without being rewritten. Author *"the {{Eye Color}} stranger"* once and it reads as a real detail every playthrough — the same detail on purpose, or a fresh one each time.
-
-### Variable or Wildcard
-
-The kind is inferred from how many values you give it — there's no separate switch.
-
-| Values | Kind | Resolves to |
-|---|---|---|
-| **One** | **Variable** | Always that value. Edit it here once and every chip updates. |
-| **Two or more** | **Wildcard** | A random one of the values. |
-| **None** | — | Nothing (empty). Give it at least one value. |
-
-### World vs. Unique
-
-A **Wildcard** chip chooses how its roll is shared, per placement:
-
-| Scope | Behavior |
-|---|---|
-| **World** | Every World chip of this placeholder shows the **same** rolled value everywhere — one town name, used consistently. |
-| **Unique** | Each placement rolls on its own — ten Unique *Eye Color* chips give ten independent eyes. |
-
-> ⚠️ **Independent doesn't mean different.** Each Unique placement draws on its own, so two of them can land on the same value — three chips from a ten-value list show a repeat about a third of the time. Where two chips *must* differ (two towns that can't share a name), give each its own placeholder with values the other doesn't have.
-
-A **Variable** ignores this — it's the same single value no matter what.
-
-### How a placed chip reads
-
-| Chip | Reads as | Example |
-|---|---|---|
-| **World** | The placeholder's name | `Town Name` |
-| **Unique** | The name plus a letter, one sequence per placeholder | `Town Name (A)`, `Town Name (B)` … `Town Name (AA)` |
-| **Labeled** | The label typed in the chip's pop-out | `Hometown` |
-
-The letters follow the order things sit in the world: entities first, as the Entities tree lists them, then locations, traits, stats, dictionaries, the world's own prompt fields, and the placeholders' own values. Remove the first placement and the next one becomes **(A)** — nothing is stored, so a letter tells two placements apart but never names one for good. Give a placement a **Label** in its pop-out when you want a name that stays. Hover any chip or pill to see the placeholder's name, its mode and its values. A chip inside longer text keeps its braces everywhere the name is printed as plain text: `The {Tavern Name (A)} Inn`.
-
-### The roll is frozen for the playthrough
-
-> 💡 A Wildcard rolls **once, when a game begins**, and the result is stored in that save. The stranger with gray eyes on turn one still has them on turn ninety, and reloading the save changes nothing. A new game rolls fresh.
-
-### Where chips work
-
-Placeholders resolve **both** in what the AI reads and in what the player sees, in any field with the chip picker:
-
-- entity, location and dictionary descriptions
-- stat descriptions and descriptors
-- the readme
-- the system prompt addition
-
-> ⚠️ **The World Description is the exception.** It's shown in the library *before* a playthrough exists, so there are no rolls to resolve yet — that field takes no chips at all.
-
-### Groups
-
-Folders for the shared list, like the ones on the Entities tab. In Advanced mode the **+** offers **Add Group**; drag a placeholder under a folder to file it, and drag a folder under another to nest it. The palette strip and the `{` menu list the loose placeholders first, then each folder under its name. Groups are editor-only: they **never reach the AI**, a character card or dictionary file leaves them behind, and a placeholder that belongs to an entity or dictionary stays under its owner rather than in a folder.
-
-### Getting started
-
-Define the placeholder here, then place its chip from any field that offers them. Reach for a Wildcard when you want variety, a Variable when you want one editable fact in many places.
+➡️ [World Editor: Placeholders](World-Editor-Placeholders)

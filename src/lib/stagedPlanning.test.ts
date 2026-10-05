@@ -207,7 +207,7 @@ describe('isEmptyCastName', () => {
 describe('classifyCast', () => {
   const entities = [ent('1', 'Mira'), ent('2', 'Captain Vos')];
 
-  it('buckets defined entities vs ad-hoc names and flags the player by trait name', () => {
+  it('buckets defined entities vs ad-hoc names and flags the player by persona name', () => {
     const cast = [
       { name: 'Player Character', isPlayer: true },
       { name: 'Aldric' }, // the player, named instead of labeled
@@ -220,8 +220,19 @@ describe('classifyCast', () => {
     expect(adHocCandidates).toEqual(['A hooded looter']);
   });
 
-  it('treats a name that resolves to an entity as an NPC even if it also matches a trait name', () => {
-    // "Mira" is both a selected trait name and a world entity — the entity wins (it's an NPC, not the player).
+  it('flags the player by a persona alias', () => {
+    const { flaggedCast, npcCast } = classifyCast([{ name: 'Little Bird' }, { name: 'Mira' }], entities, ['Aldric', 'Little Bird']);
+    expect(flaggedCast[0].isPlayer).toBe(true);
+    expect(npcCast.map((c) => c.name)).toEqual(['Mira']);
+  });
+
+  it('flags no one as the player when there is no persona', () => {
+    const { npcCast } = classifyCast([{ name: 'Aldric' }, { name: 'Mira' }], entities, []);
+    expect(npcCast.map((c) => c.name)).toEqual(['Aldric', 'Mira']);
+  });
+
+  it('treats a name that resolves to an entity as an NPC even if it also matches a persona name', () => {
+    // "Mira" is both a persona name and a world entity — the entity wins (it's an NPC, not the player).
     const { npcCast, directorCandidates } = classifyCast([{ name: 'Mira' }], entities, ['Mira']);
     expect(npcCast).toHaveLength(1);
     expect(directorCandidates).toEqual(['Mira']);
@@ -292,6 +303,14 @@ describe('buildSceneList', () => {
   it('falls back to the narration parse when no planner ran (cast null); named = revealed', () => {
     const list = buildSceneList({ cast: null, entities, narrationSoFar: 'Bram ties off the rope.', priorNarration: '' });
     expect(list).toEqual([{ name: 'Bram', revealed: true }]);
+  });
+
+  it('adds to the list on screen mid-stream with no planner, so a present entity never drops out', () => {
+    const previous = [{ name: 'Maela', revealed: true }];
+    const opening = buildSceneList({ cast: null, entities, narrationSoFar: 'The rope creaks.', priorNarration: '', previous });
+    expect(opening).toEqual(previous);
+    const later = buildSceneList({ cast: null, entities, narrationSoFar: 'The rope creaks. Bram and Maela look up.', priorNarration: '', previous: opening });
+    expect(later).toEqual([{ name: 'Maela', revealed: true }, { name: 'Bram', revealed: true }]);
   });
 });
 

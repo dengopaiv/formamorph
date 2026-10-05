@@ -65,10 +65,31 @@ describe('worldUsesAdvancedFeatures', () => {
     }))).toBe(true);
   });
 
-  it('says yes about a stored opening cue, even one switched off', () => {
+  it('says yes about a Persona mark, and no about pronouns, which Simple shows', () => {
+    const entity = { id: 'e1', name: 'Wren' };
+    expect(worldUsesAdvancedFeatures(plain({ entities: [{ ...entity, persona: true }] }))).toBe(true);
+    expect(worldUsesAdvancedFeatures(plain({ entities: [{ ...entity, persona: false }] }))).toBe(false);
+    expect(worldUsesAdvancedFeatures(plain({ entities: [{ ...entity, pronouns: 'she/her' }] }))).toBe(false);
+  });
+
+  it('says yes about a player setting other than Open, and no about Open', () => {
+    expect(worldUsesAdvancedFeatures(plain({ worldOverview: overview({ startPersona: { source: 'none' } }) }))).toBe(true);
+    expect(worldUsesAdvancedFeatures(plain({ worldOverview: overview({ allowedPersonas: 'world' }) }))).toBe(true);
+    expect(worldUsesAdvancedFeatures(plain({ worldOverview: overview({ allowedPersonas: 'any' }) }))).toBe(false);
+  });
+
+  it('says yes about a written opening, even with the list switched off', () => {
     expect(worldUsesAdvancedFeatures(plain({
-      worldOverview: overview({ openingCue: 'You wake in the reed-beds.', openingCueEnabled: false }),
+      worldOverview: overview({
+        openings: [{ id: 'o1', text: 'You wake in the reed-beds.', kind: 'action' }], openingsEnabled: false,
+      }),
     }))).toBe(true);
+  });
+
+  it('says yes about an entity with a written opening', () => {
+    const entity = { id: 'e1', name: 'Wren', openings: [{ id: 'o1', text: 'Wren waves.', kind: 'narration' as const }] };
+    expect(worldUsesAdvancedFeatures(plain({ entities: [entity] }))).toBe(true);
+    expect(worldUsesAdvancedFeatures(plain({ entities: [{ ...entity, openings: [] }] }))).toBe(false);
   });
 
   it('says no about a world whose collections are simply absent, rather than throwing on it', () => {

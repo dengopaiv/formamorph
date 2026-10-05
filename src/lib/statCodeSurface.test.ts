@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { phNode } from '@/test/sandboxPlaceholders';
+import { phMap, phNode } from '@/test/sandboxPlaceholders';
 import { executeStatCode, type CodeBoundField } from './statCodeExecutor';
 import {
-  BUILTIN_MEMBERS, DELTA_FIELDS, DELTA_MEMBERS, LANGUAGE_NAMES, placeholderEntryFields, PREVIOUS_FIELDS, SANDBOX_BUILTINS, SANDBOX_GLOBALS,
-  SANDBOX_UNDOCUMENTED_GLOBALS, SELF_WRITABLE_FIELDS, STAT_FIELDS, TRAIT_ENTRY_FIELDS, nearestSurfaceName,
+  BUILTIN_MEMBERS, CLOCK_MEMBERS, CLOCK_PREVIOUS_FIELDS, DELTA_FIELDS, DICTIONARY_FIELDS, DELTA_MEMBERS, ENTITY_FIELDS, LANGUAGE_NAMES, PERSONA_FIELDS, placeholderEntryFields, PREVIOUS_FIELDS, SANDBOX_BUILTINS, SANDBOX_GLOBALS,
+  SELF_WRITABLE_FIELDS, STAT_FIELDS, TRAIT_ENTRY_FIELDS, nearestSurfaceName,
 } from './statCodeSurface';
 import { runStatCodeTurn } from './statCodeTurn';
 import { STAT_CODE_TIMINGS, type StatCodeTiming } from './statCodeTiming';
@@ -20,7 +20,7 @@ const stats = [stat({}), stat({ id: 'b', name: 'Stamina', value: 20 })];
 const run = (code: string) => executeStatCode(code, stats, stats[0]);
 
 describe('the described surface against the sandbox that provides it', () => {
-  it.each([...SANDBOX_GLOBALS.map(entry => entry.name), ...SANDBOX_UNDOCUMENTED_GLOBALS])('injects %s', async (name) => {
+  it.each(SANDBOX_GLOBALS.map(entry => entry.name))('injects %s', async (name) => {
     await expect(run(`return typeof ${name} === 'undefined' ? 0 : 1;`)).resolves.toEqual({ value: 1, error: null });
   });
 
@@ -62,6 +62,23 @@ describe('the described surface against the sandbox that provides it', () => {
     },
   );
 
+  it.each([['clock', CLOCK_MEMBERS], ['clock.previous', CLOCK_PREVIOUS_FIELDS]] as const)(
+    'describes every field on %s, and no field it does not',
+    async (path, described) => {
+      const expected = described.map(entry => entry.name).sort().join(',');
+      await expect(run(`return Object.keys(${path}).sort().join(',') === ${JSON.stringify(expected)} ? 1 : 0;`))
+        .resolves.toEqual({ value: 1, error: null });
+    },
+  );
+
+  // Retired routes; the load rewrite moves released code off them.
+  it.each(['deltaHours', 'elapsedHours', 'day', 'daypart', 'startDay', 'startDaypart', 'currentStatId'])(
+    'no longer injects %s',
+    async (name) => {
+      await expect(run(`return typeof ${name} === 'undefined' ? 1 : 0;`)).resolves.toEqual({ value: 1, error: null });
+    },
+  );
+
   it('describes every member of a placeholders entry, and no member it does not', async () => {
     const expected = placeholderEntryFields('Wildcard').map(entry => entry.name).sort().join(',');
     const entry = phNode('Mood', 'calm');
@@ -84,6 +101,41 @@ describe('the described surface against the sandbox that provides it', () => {
     const result = await executeStatCode('traits.Brave.enabled = true;', stats, stats[0],
       { traits: [{ name: 'Brave', enabled: false, acquired: false }] });
     expect(result.traits).toEqual([{ name: 'Brave', enabled: true }]);
+  });
+
+  const persona = { name: 'Mira', traits: [{ name: 'Scarred', enabled: true, acquired: true }] };
+  const [ashOwns, weatherOwns] = phMap([
+    { name: 'Ash', children: [{ name: 'Hair', value: 'ash' }] },
+    { name: 'Weather', children: [{ name: 'Sky', value: 'clear' }] },
+  ]);
+  const entities = [{ name: 'Ash', traits: [{ name: 'Loyal', enabled: false, acquired: false }], placeholders: ashOwns }];
+  const dictionaries = [{ name: 'Weather', id: 'weather', placeholders: weatherOwns }];
+
+  it.each([
+    ['persona', PERSONA_FIELDS],
+    ['persona.traits.Scarred', TRAIT_ENTRY_FIELDS],
+    ['entities.Ash', ENTITY_FIELDS],
+    ['entities.Ash.traits.Loyal', TRAIT_ENTRY_FIELDS],
+    ['entities.Ash.placeholders.Hair', placeholderEntryFields('Wildcard')],
+    ['dictionaries.Weather', DICTIONARY_FIELDS],
+    ['dictionaries.Nope', DICTIONARY_FIELDS],
+    ['dictionaries.Weather.placeholders.Sky', placeholderEntryFields('Wildcard')],
+  ] as const)('describes every member of %s, and no member it does not', async (path, described) => {
+    const expected = described.map(entry => entry.name).sort().join(',');
+    await expect(executeStatCode(
+      `return Object.keys(${path}).sort().join(',') === ${JSON.stringify(expected)} ? 1 : 0;`,
+      stats, stats[0], { persona, entities, dictionaries },
+    )).resolves.toEqual({ value: 1, error: null });
+  });
+
+  it('reads a write to a persona trait’s enabled back out of the sandbox', async () => {
+    const result = await executeStatCode('persona.traits.Scarred.enabled = false;', stats, stats[0], { persona });
+    expect(result.entities).toEqual([{ entity: 'Mira', traits: [{ name: 'Scarred', enabled: false }] }]);
+  });
+
+  it('reads a write to an entity trait’s enabled back out of the sandbox', async () => {
+    const result = await executeStatCode('entities.Ash.traits.Loyal.enabled = true;', stats, stats[0], { entities });
+    expect(result.entities).toEqual([{ entity: 'Ash', traits: [{ name: 'Loyal', enabled: true }] }]);
   });
 
   it('offers self as the stat’s own entry in stats', async () => {
@@ -145,7 +197,7 @@ const turnProbe = async (timing: StatCodeTiming, code: string): Promise<number |
     asks: [{ id: probe.id, value: 40, max: 0 }],
     regenApplied: { [probe.id]: 5 },
     clock: {},
-    traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+    bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
     statNameOf: (stat) => stat.name,
     traitNameOf: (trait) => trait.name,
   });
@@ -192,7 +244,7 @@ describe('the described surface in each of the two boxes', () => {
         asks: [],
         regenApplied: {},
         clock: {},
-        traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+        bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
         statNameOf: (entry) => entry.name,
         traitNameOf: (entry) => entry.name,
       });
@@ -205,7 +257,7 @@ describe('the described surface in each of the two boxes', () => {
 
 describe('nearestSurfaceName', () => {
   it('points a near miss at the name it was reaching for', () => {
-    expect(nearestSurfaceName('elapsedHrs')).toBe('elapsedHours');
+    expect(nearestSurfaceName('clok')).toBe('clock');
     expect(nearestSurfaceName('Stats')).toBe('stats');
   });
 

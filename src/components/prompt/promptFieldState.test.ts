@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createEditor, $getRoot, $isElementNode, $createRangeSelection, $setSelection, type ElementNode } from 'lexical';
 import { VariableNode } from './VariableNode';
-import { buildEditorState, serializeRoot, pointAtOffset, $applyMarkdownAction } from './promptFieldState';
+import { buildEditorState, createEchoLedger, serializeRoot, pointAtOffset, $applyMarkdownAction } from './promptFieldState';
 import { plainVocabulary, placeholderVocabulary, promptVocabulary } from '@/lib/chipVocabulary';
 import { joinToken } from '@/lib/promptVariables';
 import { defaultSystemPrompt, defaultNowLinePrompt } from '@/components/game/GamePrompts';
@@ -52,6 +52,8 @@ describe('promptFieldState', () => {
       ['a trailing blank line', 'The dock creaks.\n\n', false],
       ['text around a chip', `before ${TOKEN} after`, true],
       ['a chip alone', TOKEN, true],
+      // An imported opening holds the marker as it was typed, so its spelling has to come back unchanged.
+      ['the Player Name chip in any spelling', `{{ User }} greets {{user}} by ${TOKEN}.`, true],
       ['empty', '', false],
     ])('%s', (_label, value, withChips) => {
       const editor = makeEditor();
@@ -141,5 +143,35 @@ describe('chip affixes survive the editor round-trip', () => {
   it('leaves a malformed affix as literal text rather than eating it', () => {
     const value = '<LOCATION|name|pre=unquoted> tail';
     expect(roundTrip(value)).toBe(value);
+  });
+});
+
+describe('createEchoLedger', () => {
+  it('counts a late echo of an older edit as its own', () => {
+    const echoes = createEchoLedger('');
+    expect(echoes.send('L')).toBe(true);
+    expect(echoes.send('Le')).toBe(true);
+    expect(echoes.receive('L')).toBe(true);
+    expect(echoes.receive('Le')).toBe(true);
+  });
+
+  it('sends nothing when an edit repeats the latest value', () => {
+    const echoes = createEchoLedger('a');
+    expect(echoes.send('a')).toBe(false);
+    expect(echoes.send('ab')).toBe(true);
+    expect(echoes.send('ab')).toBe(false);
+  });
+
+  it('reads a value it never sent as an outside change, and forgets older edits', () => {
+    const echoes = createEchoLedger('');
+    echoes.send('L');
+    expect(echoes.receive('Reset')).toBe(false);
+    expect(echoes.receive('L')).toBe(false);
+  });
+
+  it('reads a return to the settled value as an outside change while edits are pending', () => {
+    const echoes = createEchoLedger('start');
+    echoes.send('start!');
+    expect(echoes.receive('start')).toBe(false);
   });
 });

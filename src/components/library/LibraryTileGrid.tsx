@@ -10,24 +10,30 @@ import {
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type SensorDescriptor,
+  type SensorOptions,
 } from '@dnd-kit/core';
 import { restrictToFirstScrollableAncestor } from '@dnd-kit/modifiers';
 import { arrayMove, type SortingStrategy } from '@dnd-kit/sortable';
 import { getEventCoordinates } from '@dnd-kit/utilities';
 import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { sameIds } from '@/lib/useSortableIds';
+import { useMountedRef } from '@/lib/useMountedRef';
 import { ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
+  filteredPlacements,
   readGesture,
   resolvePlacements,
   rowMajor,
   spanAt,
   SLICE_SHARE,
   type GestureReading,
+  type LibraryGroup,
+  type LibraryTabOrganization,
   type PackedTile,
   type PlacementMap,
   type TilePlacement,
@@ -35,7 +41,10 @@ import {
 import type { LibraryTiles } from '@/lib/useLibraryTiles';
 import { THUMB_RATIO, thumbFit, type ThumbAspect } from '@/lib/thumbAspect';
 import { LibraryGroupTile } from '@/components/library/LibraryGroupTile';
+import { FolderFace } from '@/components/library/FolderFace';
+import { folderRegion, type FolderRegion } from '@/lib/folderRegion';
 import { LibraryTileContextMenu } from '@/components/library/LibraryTileContextMenu';
+import { useFolderZoom } from '@/components/library/useFolderZoom';
 
 /** The scroll-viewport clamp alone; a grid drag moves in both axes, so no vertical-list clamp. */
 const GRID_MODIFIERS = [restrictToFirstScrollableAncestor];
@@ -45,6 +54,9 @@ const GAP = 16;
 
 /** Tiles hold their real grid slots at all times; reorders change the slots, never a transform. */
 const NULL_STRATEGY: SortingStrategy = () => null;
+
+/** A filtered view starts no drag. */
+const NO_SENSORS: SensorDescriptor<SensorOptions>[] = [];
 
 /**
  * As many medium columns as the measured width fits, never fewer than one.
@@ -132,6 +144,23 @@ const samePlaces = (a: PlacementMap, b: PlacementMap): boolean => {
     && ids.every((id) => b[id] && a[id].row === b[id].row && a[id].col === b[id].col);
 };
 
+/**
+ * Where every tile of one board lives at this width. A filtered view packs the tiles it shows in the
+ * order the full board reads; the full view reads the player's arrangement.
+ *
+ * @param ids - Every tile of the board, which fixes a filtered view's reading order
+ * @param shown - The tiles the board draws
+ */
+const boardHomes = (
+  org: LibraryTabOrganization,
+  ids: string[],
+  shown: string[],
+  columns: number,
+  filtered: boolean,
+): PlacementMap => (filtered
+  ? filteredPlacements(org, ids, shown, columns)
+  : resolvePlacements(org, shown, columns));
+
 /** Rows the grid needs to show every home it is drawing. */
 const rowsFor = (
   places: PlacementMap,
@@ -148,7 +177,8 @@ function FolderHeader({ name, settings, onBack, onRename }: {
   name: string;
   settings?: React.ReactNode;
   onBack: () => void;
-  onRename: (name: string) => void;
+  /** Absent in a filtered view, which shows the name without an editor. */
+  onRename?: (name: string) => void;
 }) {
   const [draft, setDraft] = useState(name);
   useEffect(() => setDraft(name), [name]);
@@ -159,7 +189,7 @@ function FolderHeader({ name, settings, onBack, onRename }: {
         <ArrowLeft className="h-4 w-4" />
         Library
       </Button>
-      <Input
+      {onRename ? <Input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
@@ -173,7 +203,7 @@ function FolderHeader({ name, settings, onBack, onRename }: {
         }}
         aria-label="Group name"
         className="h-8 w-56 font-semibold"
-      />
+      /> : <span className="font-semibold">{name}</span>}
       {settings}
     </div>
   );
@@ -195,10 +225,15 @@ function FolderHeader({ name, settings, onBack, onRename }: {
  * @param idOf - The library id of one item, which is what the arrangement is keyed by
  * @param tiles - This tab's arrangement and the actions the grid dispatches against it
  * @param renderCard - The tab's own card for one item, told how to fill and label its tile
+ * @param placeholderOf - The art for an item with no thumbnail, in folders and under a carried tile
  * @param groupSettings - Settings shown in the folder header; omit on tabs that carry none
  * @param onCheckUpdates - Checks one item for source updates, offered on the tabs worlds can follow
  * @param onPublish - Publishes one item, offered in the context menu on the tabs that can publish
  * @param onDelete - Deletes one item, offered as the context menu's last entry
+ * @param itemActions - The tab's own context menu items for one item, drawn above Delete
+ * @param toolbar - Controls for this tab's view, drawn above the grid
+ * @param filter - Shows only the items it passes, and folders holding one. The view packs them in the saved
+ *   order and turns off drag, resize, and folder edits, so it never rewrites the saved arrangement
  */
 export function LibraryTileGrid<T>({
   items,
@@ -210,6 +245,7 @@ export function LibraryTileGrid<T>({
   minMediumWidth,
   detailedColumnsClass,
   thumbnailOf,
+  placeholderOf,
   renderCard,
   groupSettings,
   groupPresetName,
@@ -217,6 +253,9 @@ export function LibraryTileGrid<T>({
   onCheckUpdates,
   onPublish,
   onDelete,
+  itemActions,
+  toolbar,
+  filter,
 }: {
   items: T[];
   idOf: (item: T) => string;
@@ -228,6 +267,7 @@ export function LibraryTileGrid<T>({
   minMediumWidth: number;
   detailedColumnsClass: string;
   thumbnailOf: (item: T) => string | undefined;
+  placeholderOf?: (item: T) => React.ReactNode;
   renderCard: (item: T, options: {
     layout: 'grid' | 'detailed';
     fill: boolean;
@@ -239,6 +279,9 @@ export function LibraryTileGrid<T>({
   onCheckUpdates?: (id: string) => void;
   onPublish?: (id: string) => void;
   onDelete?: (id: string) => void;
+  itemActions?: (id: string) => React.ReactNode;
+  toolbar?: React.ReactNode;
+  filter?: (item: T) => boolean;
 }) {
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   // The drag in progress. The grid layout draws the pre-drag board until a reading has rested, and the
@@ -252,6 +295,8 @@ export function LibraryTileGrid<T>({
   // The column count rides along, because a cell only means a distance on the board it was read from;
   // so does each tile's span, because a resize has to be animated from the size that was on screen.
   const tileNodes = useRef(new Map<string, HTMLDivElement>());
+  // The folder header, which the zoom slides in with the rest of the folder and freezes on the way out.
+  const headerNode = useRef<HTMLDivElement | null>(null);
   const paintedRef = useRef<{
     columns: number;
     places: PlacementMap;
@@ -277,6 +322,15 @@ export function LibraryTileGrid<T>({
   const readingRef = useRef<GestureReading | null>(null);
   const keyRef = useRef<string | null>(null);
   const restRef = useRef<number | null>(null);
+  const mountedRef = useMountedRef();
+  // A drag cut short by an unmount leaves the rest countdown running. Nothing else clears it:
+  // `disarm` runs on a drag that ends, and a drag that never ends never calls it.
+  useEffect(() => () => {
+    if (restRef.current !== null) {
+      clearTimeout(restRef.current);
+      restRef.current = null;
+    }
+  }, []);
   // Where the pointer actually is. dnd-kit's own delta is the MODIFIED translate, so the carried
   // tile's clamp to the scroll viewport bleeds into it: near the bottom of a list the read stops
   // short of the hand and every far-side rest reads as a near-side one. The pointer is never clamped.
@@ -290,11 +344,31 @@ export function LibraryTileGrid<T>({
     if (openGroupId && !openGroup) setOpenGroupId(null);
   }, [openGroupId, openGroup]);
 
-  const byId = useMemo(() => new Map(items.map((item) => [idOf(item), item] as const)), [items, idOf]);
-  const renderedIds = useMemo(
-    () => (openGroup ? openGroup.members.filter((id) => byId.has(id)) : tiles.topLevel),
-    [openGroup, byId, tiles.topLevel],
+  const locked = !!filter;
+  const allIds = useMemo(() => new Set(items.map(idOf)), [items, idOf]);
+  // What the grid draws: every item, or only the ones the filter passes.
+  const byId = useMemo(
+    () => new Map(items.filter((item) => !filter || filter(item)).map((item) => [idOf(item), item] as const)),
+    [items, idOf, filter],
   );
+  // A folder's full tile list: the members this tab holds.
+  const membersOf = useCallback(
+    (group: LibraryGroup) => group.members.filter((id) => allIds.has(id)),
+    [allIds],
+  );
+  // The tiles of a list the view draws: all of them, or the ones the filter passes and folders holding one.
+  const shownOf = useCallback(
+    (ids: string[]) => (locked
+      ? ids.filter((id) => byId.has(id) || !!tiles.group(id)?.members.some((m) => byId.has(m)))
+      : ids),
+    [locked, byId, tiles],
+  );
+  // The grid's full tile list, which fixes the reading order a filtered view packs in.
+  const gridIds = useMemo(
+    () => (openGroup ? membersOf(openGroup) : tiles.topLevel),
+    [openGroup, membersOf, tiles.topLevel],
+  );
+  const renderedIds = useMemo(() => shownOf(gridIds), [shownOf, gridIds]);
 
   const mediumCols = fitMediumColumns(width, minMediumWidth);
   const baseCols = mediumCols * 2;
@@ -307,8 +381,8 @@ export function LibraryTileGrid<T>({
   // Where every tile lives at this width: the arrangement the player left, seeded through the packer at
   // a width they have never used, with anything homeless dropped into the first free block.
   const homes = useMemo(
-    () => (layout === 'grid' ? resolvePlacements(tiles.organization, renderedIds, baseCols) : {}),
-    [layout, tiles.organization, renderedIds, baseCols],
+    () => (layout !== 'grid' ? {} : boardHomes(tiles.organization, gridIds, renderedIds, baseCols, locked)),
+    [layout, locked, tiles.organization, gridIds, renderedIds, baseCols],
   );
 
   // The board on screen right now. While a grid drag runs this IS the preview: tiles hold real cells at
@@ -321,6 +395,79 @@ export function LibraryTileGrid<T>({
   const cellWidth = width > 0 ? (width - (baseCols - 1) * GAP) / baseCols : 0;
   const cellHeight = cellWidth > 0 ? ((2 * cellWidth + GAP) / THUMB_RATIO[aspect] - GAP) / 2 : 0;
   const pitch = { x: cellWidth + GAP, y: cellHeight + GAP };
+  const rowHeight = Math.max(1, Math.round(cellHeight));
+
+  // The part of a folder's board its tile stands for: the board itself, read the same way as `homes`
+  // above, and the top-left region of it the face draws. Answered for any folder on the tab, the open
+  // one included, because a fly-out zooms out to a tile that is not on screen when it is asked for.
+  const faceOf = useCallback((groupId: string): {
+    members: string[];
+    places: PlacementMap;
+  } & FolderRegion => {
+    const group = tiles.group(groupId);
+    const ids = group ? membersOf(group) : [];
+    const members = shownOf(ids);
+    const places = group ? boardHomes(tiles.organization, ids, members, baseCols, locked) : {};
+    return {
+      members,
+      places,
+      ...folderRegion({
+        members, places, spanOf, tileSpan: spanOf(groupId), baseCols, cellWidth, rowHeight, gap: GAP,
+      }),
+    };
+  }, [tiles, membersOf, shownOf, baseCols, locked, spanOf, cellWidth, rowHeight]);
+
+  // Each folder tile's face, held for the tiles the library is drawing right now.
+  const folderFaces = useMemo(() => {
+    const faces = new Map<string, ReturnType<typeof faceOf>>();
+    if (layout !== 'grid' || openGroup) return faces;
+    for (const id of renderedIds) if (tiles.group(id)) faces.set(id, faceOf(id));
+    return faces;
+  }, [layout, openGroup, renderedIds, tiles, faceOf]);
+
+  const memberPlaceholder = (memberId: string) => {
+    const member = byId.get(memberId);
+    return member && placeholderOf ? placeholderOf(member) : undefined;
+  };
+
+  /**
+   * One folder's face, drawn the same way wherever that folder stands: on the board, and under the
+   * pointer while it is carried. Both read one call, so the two pictures cannot drift apart.
+   */
+  const renderFace = (face: ReturnType<typeof faceOf>) => (
+    <FolderFace
+      members={face.members}
+      places={face.places}
+      hidden={face.hidden}
+      regionWidth={face.width}
+      spanOf={spanOf}
+      thumbnailOf={(memberId) => {
+        const member = byId.get(memberId);
+        return member ? thumbnailOf(member) : undefined;
+      }}
+      placeholderOf={memberPlaceholder}
+      columns={baseCols}
+      boardWidth={width}
+      rowHeight={rowHeight}
+      gap={GAP}
+      tileWidth={face.tileWidth}
+      fit={thumbFit(aspect)}
+    />
+  );
+
+  // A click on a folder tile, Open Group, and Library all zoom between the tile and its board. The
+  // disband effect above keeps the direct setter: there is no tile left to zoom toward once the folder
+  // is gone.
+  const { openGroup: flyIntoGroup, closeGroup } = useFolderZoom({
+    gridNode,
+    headerNode,
+    tileNodes,
+    openGroupId,
+    setOpenGroupId,
+    busy: activeId !== null,
+    enabled: layout === 'grid',
+    regionOf: faceOf,
+  });
 
   // The slide, run before the browser paints the new cells: each moved tile is pushed back to where it
   // was, the push is forced into the layout, and then released. Doing it here rather than through state
@@ -489,6 +636,7 @@ export function LibraryTileGrid<T>({
     disarm();
     restRef.current = window.setTimeout(() => {
       restRef.current = null;
+      if (!mountedRef.current) return;
       setPreview({
         // A blocked reading and a folder reading both leave the board alone: one because it cannot
         // happen, the other because grouping is not a rearrangement.
@@ -653,12 +801,18 @@ export function LibraryTileGrid<T>({
     setClaim({ ...home, span });
   };
 
+  // A folder as the view shows it: in a filtered view, only its members the filter passes.
+  const shownGroup = (group: LibraryGroup): LibraryGroup =>
+    (locked ? { ...group, members: group.members.filter((m) => byId.has(m)) } : group);
+
   const renderTile = (id: string) => {
-    const group = tiles.group(id);
+    const stored = tiles.group(id);
+    const group = stored && shownGroup(stored);
     const item = byId.get(id);
     if (!group && !item) return null;
 
     const spot = live[id];
+    const face = folderFaces.get(id);
     const size = tiles.size(id);
     const compact = layout === 'grid' && size === 'small';
     // `transform` and `transition` are left out on purpose: the slide effect owns both, and a value
@@ -679,10 +833,12 @@ export function LibraryTileGrid<T>({
         layout={layout}
         renderedIds={renderedIds}
         baseCols={baseCols}
-        onOpenGroup={setOpenGroupId}
+        arrange={!locked}
+        onOpenGroup={flyIntoGroup}
         onCheckUpdates={onCheckUpdates}
         onPublish={onPublish}
         onDelete={onDelete}
+        itemActions={itemActions}
       >
           <div
             ref={(node) => {
@@ -690,6 +846,7 @@ export function LibraryTileGrid<T>({
               else tileNodes.current.delete(id);
             }}
             style={style}
+            data-tile-id={id}
             data-group-target={id === preview.folderTarget ? '' : undefined}
             className={cn(
               'relative min-w-0',
@@ -713,11 +870,13 @@ export function LibraryTileGrid<T>({
                   const member = byId.get(memberId);
                   return member ? thumbnailOf(member) : undefined;
                 })}
+                placeholders={placeholderOf && group.members.map(memberPlaceholder)}
+                face={face && renderFace(face)}
                 layout={layout}
                 fill={layout === 'grid'}
                 compact={compact}
                 presetName={groupPresetName?.(group.id)}
-                onOpen={setOpenGroupId}
+                onOpen={flyIntoGroup}
               />
             ) : (
               renderCard(item as T, { layout, fill: layout === 'grid', compact })
@@ -730,41 +889,52 @@ export function LibraryTileGrid<T>({
   const gridStyle: React.CSSProperties = layout === 'grid'
     ? {
       gridTemplateColumns: `repeat(${baseCols}, minmax(0, 1fr))`,
-      gridTemplateRows: `repeat(${rowsFor(live, drawnIds, spanOf, claim)}, ${Math.max(1, Math.round(cellHeight))}px)`,
+      gridTemplateRows: `repeat(${rowsFor(live, drawnIds, spanOf, claim)}, ${rowHeight}px)`,
     }
     : {};
 
   /**
-   * The overlay's stand-in for the carried tile: the thumbnail — or a folder's mosaic — in a box the
+   * The overlay's stand-in for the carried tile: the thumbnail — or a folder's own face — in a box the
    * size the tile had. The real card components register sortables, which the overlay must not, so
    * this is a plain clone rather than a second render of the card.
+   *
+   * A folder in the grid layout draws the face component from the same region function as its tile, so
+   * the picture under the hand is the picture the player picked up. The face draws plain thumbnails and
+   * registers nothing, which is what makes it safe here. The detailed layout has no face to draw, so it
+   * keeps the mosaic.
    *
    * Half opacity, and nothing else: the flat grid carried the card itself at exactly this, with no
    * shadow or ring under the hand. The one exception is a spot that cannot take the tile, which says so
    * under the hand rather than waiting for the release to do nothing.
    */
   const overlayContent = (id: string) => {
-    const group = tiles.group(id);
+    const stored = tiles.group(id);
+    const group = stored && shownGroup(stored);
     const item = byId.get(id);
     const thumb = item ? thumbnailOf(item) : undefined;
+    // The board's own face for this folder. A folder never stands inside a folder, so a drag that
+    // carries one is always on the library board, which is where `folderFaces` is filled.
+    const face = group && folderFaces.get(id);
     return (
       <div className={cn(
-        'h-full w-full overflow-hidden rounded-lg bg-card opacity-50',
+        'relative h-full w-full overflow-hidden rounded-lg bg-card opacity-50',
+        // The tile's own frame, which the face is drawn to sit under.
+        face && 'border-2 border-border',
         preview.blocked && 'ring-2 ring-inset ring-destructive',
       )}>
-        {group ? (
-          <div className="grid h-full w-full grid-cols-2 grid-rows-2 gap-px">
+        {face ? renderFace(face) : group ? (
+          <div data-folder-mosaic className="grid h-full w-full grid-cols-2 grid-rows-2 gap-px">
             {Array.from({ length: 4 }, (_, i) => {
               const member = byId.get(group.members[i] ?? '');
               const memberThumb = member ? thumbnailOf(member) : undefined;
               return memberThumb
                 ? <img key={i} src={memberThumb} alt="" className={cn('h-full w-full', thumbFit(aspect))} />
-                : <div key={i} className="h-full w-full bg-muted" />;
+                : <div key={i} className="h-full w-full bg-muted">{member && placeholderOf?.(member)}</div>;
             })}
           </div>
         ) : thumb
           ? <img src={thumb} alt="" className={cn('h-full w-full', thumbFit(aspect))} />
-          : <div className="h-full w-full bg-muted" />}
+          : <div className="h-full w-full bg-muted">{item && placeholderOf?.(item)}</div>}
       </div>
     );
   };
@@ -773,7 +943,7 @@ export function LibraryTileGrid<T>({
     <EditorDndContext
       // A mouse press and a long press on touch, rather than one pointer sensor: a tile is also a scroll
       // surface on a phone, so a drag there has to be asked for by holding still first.
-      sensors={sensors}
+      sensors={locked ? NO_SENSORS : sensors}
       onDragStart={handleDragStart}
       // Both events feed the same reading. onDragOver alone misses movement within one tile — from
       // its edge into its middle — since it fires only when the over tile changes; onDragMove alone
@@ -786,13 +956,16 @@ export function LibraryTileGrid<T>({
       // dragging a tile past an edge must scroll this finite frame rather than grow the page.
       modifiers={GRID_MODIFIERS}
     >
+      {toolbar && <div className="px-4 pb-3 flex items-center gap-2">{toolbar}</div>}
       {openGroup && (
-        <FolderHeader
-          name={openGroup.name}
-          settings={groupSettings?.(openGroup.id)}
-          onBack={() => setOpenGroupId(null)}
-          onRename={(name) => tiles.rename(openGroup.id, name)}
-        />
+        <div ref={headerNode} data-folder-header>
+          <FolderHeader
+            name={openGroup.name}
+            settings={groupSettings?.(openGroup.id)}
+            onBack={closeGroup}
+            onRename={locked ? undefined : (name) => tiles.rename(openGroup.id, name)}
+          />
+        </div>
       )}
       <ScrollArea className="flex-1 min-h-0 px-4">
         {renderedIds.length === 0 && !openGroup ? emptyState : (
@@ -819,6 +992,7 @@ export function LibraryTileGrid<T>({
         {activeId && overlaySize && (
           <div
             style={overlaySize}
+            data-drag-overlay
             className="pointer-events-none"
             data-drag-blocked={preview.blocked ? '' : undefined}
           >

@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { buildDestinationsContext, buildEntityContext, buildLocationContext } from '@/lib/locationContext';
 import { estimateTokens } from '@/lib/memoryUtils';
 import type { Connection, Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, TraitGroup } from '@/types';
-import { buildAiContext, type AiContextWorld, type ContextBlockId } from './aiContext';
+import { defaultStatUpdatesPrompt, defaultSystemPrompt } from '@/components/game/GamePrompts';
+import {
+  buildAiContext, buildStatBlock, statsChipIn, type AiContextWorld, type ContextBlockId,
+} from './aiContext';
 import { buildLens, type LensState } from './lens';
 
 import { phValues } from '@/test/placeholderValues';
@@ -10,7 +13,7 @@ import { phValues } from '@/test/placeholderValues';
 const HAIR_CHIP = '{{ph:ph-hair:world:p1}}';
 const hairColor: Placeholder = { id: 'ph-hair', name: 'Hair Color', values: phValues(['ash', 'copper', 'jet']) };
 
-const traitGroups: TraitGroup[] = [{ id: 'g-origin', name: 'Origin', parentId: null, exclusive: true }];
+const traitGroups: TraitGroup[] = [{ id: 'g-origin', name: 'Origin', parentId: null, maxPicks: 1 }];
 const traits: Trait[] = [
   {
     id: 't-sedge', name: 'Sedge-Born', groupId: 'g-origin', statChanges: [], order: 0,
@@ -37,7 +40,7 @@ const locations: GameLocation[] = [
 // One-way, hinted, and over a pair that would otherwise be implicitly two-way: Harbor reaches the Market,
 // the Market cannot come back.
 const connections: Connection[] = [
-  { id: 'c-bridge', from: 'loc-harbor', to: 'loc-market', twoWay: false, aiHint: `the ${HAIR_CHIP} plank bridge` },
+  { id: 'c-bridge', a: 'loc-harbor', b: 'loc-market', aToB: { hint: `the ${HAIR_CHIP} plank bridge` } },
 ];
 
 const entities: Entity[] = [
@@ -94,7 +97,7 @@ describe('context blocks', () => {
   it('renders each block exactly as the game builder does for the same inputs', () => {
     // Chip-free, so the comparison is against the builders' raw output with nothing resolved over it.
     const plain = {
-      connections: [{ ...connections[0], aiHint: 'the plank bridge' }],
+      connections: [{ ...connections[0], aToB: { hint: 'the plank bridge' } }],
       entities: entities.map((e) => (e.id === 'e-mara' ? { ...e, name: 'Mara' } : e)),
       placeholders: [],
     };
@@ -113,6 +116,18 @@ describe('context blocks', () => {
     expect(block(data, 'dictionary').text).toContain('The river carries silt every spring.');
     expect(block(data, 'dictionary').text).not.toContain('Never read.');
     expect(block(data, 'dictionary').note).toContain('(1)');
+  });
+
+  it('serves Background lore ahead of Foreground lore in the one Dictionary block', () => {
+    const split = [{
+      ...dictionaries[0],
+      entries: [
+        { id: 'de-fg', name: 'The Silt', key: ['silt'], value: 'The river carries silt every spring.' },
+        { id: 'de-bg', name: 'The Founding', key: ['founding'], value: 'Eel-trappers built the first pier.', position: 'before' },
+      ],
+    } as unknown as Dictionary]; // Only the fields the lore builder reads, as in the shared fixture.
+    const text =block(context(at('loc-harbor'), { dictionaries: split }), 'dictionary').text;
+    expect(text).toBe('The Founding: Eel-trappers built the first pier.\nThe Silt: The river carries silt every spring.');
   });
 
   it('marks a block the location has nothing for as empty, costing nothing', () => {
@@ -163,6 +178,20 @@ describe('the lens PC', () => {
   it('serves the stats the PC switches on and drops the ones it switches off', () => {
     expect(block(context(at('loc-harbor')), 'stats').text).not.toContain('Tide Sense');
     expect(block(context(at('loc-harbor', 't-sedge')), 'stats').text).toContain('Tide Sense');
+  });
+
+  it('renders the stats block in the shape the shipped narration prompt places it', () => {
+    expect(block(context(at('loc-harbor')), 'stats').token).toBe(statsChipIn(defaultSystemPrompt));
+  });
+
+  it('renders a stats chip in any shape through the one stat builder, for the lens PC', () => {
+    const w = world({ stats: [{ ...stats[0], description: `Steadiness near ${HAIR_CHIP} water.` }] });
+    const lens = buildLens({ ...w, traitGroups: w.traitGroups ?? [] }, at('loc-harbor', 't-sedge'));
+    const token = statsChipIn(defaultStatUpdatesPrompt);
+    expect(token).toBe('<STATS DESCRIPTION|numbers.meaning.markdown>');
+    expect(buildStatBlock(w, lens, token!)).toBe('- **Nerve:** 5/10 — Steadiness near copper water.');
+    expect(buildStatBlock(w, lens, '<STATS DESCRIPTION|descriptions.markdown>'))
+      .toBe(block(buildAiContext(w, lens), 'stats').text);
   });
 
   it('replaces the default trait its own exclusive group contributed', () => {
@@ -247,5 +276,28 @@ describe('a malformed world', () => {
     const ghosts = entities.filter((e) => e.id !== 'e-mara');
     const data = context(at('loc-harbor'), { entities: ghosts });
     expect(roster(data, 'here').entities.map((e) => e.id)).toEqual(['e-both']);
+  });
+});
+
+describe('a blueprint chip in the PC’s trait text', () => {
+  const garb: Placeholder = { id: 'garb', name: 'Garb', values: [{ id: 'v-tabard', text: 'tabard' }, { id: 'v-robe', text: 'robe' }] };
+  const worn = traits.map((t) => (t.id === 't-sedge' ? { ...t, aiDescription: 'Wears {{ph:garb:world:p9}}.' } : t));
+  // The Custom Persona entity's copy rewords tabard and removes robe, so it reads one fixed value.
+  const newcomer: Entity = {
+    id: 'cp', name: 'Newcomer', customPersona: true,
+    placeholders: [{
+      id: 'cp-garb', name: 'Garb', values: [], blueprintId: 'garb',
+      valueOverrides: { 'v-tabard': { text: { value: 'rags', blueprint: 'tabard' } }, 'v-robe': { removed: true } },
+    }],
+  };
+
+  it('reads the Custom Persona entity’s copy for the PC', () => {
+    const data = context(at('loc-harbor', 't-sedge'), { traits: worn, placeholders: [hairColor, garb], entities: [...entities, newcomer] });
+    expect(block(data, 'traits').text).toContain('Wears rags.');
+  });
+
+  it('reads the blueprint itself with no Custom Persona entity', () => {
+    const data = context(at('loc-harbor', 't-sedge'), { traits: worn, placeholders: [hairColor, garb] });
+    expect(block(data, 'traits').text).toContain('Wears {tabard|robe}.');
   });
 });

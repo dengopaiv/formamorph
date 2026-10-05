@@ -14,10 +14,15 @@ import {
   type PlaceholderFinding, type PlaceholderPick, type PlaceholderToken,
 } from '@/lib/placeholders';
 import { labelPlaceholders, worldPlacementLetters, type PlacementLetters } from '@/lib/placementLetters';
+import { travelEnds } from '@/lib/locationGraph';
 import {
-  allPinRows, collectPins, hasDeadValueId, indexPlaceholders, pinConflict, pinSourceOwnerId, valuePinners,
-  type PinEditorWorld, type PinFinding, type PinRow, type PinSourceKind,
+  allPinRows, collectPins, hasDeadValueId, indexPlaceholders, isBlueprintSideSource, pinConflict, pinSourceOwnerId,
+  valuePinners, type PinEditorWorld, type PinFinding, type PinRow, type PinSourceKind,
 } from '@/lib/placeholderPins';
+import { copyOf, effectiveCopy } from '@/lib/blueprints';
+import { copyNeeds, isUntouchedCopy, type CopyNeed } from '@/lib/blueprintCopies';
+import { acceptsBlueprintChips, type ChipField } from '@/lib/blueprintChips';
+import { blueprintIds, copyName } from '@/lib/placeholderBlueprints';
 import { holdsAsChip, qualifiedPlaceholderName } from '@/lib/placeholderTree';
 import {
   allPlaceholders, mapAllPlaceholders, placeholderOwners, withoutPlaceholders, type PlaceholderSlices,
@@ -38,8 +43,20 @@ import {
 } from '@/lib/imageBytes';
 import { formatBytes, IMAGE_CAPS, type ImageCap } from '@/lib/imageOptim';
 import { clamp } from '@/lib/utils';
+import { entityTexts } from '@/lib/entityTexts';
+import { overviewTexts } from '@/lib/overviewTexts';
+import {
+  broughtIds, canBePlayer, editorGateInput, linksInTreeOrder, originalOf, PLAYER_BEARER, resolveBearers, type Bearer,
+  type BearerWorld,
+} from '@/lib/bearers';
+import {
+  WORLD_OWNER, alwaysOnOverMax, gateOf, gateStates, groupPickState, neverUnlockable, settleDefaults, type GateInput,
+} from '@/lib/traitGates';
+import { isAlwaysOn } from '@/lib/traitEffects';
+import { canOwnStatTraits } from '@/lib/traitTree';
 import type {
-  DictionaryEntry, Entity, GameLocation, Placeholder, PlaceholderPin, PlaceholderValue, Stat, StatDescriptor, Trait, World,
+  DictionaryEntry, Entity, GameLocation, PersonaRef, Placeholder, PlaceholderPin, PlaceholderValue, Stat, StatDescriptor,
+  Trait, TraitGroup, TraitLink, World,
 } from '@/types';
 
 /**
@@ -313,20 +330,38 @@ const aliasSelfDuplicate: Rule = {
   })),
 };
 
+/** Authored text as a finding names it: chips by their placement labels, blank as Untitled. */
+const labelOf = (text: string | undefined, world: RuleWorld): string =>
+  labelPlaceholders(text ?? '', allPlaceholders(world), { letters: lettersOf(world) }).trim() || 'Untitled';
+
+/** The world's traits, then every trait an entity owns. */
+const everyTrait = (world: RuleWorld): Trait[] => [
+  ...(world.traits ?? []), ...(world.entities ?? []).flatMap((e) => e.traits ?? []),
+];
+
+/** The traits whose stat effects can reach the player: the world's, and the ones persona entities own. */
+const statTraits = (world: RuleWorld): Trait[] => [
+  ...(world.traits ?? []), ...(world.entities ?? []).filter(canOwnStatTraits).flatMap((e) => e.traits ?? []),
+];
+
 /** A non-entity item, chips labeled like the editor's own lists label them. */
 const namedItem = (id: string, name: string | undefined, world: RuleWorld, section?: FindingSection): FindingItem => ({
   id,
-  name: labelPlaceholders(name ?? '', allPlaceholders(world), { letters: lettersOf(world) }).trim() || 'Untitled',
+  name: labelOf(name, world),
   ...(section ? { section } : {}),
 });
 
 /**
- * A placeholder as a finding names it: bare at the top level, and qualified with `›` under an owner, so a
+ * A placeholder as a finding names it: bare at the top level, a copy as `Owner.Blueprint`, and qualified
+ * with `›` under an owner, so a
  * world carrying three rows called `Hair` says which Hair. The item keeps the placeholder's own id, so Open
  * still lands on the row rather than on whatever owns it.
  */
-const placeholderItem = (id: string, world: RuleWorld, section?: FindingSection): FindingItem =>
-  namedItem(id, qualifiedPlaceholderName(allPlaceholders(world), id) ?? undefined, world, section);
+const placeholderItem = (id: string, world: RuleWorld, section?: FindingSection): FindingItem => {
+  const copy = copiesOf(world).get(id);
+  if (copy) return { ...copyItem(copy, world), ...(section ? { section } : {}) };
+  return namedItem(id, qualifiedPlaceholderName(allPlaceholders(world), id) ?? undefined, world, section);
+};
 
 /** An entry as its list labels it: the free name, else the first keyword. */
 const entryItem = (entry: DictionaryEntry, world: RuleWorld): FindingItem =>
@@ -409,7 +444,7 @@ const traitToggleMissingStat: Rule = {
   summary: (count) => `${count} trait stat toggles point at stats that don’t exist`,
   check: (world) => {
     const known = new Set((world.stats ?? []).map((s) => s.id));
-    return (world.traits ?? [])
+    return everyTrait(world)
       .filter((trait) => (trait.statToggles ?? []).some((toggle) => !known.has(toggle.statId)))
       .map((trait) => {
         const item = namedItem(trait.id, trait.name, world);
@@ -422,9 +457,9 @@ const traitToggleMissingStat: Rule = {
 
 /** The world as the pin editors read it, so a finding labels a source exactly as its editor does. */
 const pinEditorWorld = (world: RuleWorld): PinEditorWorld => ({
-  traits: world.traits ?? [], traitGroups: world.traitGroups ?? [], locations: world.locations ?? [],
-  stats: world.stats ?? [], placeholders: allPlaceholders(world),
-  placeholderOwners: placeholderOwners(world), placementLetters: lettersOf(world),
+  traits: world.traits ?? [], traitGroups: world.traitGroups ?? [], entities: world.entities ?? [],
+  locations: world.locations ?? [], stats: world.stats ?? [], placeholders: allPlaceholders(world),
+  placeholderGroups: world.placeholderGroups ?? [], placeholderOwners: placeholderOwners(world), placementLetters: lettersOf(world),
 });
 
 /** Every pin in the world, walked once per world object — four rules read the same list. A fresh Add
@@ -512,7 +547,7 @@ const placeholderPinUnknownValue: Rule = {
     const placeholders = allPlaceholders(world);
     const byId = indexPlaceholders(placeholders);
     return pinRowsOf(world)
-      .filter((row) => hasDeadValueId(row.pin, byId.get(row.pin.placeholderId)))
+      .filter((row) => deadPinTarget(row.pin, byId))
       .map((row) => {
         const target = placeholderItem(row.pin.placeholderId, world);
         const applies = row.pin.value
@@ -528,10 +563,20 @@ const placeholderPinUnknownValue: Rule = {
   fix: (world) => {
     const byId = indexPlaceholders(allPlaceholders(world));
     return withMappedPins(world, (pin) => {
-      const ph = byId.get(pin.placeholderId);
-      return ph && hasDeadValueId(pin, ph) ? relinkedPin(pin, ph) : pin;
+      const ph = deadPinTarget(pin, byId);
+      return ph ? relinkedPin(pin, ph) : pin;
     });
   },
+};
+
+/** The placeholder a pin reads, a copy read over its blueprint, when the pin names a value it lacks. A value
+ *  the copy removed is the copy rule's. */
+const deadPinTarget = (pin: PlaceholderPin, byId: ReadonlyMap<string, Placeholder>): Placeholder | undefined => {
+  const stored = byId.get(pin.placeholderId);
+  if (!stored) return undefined;
+  const blueprint = stored.blueprintId ? byId.get(stored.blueprintId) : undefined;
+  const target = blueprint ? effectiveCopy(stored, blueprint) : stored;
+  return hasDeadValueId(pin, target) && !stored.valueOverrides?.[pin.valueId!]?.removed ? target : undefined;
 };
 
 const placeholderPinConflict: Rule = {
@@ -717,14 +762,11 @@ interface ChipOwner {
 const chipOwners = (world: RuleWorld): ChipOwner[] => [
   {
     item: { id: 'overview', name: world.worldOverview?.name || 'Overview', section: 'overview' },
-    texts: [
-      world.worldOverview?.systemPrompt, world.worldOverview?.readme, world.worldOverview?.introReadme,
-      world.worldOverview?.openingCue,
-    ],
+    texts: overviewTexts(world.worldOverview),
   },
   ...(world.entities ?? []).map((e) => ({
     item: { ...asItem(e, world), section: 'entities' as const },
-    texts: [e.name, ...(e.aliases ?? []), e.playerDescription, e.aiDescription, e.aiSummary, e.imageTags],
+    texts: entityTexts(e),
   })),
   ...(world.locations ?? []).map((l) => ({
     item: namedItem(l.id, l.name, world, 'locations'),
@@ -793,14 +835,17 @@ const allChipTexts = (world: RuleWorld): Array<string | undefined> => [
 
 /** The placeholders no chip anywhere references, each with the traits still pinning it. A pin is authored
  *  intent, not a placement — any pin entry counts, empty value included — so the two rules over this list
- *  exactly partition "unplaced", and the delete-fix can never orphan a pin. */
+ *  exactly partition "unplaced", and the delete-fix can never orphan a pin. A blueprint is placed wherever
+ *  a copy of it is, and a copy is never listed: it exists because a trait needs it (see lib/blueprintCopies). */
 const unplacedPlaceholders = (world: RuleWorld): Array<{ placeholder: Placeholder; pinnedBy: Trait[] }> => {
   const placed = chipIds(allChipTexts(world));
-  return allPlaceholders(world)
-    .filter((p) => !placed.has(p.id))
+  const all = allPlaceholders(world);
+  for (const p of all) if (p.blueprintId && placed.has(p.id)) placed.add(p.blueprintId);
+  return all
+    .filter((p) => !p.blueprintId && !placed.has(p.id))
     .map((placeholder) => ({
       placeholder,
-      pinnedBy: (world.traits ?? []).filter((t) =>
+      pinnedBy: everyTrait(world).filter((t) =>
         (t.placeholderPins ?? []).some((pin) => pin.placeholderId === placeholder.id)),
     }));
 };
@@ -1052,18 +1097,37 @@ const entityNowhere: Rule = {
   severity: 'warning',
   section: 'entities',
   summary: (count) => `${count} entities are placed in no location, so they can never appear`,
+  // The Custom Persona entity is the player, never a scene's entity, so it stands nowhere.
   check: (world) => (world.entities ?? [])
-    .filter((entity) => (entity.locations ?? []).length === 0)
+    .filter((entity) => (entity.locations ?? []).length === 0 && !entity.customPersona)
     .map((entity) => {
       const item = asItem(entity, world);
       return finding(entityNowhere, `${quote(item.name)} is placed in no location, so it can never appear`, [item]);
     }),
 };
 
+const entityNoCodeName: Rule = {
+  id: 'entity-no-code-name',
+  severity: 'warning',
+  section: 'entities',
+  advanced: true,
+  summary: (count) => `${count} entities have no code name, so stat code can’t reach them`,
+  check: (world) => {
+    if (!(world.stats ?? []).some((stat) => filledCodeBoxes(stat).length)) return [];
+    return (world.entities ?? [])
+      .filter((entity) => !statCodeName(entity.name, allPlaceholders(world)))
+      .map((entity) => {
+        const item = asItem(entity, world);
+        const who = (entity.name ?? '').trim() ? `${quote(item.name)} has no code name` : 'An entity has no name';
+        return finding(entityNoCodeName, `${who}, so stat code can’t reach it`, [item]);
+      });
+  },
+};
+
 /** The stats that can be live at some point in a playthrough — everything except a stat that starts disabled
  *  with no trait to switch it on. A stat that is never live never runs its code and never reaches the AI. */
 const everActiveStats = (world: RuleWorld): Stat[] => {
-  const enabledBy = new Set((world.traits ?? []).flatMap((trait) =>
+  const enabledBy = new Set(statTraits(world).flatMap((trait) =>
     (trait.statToggles ?? []).filter((toggle) => toggle.enabled).map((toggle) => toggle.statId),
   ));
   return (world.stats ?? []).filter((stat) => stat.enabled !== false || enabledBy.has(stat.id));
@@ -1262,7 +1326,7 @@ const traitFloor = (stat: Stat, trait: Trait): number =>
 
 /** Every trait that moves a stat's starting value, with the delta it asks for. */
 const traitValueChanges = (world: RuleWorld): Array<{ stat: Stat; trait: Trait; delta: number }> =>
-  (world.stats ?? []).flatMap((stat) => (world.traits ?? []).flatMap((trait) => {
+  (world.stats ?? []).flatMap((stat) => statTraits(world).flatMap((trait) => {
     const delta = traitContribution(stat, trait, 'starting');
     return delta === 0 ? [] : [{ stat, trait, delta }];
   }));
@@ -1292,15 +1356,15 @@ const statTraitDeltaClamped: Rule = {
 };
 
 /** Whether a stat's code builds on the stat's own current value, which is the one thing that lets a trait's
- *  starting change survive the first recompute. Three ways code can find itself count: the injected
- *  `currentStatId`, the `self` map entry, and its own name written as a literal or a map lookup. */
+ *  starting change survive the first recompute. Two ways code can find itself count: the `self` map entry,
+ *  and its own id or name written as a literal or a map lookup. */
 const codeReadsSelf = (code: string, stat: Stat, world: RuleWorld): boolean => {
   // The id has to be quoted to be a lookup: bare containment would read a stat whose id is "1" out of
   // `return 100;` and silently quiet the rule. An idless stat has no lookup to find, rather than an empty one.
   const quotedId = stat.id
     ? new RegExp(`["'\`]${stat.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'\`]`)
     : undefined;
-  if (/\bcurrentStatId\b/.test(code) || /\bself\b/.test(code) || quotedId?.test(code)) return true;
+  if (/\bself\b/.test(code) || quotedId?.test(code)) return true;
   const own = statCodeName(stat.name, allPlaceholders(world));
   return statNamesInCode(code).some((name) => name === own);
 };
@@ -1390,8 +1454,9 @@ const connectionEndpointOrphan: Rule = {
   check: (world) => {
     const byId = new Map((world.locations ?? []).map((l) => [l.id, l]));
     return (world.connections ?? []).flatMap((connection) => {
-      const from = byId.get(connection.from);
-      const to = byId.get(connection.to);
+      const [fromId, toId] = travelEnds(connection);
+      const from = byId.get(fromId);
+      const to = byId.get(toId);
       if (from && to) return [];
       const survivor = from ?? to;
       // The way in is the endpoint that still exists — the link itself has no row of its own to open.
@@ -1625,27 +1690,109 @@ const locationNoEntities: Rule = {
 
 // ── Trait groups ──────────────────────────────────────────────────────────────────────────────────────────
 
-const traitGroupMultipleDefaults: Rule = {
-  id: 'trait-group-multiple-defaults',
+/** A group as a pick-count finding names it: the group, then "on" its bearer when an entity holds it. */
+const groupSubject = (group: TraitGroup, bearer: Bearer | undefined, world: RuleWorld): string => {
+  const on = bearerName(bearer);
+  return on === null ? quote(labelOf(group.name, world)) : `${quote(labelOf(group.name, world))} on ${quote(labelOf(on, world))}`;
+};
+
+const picksOf = (count: number) => `${count} pick${count === 1 ? '' : 's'}`;
+
+const traitGroupDefaultsOverMax: Rule = {
+  id: 'trait-group-defaults-over-max',
   severity: 'warning',
   section: 'traits',
-  summary: (count) => `${count} exclusive trait groups mark two or more traits as default`,
+  summary: (count) => `${count} trait groups mark more traits as default than they allow`,
+  check: (world) => [...bearersOf(world).values()].flatMap((bearer) => bearer.groups.flatMap((group) => {
+    const max = group.maxPicks;
+    if (max === undefined) return [];
+    const defaults = bearer.traits.filter((t) => (t.groupId ?? null) === group.id && t.isDefault && !isAlwaysOn(t));
+    if (defaults.length <= max) return [];
+    const groupItem = bearerTraitItem(group, bearer, world);
+    const defaultItems = defaults.map((t) => bearerTraitItem(t, bearer, world));
+    const allowed = max === 1 ? 'one active trait' : `${max} active traits`;
+    return [finding(
+      traitGroupDefaultsOverMax,
+      `${groupSubject(group, bearer, world)} allows ${allowed} but marks ${listNames(defaultItems.map((i) => i.name))} as defaults — only ${max === 1 ? 'one' : max} can actually apply`,
+      [groupItem, ...defaultItems],
+    )];
+  })),
+};
+
+const traitGroupAlwaysOnOverMax: Rule = {
+  id: 'trait-group-always-on-over-max',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} trait groups can have more Always On traits active than they allow`,
+  // Under every persona choice; a group reports the largest set any one of them opens together.
   check: (world) => {
-    const traits = world.traits ?? [];
-    return (world.traitGroups ?? [])
-      .filter((group) => group.exclusive)
-      .flatMap((group) => {
-        const defaults = traits.filter((t) => t.groupId === group.id && t.isDefault);
-        if (defaults.length < 2) return [];
-        const groupItem = namedItem(group.id, group.name, world);
-        const defaultItems = defaults.map((t) => namedItem(t.id, t.name, world));
-        return [finding(
-          traitGroupMultipleDefaults,
-          `${quote(groupItem.name)} allows one active trait but marks ${listNames(defaultItems.map((i) => i.name))} as defaults — only one can actually apply`,
-          [groupItem, ...defaultItems],
-        )];
-      });
+    const found = new Map<string, { bearer: Bearer | undefined; group: TraitGroup; traits: Trait[] }>();
+    for (const persona of personaChoices(world)) {
+      const { bearers, gate } = resolveBearers(bearerWorldOf(world), persona);
+      for (const over of alwaysOnOverMax(gate)) {
+        const k = pairKey(over.ownerId, over.groupId);
+        if ((found.get(k)?.traits.length ?? 0) >= over.traitIds.length) continue;
+        const owner = gate.owners.find((o) => o.id === over.ownerId)!;
+        found.set(k, {
+          bearer: bearers.find((b) => b.id === over.ownerId),
+          group: owner.groups.find((g) => g.id === over.groupId)!,
+          traits: over.traitIds.map((id) => owner.traits.find((t) => t.id === id)!),
+        });
+      }
+    }
+    return [...found.values()].map(({ bearer, group, traits }) => {
+      const items = traits.map((t) => bearerTraitItem(t, bearer, world));
+      return finding(
+        traitGroupAlwaysOnOverMax,
+        `${groupSubject(group, bearer, world)} allows at most ${picksOf(group.maxPicks ?? 0)} but ${listNames(items.map((i) => i.name))} are Always On and can be active together`,
+        [bearerTraitItem(group, bearer, world), ...items],
+      );
+    });
   },
+};
+
+const traitGroupMinAboveMax: Rule = {
+  id: 'trait-group-min-above-max',
+  severity: 'error',
+  section: 'traits',
+  summary: (count) => `${count} trait groups need more picks than they allow`,
+  check: (world) => [...bearersOf(world).values()].flatMap((bearer) => bearer.groups.flatMap((group) => {
+    const min = group.minPicks ?? 0;
+    if (group.maxPicks === undefined || min <= group.maxPicks) return [];
+    return [finding(
+      traitGroupMinAboveMax,
+      `${groupSubject(group, bearer, world)} needs at least ${picksOf(min)} but allows at most ${group.maxPicks}`,
+      [bearerTraitItem(group, bearer, world)],
+    )];
+  })),
+};
+
+/** A shortfall's rows: the group, then its traits. */
+const shortfallItems = (p: PickShortfall, world: RuleWorld): FindingItem[] =>
+  [bearerTraitItem(p.group, p.bearer, world), ...p.traits.map((t) => bearerTraitItem(t, p.bearer, world))];
+
+const traitGroupMinUnreachable: Rule = {
+  id: 'trait-group-min-unreachable',
+  severity: 'error',
+  section: 'traits',
+  summary: (count) => `${count} trait groups need more picks than their traits can unlock`,
+  check: (world) => gateReportOf(world).picks.filter((p) => p.kind === 'unreachable').map((p) => finding(
+    traitGroupMinUnreachable,
+    `${groupSubject(p.group, p.bearer, world)} needs at least ${picksOf(p.min)} but ${p.count === 0 ? 'none' : `only ${p.count}`} of its traits can ever unlock`,
+    shortfallItems(p, world),
+  )),
+};
+
+const traitGroupDefaultsBelowMin: Rule = {
+  id: 'trait-group-defaults-below-min',
+  severity: 'error',
+  section: 'traits',
+  summary: (count) => `${count} trait groups start with fewer picks than they need`,
+  check: (world) => gateReportOf(world).picks.filter((p) => p.kind === 'defaults').map((p) => finding(
+    traitGroupDefaultsBelowMin,
+    `${groupSubject(p.group, p.bearer, world)} needs at least ${picksOf(p.min)} but a new game starts with ${p.count} — the defaults don’t meet the minimum`,
+    shortfallItems(p, world),
+  )),
 };
 
 const traitGroupTooSmall: Rule = {
@@ -1656,7 +1803,7 @@ const traitGroupTooSmall: Rule = {
   check: (world) => {
     const traits = world.traits ?? [];
     return (world.traitGroups ?? [])
-      .filter((group) => group.exclusive)
+      .filter((group) => group.maxPicks === 1)
       .map((group) => ({ group, size: traits.filter((t) => t.groupId === group.id).length }))
       .filter(({ size }) => size < 2)
       .map(({ group, size }) => {
@@ -1667,6 +1814,513 @@ const traitGroupTooSmall: Rule = {
           [item],
         );
       });
+  },
+};
+
+// ── Trait gates ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** The slices the bearer resolver reads. */
+export type BearerSource = Partial<Pick<RuleWorld, 'traits' | 'traitGroups' | 'entities'>>;
+
+/** The world as the bearer resolver reads it. A trait whose id is in `open`, world or owned, loses its
+ *  requirements. */
+export function bearerWorldOf(world: BearerSource, open: ReadonlySet<string> = new Set()): BearerWorld {
+  const opened = (t: Trait): Trait => (open.has(t.id) ? { ...t, requires: [] } : t);
+  return {
+    traits: (world.traits ?? []).map(opened),
+    traitGroups: world.traitGroups ?? [],
+    entities: (world.entities ?? []).map((e) => ({ ...e, name: e.name ?? '', ...(e.traits ? { traits: e.traits.map(opened) } : {}) })),
+  };
+}
+
+/** None, then playing as each world persona, persona-only ones included. */
+const personaChoices = (world: RuleWorld): PersonaRef[] => [
+  { source: 'none' },
+  ...(world.entities ?? []).filter((e) => e.persona).map((e): PersonaRef => ({ source: 'world', entityId: e.id })),
+];
+
+/** A bearer as a finding names it: the entity, or null for the player's own root. */
+const bearerName = (bearer: Bearer | undefined): string | null => (bearer?.entity ? bearer.name : null);
+
+const pairKey = (a: string, b: string) => `${a}\u0000${b}`;
+
+/** A trait on one bearer, as a gate finding names it and opens it. */
+interface StuckTrait {
+  ownerId: string;
+  traitId: string;
+  traitName: string;
+  /** See {@link bearerName}. */
+  bearer: string | null;
+  link?: TraitLink;
+  /** Each requirement as its editor chip reads, quoted. */
+  requirements: string[];
+}
+
+interface GateReport {
+  /** Trait id → each requirement as its editor chip reads, quoted. */
+  requirementTexts: Map<string, string[]>;
+  /** Trait id → the requirements whose target this world no longer has, quoted. World and owned traits. */
+  unresolved: Map<string, string[]>;
+  /** Never-unlockable sets across every bearer, with a trait behind a deleted target counted as openable. */
+  stuck: StuckTrait[][];
+  /** Defaults that start unselected under every persona choice, outside the never-unlockable sets. */
+  offDefaults: string[];
+  /** Groups whose minimum a bearer can't meet, under every persona choice that holds the bearer. */
+  picks: PickShortfall[];
+}
+
+/** One group on one bearer that can't meet its minimum. */
+interface PickShortfall {
+  /** `unreachable`: too few traits can unlock. `defaults`: the settled defaults fall short. */
+  kind: 'unreachable' | 'defaults';
+  bearer: Bearer | undefined;
+  group: TraitGroup;
+  min: number;
+  /** The unlockable traits (`unreachable`) or the settled defaults (`defaults`) placed directly in the group. */
+  count: number;
+  /** The traits behind the finding: the stuck ones (`unreachable`) or the settled defaults (`defaults`). */
+  traits: Trait[];
+}
+
+/**
+ * The gate findings, worked out once per world object. A trait with a deleted target counts as openable for
+ * the other two rules, so each root cause raises one finding: its dependents show once the author re-points it.
+ * Each bearer is checked as if picked: a trait is stuck only when it is stuck under every persona choice
+ * that holds it.
+ */
+const gateReportsByWorld = new WeakMap<RuleWorld, GateReport>();
+const gateReportOf = (world: RuleWorld): GateReport => {
+  let report = gateReportsByWorld.get(world);
+  if (report) return report;
+  const traits = world.traits ?? [];
+  const label = (text: string) => quote(labelOf(text, world));
+
+  const requirementTexts = new Map<string, string[]>();
+  const unresolved = new Map<string, string[]>();
+  for (const [ownerId, states] of gateStates(editorGateInput(bearerWorldOf(world)))) {
+    for (const [id, state] of states) {
+      if (ownerId === WORLD_OWNER) requirementTexts.set(id, state.requirements.map((r) => label(r.text)));
+      const dead = state.requirements.filter((r) => r.unresolved).map((r) => label(r.text));
+      if (dead.length && !unresolved.has(id)) unresolved.set(id, dead);
+    }
+  }
+
+  const openable = bearerWorldOf(world, new Set(unresolved.keys()));
+  const passes = personaChoices(world).map((persona) => {
+    const { bearers, gate } = resolveBearers(openable, persona);
+    const holds = new Map(gate.owners.map((o) => [o.id, new Set(o.traits.map((t) => t.id))]));
+    const sets = neverUnlockable(gate);
+    return { bearers: new Map(bearers.map((b) => [b.id, b])), gate, holds, sets, stuck: new Set(sets.flat().map((r) => pairKey(r.ownerId, r.traitId))) };
+  });
+  const stuckEverywhere = (ownerId: string, traitId: string) =>
+    passes.every((p) => !p.holds.get(ownerId)?.has(traitId) || p.stuck.has(pairKey(ownerId, traitId)));
+
+  const reported = new Set<string>();
+  const stuck = passes.flatMap((pass) => {
+    let states: ReturnType<typeof gateStates> | undefined;
+    return pass.sets.map((set) => set
+      .filter((r) => !reported.has(pairKey(r.ownerId, r.traitId)) && stuckEverywhere(r.ownerId, r.traitId))
+      .map((r): StuckTrait => {
+        reported.add(pairKey(r.ownerId, r.traitId));
+        const bearer = pass.bearers.get(r.ownerId);
+        const link = bearer?.linkOf.get(r.traitId);
+        states ??= gateStates({ ...pass.gate, active: {} });
+        return {
+          ownerId: r.ownerId,
+          traitId: r.traitId,
+          traitName: bearer?.traits.find((t) => t.id === r.traitId)?.name ?? '',
+          bearer: bearerName(bearer),
+          ...(link ? { link } : {}),
+          requirements: (gateOf(states, r.ownerId, r.traitId)?.requirements ?? []).map((req) => label(req.text)),
+        };
+      }))
+      .filter((set) => set.length > 0);
+  });
+
+  const input = editorGateInput(openable);
+  const stuckIds = new Set([
+    ...neverUnlockable(input).flat().filter((r) => r.ownerId === WORLD_OWNER).map((r) => r.traitId),
+    ...stuck.flat().filter((t) => t.ownerId === WORLD_OWNER && !t.link).map((t) => t.traitId),
+  ]);
+  // Each bearer settles its own defaults, so a default is off only when no bearer keeps it under any persona.
+  const everOff = new Set<string>();
+  const everOn = new Set<string>();
+  const settleInto = (gate: Omit<GateInput, 'active'>) => {
+    const settled = settleDefaults(gate);
+    for (const r of settled.turnedOff) everOff.add(r.traitId);
+    for (const ids of Object.values(settled.active)) for (const id of ids) everOn.add(id);
+    return settled;
+  };
+  const settledByPass = passes.map((pass) => settleInto(pass.gate).active);
+  for (const persona of personaChoices(world)) settleInto({ ...input, persona });
+  const offDefaults = traits.filter((t) => !stuckIds.has(t.id) && everOff.has(t.id) && !everOn.has(t.id)).map((t) => t.id);
+
+  // A group is short only when it is short under every persona choice that holds its bearer. A group with an
+  // unreachable minimum leaves its defaults to that finding, as does a minimum above the maximum.
+  const shortfallsByGroup = new Map<string, { runs: number; unreachable: PickShortfall[]; defaults: PickShortfall[] }>();
+  passes.forEach((pass, i) => {
+    for (const owner of pass.gate.owners) {
+      const started = settledByPass[i][owner.id] ?? [];
+      for (const group of owner.groups) {
+        const min = group.minPicks ?? 0;
+        const bearer = pass.bearers.get(owner.id);
+        const direct = owner.traits.filter((t) => (t.groupId ?? null) === group.id);
+        const entry = shortfallsByGroup.get(pairKey(owner.id, group.id)) ?? { runs: 0, unreachable: [], defaults: [] };
+        shortfallsByGroup.set(pairKey(owner.id, group.id), entry);
+        entry.runs++;
+        const stuckHere = direct.filter((t) => pass.stuck.has(pairKey(owner.id, t.id)));
+        if (min > direct.length - stuckHere.length) {
+          entry.unreachable.push({ kind: 'unreachable', bearer, group, min, count: direct.length - stuckHere.length, traits: stuckHere });
+        }
+        const state = groupPickState(group, owner.traits, started);
+        if (state.short) {
+          const on = new Set(started);
+          entry.defaults.push({ kind: 'defaults', bearer, group, min, count: state.count, traits: direct.filter((t) => on.has(t.id)) });
+        }
+      }
+    }
+  });
+  const picks: PickShortfall[] = [];
+  for (const { runs, unreachable, defaults } of shortfallsByGroup.values()) {
+    if (unreachable.length === runs) picks.push(unreachable[0]);
+    else if (defaults.length === runs && defaults[0].min <= (defaults[0].group.maxPicks ?? Infinity)) picks.push(defaults[0]);
+  }
+
+  report = { requirementTexts, unresolved, stuck, offDefaults, picks };
+  gateReportsByWorld.set(world, report);
+  return report;
+};
+
+/** A world or owned trait by its id, opening its own row. */
+const traitItem = (id: string, world: RuleWorld): FindingItem => namedItem(id, everyTrait(world).find((t) => t.id === id)?.name, world);
+
+/** A link as a finding opens it: its own row in the Traits tree, named by what it brings. */
+const linkItem = (link: TraitLink, name: string | undefined, world: RuleWorld): FindingItem =>
+  namedItem(link.id, name ?? link.originalName, world, 'traits');
+
+/** The rows a finding opens, once each: a trait a link brings opens the link. */
+const uniqueItems = (items: FindingItem[]): FindingItem[] =>
+  items.filter((item, i) => items.findIndex((other) => other.id === item.id) === i);
+
+/** A never-unlockable set as one line: the bearer's own words when one bearer holds the whole set. */
+function stuckMessage(set: StuckTrait[], world: RuleWorld): string {
+  const name = (text: string) => quote(labelOf(text, world));
+  const traits = listNames(set.map((t) => name(t.traitName)));
+  const holders = new Set(set.map((t) => (t.bearer === null ? null : t.ownerId)));
+  const holder = holders.size === 1 ? set[0].bearer : null;
+  if (holder === null) {
+    const named = set.map((t) => (t.bearer === null ? name(t.traitName) : `${name(t.traitName)} on ${name(t.bearer)}`));
+    return `${listNames(named)} can never unlock — no pick or persona can meet ${set.length === 1 ? 'its' : 'their'} requirements`;
+  }
+  const verb = set.every((t) => t.link) ? 'links' : 'has';
+  if (set.length === 1) {
+    return `${name(holder)} ${verb} ${traits} but can never meet ${set[0].requirements.join(' or ')}, so it never unlocks`;
+  }
+  return `${name(holder)} ${verb} ${traits}, which can never unlock — nothing ${name(holder)} can hold meets their requirements`;
+}
+
+const traitRequirementNeverUnlockable: Rule = {
+  id: 'trait-requirement-never-unlockable',
+  severity: 'error',
+  section: 'traits',
+  summary: (count) => `${count} sets of traits can never unlock`,
+  check: (world) => gateReportOf(world).stuck.map((set) => finding(
+    traitRequirementNeverUnlockable,
+    stuckMessage(set, world),
+    uniqueItems(set.map((t) => (t.link ? linkItem(t.link, t.traitName, world) : namedItem(t.traitId, t.traitName, world)))),
+  )),
+};
+
+const traitRequirementUnresolved: Rule = {
+  id: 'trait-requirement-unresolved',
+  severity: 'error',
+  section: 'traits',
+  summary: (count) => `${count} traits require something this world no longer has`,
+  check: (world) => [...gateReportOf(world).unresolved].map(([id, dead]) => {
+    const item = traitItem(id, world);
+    return finding(
+      traitRequirementUnresolved,
+      `${quote(item.name)} requires ${listNames(dead)}, which this world no longer has`,
+      [item],
+    );
+  }),
+};
+
+const traitDefaultGated: Rule = {
+  id: 'trait-default-gated',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} default traits start unselected because their requirements aren’t met`,
+  check: (world) => {
+    const { offDefaults, requirementTexts } = gateReportOf(world);
+    return offDefaults.map((id) => {
+      const item = traitItem(id, world);
+      return finding(
+        traitDefaultGated,
+        `${quote(item.name)} is marked default but starts unselected — no starting default or persona choice meets ${(requirementTexts.get(id) ?? []).join(' or ')}`,
+        [item],
+      );
+    });
+  },
+};
+
+// ── Trait links ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** Why a link adds nothing to its bearer's tree. */
+type Redundancy =
+  | { reason: 'reached'; by: TraitLink }
+  | { reason: 'duplicate' };
+
+/** Why the link at `i` of `links`, in tree order, adds nothing, or null when it adds something. */
+function redundancyOf(
+  lists: Pick<BearerWorld, 'traits' | 'traitGroups'>, links: readonly TraitLink[], i: number,
+): Redundancy | null {
+  const link = links[i];
+  const by = links.find((other) => other.kind === 'group' && other.originalId !== link.originalId
+    && broughtIds(lists, other.originalId).includes(link.originalId));
+  if (by) return { reason: 'reached', by };
+  return links.slice(0, i).some((other) => other.originalId === link.originalId) ? { reason: 'duplicate' } : null;
+}
+
+/** What follows "“Albus” links “Smite”" in a redundant-link finding. */
+function redundancyTail(why: Redundancy, originalName: (link: TraitLink) => string): string {
+  return why.reason === 'reached' ? `, which its link to ${quote(originalName(why.by))} already brings` : ' twice';
+}
+
+const traitLinkRedundant: Rule = {
+  id: 'trait-link-redundant',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} links bring a trait or group their bearer already has`,
+  // Any bearer can hold one original twice through a linked group.
+  check: (world) => {
+    const lists = { traits: world.traits ?? [], traitGroups: world.traitGroups ?? [] };
+    const originalName = (link: TraitLink) => labelOf(originalOf(lists, link.originalId)?.item.name ?? link.originalName, world);
+    return (world.entities ?? []).flatMap((entity) => {
+      const links = linksInTreeOrder(entity);
+      const bearer = quote(labelOf(entity.name ?? '', world));
+      return links.flatMap((link, i) => {
+        if (!originalOf(lists, link.originalId)) return [];
+        const why = redundancyOf(lists, links, i);
+        if (!why) return [];
+        const item = linkItem(link, originalName(link), world);
+        return [finding(traitLinkRedundant, `${bearer} links ${quote(item.name)}${redundancyTail(why, originalName)}`, [item])];
+      });
+    });
+  },
+};
+
+// ── Blueprints and copies ─────────────────────────────────────────────────────────────────────────────────
+
+/** Every bearer's tree with no persona picked, walked once per world object. */
+const bearersByWorld = new WeakMap<RuleWorld, Map<string, Bearer>>();
+const bearersOf = (world: RuleWorld): Map<string, Bearer> => {
+  let bearers = bearersByWorld.get(world);
+  if (!bearers) {
+    bearers = new Map(resolveBearers(bearerWorldOf(world), undefined).bearers.map((b) => [b.id, b]));
+    bearersByWorld.set(world, bearers);
+  }
+  return bearers;
+};
+
+/** The copies each entity needs, with why, reconciled once per world object; two rules read it. */
+const needsByWorld = new WeakMap<RuleWorld, Map<string, Map<string, CopyNeed>>>();
+const needsOf = (world: RuleWorld): Map<string, Map<string, CopyNeed>> => {
+  let needs = needsByWorld.get(world);
+  if (!needs) {
+    needs = copyNeeds({ ...bearerWorldOf(world), placeholders: world.placeholders ?? [], placeholderGroups: world.placeholderGroups ?? [] });
+    needsByWorld.set(world, needs);
+  }
+  return needs;
+};
+
+/** A copy with the entity that owns it. */
+interface OwnedCopy {
+  owner: Entity;
+  copy: Placeholder & { blueprintId: string };
+}
+
+/** Copy id → the copy and its owner, walked once per world object. */
+const copiesByWorld = new WeakMap<RuleWorld, Map<string, OwnedCopy>>();
+const copiesOf = (world: RuleWorld): Map<string, OwnedCopy> => {
+  let copies = copiesByWorld.get(world);
+  if (!copies) {
+    copies = new Map();
+    for (const owner of world.entities ?? []) {
+      for (const p of owner.placeholders ?? []) if (p.blueprintId) copies.set(p.id, { owner, copy: { ...p, blueprintId: p.blueprintId } });
+    }
+    copiesByWorld.set(world, copies);
+  }
+  return copies;
+};
+
+/** A copy as the tree names it, `Owner.Blueprint`, opening the copy's row. */
+const copyItem = ({ owner, copy }: OwnedCopy, world: RuleWorld): FindingItem => {
+  const blueprint = (world.placeholders ?? []).find((p) => p.id === copy.blueprintId);
+  return { id: copy.id, name: copyName(asItem(owner, world).name, labelOf(blueprint?.name ?? copy.name, world)), section: 'placeholders' };
+};
+
+/** A trait on a bearer as a finding opens it: the link that brought it, else the trait. */
+const bearerTraitItem = (item: Trait | TraitGroup, bearer: Bearer | undefined, world: RuleWorld): FindingItem => {
+  const link = bearer?.linkOf.get(item.id);
+  return link ? linkItem(link, item.name, world) : namedItem(item.id, item.name, world, 'traits');
+};
+
+/** The value ids a copy removed. */
+const removedValues = (copy: Placeholder): Set<string> =>
+  new Set(Object.entries(copy.valueOverrides ?? {}).filter(([, o]) => o.removed).map(([id]) => id));
+
+const copyPinRemovedValue: Rule = {
+  id: 'copy-pin-removed-value',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} pins name a value their copy removed`,
+  // A blueprint pin reads the copy of each entity that bears the trait, or plays the root trait; a pin a
+  // Detach rewrote names the copy itself.
+  check: (world) => {
+    const removing = [...copiesOf(world).values()]
+      .map((owned) => ({ ...owned, removed: removedValues(owned.copy) }))
+      .filter(({ removed }) => removed.size);
+    if (!removing.length) return [];
+    const bearers = bearersOf(world);
+    const player = bearers.get(PLAYER_BEARER);
+    const byId = indexPlaceholders(world.placeholders ?? []);
+    return removing.flatMap(({ owner, copy, removed }) => {
+      const bearer = bearers.get(owner.id);
+      const traits = [...(bearer?.traits ?? []), ...(canBePlayer(owner) ? player?.traits ?? [] : [])];
+      const hits = new Map<string, { valueId: string; label: string; item: FindingItem }>();
+      const add = (pin: PlaceholderPin, label: string, item: () => FindingItem) => {
+        if (!pin.valueId || !removed.has(pin.valueId)) return;
+        const at = item();
+        const key = pairKey(at.id, pin.valueId);
+        if (!hits.has(key)) hits.set(key, { valueId: pin.valueId, label, item: at });
+      };
+      for (const t of traits) {
+        for (const pin of t.placeholderPins ?? []) {
+          if (pin.placeholderId === copy.blueprintId) add(pin, `Trait: ${labelOf(t.name, world)}`, () => bearerTraitItem(t, bearer, world));
+        }
+      }
+      for (const row of pinRowsOf(world)) if (row.pin.placeholderId === copy.id) add(row.pin, row.label, () => pinSourceItem(row, world));
+      const target = copyItem({ owner, copy }, world);
+      const valueText = (id: string) => labelOf(byId.get(copy.blueprintId)?.values.find((v) => v.id === id)?.text, world);
+      return [...hits.values()].map(({ valueId, label, item }) => finding(
+        copyPinRemovedValue,
+        `${quote(target.name)} removes ${quote(valueText(valueId))}, the value ${quote(label)} pins — the pin applies nothing`,
+        [target, item],
+      ));
+    });
+  },
+};
+
+/** Texts of one kind of field, as {@link acceptsBlueprintChips} reads it, with the row a finding opens, built on a hit. */
+interface FieldTexts {
+  item: () => FindingItem;
+  texts: Array<string | undefined>;
+  field: ChipField;
+}
+
+/** Every chip-bearing field outside the world's own traits, which always take a blueprint chip. */
+const blueprintChipFields = (world: RuleWorld): FieldTexts[] => {
+  const text = { kind: 'text' } as const;
+  return [
+    ...chipOwners(world).filter((o) => o.item.section !== 'traits').map((o) => ({ item: () => o.item, texts: o.texts, field: text })),
+    { item: () => worldItem(world), texts: [world.worldOverview?.description], field: text },
+    ...(world.statUpdates ?? []).map((u) => ({ item: () => namedItem(u.id, u.name, world, 'stats'), texts: [u.prompt], field: text })),
+    ...(world.entities ?? []).flatMap((e) => [...(e.traits ?? []), ...(e.traitGroups ?? [])].map((t) => ({
+      item: (): FindingItem => ({ id: t.id, name: `${asItem(e, world).name}'s ${labelOf(t.name, world)}`, section: 'traits' }),
+      texts: [t.name, t.playerDescription, t.aiDescription],
+      field: { kind: 'trait', owned: true } as const,
+    }))),
+    ...allPlaceholders(world).map((p) => ({
+      item: () => placeholderItem(p.id, world),
+      texts: [...(p.values ?? []).map((v) => v.text), ...Object.values(p.valueOverrides ?? {}).map((o) => o.text?.value)],
+      field: { kind: 'values', placeholderId: p.id } as const,
+    })),
+  ];
+};
+
+const BLUEPRINT_HOLDERS = 'world traits, blueprint values and copy values';
+
+const blueprintRefusedField: Rule = {
+  id: 'blueprint-refused-field',
+  severity: 'warning',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} items hold a blueprint chip or pin in a field that refuses it`,
+  // Every insert path refuses these, so a hit is one that got through, such as in a hand-edited file.
+  check: (world) => {
+    const blueprints = blueprintIds(world);
+    if (!blueprints.size) return [];
+    const name = (id: string) => quote(placeholderItem(id, world).name);
+    const chips = blueprintChipFields(world).flatMap(({ item, texts, field }) => {
+      const hit = [...chipIds(texts)].find((id) => blueprints.has(id));
+      if (!hit || acceptsBlueprintChips(field, world)) return [];
+      const at = item();
+      return [finding(
+        blueprintRefusedField,
+        `${quote(at.name)} holds a chip of the blueprint ${name(hit)}, but only ${BLUEPRINT_HOLDERS} take blueprint chips`,
+        [at],
+      )];
+    });
+    const editor = pinEditorWorld(world);
+    const pins = pinRowsOf(world)
+      .filter((row) => blueprints.has(row.pin.placeholderId) && !isBlueprintSideSource(editor, row.source))
+      .map((row) => finding(
+        blueprintRefusedField,
+        `${quote(row.label)} pins the blueprint ${name(row.pin.placeholderId)}, but only ${BLUEPRINT_HOLDERS} pin blueprints`,
+        [pinSourceItem(row, world)],
+      ));
+    return [...chips, ...pins];
+  },
+};
+
+const copyEditedUnused: Rule = {
+  id: 'copy-edited-unused',
+  severity: 'info',
+  section: 'placeholders',
+  advanced: true,
+  summary: (count) => `${count} edited copies have no trait or chip that uses them`,
+  // An untouched copy goes with its last use; an edited one stays for the author to keep or delete.
+  check: (world) => {
+    const edited = [...copiesOf(world).values()].filter(({ copy }) => !isUntouchedCopy(copy));
+    if (!edited.length) return [];
+    const needs = needsOf(world);
+    return edited
+      .filter(({ owner, copy }) => !needs.get(owner.id)?.has(copy.blueprintId))
+      .map((owned) => {
+        const item = copyItem(owned, world);
+        return finding(copyEditedUnused, `${quote(item.name)} is edited, but no trait or chip uses it`, [item]);
+      });
+  },
+};
+
+const copyMissing: Rule = {
+  id: 'copy-missing',
+  severity: 'warning',
+  section: 'entities',
+  advanced: true,
+  summary: (count) => `${count} bearers need a copy they don’t have`,
+  // The reconcile adds every needed copy after each edit, so a hit is a world that skipped it.
+  check: (world) => {
+    const byId = new Map((world.entities ?? []).map((e) => [e.id, e]));
+    return [...needsOf(world)].flatMap(([entityId, needs]) => {
+      const entity = byId.get(entityId);
+      if (!entity) return [];
+      return [...needs].filter(([blueprintId]) => !copyOf(entity, blueprintId)).flatMap(([blueprintId, why]) => {
+        // An own-text need names a copy the entity holds, so it never lands here.
+        if (why.kind === 'own') return [];
+        const source = why.kind === 'trait'
+          ? bearerTraitItem(why.item, bearersOf(world).get(entityId), world)
+          : placeholderItem(why.placeholderId, world);
+        const bearer = { ...asItem(entity, world), section: 'entities' as const };
+        return [finding(
+          copyMissing,
+          `${quote(bearer.name)} needs a copy of ${quote(placeholderItem(blueprintId, world).name)} for ${quote(source.name)} but has none, so it reads the blueprint`,
+          [bearer, source],
+        )];
+      });
+    });
   },
 };
 
@@ -2292,7 +2946,7 @@ export const RULES: readonly Rule[] = [
   chipUnknownPlaceholder, placeholderUnused, placeholderPinnedUnused, statCodeUnknownStat,
   statCodeBeforeReadsDelta,
   entrySecondaryWithoutPrimary, entryInert, entryRegexInvalid,
-  noStartingLocation, legacyStartLocation, entityNowhere, statDisabledForever,
+  noStartingLocation, legacyStartLocation, entityNowhere, entityNoCodeName, statDisabledForever,
   statStartingOutOfRange, statStartNoDescriptor, statDescriptorDuplicateThreshold, statDescriptorOutOfRange,
   statDescriptorCoverageGap, statPercentageBounds,
   statTraitDeltaClamped, statCodeOverridesTrait, statAiLockFrozen,
@@ -2300,7 +2954,10 @@ export const RULES: readonly Rule[] = [
   aliasLowercaseNoTwin, entityNameInWildcardPool,
   entityMissingPlayerDescription, entityMissingAiDescription, entityMissingBothDescriptions,
   entityLongDescriptionNoSummary, aiSummaryHidesDescription, locationNoEntities,
-  traitGroupMultipleDefaults, traitGroupTooSmall,
+  traitGroupDefaultsOverMax, traitGroupAlwaysOnOverMax, traitGroupTooSmall, traitGroupMinAboveMax, traitGroupMinUnreachable,
+  traitGroupDefaultsBelowMin, traitRequirementNeverUnlockable, traitRequirementUnresolved, traitDefaultGated,
+  traitLinkRedundant,
+  copyPinRemovedValue, blueprintRefusedField, copyEditedUnused, copyMissing,
   placeholderWeightUnknownValue, wildcardSingleValue,
   placeholderPinUnknownValue, placeholderPinConflict, placeholderPinCycle, placeholderPinSelf,
   placeholderSlotMiss, placeholderDanglingReference, placeholderReferenceCycle, placeholderEmptyRecord,

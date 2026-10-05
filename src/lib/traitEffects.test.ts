@@ -9,7 +9,8 @@ import {
   enabledStats,
   exclusiveSiblings,
   traitConflicts,
-  collapseExclusiveDefaults,
+  capDefaults,
+  defaultPicks,
   refreshChosenTraits,
   refreshSavedStats,
   renamedPlaceholderValues,
@@ -179,7 +180,7 @@ describe('placeholder pins', () => {
 });
 
 describe('exclusive groups', () => {
-  const groups = [G('excl', { exclusive: true }), G('plain')];
+  const groups = [G('excl', { maxPicks: 1 }), G('plain')];
   const traits = [
     T('a', { groupId: 'excl' }), T('b', { groupId: 'excl' }),
     T('c', { groupId: 'plain' }), T('d', { groupId: 'plain' }),
@@ -197,7 +198,7 @@ describe('exclusive groups', () => {
 });
 
 describe('conflict detection', () => {
-  const groups = [G('excl', { exclusive: true, order: 0 }), G('plain', { order: 1 })];
+  const groups = [G('excl', { maxPicks: 1, order: 0 }), G('plain', { order: 1 })];
   const vampire = T('vampire', { name: 'Vampire', order: 0, statToggles: [{ statId: 's1', enabled: true }] });
   const cured = T('cured', { name: 'Cured', order: 1, statToggles: [{ statId: 's1', enabled: false }] });
   const lone = T('lone', { name: 'Lone', order: 2, statToggles: [{ statId: 's2', enabled: true }] });
@@ -235,20 +236,54 @@ describe('conflict detection', () => {
   });
 });
 
-describe('collapseExclusiveDefaults', () => {
-  const groups = [G('excl', { exclusive: true, order: 0 }), G('plain', { order: 1 })];
+describe('capDefaults', () => {
+  const groups = [G('excl', { maxPicks: 1, order: 0 }), G('plain', { order: 1 }), G('two', { maxPicks: 2, order: 2 })];
   const traits = [
     T('a', { groupId: 'excl', order: 0 }), T('b', { groupId: 'excl', order: 1 }),
     T('c', { groupId: 'plain', order: 0 }), T('d', { groupId: 'plain', order: 1 }),
+    T('x', { groupId: 'two', order: 0 }), T('y', { groupId: 'two', order: 1 }), T('z', { groupId: 'two', order: 2 }),
     T('loose'),
   ];
 
-  it('keeps only the first authored default per exclusive group', () => {
-    expect(collapseExclusiveDefaults(['b', 'a', 'loose'], traits, groups)).toEqual(['a', 'loose']);
+  it('keeps only the first authored default of a max-one group', () => {
+    expect(capDefaults(['b', 'a', 'loose'], traits, groups)).toEqual(['a', 'loose']);
   });
 
-  it('leaves non-exclusive groups and ungrouped traits alone', () => {
-    expect(collapseExclusiveDefaults(['c', 'd', 'loose'], traits, groups)).toEqual(['c', 'd', 'loose']);
+  it('keeps the first defaults up to a larger max, in authored order', () => {
+    expect(capDefaults(['z', 'y', 'x'], traits, groups)).toEqual(['x', 'y']);
+  });
+
+  it('leaves groups with no max and ungrouped traits alone', () => {
+    expect(capDefaults(['c', 'd', 'loose'], traits, groups)).toEqual(['c', 'd', 'loose']);
+  });
+});
+
+describe('defaultPicks', () => {
+  const groups = [G('two', { maxPicks: 2 })];
+
+  it('starts with the ungated Always On traits, which fill their group before the defaults', () => {
+    const traits = [
+      T('x', { groupId: 'two', order: 0, isDefault: true }), T('y', { groupId: 'two', order: 1, isDefault: true }),
+      T('z', { groupId: 'two', order: 2, mode: 'alwaysOn' }),
+      T('curse', { mode: 'alwaysOn', requires: [{ kind: 'trait', id: 'x' }] }),
+      T('fixed', { mode: 'alwaysOn', isDefault: true, requires: [{ kind: 'trait', id: 'y' }] }),
+    ];
+    expect(defaultPicks(traits, groups)).toEqual(['x', 'z']);
+  });
+
+  it('takes the active Always On traits a caller settled', () => {
+    const traits = [T('x', { groupId: 'two', isDefault: true }), T('curse', { groupId: 'two', mode: 'alwaysOn', requires: [{ kind: 'trait', id: 'x' }] })];
+    expect(defaultPicks(traits, groups, ['curse'])).toEqual(['x', 'curse']);
+  });
+});
+
+describe('an Always On trait in a max-one group', () => {
+  const groups = [G('oath', { maxPicks: 1 })];
+  const traits = [T('sworn', { groupId: 'oath', mode: 'alwaysOn' }), T('free', { groupId: 'oath' }), T('bound', { groupId: 'oath' })];
+
+  it('neither retires a sibling nor is retired by one (Q29)', () => {
+    expect(exclusiveSiblings(traits[0], traits, groups)).toEqual([]);
+    expect(exclusiveSiblings(traits[1], traits, groups)).toEqual(['bound']);
   });
 });
 

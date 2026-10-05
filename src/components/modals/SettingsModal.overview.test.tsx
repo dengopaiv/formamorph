@@ -1,0 +1,234 @@
+// Storage is real (in-memory): SettingsProvider and the modal both read it on mount.
+import 'fake-indexeddb/auto';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { SettingsProvider } from '@/contexts/SettingsContext';
+import { ThemeProvider } from '@/components/theme-provider';
+import { SettingsModal } from './SettingsModal';
+import { presetStoreCodec, type PromptPresetStore } from '@/lib/promptPresets';
+import { OVERVIEW_LABEL } from '@/lib/promptGroups';
+import { resetEndpointModelCache } from '@/lib/endpointModels';
+import { resetProbeMemo } from '@/lib/probeMemo';
+import { clearCatalog, replaceCatalog } from '@/lib/worldCatalog';
+
+// The bundled-engine panel talks to Electron IPC, and the embedding model is a worker download.
+vi.mock('@/components/modals/LocalModelPanel', () => ({ LocalModelPanel: () => null }));
+vi.mock('@/lib/embeddingWorkerClient', () => ({
+  loadEmbeddingModel: () => Promise.resolve(),
+  disposeEmbeddingModel: () => {},
+}));
+
+const PROMPTS_KEY = 'FORMAMORPH_promptPresets';
+const stored = () => presetStoreCodec.parse(localStorage.getItem(PROMPTS_KEY)!).presets.find((p) => p.id === 'mine');
+
+function seed(activeId: string) {
+  const store: PromptPresetStore = {
+    activeId,
+    presets: [{ id: 'mine', name: 'Mine', values: { systemPrompt: 'A' } as never, style: 'markdown' }],
+  };
+  localStorage.setItem(PROMPTS_KEY, presetStoreCodec.serialize(store));
+}
+
+const openPrompts = (initialPromptTab?: string) =>
+  render(
+    <ThemeProvider>
+      <SettingsProvider>
+        <SettingsModal isOpen onOpenChange={() => {}} forcedMode="advanced" initialTab="prompts" initialPromptTab={initialPromptTab} />
+      </SettingsProvider>
+    </ThemeProvider>,
+  );
+
+/** The rail's row buttons, in order. */
+const railButtons = () => within(screen.getByRole('navigation', { name: 'Prompts' })).getAllByRole('button');
+
+beforeEach(() => {
+  localStorage.clear();
+  window.matchMedia = ((query: string) => ({
+    matches: false, media: query, onchange: null,
+    addListener: vi.fn(), removeListener: vi.fn(),
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+});
+
+describe('Settings → Prompts: preset Overview', () => {
+  it('a built-in preset has no Overview entry', () => {
+    seed('default');
+    openPrompts();
+    expect(screen.queryByRole('button', { name: OVERVIEW_LABEL })).toBeNull();
+  });
+
+  it('a built-in preset routed to the Overview lands on a prompt instead', () => {
+    seed('default');
+    openPrompts('overview');
+    expect(screen.queryByLabelText('Author')).toBeNull();
+    expect(screen.getByText(/Writes the story itself/)).toBeTruthy();
+  });
+
+  it('a user preset lists the Overview first in the rail', () => {
+    seed('mine');
+    openPrompts();
+    expect(railButtons()[0].textContent).toBe(OVERVIEW_LABEL);
+  });
+
+  it('opens the fields in order and writes each through to the stored preset', () => {
+    seed('mine');
+    openPrompts();
+    fireEvent.click(screen.getByRole('button', { name: OVERVIEW_LABEL }));
+
+    const labels = screen.getAllByText(/^(Author|Description|Tags|Models)$/).map((n) => n.textContent);
+    expect(labels).toEqual(['Author', 'Description', 'Tags', 'Models']);
+
+    fireEvent.change(screen.getByLabelText('Author'), { target: { value: 'Ann' } });
+    expect(stored()?.overview?.author).toBe('Ann');
+
+    const tags = screen.getByLabelText('Tags');
+    fireEvent.change(tags, { target: { value: 'Slow Burn' } });
+    fireEvent.keyDown(tags, { key: 'Enter' });
+    expect(stored()?.overview?.tags).toEqual(['slow burn']);
+
+    const models = screen.getByLabelText('Models');
+    fireEvent.change(models, { target: { value: 'Cydonia-24B' } });
+    fireEvent.keyDown(models, { key: 'Enter' });
+    expect(stored()?.overview?.models).toEqual(['Cydonia-24B']);
+  });
+
+  // Below md the rail becomes one dropdown. Radix opens a Select from the keyboard; jsdom has no pointer capture.
+  const openPromptDropdown = () => {
+    const trigger = screen.getAllByRole('combobox').find((c) => /Anatomy|Overview/.test(c.textContent ?? ''))!;
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+  };
+
+  it('the mobile prompt dropdown lists the Overview first for a user preset', () => {
+    seed('mine');
+    openPrompts();
+    openPromptDropdown();
+    expect(screen.getAllByRole('option')[0].textContent).toBe(OVERVIEW_LABEL);
+  });
+
+  it('the mobile prompt dropdown has no Overview for a built-in preset', () => {
+    seed('default');
+    openPrompts();
+    openPromptDropdown();
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('option', { name: OVERVIEW_LABEL })).toBeNull();
+  });
+
+  describe('Models suggestions from the endpoint', () => {
+    beforeEach(() => {
+      resetEndpointModelCache();
+      resetProbeMemo();
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('lists the cleaned ids when the field opens, and free text still commits', async () => {
+      const doFetch = vi.fn(async () => new Response(JSON.stringify({ data: [
+        { id: 'cydonia-24b-v4.3@q4_k_m' }, { id: 'cydonia-24b-v4.3@q6_k' }, { id: 'g4-meromero-31b' },
+      ] }), { status: 200 }));
+      vi.stubGlobal('fetch', doFetch);
+      seed('mine');
+      openPrompts('overview');
+      expect(doFetch).not.toHaveBeenCalled();
+
+      const models = screen.getByLabelText('Models');
+      fireEvent.focus(models);
+      const picks = await screen.findAllByRole('button', { name: /cydonia|meromero/ });
+      expect(picks.map((b) => b.textContent)).toEqual(['cydonia-24b-v4.3', 'g4-meromero-31b']);
+
+      fireEvent.mouseDown(picks[0]);
+      expect(stored()?.overview?.models).toEqual(['cydonia-24b-v4.3']);
+      fireEvent.change(models, { target: { value: 'My-Model' } });
+      fireEvent.keyDown(models, { key: 'Enter' });
+      expect(stored()?.overview?.models).toEqual(['cydonia-24b-v4.3', 'My-Model']);
+    });
+
+    it('an unreachable endpoint leaves the field usable with no error', async () => {
+      const doFetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+      vi.stubGlobal('fetch', doFetch);
+      seed('mine');
+      openPrompts('overview');
+
+      const models = screen.getByLabelText('Models');
+      fireEvent.focus(models);
+      await waitFor(() => expect(doFetch).toHaveBeenCalled());
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText(/failed|error|unreachable/i)).toBeNull();
+
+      fireEvent.change(models, { target: { value: 'My-Model' } });
+      fireEvent.keyDown(models, { key: 'Enter' });
+      expect(stored()?.overview?.models).toEqual(['My-Model']);
+    });
+  });
+
+  describe('suggestions from the cached catalog', () => {
+    beforeEach(async () => {
+      resetEndpointModelCache();
+      resetProbeMemo();
+      await clearCatalog();
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    const typeInto = (label: string, text: string) => {
+      const input = screen.getByLabelText(label);
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: text } });
+      return input;
+    };
+
+    it('Tags suggests prompt-listing tags only, and Models merges catalog and endpoint spellings', async () => {
+      await replaceCatalog([
+        { id: 'p1', kind: 'prompt', tags: ['slow burn'], models: ['Cydonia-24B'] },
+        { id: 'p2', kind: 'prompt', tags: ['slow burn'], models: ['Cydonia-24B'] },
+        { id: 'w1', kind: 'world', tags: ['slow world'], models: [] },
+      ]);
+      const doFetch = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'cydonia-24b' }, { id: 'local-only' }] }), { status: 200 }));
+      vi.stubGlobal('fetch', doFetch);
+      seed('mine');
+      openPrompts('overview');
+
+      typeInto('Tags', 'slow');
+      expect(await screen.findByRole('button', { name: 'slow burn' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'slow world' })).toBeNull();
+
+      typeInto('Models', '');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'local-only' })).toBeTruthy());
+      const picks = screen.getAllByRole('button', { name: /cydonia|local-only/i }).map((b) => b.textContent);
+      expect(picks).toEqual(['Cydonia-24B', 'local-only']);
+    });
+
+    it('picks up a catalog cached after the Overview first opened', async () => {
+      seed('mine');
+      openPrompts('overview');
+      await waitFor(() => expect(screen.getByLabelText('Tags')).toBeTruthy());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Narration' }).at(-1)!);
+      await replaceCatalog([{ id: 'p1', kind: 'prompt', tags: ['slow burn'], models: [] }]);
+      fireEvent.click(screen.getByRole('button', { name: OVERVIEW_LABEL }));
+
+      typeInto('Tags', 'slow');
+      expect(await screen.findByRole('button', { name: 'slow burn' })).toBeTruthy();
+    });
+
+    it('with no catalog and no network, opening makes no request and both fields take free text', async () => {
+      const doFetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+      vi.stubGlobal('fetch', doFetch);
+      seed('mine');
+      openPrompts('overview');
+      expect(doFetch).not.toHaveBeenCalled();
+
+      const tags = typeInto('Tags', 'Mine Only');
+      fireEvent.keyDown(tags, { key: 'Enter' });
+      const models = typeInto('Models', 'My-Model');
+      fireEvent.keyDown(models, { key: 'Enter' });
+      expect(stored()?.overview?.tags).toEqual(['mine only']);
+      expect(stored()?.overview?.models).toEqual(['My-Model']);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
+
+  it('picking a prompt leaves the Overview', () => {
+    seed('mine');
+    openPrompts('overview');
+    expect(screen.getByLabelText('Author')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Narration' }).at(-1)!);
+    expect(screen.queryByLabelText('Author')).toBeNull();
+  });
+});

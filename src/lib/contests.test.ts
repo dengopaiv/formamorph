@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  activeContestOf, contestPhase, contestsOf, contestEntryIdOf, entriesOf, isContestRunning,
+  activeContestOf, contestPhase, contestsOf, contestEntryIdOf, entriesOf,
   judgingContestsOf, orderContestEntries, placeInContest, placementsBy, shuffleWithSeed, contestSections,
+  standingsOrder, tiedLikeCounts,
 } from './contests';
 import type { ContestSection } from './contests';
 import { daysFrom, serverEvent as event } from '@/test/serverEvents';
@@ -11,8 +12,13 @@ import type { WorldRecord } from '@/components/WorldDetails';
 
 const at = (offsetDays: number) => daysFrom(offsetDays);
 
-const entry = (id: string, likes: number, eventId: string | null = 'e1'): WorldRecord => ({
-  _id: id, name: id, likes, contest_event_id: eventId,
+const entry = (
+  id: string,
+  likes: number,
+  eventId: string | null = 'e1',
+  createdAt?: string,
+): WorldRecord => ({
+  _id: id, name: id, likes, contest_event_id: eventId, created_at: createdAt,
 });
 
 /** A podium out of world ids, gold first — the server's shape, minus the snapshots nobody asserts. */
@@ -29,7 +35,6 @@ const decidedWith = (
 describe('which state a contest is in', () => {
   it('is live inside its window', () => {
     expect(contestPhase(event())).toBe('live');
-    expect(isContestRunning(event())).toBe(true);
   });
 
   it('is judging once the window closes with the results still to come', () => {
@@ -40,9 +45,9 @@ describe('which state a contest is in', () => {
     expect(contestPhase(decidedWith(['w2']))).toBe('decided');
   });
 
-  it('is not running before it starts, or once it has been called off', () => {
-    expect(isContestRunning(event({ startsAt: at(2), endsAt: at(9) }))).toBe(false);
-    expect(isContestRunning(event({ cancelledAt: at(-1) }))).toBe(false);
+  it('has no phase before it starts, or once it has been called off', () => {
+    expect(contestPhase(event({ startsAt: at(2), endsAt: at(9) }))).toBeNull();
+    expect(contestPhase(event({ cancelledAt: at(-1) }))).toBeNull();
   });
 });
 
@@ -60,6 +65,12 @@ describe('the contests worth showing', () => {
     const called_off = event({ id: 'c1', cancelledAt: at(-1) });
 
     expect(contestsOf([announcement, called_off, event()]).map((e) => e.id)).toEqual(['e1']);
+  });
+
+  it('drops a contest that has not started, which staff see in this same feed', () => {
+    const scheduled = event({ id: 'soon', startsAt: at(4), endsAt: at(20) });
+
+    expect(contestsOf([scheduled, event()]).map((e) => e.id)).toEqual(['e1']);
   });
 });
 
@@ -161,6 +172,25 @@ describe('which listings belong to a contest', () => {
     expect(placementsBy(entry('w2', 0), [announcement])).toEqual([]);
   });
 
+  it('badges each world that shares a place with the place it shares, listing and local copy alike', () => {
+    // Two golds and the silver that follows them. The lookup is by world, so a shared place is meant to
+    // need nothing new — this is what says so.
+    const tied = event({
+      resultsAnnouncedAt: at(0),
+      placements: [
+        { place: 1, worldId: 'w1', worldName: 'Gold', authorName: 'an author' },
+        { place: 1, worldId: 'w2', worldName: 'Also Gold', authorName: 'an author' },
+        { place: 2, worldId: 'w3', worldName: 'Silver', authorName: 'an author' },
+      ],
+    });
+
+    expect(placementsBy(entry('w1', 0), [tied]).map((p) => p.place)).toEqual([1]);
+    expect(placementsBy(entry('w2', 0), [tied]).map((p) => p.place)).toEqual([1]);
+    expect(placeInContest(entry('w3', 0), tied)).toBe(2);
+    expect(placementsBy({ id: 'local-copy', name: 'Also Gold', sourceId: 'w2' }, [tied]).map((p) => p.place))
+      .toEqual([1]);
+  });
+
   it('never badges a world whose place lost its listing id', () => {
     // The snapshot survives a deletion; the id does not, and a record with no id must not answer to it.
     const decided = decidedWith([null], { id: 'won' });
@@ -184,9 +214,19 @@ describe('the order entries are shown in', () => {
     expect(orderContestEntries(entries, event(), 0.42)).toEqual(orderContestEntries(entries, event(), 0.42));
   });
 
-  it('settles by likes once judging starts, where a shuffle would only hide the standings', () => {
+  it('shuffles while judging, so the likes do not lead the list before results', () => {
     const judging = event({ startsAt: at(-20), endsAt: at(-2) });
-    expect(orderContestEntries(entries, judging, 0.42).map((w) => w._id)).toEqual(['w2', 'w5', 'w3', 'w1', 'w4']);
+    const first = orderContestEntries(entries, judging, 0.42).map((w) => w._id);
+    const other = orderContestEntries(entries, judging, 0.77).map((w) => w._id);
+
+    expect(first).not.toEqual(['w2', 'w5', 'w3', 'w1', 'w4']);
+    expect(first).not.toEqual(other);
+    expect([...first].sort()).toEqual(['w1', 'w2', 'w3', 'w4', 'w5']);
+    expect(first).toEqual(orderContestEntries(entries, judging, 0.42).map((w) => w._id));
+  });
+
+  it('settles by likes once results are announced', () => {
+    expect(orderContestEntries(entries, decidedWith([]), 0.42).map((w) => w._id)).toEqual(['w2', 'w5', 'w3', 'w1', 'w4']);
   });
 
   it('pins the whole podium in front of the likes, in podium order', () => {
@@ -209,6 +249,75 @@ describe('the order entries are shown in', () => {
   it('leaves the likes order alone when no placed world is in the catalog', () => {
     expect(orderContestEntries(entries, decidedWith(['gone']), 0.42).map((w) => w._id))
       .toEqual(['w2', 'w5', 'w3', 'w1', 'w4']);
+  });
+
+  it('pins worlds that share a place in the order the podium stores them, not in likes order', () => {
+    // w4 has the fewest likes of all five and w1 the second fewest, and both took 1st. Nothing but the
+    // podium's own array order can put w4 in front of w1 here.
+    const tied = event({
+      resultsAnnouncedAt: at(0),
+      placements: [
+        { place: 1, worldId: 'w4', worldName: 'w4', authorName: 'an author' },
+        { place: 1, worldId: 'w1', worldName: 'w1', authorName: 'an author' },
+        { place: 2, worldId: 'w3', worldName: 'w3', authorName: 'an author' },
+      ],
+    });
+
+    expect(orderContestEntries(entries, tied, 0.42).map((w) => w._id))
+      .toEqual(['w4', 'w1', 'w3', 'w2', 'w5']);
+  });
+
+  it('breaks level like counts by publish time, earliest first', () => {
+    const level = [entry('late', 5, 'e1', at(-2)), entry('early', 5, 'e1', at(-9)), entry('middle', 5, 'e1', at(-5))];
+    expect(orderContestEntries(level, decidedWith([]), 0.42).map((w) => w._id)).toEqual(['early', 'middle', 'late']);
+  });
+
+  it('sorts a listing whose publish time cannot be read last, rather than scrambling the rest', () => {
+    // A stamp that cannot be read must not beat one that can, and two of them must still compare level —
+    // which a sentinel of infinity would not, because the difference of two infinities is not a number.
+    const level = [entry('junk', 5, 'e1', 'not a date'), entry('none', 5), entry('dated', 5, 'e1', at(-9))];
+    expect(orderContestEntries(level, decidedWith([]), 0.42).map((w) => w._id)).toEqual(['dated', 'junk', 'none']);
+  });
+});
+
+describe('the standings', () => {
+  const standing = (id: string, likes: number, publishedAt: number) => ({ id, likes, publishedAt });
+
+  it('puts the most-liked entry first', () => {
+    const order = standingsOrder([standing('a', 2, 0), standing('b', 9, 0), standing('c', 5, 0)]);
+    expect(order.map((s) => s.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('breaks a level count by publish time, earliest first', () => {
+    const order = standingsOrder([standing('late', 5, 900), standing('early', 5, 100), standing('mid', 5, 400)]);
+    expect(order.map((s) => s.id)).toEqual(['early', 'mid', 'late']);
+  });
+
+  it('leaves the entries it was given alone', () => {
+    // The grid re-derives this on every render, so a sort in place would reorder the state it reads.
+    const given = [standing('a', 1, 0), standing('b', 9, 0)];
+    standingsOrder(given);
+    expect(given.map((s) => s.id)).toEqual(['a', 'b']);
+  });
+
+  it('marks every count two or more entries share, and no other', () => {
+    const shared = tiedLikeCounts([
+      standing('a', 9, 0), standing('b', 9, 0), standing('c', 4, 0), standing('d', 1, 0), standing('e', 1, 0),
+    ]);
+    expect([...shared].sort((x, y) => x - y)).toEqual([1, 9]);
+  });
+
+  it('marks a count three entries share once', () => {
+    const shared = tiedLikeCounts([standing('a', 7, 0), standing('b', 7, 0), standing('c', 7, 0)]);
+    expect([...shared]).toEqual([7]);
+  });
+
+  it('marks nothing when every count is its own', () => {
+    expect(tiedLikeCounts([standing('a', 3, 0), standing('b', 2, 0)]).size).toBe(0);
+  });
+
+  it('marks a level count of zero, which is the count a quiet contest is full of', () => {
+    expect(tiedLikeCounts([standing('a', 0, 0), standing('b', 0, 0)]).has(0)).toBe(true);
   });
 });
 

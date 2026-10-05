@@ -1,40 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
-import { BookOpen, Check, ChevronDown, ListTree } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ListTree, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { SetupTraitList, TraitCascadeNotice, type TraitCascade } from '@/components/game/SetupTraitList';
+import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
+import { WORLD_OWNER, groupPickState, type GateStates } from '@/lib/traitGates';
+import { choiceRowClass } from '@/components/game/setupChoiceRow';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle, dialogCenteredAnimation } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tip } from '@/components/ui/tooltip';
 import type { DictionarySelectionItem } from '@/lib/dictionarySelection';
-import type { GameLocation, Stat, Trait, TraitGroup } from '@/types';
+import type { Entity, GameLocation, PersonaRef, Stat, Trait, TraitGroup } from '@/types';
+import { PersonaPicker, PersonaPortrait, type PersonaOption } from '@/components/game/PersonaPicker';
+import { primaryImage } from '@/lib/entityImages';
+import type { ResolveEntityText } from '@/lib/resolveWorldNames';
+import { bearerTraitTree, playerEntityIds } from '@/lib/ownedTraitsInPlay';
+import { hasPersonaChoice } from '@/lib/personaPick';
 import { stripMarkdown } from '@/lib/stripMarkdown';
 import { useElementSize } from '@/lib/useElementSize';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/useIsMobile';
+import { buildTraitWorkspace, type TraitCategory } from '@/lib/setupTraitWorkspace';
+import { isShown } from '@/lib/traitEffects';
 import EnterWorldLibrary, { type EntityAddition } from './EnterWorldLibrary';
-
-interface TraitCategory {
-  kind: 'traits';
-  id: string | null;
-  name: string;
-  group?: TraitGroup;
-  path: TraitGroup[];
-  depth: number;
-  traits: Trait[];
-}
-
-interface NavigationGroup {
-  group: TraitGroup;
-  depth: number;
-  categoryIndex: number;
-}
-
-interface TraitWorkspace {
-  categories: TraitCategory[];
-  navigationGroups: NavigationGroup[];
-}
 
 export interface EnterWorldWorkspaceProps {
   /** False plays the exit animation; the host keeps the workspace mounted until it finishes. */
@@ -44,18 +32,39 @@ export interface EnterWorldWorkspaceProps {
   worldAuthor?: string;
   traits: Trait[];
   traitGroups: TraitGroup[];
+  /** The world's entities; each that bears traits gets a page in the tree. */
+  traitEntities?: readonly Entity[];
+  /** The library persona and the added library entities, in the order added. */
+  traitLibrary?: readonly Entity[];
+  resolveEntityText?: ResolveEntityText;
   stats: Stat[];
   locations: GameLocation[];
   resolveText: (text: string) => string;
-  resolveTraitText: (trait: Trait, text: string) => string;
-  selectedTraits: string[];
+  /** A trait's own text, bound for its bearer, which is the Character Name in it. */
+  resolveTraitText: (trait: Trait, text: string, bearer?: Entity | null) => string;
+  /** Each bearer's picks by owner id, the player's under the world's. */
+  selectedTraits: Readonly<Record<string, readonly string[]>>;
   selectedLocationId: string | null;
   libraryEntities: EntityAddition[];
   selectedEntityIds: Set<string>;
   dictionaryItems: DictionarySelectionItem[];
+  /** The world's own personas on offer. */
+  worldPersonas?: PersonaOption[];
+  /** The library personas on offer. The category hides when neither list has one. */
+  personas?: PersonaOption[];
+  /** The picker offers None. Absent = yes. */
+  personaNone?: boolean;
+  /** The Custom Persona entity, which stands in None's place. */
+  personaCustom?: PersonaOption;
+  persona?: PersonaRef;
+  onPersonaChange?: (ref: PersonaRef) => void;
   categoryIndex: number;
   onCategoryChange: (index: number) => void;
-  onTraitSelect: (traitId: string) => void;
+  onTraitSelect: (traitId: string, ownerId: string) => void;
+  traitGates?: GateStates;
+  /** What the last selection change turned off; shown until dismissed or the next change. */
+  traitCascade?: TraitCascade | null;
+  onDismissTraitCascade?: () => void;
   onLocationChange: (locationId: string | null) => void;
   onEntityToggle: (entityId: string, selected: boolean) => void;
   onDictionaryItemsChange: (items: DictionarySelectionItem[]) => void;
@@ -70,50 +79,6 @@ export interface EnterWorldWorkspaceProps {
 
 const REMEMBERED_MS = 3000;
 
-const authoredOrder = <T extends { order?: number }>(items: T[]): T[] =>
-  [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-
-const choiceRowClass = (selected: boolean) => cn(
-  'flex min-h-14 cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 transition-colors',
-  'focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset',
-  selected
-    ? 'border-primary bg-primary/10'
-    : 'border-border hover:border-muted-foreground/60 hover:bg-muted/40',
-);
-
-const buildTraitWorkspace = (traits: Trait[], groups: TraitGroup[]): TraitWorkspace => {
-  const directTraits = (groupId: string | null) => authoredOrder(
-    traits.filter((trait) => (trait.groupId ?? null) === groupId),
-  );
-  const children = (parentId: string | null) => authoredOrder(
-    groups.filter((group) => (group.parentId ?? null) === parentId),
-  );
-  const hasTraits = (groupId: string): boolean =>
-    directTraits(groupId).length > 0 || children(groupId).some((group) => hasTraits(group.id));
-
-  const categories: TraitCategory[] = [];
-  const navigationGroups: NavigationGroup[] = [];
-  const general = directTraits(null);
-  if (general.length > 0) {
-    categories.push({ kind: 'traits', id: null, name: 'General', path: [], depth: 0, traits: general });
-  }
-
-  const walk = (parentId: string | null, path: TraitGroup[], depth: number) => {
-    for (const group of children(parentId).filter((candidate) => hasTraits(candidate.id))) {
-      const nextPath = [...path, group];
-      const ownTraits = directTraits(group.id);
-      const categoryIndex = ownTraits.length > 0 ? categories.length : -1;
-      if (ownTraits.length > 0) {
-        categories.push({ kind: 'traits', id: group.id, name: group.name, group, path: nextPath, depth, traits: ownTraits });
-      }
-      navigationGroups.push({ group, depth, categoryIndex });
-      walk(group.id, nextPath, depth + 1);
-    }
-  };
-  walk(null, [], 0);
-  return { categories, navigationGroups };
-};
-
 export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
   const viewportMobile = useIsMobile();
   const [containerRef, containerSize] = useElementSize();
@@ -127,12 +92,45 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
     return () => clearTimeout(timer);
   }, [additionsRemembered]);
   const categoryNavigationButton = useRef<HTMLButtonElement>(null);
-  const traitWorkspace = useMemo(
-    () => buildTraitWorkspace(props.traits, props.traitGroups),
-    [props.traits, props.traitGroups],
+  const traitTree = useMemo(
+    () => bearerTraitTree(
+      { traits: props.traits, traitGroups: props.traitGroups, entities: props.traitEntities ?? [] },
+      props.persona, props.traitLibrary ?? [],
+    ),
+    [props.traits, props.traitGroups, props.traitEntities, props.persona, props.traitLibrary],
   );
+  const picksOf = (ownerId: string | undefined) => props.selectedTraits[ownerId ?? WORLD_OWNER] ?? [];
+  // Every category, seen or not, for the Begin check.
+  const allCategories = useMemo(
+    () => buildTraitWorkspace(traitTree.traits, traitTree.groups, new Set(traitTree.entityNodes.keys())).categories,
+    [traitTree],
+  );
+  // A category with no row the player sees drops out, so the page index can move as picks change (Q33).
+  const traitWorkspace = useMemo(
+    () => buildTraitWorkspace(
+      traitTree.traits, traitTree.groups, new Set(traitTree.entityNodes.keys()),
+      (trait, entityId) => isShown(trait, props.selectedTraits[entityId ?? WORLD_OWNER] ?? []),
+    ),
+    [traitTree, props.selectedTraits],
+  );
+  const playerIds = playerEntityIds(traitTree);
+  const youMark = <span className="ml-2 text-meta font-normal text-primary">You</span>;
+  // One entity, one role: the persona leaves the character list, and an added character leaves the picker.
+  const personaId = props.persona?.source === 'library' ? props.persona.entityId : null;
+  const personaOptions = useMemo(
+    () => (props.personas ?? []).filter((option) => option.id === personaId || !props.selectedEntityIds.has(option.id)),
+    [personaId, props.personas, props.selectedEntityIds],
+  );
+  const characterOptions = useMemo(
+    () => (personaId ? props.libraryEntities.filter((entity) => entity.id !== personaId) : props.libraryEntities),
+    [personaId, props.libraryEntities],
+  );
+  const hasPersonas = hasPersonaChoice({
+    world: props.worldPersonas ?? [], library: props.personas ?? [], none: props.personaNone !== false, custom: props.personaCustom,
+  });
   const categories = useMemo(
     () => [
+      ...(hasPersonas ? [{ kind: 'persona' as const, id: 'persona', name: 'Persona' }] : []),
       ...traitWorkspace.categories,
       ...(props.locations.length > 1
         ? [{ kind: 'location' as const, id: 'location', name: 'Starting Location' }]
@@ -141,18 +139,21 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
         ? [{ kind: 'library' as const, id: 'library', name: 'Library Additions' }]
         : []),
     ],
-    [props.dictionaryItems.length, props.libraryEntities.length, props.locations.length, traitWorkspace],
+    [hasPersonas, props.dictionaryItems.length, props.libraryEntities.length, props.locations.length, traitWorkspace],
   );
+  const pickStateOf = (category: TraitCategory) =>
+    (category.group ? groupPickState(category.group, category.traits, picksOf(category.entityId)) : null);
+  // Begin waits for every bearer's groups to meet their minimums; Quick Start never comes through here.
+  const short = allCategories.some((category) => !!pickStateOf(category)?.short);
   const currentIndex = Math.min(props.categoryIndex, Math.max(categories.length - 1, 0));
   const current = categories[currentIndex];
   const visibleGroups = traitWorkspace.navigationGroups;
-  const statById = useMemo(() => new Map(props.stats.map((stat) => [stat.id, stat])), [props.stats]);
   const dialogDescription = 'Configure this playthrough before entering the world.';
 
   const categoryButton = (category: (typeof categories)[number], index: number, depth = 0) => {
-    const selected = category.kind === 'traits'
-      ? category.traits.filter((trait) => props.selectedTraits.includes(trait.id)).length
-      : 0;
+    const picks = category.kind === 'traits' ? picksOf(category.entityId) : [];
+    const shown = category.kind === 'traits' ? category.traits.filter((trait) => isShown(trait, picks)) : [];
+    const selected = shown.filter((trait) => picks.includes(trait.id)).length;
     return (
       <button
         type="button"
@@ -171,18 +172,48 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
           categoryNavigationButton.current?.focus();
         }}
       >
-        <span className="min-w-0 flex-1 break-words">{category.name}</span>
-        {category.kind === 'traits' && (
+        {category.kind === 'traits' && category.entityNode && <User aria-hidden className="h-4 w-4 shrink-0" />}
+        <span className="min-w-0 flex-1 break-words">
+          {category.name}
+          {category.kind === 'traits' && category.entityNode && !!category.entityId && playerIds.includes(category.entityId) && youMark}
+        </span>
+        {shown.length > 0 && (
           <span
-            aria-label={`${selected} of ${category.traits.length} selected`}
+            aria-label={`${selected} of ${shown.length} selected`}
             className={cn('shrink-0 text-meta font-normal', selected ? 'text-primary' : 'text-muted-foreground')}
           >
-            {selected}/{category.traits.length}
+            {selected}/{shown.length}
           </span>
         )}
       </button>
     );
   };
+  // An entity's page opens on its portrait beside its name and player description.
+  const entityHeading = (entityId: string) => {
+    const entity = traitTree.entityNodes.get(entityId);
+    if (!entity) return null;
+    const description = entity.playerDescription?.trim();
+    return (
+      <div className="mb-3 flex items-start gap-4">
+        <PersonaPortrait image={primaryImage(entity)} />
+        <div className="min-w-0">
+          <p className="mb-1 text-meta font-medium tracking-wide text-muted-foreground">Starting Traits</p>
+          <h2 className="break-words text-heading font-semibold">
+            {entity.name}
+            {playerIds.includes(entity.id) && youMark}
+          </h2>
+          {description && (
+            <div className="mt-1 max-w-3xl text-helper text-muted-foreground">
+              <MarkdownRenderer text={props.resolveEntityText ? props.resolveEntityText(entity, description) : description} />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+  const personaIndex = categories.findIndex((category) => category.kind === 'persona');
+  // Trait group indices count from the first trait category, which the Persona category precedes.
+  const traitOffset = personaIndex >= 0 ? 1 : 0;
   const generalIndex = categories.findIndex((category) => category.kind === 'traits' && category.id === null);
   const locationIndex = categories.findIndex((category) => category.kind === 'location');
   const libraryIndex = categories.findIndex((category) => category.kind === 'library');
@@ -195,7 +226,8 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
       )}
     >
     <nav aria-label="World setup categories" className="space-y-1 p-3">
-      {props.traits.length > 0 && (
+      {personaIndex >= 0 && categoryButton(categories[personaIndex], personaIndex)}
+      {traitTree.traits.length > 0 && (
         <p className="my-3 flex items-center gap-3 px-2 text-meta font-medium uppercase text-muted-foreground">
           <span>Starting Traits</span><span className="h-px flex-1 bg-border" />
         </p>
@@ -203,7 +235,7 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
       {generalIndex >= 0 && categoryButton(categories[generalIndex], generalIndex)}
       {visibleGroups.map(({ group, depth, categoryIndex }) => (
         <div key={group.id}>
-          {categoryIndex >= 0 ? categoryButton(categories[categoryIndex], categoryIndex, depth) : (
+          {categoryIndex >= 0 ? categoryButton(categories[categoryIndex + traitOffset], categoryIndex + traitOffset, depth) : (
             <div
               aria-describedby={group.playerDescription?.trim() ? `setup-group-${group.id}-description` : undefined}
               className="min-h-8 break-words px-2 py-1 text-label text-muted-foreground"
@@ -242,6 +274,7 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
   return (
     <Dialog open={props.open ?? true} onOpenChange={(open) => { if (!open) props.onCancel(); }}>
       <DialogContent
+        surface="enterWorld"
         ref={containerRef}
         data-enter-world-container="dialog"
         hideClose
@@ -322,83 +355,42 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
           {current?.kind !== 'library' && (
             <ScrollArea className="min-h-0 flex-1">
               <div className="p-4 md:px-6 md:py-4">
-          {current?.kind === 'traits' && (
+          {current?.kind === 'traits' && current.entityNode && current.traits.length === 0 && entityHeading(current.entityId!)}
+          {current?.kind === 'traits' && (!current.entityNode || current.traits.length > 0) && (
+            <SetupTraitList
+              heading={current.entityNode ? entityHeading(current.entityId!) : undefined}
+              name={current.name}
+              groups={current.path}
+              traits={current.traits}
+              picks={pickStateOf(current)}
+              stats={props.stats}
+              selectedTraits={picksOf(current.entityId)}
+              resolveText={props.resolveText}
+              resolveTraitText={(trait, text) =>
+                props.resolveTraitText(trait, text, current.entityId ? traitTree.entityNodes.get(current.entityId) ?? null : null)}
+              onTraitSelect={props.onTraitSelect}
+              ownerId={current.entityId ?? WORLD_OWNER}
+              gates={props.traitGates}
+              cascade={props.traitCascade}
+              onDismissCascade={props.onDismissTraitCascade}
+            />
+          )}
+          {current?.kind === 'persona' && props.persona && props.onPersonaChange && (
             <>
-              <p className="mb-1 text-meta font-medium tracking-wide text-muted-foreground">Starting Traits</p>
+              <p className="mb-1 text-meta font-medium tracking-wide text-muted-foreground">World Setup</p>
               <h2 className="mb-3 text-heading font-semibold">{current.name}</h2>
-              {current.path.map((group) => group.playerDescription?.trim() && (
-                <div key={group.id} className="mb-2 max-w-3xl text-helper text-muted-foreground">
-                  <MarkdownRenderer text={props.resolveText(group.playerDescription)} />
-                </div>
-              ))}
-              <fieldset className="mt-4 min-w-0">
-                <legend className="sr-only">{current.name} choices</legend>
-                {(() => {
-                  const exclusive = current.group?.exclusive === true;
-                  const selectedExclusive = current.traits.find((trait) => props.selectedTraits.includes(trait.id))?.id;
-                  const rows = current.traits.map((trait) => {
-                    const selected = props.selectedTraits.includes(trait.id);
-                    const description = props.resolveTraitText(trait, trait.playerDescription ?? '').trim();
-                    const changes = trait.statChanges
-                      .map((change) => ({ change, stat: statById.get(change.statId) }))
-                      .filter(({ stat }) => stat !== undefined && stat.hidden !== true);
-                    return (
-                      <div key={trait.id} className={choiceRowClass(selected)}>
-                        {exclusive ? (
-                          <RadioGroupItem
-                            id={`setup-trait-${trait.id}`}
-                            value={trait.id}
-                            aria-label={trait.name}
-                            className="mt-0.5 shrink-0"
-                            onClick={(event) => {
-                              if (selected) {
-                                event.preventDefault();
-                                props.onTraitSelect(trait.id);
-                              }
-                            }}
-                          />
-                        ) : (
-                          <Checkbox
-                            id={`setup-trait-${trait.id}`}
-                            checked={selected}
-                            aria-label={trait.name}
-                            className="mt-0.5 shrink-0"
-                            onCheckedChange={() => props.onTraitSelect(trait.id)}
-                          />
-                        )}
-                        <label htmlFor={`setup-trait-${trait.id}`} className="min-w-0 flex-1 cursor-pointer">
-                          <strong className="block text-label font-semibold">{trait.name}</strong>
-                          {description && <span className="mt-1 block text-helper text-muted-foreground">{description}</span>}
-                          {changes.length > 0 && (
-                            <ul className="mt-2 list-inside list-disc text-helper text-muted-foreground">
-                              {changes.map(({ change, stat }, index) => (
-                                <li key={index}>
-                                  {props.resolveTraitText(trait, stat!.name)}:{' '}
-                                  <span className={change.value > 0 ? 'text-success' : 'text-destructive'}>
-                                    {change.value > 0 ? '+' : ''}{change.value}
-                                  </span>
-                                  {change.type && change.type !== 'starting' ? ` (${change.type})` : ''}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </label>
-                      </div>
-                    );
-                  });
-                  return exclusive ? (
-                    <RadioGroup
-                      value={selectedExclusive ?? ''}
-                      onValueChange={props.onTraitSelect}
-                      className="grid min-w-0 gap-3 xl:grid-cols-2"
-                    >
-                      {rows}
-                    </RadioGroup>
-                  ) : (
-                    <div className="grid min-w-0 gap-3 xl:grid-cols-2">{rows}</div>
-                  );
-                })()}
-              </fieldset>
+              <p className="mb-4 text-helper text-muted-foreground">Choose who you play in this world</p>
+              <PersonaPicker
+                world={props.worldPersonas}
+                library={personaOptions}
+                none={props.personaNone}
+                custom={props.personaCustom}
+                value={props.persona}
+                onChange={props.onPersonaChange}
+              />
+              {props.traitCascade && props.onDismissTraitCascade && (
+                <TraitCascadeNotice cascade={props.traitCascade} onDismiss={props.onDismissTraitCascade} />
+              )}
             </>
           )}
           {current?.kind === 'location' && (
@@ -501,7 +493,7 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
                 </span>
               </div>
               <EnterWorldLibrary
-                entities={props.libraryEntities}
+                entities={characterOptions}
                 selectedEntityIds={props.selectedEntityIds}
                 dictionaryItems={props.dictionaryItems}
                 worldAuthor={props.worldAuthor}
@@ -516,7 +508,7 @@ export default function EnterWorldWorkspace(props: EnterWorldWorkspaceProps) {
       <footer className="shrink-0 bg-background px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pb-2">
         <DialogFooter>
           <Button variant="ghost" className="w-full text-muted-foreground sm:w-auto" onClick={props.onCancel}>Cancel</Button>
-          <Button className="w-full sm:w-auto" disabled={props.resolving} onClick={props.onContinue}>
+          <Button className="w-full sm:w-auto" disabled={props.resolving || short} onClick={props.onContinue}>
             {props.resolving ? 'Loading…' : props.continueLabel}
           </Button>
         </DialogFooter>

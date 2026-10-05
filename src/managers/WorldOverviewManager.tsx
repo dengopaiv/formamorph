@@ -7,8 +7,9 @@ import { TokenAutocomplete } from "@/components/TokenAutocomplete";
 import { useDanbooruTags } from "@/lib/useDanbooruTags";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/typography";
-import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { ImageUpload, SoundUpload } from '../lib/UtilityComponents';
+import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { IMAGE_CAPS } from '../lib/imageOptim';
 import { GenerateImageButton } from '../components/GenerateImageButton';
 import { ModelDetailsPanel } from '../components/modals/ModelDetailsPanel';
@@ -16,7 +17,11 @@ import { readVrmMeta } from '../lib/vrmMeta';
 import { downloadBlob } from '@/lib/downloadBlob';
 import { ActionIcon } from '@/lib/actionIcons';
 import { useEditorMode } from '@/lib/editorMode';
-import type { VrmLicense } from '@/types';
+import { ALLOWED_PERSONAS, limitsToWorld, worldPersonaRules } from '@/lib/personaPick';
+import { customPersonaEntity } from '@/lib/blueprints';
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { AllowedPersonas, VrmLicense } from '@/types';
 
 /**
  * The world's custom player VRM in the same details view the model library uses. The world stores the model
@@ -69,10 +74,83 @@ const PlayerVrmPreview = ({ data, fileName, open, onClose }: { data: string; fil
       onClose={onClose}
       footer={
         <Button variant="outline" size="sm" className="w-full" onClick={handleExport} disabled={!blob}>
-          <ActionIcon.export className="mr-2 h-4 w-4" /> Export Avatar
+          <ActionIcon.export className="mr-2 h-4 w-4" /> Export
         </Button>
       }
     />
+  );
+};
+
+const ALLOWED_PERSONAS_LABELS: Record<AllowedPersonas, string> = { any: 'Any', world: 'World Only' };
+
+export const ALLOWED_PERSONAS_HINTS: Record<AllowedPersonas, string> = {
+  any: 'Lets players pick any persona, their own included',
+  world: 'Limits players to the personas this world defines',
+};
+
+export const WORLD_ONLY_WITHOUT_PERSONAS_HINT = 'Works like Any until you give an entity a Persona role';
+
+export const START_PERSONA_HINT = 'Sets the persona new players start on. Returning players start on their last pick.';
+
+const PLAYER_DEFAULT = 'default';
+const NONE = 'none';
+
+/** Which personas the player can pick, and which one a new player starts on. Advanced only; Any and the
+ *  player's default write no field. */
+const PersonaRulesFields = () => {
+  const { worldOverview, updateWorldOverview, entities } = useGameData();
+  const { allowed, start } = worldPersonaRules(worldOverview);
+  const personas = entities.filter((entity) => entity.persona === true);
+  const custom = customPersonaEntity(entities);
+  const limited = limitsToWorld(allowed, { world: personas, custom });
+  const hint = allowed === 'world' && !limited ? WORLD_ONLY_WITHOUT_PERSONAS_HINT : ALLOWED_PERSONAS_HINTS[allowed];
+
+  const options = [
+    ...(limited ? [] : [{ value: PLAYER_DEFAULT, label: "Player's Default" }]),
+    ...(limited && !custom ? [] : [{ value: NONE, label: custom ? custom.name || 'Custom Persona' : 'None' }]),
+    ...personas.map((entity) => ({ value: entity.id, label: entity.name || 'Unnamed' })),
+  ];
+  // Under World Only the absent pick is the first offered persona; a stale pick reads as the absent one.
+  const stored = start?.source === 'world' ? start.entityId : start ? NONE : PLAYER_DEFAULT;
+  const selected = options.some((o) => o.value === stored) ? stored : options[0]?.value;
+  const writeStart = (v: string) => updateWorldOverview({
+    startPersona: v === PLAYER_DEFAULT ? undefined : v === NONE ? { source: 'none' } : { source: 'world', entityId: v },
+  });
+
+  return (
+    <>
+      <div className="space-y-2">
+        <Label id="allowed-personas-label">Allowed Personas</Label>
+        <ToggleGroup
+          type="single"
+          aria-labelledby="allowed-personas-label"
+          value={allowed}
+          // A single ToggleGroup clears on a second click of the active item; the setting always has a value.
+          onValueChange={(v) => {
+            const next = ALLOWED_PERSONAS.find((s) => s === v);
+            if (next) updateWorldOverview({ allowedPersonas: next === 'any' ? undefined : next });
+          }}
+          className="flex w-fit"
+        >
+          {ALLOWED_PERSONAS.map((value) => (
+            <ToggleGroupItem key={value} value={value} className="px-3">{ALLOWED_PERSONAS_LABELS[value]}</ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <Hint>{hint}</Hint>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="start-persona">Starts On</Label>
+        <Hint>{START_PERSONA_HINT}</Hint>
+        <Select value={selected} onValueChange={writeStart}>
+          <SelectTrigger id="start-persona" className="w-64 max-w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+    </>
   );
 };
 
@@ -99,11 +177,11 @@ const WorldOverviewManager = () => {
           });
         } catch (error) {
           console.error('Error processing VRM:', error);
-          toast.error('Error processing player avatar. Please try again.');
+          toastError(error, { headline: 'Error processing player avatar. Please try again.' });
         }
       };
       reader.onerror = () => {
-        toast.error('Error reading file. Please try again.');
+        toastError(reader.error, { headline: 'Error reading file. Please try again.' });
       };
       reader.readAsDataURL(file);
     }
@@ -117,7 +195,7 @@ const WorldOverviewManager = () => {
     // The listing fields first, then the avatar setting, then the music: the library card's name, author,
     // tags and picture read as one block.
     <div className="space-y-4">
-      <div className="space-y-2">
+      <div className="space-y-2" data-tour-anchor="world-name">
         <Label htmlFor="worldName">World Name</Label>
         <Input
           id="worldName"
@@ -145,7 +223,7 @@ const WorldOverviewManager = () => {
           placeholder="Add tags"
         />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2" data-tour-anchor="world-thumbnail" {...targetAttribute('worldEditor.overview', 'thumbnail')}>
         <Label htmlFor="image-upload-thumbnail">Thumbnail</Label>
         {/* The frame and its Generate button share one box, so the button is as wide as the picture it
             makes rather than centered under it. */}
@@ -174,14 +252,14 @@ const WorldOverviewManager = () => {
           onCheckedChange={(checked) => updateWorldOverview({ use3DModel: checked === true })}
         />
         <Label htmlFor="use3DModel">3D Player Avatar</Label>
-        <Hint as="span">The player can customize it.</Hint>
+        <Hint as="span">The player can customize it</Hint>
       </div>
       {/* Advanced only: a Simple-mode world keeps whatever avatar it carries and the bundled one otherwise,
           the way it keeps a prompt it does not offer to edit. */}
       {advanced && worldOverview.use3DModel && (
         <div className="space-y-2">
           <Label htmlFor="customVRM">Custom Player Avatar</Label>
-          <Hint>Overrides the default 3D player model.</Hint>
+          <Hint>Overrides the default 3D player model</Hint>
           <input
             ref={vrmInputRef}
             id="customVRM"
@@ -222,7 +300,8 @@ const WorldOverviewManager = () => {
           )}
         </div>
       )}
-      <div className="space-y-2">
+      {advanced && <PersonaRulesFields />}
+      <div className="space-y-2" {...targetAttribute('worldEditor.overview', 'background-music')}>
         <Label htmlFor="sound-upload-world-bgm">Background Music</Label>
         {/* The world stores a bare data URL where a location stores a media record, so the shared widget
             is fed one and read back for its bytes alone. */}

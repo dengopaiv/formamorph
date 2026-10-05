@@ -1,12 +1,14 @@
 import type { AIRequestType } from '@/types';
 import {
   DEFAULT_TEXT_PRESET_ID, BUILTIN_ENGINE_PRESET_ID, BUILTIN_ENGINE_VALUES,
-  isBuiltInPresetId, valuesForId,
+  canonicalPresetId, isBuiltInPresetId, valuesForId,
   type TextEndpointPresetStore, type TextEndpointValues,
 } from './textEndpointPresets';
 import type { EndpointSamplerOverrides } from './endpointSamplers';
-import type { AiRequestBody } from './aiRequest/aiRequestSpec';
-import type { ReasoningEffortField } from './reasoningEffort';
+import {
+  reasoningWireFields,
+  type ReasoningBodyFields, type ReasoningDialect, type ReasoningWireField,
+} from './reasoningDialect';
 
 /**
  * Which text-endpoint preset each prompt kind sends to, keyed by request type. A kind with no entry
@@ -68,6 +70,15 @@ export function routedPresetId(kind: AIRequestType, map: PromptEndpointMap, stor
 }
 
 /**
+ * A routing map that pins `kind` to the first of `routes` that names a preset. None follows the active
+ * endpoint, so a route left behind by a deleted preset gives way to the next.
+ */
+export function routeMap(kind: AIRequestType, routes: readonly string[], store: TextEndpointPresetStore): PromptEndpointMap {
+  const id = routes.find((route) => isRoutableId(store, route));
+  return id === undefined ? {} : { [kind]: id };
+}
+
+/**
  * The endpoint a prompt kind sends to. An unpinned (or ghost-pinned) kind returns the active state
  * untouched, so nothing about the pre-routing path changes. A pinned kind returns its preset's values
  * layered over the shipped defaults, so a preset stored before a new field existed still resolves.
@@ -105,7 +116,7 @@ export function resolvePromptEndpoint(
   if (routed === null) {
     return {
       presetId: null,
-      endpointId: id,
+      endpointId: canonicalPresetId(store, id),
       endpoint: active.values.endpoint,
       apiToken: active.values.apiToken,
       model: active.values.model,
@@ -139,11 +150,11 @@ export interface DebugEndpointInfo {
   routed: boolean;
   model: string;
   url: string;
-  /** The effort hint the request carried. Absent where it sent none. */
-  reasoningEffort?: ReasoningEffortField;
-  /** The thinking cap the request carried, in tokens. Absent where it sent none; `0` is a switched-off
-   *  prompt, which is a different thing from sending nothing. */
-  budgetTokens?: number;
+  /** The reasoning fields the request carried, in the spelling the endpoint received. Empty where it sent
+   *  none. A `0` budget is a switched-off prompt, which is a different thing from sending nothing. */
+  reasoningFields: ReasoningWireField[];
+  /** The `max_tokens` the request sent. Absent where it sent none. */
+  maxTokens?: number;
 }
 
 /**
@@ -151,8 +162,8 @@ export interface DebugEndpointInfo {
  * and deliberately drops the token: the viewer exports this structure as JSON for bug reports, so the
  * omission is the point of the function rather than an accident of the call site.
  *
- * The reasoning fields are read off the wire body rather than resolved a second time, so the viewer reports
- * what the request actually carried.
+ * The reasoning fields are read back out of the wire body through the dialect that wrote them, rather than
+ * resolved a second time, so the viewer reports what the request actually carried and under which key.
  */
 export function toDebugEndpoint(
   target: {
@@ -162,15 +173,16 @@ export function toDebugEndpoint(
     url: string;
     apiToken: string;
   },
-  body: Pick<AiRequestBody, 'reasoning_effort' | 'thinking_budget_tokens'>,
+  body: ReasoningBodyFields & { max_tokens?: number },
+  dialect: ReasoningDialect,
 ): DebugEndpointInfo {
   return {
     preset: target.presetName,
     routed: target.presetId !== null,
     model: target.model,
     url: target.url,
-    ...(body.reasoning_effort !== undefined && { reasoningEffort: body.reasoning_effort }),
-    ...(body.thinking_budget_tokens !== undefined && { budgetTokens: body.thinking_budget_tokens }),
+    reasoningFields: reasoningWireFields(dialect, body),
+    ...(body.max_tokens !== undefined && { maxTokens: body.max_tokens }),
   };
 }
 

@@ -14,10 +14,12 @@
  */
 import {
   DEFAULT_MAX_TOKENS,
+  DEFAULT_TOOLS_ENABLED,
   DEFAULT_IMAGE_PORTRAIT_WIDTH, DEFAULT_IMAGE_PORTRAIT_HEIGHT,
   DEFAULT_IMAGE_LANDSCAPE_WIDTH, DEFAULT_IMAGE_LANDSCAPE_HEIGHT,
 } from '@/contexts/settingsDefaults';
 import type { ParagraphLimit, ReasoningEffort } from '@/contexts/SettingsContext';
+import { reasoningRuledOut, toolsSupported, type ReasoningCapability } from '@/lib/reasoningEffort';
 
 export interface SettingsAdvancedInput {
   // Display → Narration
@@ -27,6 +29,8 @@ export interface SettingsAdvancedInput {
   reasoningEffort: ReasoningEffort;
   limitActiveCharacters: boolean;
   activeCharacterLimit: number;
+  // Output → Tools
+  toolsEnabled: boolean;
   // Output → Memory
   memoryDigests: boolean;
   semanticMemory: boolean;
@@ -68,6 +72,7 @@ export const HIDDEN_SETTING_DEFAULTS = {
   reasoningEffort: 'auto',
   limitActiveCharacters: true,
   activeCharacterLimit: 5,
+  toolsEnabled: DEFAULT_TOOLS_ENABLED,
   memoryDigests: true,
   semanticMemory: false,
   semanticBandCap: 12,
@@ -100,4 +105,31 @@ export function settingsUseAdvancedValues(s: Partial<SettingsAdvancedInput>): bo
     if (k === 'describeCharacters') return s.describeCharacters !== (s.characterDiaries ?? false);
     return s[k] !== HIDDEN_SETTING_DEFAULTS[k];
   });
+}
+
+type SectionField =
+  | 'paragraphLimit' | 'markdownOutput' | 'showReasoning' | 'showSilentRequests'
+  | 'reasoningEffort' | 'limitActiveCharacters' | 'activeCharacterLimit' | 'toolsEnabled'
+  | 'memoryDigests' | 'semanticMemory' | 'semanticBandCap' | 'semanticRehydration' | 'timeContext' | 'aiClock'
+  | 'semanticLore' | 'describeCharacters' | 'characterDiaries' | 'semanticDiaries' | 'concurrentTurnRequests';
+
+/**
+ * The Display and Output fields the marker compares. Native Reasoning and Tools are left out where the
+ * active endpoint rules their rows out, so a stored value there promises no row.
+ */
+export function sectionHiddenFields(
+  s: Pick<SettingsAdvancedInput, SectionField> & { reasoningCapability: ReasoningCapability | null },
+): Partial<SettingsAdvancedInput> {
+  return {
+    paragraphLimit: s.paragraphLimit, markdownOutput: s.markdownOutput,
+    showReasoning: s.showReasoning, showSilentRequests: s.showSilentRequests,
+    ...(reasoningRuledOut(s.reasoningCapability) ? {} : { reasoningEffort: s.reasoningEffort }),
+    limitActiveCharacters: s.limitActiveCharacters, activeCharacterLimit: s.activeCharacterLimit,
+    ...(toolsSupported(s.reasoningCapability) ? { toolsEnabled: s.toolsEnabled } : {}),
+    memoryDigests: s.memoryDigests, semanticMemory: s.semanticMemory, semanticBandCap: s.semanticBandCap,
+    semanticRehydration: s.semanticRehydration, timeContext: s.timeContext, aiClock: s.aiClock,
+    semanticLore: s.semanticLore, describeCharacters: s.describeCharacters,
+    characterDiaries: s.characterDiaries, semanticDiaries: s.semanticDiaries,
+    concurrentTurnRequests: s.concurrentTurnRequests,
+  };
 }

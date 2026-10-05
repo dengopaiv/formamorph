@@ -5,15 +5,21 @@
 // Pure and display-only: nothing here decides what a trait does, only where its row lands.
 
 import { buildTraitTree, type TraitTreeNode } from './traitTree';
+import { isAlwaysOn, isHidden } from './traitEffects';
 import type { Trait, TraitGroup } from '@/types';
 
-/** A run of traits under one (sub)group heading. An exclusive block's traits are alternatives, not a set. */
+/** A run of traits under one (sub)group heading. A max-one block's traits are alternatives, not a set. */
 export interface TraitBlock {
   key: string;
   /** Path of nested subgroup names ("Mutations › Major"), or null for the section group's own traits. */
   subheader: string | null;
-  exclusive: boolean;
+  /** The group the traits sit in directly, whose pick count governs them; null outside any group. */
+  group: TraitGroup | null;
   traits: Trait[];
+  /** Set when the block sits in an entity node's subtree: the bearer whose traits these are. */
+  entityId?: string;
+  /** Set on the entity node's own block, which wears the node's heading. */
+  entityNode?: true;
 }
 
 /** One collapsible section: a top-level group, "General", or the whole list when the world has no groups. */
@@ -22,6 +28,8 @@ export interface TraitSection {
   /** null = the flat, chrome-less case: no header, no collapsing. */
   name: string | null;
   blocks: TraitBlock[];
+  /** Set when the section's group is an entity node. */
+  entityId?: string;
 }
 
 const leaves = (nodes: TraitTreeNode[]): Trait[] =>
@@ -37,15 +45,23 @@ const holdsTraits = (node: TraitTreeNode): boolean =>
  * Traits sitting outside any group become a "General" section, unless there is no populated group at all —
  * then the whole list is one unnamed section and the panel draws no section chrome. Groups whose subtree
  * holds no listed trait are dropped, so a group full of traits the player can't act on leaves no empty shell.
+ * A group in `entityNodeIds` is an entity node, and its section and every block below it carry that
+ * entity's id.
  */
-export function buildTraitSections(traits: Trait[], groups: TraitGroup[]): TraitSection[] {
+export function buildTraitSections(
+  traits: Trait[], groups: TraitGroup[], entityNodeIds: ReadonlySet<string> = new Set(),
+): TraitSection[] {
+  const entity = (id: string, within?: string) => {
+    const owner = entityNodeIds.has(id) ? id : within;
+    return owner ? { entityId: owner } : {};
+  };
   const tree = buildTraitTree(groups, traits);
   const ungrouped = leaves(tree);
   const tops = subgroups(tree).filter(holdsTraits);
 
   if (tops.length === 0) {
     return ungrouped.length > 0
-      ? [{ key: 'flat', name: null, blocks: [{ key: 'flat', subheader: null, exclusive: false, traits: ungrouped }] }]
+      ? [{ key: 'flat', name: null, blocks: [{ key: 'flat', subheader: null, group: null, traits: ungrouped }] }]
       : [];
   }
 
@@ -54,25 +70,28 @@ export function buildTraitSections(traits: Trait[], groups: TraitGroup[]): Trait
     sections.push({
       key: 'general',
       name: 'General',
-      blocks: [{ key: 'general', subheader: null, exclusive: false, traits: ungrouped }],
+      blocks: [{ key: 'general', subheader: null, group: null, traits: ungrouped }],
     });
   }
   for (const top of tops) {
     const blocks: TraitBlock[] = [];
-    const walk = (node: Extract<TraitTreeNode, { kind: 'group' }>, path: string[]) => {
+    const walk = (node: Extract<TraitTreeNode, { kind: 'group' }>, path: string[], within?: string) => {
       const own = leaves(node.children);
+      const bearer = entity(node.id, within);
       if (own.length > 0) {
         blocks.push({
           key: `g:${node.id}`,
           subheader: path.length > 0 ? path.join(' › ') : null,
-          exclusive: node.group.exclusive === true,
+          group: node.group,
           traits: own,
+          ...bearer,
+          ...(entityNodeIds.has(node.id) ? { entityNode: true as const } : {}),
         });
       }
-      for (const child of subgroups(node.children).filter(holdsTraits)) walk(child, [...path, child.group.name]);
+      for (const child of subgroups(node.children).filter(holdsTraits)) walk(child, [...path, child.group.name], bearer.entityId);
     };
     walk(top, []);
-    sections.push({ key: `g:${top.id}`, name: top.group.name, blocks });
+    sections.push({ key: `g:${top.id}`, name: top.group.name, blocks, ...entity(top.id) });
   }
   return sections;
 }
@@ -89,9 +108,10 @@ export interface TraitSectionView {
 
 export interface TraitSectionViewOptions {
   query: string;
-  isOff: (traitId: string) => boolean;
+  /** Whether the trait is off in the block's bearer's tree; the world's when the block names none. */
+  isOff: (traitId: string, bearerId?: string) => boolean;
   /** The description as the player reads it; defaults to the raw authored text. */
-  describe?: (trait: Trait) => string;
+  describe?: (trait: Trait, bearerId?: string) => string;
 }
 
 /**
@@ -104,16 +124,17 @@ export function viewTraitSection(
   { query, isOff, describe = (t) => t.playerDescription ?? '' }: TraitSectionViewOptions,
 ): TraitSectionView | null {
   const q = query.trim().toLowerCase();
-  const matches = (t: Trait) =>
-    q === '' || t.name.toLowerCase().includes(q) || describe(t).toLowerCase().includes(q);
+  const matches = (t: Trait, bearerId?: string) =>
+    q === '' || t.name.toLowerCase().includes(q) || describe(t, bearerId).toLowerCase().includes(q);
 
-  const split = (keep: (t: Trait) => boolean): TraitBlock[] =>
+  const split = (keep: (t: Trait, bearerId?: string) => boolean): TraitBlock[] =>
     section.blocks
-      .map((b) => ({ ...b, traits: b.traits.filter((t) => matches(t) && keep(t)) }))
+      .map((b) => ({ ...b, traits: b.traits.filter((t) => matches(t, b.entityId) && keep(t, b.entityId)) }))
       .filter((b) => b.traits.length > 0);
 
-  const enabled = split((t) => !isOff(t.id));
-  const disabled = split((t) => isOff(t.id));
+  // A Hidden trait never shows (Q13), and a dormant Always On trait isn't shown at all (Q15).
+  const enabled = split((t, bearerId) => !isOff(t.id, bearerId) && !isHidden(t));
+  const disabled = split((t, bearerId) => isOff(t.id, bearerId) && !isAlwaysOn(t));
   const count = (blocks: TraitBlock[]) => blocks.reduce((n, b) => n + b.traits.length, 0);
   if (enabled.length === 0 && disabled.length === 0) return null;
   return { enabled, disabled, enabledCount: count(enabled), disabledCount: count(disabled) };

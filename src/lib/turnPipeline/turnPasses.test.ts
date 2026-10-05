@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { TURN_PASSES, TURN_PASS_CAPS, sceneTagsPass, SCENE_TAGS_EMPTY_CAST } from './turnPasses';
+import { TURN_PASSES, TURN_PASS_CAPS, sceneTagsPass, SCENE_TAGS_EMPTY_CAST, milestoneSelectPass } from './turnPasses';
+import { defaultMilestoneSelectUserPrompt } from '@/components/game/GamePrompts';
 import { renderPromptTemplate } from '@/lib/promptTemplate';
 import { planTurn } from './planTurn';
 import type { ChatMessage, Entity } from '@/types';
@@ -67,7 +68,6 @@ describe('turn pass requests', () => {
       // Rendered before the move, so it reads the location the turn began in.
       expect(request.systemPrompt).toBe('ROUTER CURRENT-LOCATION');
       expect(request.messages).toEqual([{ role: 'user', content: 'Action: I read the notices.' }]);
-      expect(request.maxTokens).toBeNull();
       expect(request.silent).toBe(false);
     });
 
@@ -291,17 +291,30 @@ describe('turn pass requests', () => {
       }
     });
 
-    it('sends the discovery prompt as authored and pins the caps the passes ask for', () => {
-      const discover = build('discoverEntity', { subject: { name: 'Ferryman' } });
-      expect(discover.systemPrompt).toBe('DISCOVER PROMPT');
-      expect(discover.messages[0].content).toBe(
-        'Character name: Ferryman\n\nThe passage they appeared in:\nThe notices are damp and half-illegible.',
-      );
-      expect(discover.maxTokens).toBe(TURN_PASS_CAPS.discoverEntity);
+    it('pins the caps the passes ask for', () => {
+      expect(build('discoverEntity', { subject: { name: 'Ferryman' } }).maxTokens).toBe(TURN_PASS_CAPS.discoverEntity);
       expect(build('summary').maxTokens).toBe(TURN_PASS_CAPS.summary);
       expect(build('timePassed').maxTokens).toBe(TURN_PASS_CAPS.timePassed);
       expect(build('openingTime', {}, { isGameStarted: false }).maxTokens).toBe(TURN_PASS_CAPS.openingTime);
       expect(build('diary', { subject: { name: 'Bram' } }).maxTokens).toBe(TURN_PASS_CAPS.diary);
+    });
+
+    it('caps the choices at 256 tokens', () => {
+      expect(build('choices').maxTokens).toBe(256);
+    });
+
+    it('sizes the stat cap from the world’s stat count', () => {
+      expect(build('statUpdates', {}, {}, { statCount: 1 }).maxTokens).toBe(32);
+      expect(build('statUpdates', {}, {}, { statCount: 6 }).maxTokens).toBe(112);
+    });
+
+    it('sizes the location cap from the longest destination name', () => {
+      for (const id of ['locationAuto', 'locationSuggest'] as const) {
+        // 'Pier' estimates to 1 token; the long name is 44 characters, so 11.
+        expect([id, build(id, { destinations: ['Pier'] }).maxTokens]).toEqual([id, 9]);
+        expect([id, build(id, { destinations: ['Pier', 'The Drowned Chapel Beyond The Southern Marsh'] }).maxTokens])
+          .toEqual([id, 19]);
+      }
     });
   });
 
@@ -345,10 +358,54 @@ describe('turn pass requests', () => {
 
     it('strips the discovery labels back off the description', () => {
       const cleaned = pass('discoverEntity').parseResponse(
-        'Character name: Ferryman\nA weathered man of few words.',
+        'Character name: Ferryman\nA weathered man of few words.\n\nWhat the story has shown of them since:\nHe rowed.',
         material({ subject: { name: 'Ferryman' } }),
       );
       expect(cleaned).toBe('A weathered man of few words.');
+    });
+  });
+
+  describe('the character note', () => {
+    const ferryman = { name: 'Ferryman' };
+
+    it('renders the note prompt against the turn context', () => {
+      expect(build('discoverEntity', { subject: ferryman }).systemPrompt).toBe('DISCOVER TURN-LOCATION');
+    });
+
+    it('sends the name and the passage they first appeared in on a first note', () => {
+      expect(lastMessage('discoverEntity', { subject: ferryman })).toBe(
+        'Note: Ferryman\n\nThe passage they first appeared in:\nThe notices are damp and half-illegible.',
+      );
+    });
+
+    it('adds what the story has shown of them since on a rewrite', () => {
+      const later = { subject: { ...ferryman, laterMaterial: ['He rowed them over.', 'He said nothing.'] } };
+      expect(lastMessage('discoverEntity', later)).toBe(
+        'Note: Ferryman\n\nThe passage they first appeared in:\nThe notices are damp and half-illegible.\n\n' +
+        'What the story has shown of them since:\nHe rowed them over.\n\nHe said nothing.',
+      );
+    });
+
+    it('sends a rewrite with nothing later exactly as a first note', () => {
+      const rewrite = lastMessage('discoverEntity', { subject: { ...ferryman, laterMaterial: [] } });
+      expect(rewrite).toBe(lastMessage('discoverEntity', { subject: ferryman }));
+    });
+
+    it('sends a rewrite with no first passage as the present sections alone', () => {
+      const rewrite = lastMessage('discoverEntity', { narration: '', subject: { ...ferryman, laterMaterial: [] } });
+      expect(rewrite).toBe('Note: Ferryman');
+    });
+
+    it('sends no leading blank lines when a template opens on an empty block', () => {
+      const opensOnBlock = { prompts: { ...TEST_PROMPTS, discoverEntityUser: '<FIRST PASSAGE>\n\n<LATER MATERIAL>' } };
+      const message = lastMessage('discoverEntity', { narration: '', subject: { name: ' Ferryman ', laterMaterial: ['He rowed.'] } }, opensOnBlock);
+      expect(message).toBe('What the story has shown of them since:\nHe rowed.');
+    });
+
+    it('drops the passage section when that turn is gone', () => {
+      const orphan = { narration: '', subject: { ...ferryman, laterMaterial: ['He rowed.'] } };
+      const message = lastMessage('discoverEntity', orphan);
+      expect(message).toBe('Note: Ferryman\n\nWhat the story has shown of them since:\nHe rowed.');
     });
   });
 
@@ -458,6 +515,7 @@ describe('every pass request anatomy', () => {
     timePassed: { system: true, user: true },
     openingTime: { system: true, user: true },
     diary: { system: true, user: false },
+    discoverEntity: { system: true, user: true },
   };
   const LABELED = Object.keys(SOURCES) as TurnPassId[];
   const subject = { subject: { name: 'Bram', entity: BRAM, stance: 'at the rail' } };
@@ -484,9 +542,6 @@ describe('every pass request anatomy', () => {
     expect(message.has('system-template')).toBe(false);
   });
 
-  it('leaves the discovery pass unlabeled — its prompt is not an editor surface', () => {
-    expect(build('discoverEntity', subject).anatomy).toBeUndefined();
-  });
 
   it('points the two chips a user message carries at different things', () => {
     const request = build('choices');
@@ -573,5 +628,87 @@ describe('the scene-tag pass', () => {
     expect(request.anatomy!.messages[0].map((r) => r.contextLabel))
       .toEqual([undefined, 'narration', undefined, 'scene-cast']);
     expect(runsTile(request.systemPrompt, request.anatomy!.system)).toBe(true);
+  });
+});
+
+describe('the milestone selector pass', () => {
+  const REPLY_THREE = '\n\nReply with three lines:\n'
+    + 'Keep: the numbers of the NEW moments worth remembering, comma-separated, or "none".\n'
+    + 'Forget: the numbers of already-kept moments whose outcome a new moment now carries, or "none".\n'
+    + 'Weight: each kept number with its weight, like "<number>=<weight>", comma-separated, or "none".';
+  const REPLY_KEEP = '\n\nReply with one line:\nKeep: the numbers worth remembering, comma-separated, or "none".';
+  const selectMaterial = (kept: string[], fresh: string[]) => material({ milestone: { kept, fresh } });
+  const buildSelect = (kept: string[], fresh: string[], userTemplate = TEST_PROMPTS.milestoneSelectUser) =>
+    milestoneSelectPass.buildRequest(
+      input({ prompts: { ...TEST_PROMPTS, milestoneSelectUser: userTemplate } }),
+      selectMaterial(kept, fresh),
+    );
+
+  it('is not dispatched by the turn runner — the view runs it between turns', () => {
+    expect(TURN_PASSES.some((p) => p.id === 'milestoneSelect')).toBe(false);
+  });
+
+  // The shipped template must send what the selector was probed on, in both shapes.
+  it('sends the probed message with the shipped template once memory keeps something', () => {
+    const request = buildSelect(['old a', 'old b'], ['new c'], defaultMilestoneSelectUserPrompt);
+    expect(request.messages).toEqual([{
+      role: 'user',
+      content: `Moments already in memory, oldest first:\n1. old a\n2. old b\n\nNew moments to judge:\n3. new c${REPLY_THREE}`,
+    }]);
+  });
+
+  it('sends the probed first-run message with the shipped template, asking for Keep alone', () => {
+    expect(buildSelect([], ['new a', 'new b'], defaultMilestoneSelectUserPrompt).messages[0].content)
+      .toBe(`New moments to judge, oldest first:\n1. new a\n2. new b${REPLY_KEEP}`);
+  });
+
+  it('keeps the author text around the chips, and one blank line before the reply format', () => {
+    expect(buildSelect(['old a'], ['new b'], 'Judge these.\n<REMEMBERED MOMENTS>\n<NEW MOMENTS>\n\n').messages[0].content)
+      .toBe(`Judge these.\nMoments already in memory, oldest first:\n1. old a\nNew moments to judge:\n2. new b${REPLY_THREE}`);
+  });
+
+  it('leaves one blank line where an empty kept list sat between author text and the new list', () => {
+    const request = buildSelect([], ['new a'], 'Judge these.\n\n<REMEMBERED MOMENTS>\n\n<NEW MOMENTS>');
+    expect(request.messages[0].content).toBe(`Judge these.\n\nNew moments to judge, oldest first:\n1. new a${REPLY_KEEP}`);
+    expect(runsTile(request.messages[0].content, request.anatomy!.messages[0])).toBe(true);
+  });
+
+  it('sends a silent request at the pass cap, against the context the turn began in', () => {
+    const request = buildSelect(['old a'], ['new b']);
+    expect(request.type).toBe('milestoneSelect');
+    expect(request.maxTokens).toBe(300);
+    expect(request.silent).toBe(true);
+    expect(request.attachTurnId).toBe('turn-1');
+    expect(request.systemPrompt).toBe('MILESTONE CURRENT-LOCATION');
+  });
+
+  it('names its runs: the template, both lists as memory, and the reply format the app appends', () => {
+    const request = buildSelect(['old a'], ['new b']);
+    const content = request.messages[0].content;
+    const runs = request.anatomy!.messages[0];
+    expect(runsTile(content, runs)).toBe(true);
+    expect(runs.map((r) => [r.chip ?? r.source ?? r.contextLabel, content.slice(r.start, r.end)])).toEqual([
+      ['user-template', 'Kept: '],
+      ['<REMEMBERED MOMENTS>', 'Moments already in memory, oldest first:\n1. old a'],
+      ['user-template', ' | New: '],
+      ['<NEW MOMENTS>', 'New moments to judge:\n2. new b'],
+      ['reply-format', REPLY_THREE],
+    ]);
+    expect(runs.map((r) => r.contextLabel)).toEqual([undefined, 'condensed', undefined, 'condensed', 'reply-format']);
+    expect(runsTile(request.systemPrompt, request.anatomy!.system)).toBe(true);
+  });
+
+  it('still tiles its runs when the empty kept chip leads the message', () => {
+    const request = buildSelect([], ['new a'], defaultMilestoneSelectUserPrompt);
+    expect(runsTile(request.messages[0].content, request.anatomy!.messages[0])).toBe(true);
+  });
+
+  it('parses the reply against the two list lengths it numbered', () => {
+    const verdict = milestoneSelectPass.parseResponse('Keep: 3\nForget: 1 replaced by 3\nWeight: 3=2', selectMaterial(['A', 'B'], ['C']));
+    expect(verdict).toEqual({ keepFresh: new Set([0]), forgetOld: new Set([0]), weights: new Map([[0, 2]]) });
+  });
+
+  it('refuses to build without the two lists', () => {
+    expect(() => milestoneSelectPass.buildRequest(input(), material())).toThrow(/milestone/);
   });
 });

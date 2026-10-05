@@ -1,17 +1,24 @@
-import type { AIRequestType, ChatMessage } from '@/types';
+import type { AIRequestType, RequestMessage, WireMessage } from '@/types';
+import { toolSchema, type OfferedFunction, type ToolFunctionSchema } from '@/lib/tools/toolSchema';
 import type { ThinkingMode, ReasoningEffort } from '@/contexts/SettingsContext';
 import type { ParagraphLimit } from '@/lib/outputLength';
 import {
-  reasoningBudgetBody, reasoningEffortBody, reasoningRuledOut, resolvePromptReasoning,
-  type PromptReasoning, type ReasoningCapability, type ReasoningEffortField,
+  MAX_REASONING_BUDGET_PCT, nativeReasoningSuppressed, reasoningBudget, reasoningEffortValue, reasoningRuledOut, resolveRequestReasoning, toolsSupported,
+  type KeptReasoningSettings, type PromptReasoning, type ReasoningCapability, type ReasoningEffortField,
 } from '@/lib/reasoningEffort';
-import { resolvePromptSampler, type PromptSamplerMap } from '@/lib/promptSamplers';
+import { reasoningDialectBody, reasoningDialectBudgetFloor, type ReasoningBodyFields } from '@/lib/reasoningDialect';
+import { resolvePromptSampler, type PromptSampler, type PromptSamplerMap } from '@/lib/promptSamplers';
 import type { EndpointSampler, EndpointSamplerOverrides } from '@/lib/endpointSamplers';
+import { customMaxOutput, type PromptMaxOutputMap } from '@/lib/promptMaxOutput';
 
 /** Everything about the endpoint one call resolved to. The probe/cache state producing it stays outside. */
 export interface AiEndpointTarget {
   /** Stable endpoint-configuration identity, including the hosted Default. */
   endpointId: string;
+  /** The preset the kind is pinned or routed to, or null when it follows the active selection. The app's resolver sets it. */
+  presetId?: string | null;
+  /** The name of the preset this resolved to, pinned or followed. The app's resolver sets it. */
+  presetName?: string;
   url: string;
   apiToken: string;
   model: string;
@@ -27,15 +34,20 @@ export interface AiEndpointTarget {
 
 /** The per-call settings snapshot: plain values plus the endpoint resolver, so nothing here touches React. */
 export interface AiSettingsSnapshot {
-  resolveTarget: (kind: AIRequestType) => AiEndpointTarget;
+  /** The kind's own route, or with `routes` the first preset id of them that exists, else the active endpoint. */
+  resolveTarget: (kind: AIRequestType, routes?: readonly string[]) => AiEndpointTarget;
   thinkingMode: ThinkingMode;
   /** Global native effort level, folded in by a prompt set to `global`. */
   reasoningEffort: ReasoningEffort;
   /** True when reasoning is engaged anywhere; false suppresses `reasoning_effort` on external endpoints. */
   reasoningEngaged: boolean;
   promptReasoning: Record<string, PromptReasoning>;
+  /** The switches and strengths as stored, read only where the endpoint refuses a switched-off request. */
+  keptReasoning?: KeptReasoningSettings;
   promptReasoningBudget: Partial<Record<AIRequestType, number>>;
   promptSamplers: PromptSamplerMap;
+  /** The active preset's Max Output rows; an entry that is on replaces the call's own cap. */
+  promptMaxOutput: PromptMaxOutputMap;
   genTemperature: number;
   genRepetitionPenalty: number;
   genTopP: number;
@@ -47,18 +59,24 @@ export interface AiSettingsSnapshot {
 }
 
 /** One AI call as the caller states it, before any settings are applied. */
-export interface AiCall {
+export interface AiCall<TTool extends OfferedFunction = OfferedFunction> {
   systemPrompt: string;
-  messages: ChatMessage[];
+  messages: RequestMessage[];
   requestType: AIRequestType;
-  /** Overrides the target's own output cap (also drives the reasoning budget). */
+  /** Overrides the target's own output cap for the answer. */
   maxTokensOverride?: number | null;
+  /** Sampler values for this call, ahead of the pin and the endpoint. A prompt's own Custom setting still wins. */
+  samplerOverride?: Partial<Record<PromptSampler, number>>;
+  /** The functions this prompt offers: its Tools, or an app-internal function. Sent only where the target's record says it takes them. */
+  tools?: readonly TTool[];
 }
 
-/** The chat-completions body this layer builds. Optional fields are absent, never undefined-valued. */
-export interface AiRequestBody {
+/** The chat-completions body this layer builds. Optional fields are absent, never undefined-valued. The
+ *  reasoning fields come from the target dialect's row, so they arrive as a group. The caller's request holds
+ *  plain chat messages; a tool round's follow-up widens them to the wire's other roles. */
+export interface AiRequestBody<TMessage extends WireMessage = RequestMessage> extends ReasoningBodyFields {
   model: string;
-  messages: ChatMessage[];
+  messages: TMessage[];
   max_tokens?: number;
   stream: true;
   top_p?: number;
@@ -67,18 +85,25 @@ export interface AiRequestBody {
   temperature?: number;
   repetition_penalty?: number;
   repeat_penalty?: number;
-  thinking_budget_tokens?: number;
-  reasoning_effort?: ReasoningEffortField;
   stop?: string[];
+  tools?: ToolFunctionSchema[];
+  tool_choice?: 'auto';
 }
 
 /** A complete request, ready for one fetch. */
-export interface AiRequestSpec {
+export interface AiRequestSpec<TMessage extends WireMessage = RequestMessage, TTool extends OfferedFunction = OfferedFunction> {
   url: string;
   headers: Record<string, string>;
-  body: AiRequestBody;
+  body: AiRequestBody<TMessage>;
   target: AiEndpointTarget;
   requestType: AIRequestType;
+  /** The Answer Cap in tokens, which the tool loop enforces on answer text. Absent where nothing caps the output. */
+  answerCap?: number;
+  /** The functions the body offers, present exactly when the body carries `tools`. The loop runs calls against these. */
+  tools?: readonly TTool[];
+  /** The effort literal this request carried, whichever field the dialect spelled it in. Absent where it
+   *  carried none. Read by the observation, which asks what was in force rather than which key held it. */
+  reasoningLevel?: ReasoningEffortField;
   /** Where every emitted sampler value came from, retained for targeted rejection handling. */
   samplerSources: Partial<Record<EndpointSampler, 'prompt' | 'prompt-pin' | 'endpoint' | 'local-engine'>>;
   /** Origin of an emitted output cap, kept apart from the sampler provenance. */
@@ -102,10 +127,12 @@ function resolveSampler(
   requestType: AIRequestType,
   localEngine: boolean,
   target: AiEndpointTarget,
-  sampler: 'temperature' | 'repetitionPenalty',
+  sampler: PromptSampler,
+  override?: number,
 ): ResolvedSampler {
   const setting = snapshot.promptSamplers[requestType]?.[sampler];
   if (setting?.custom) return { value: setting.value, source: 'prompt' };
+  if (override !== undefined) return { value: override, source: 'prompt' };
 
   const globalValue = sampler === 'temperature' ? snapshot.genTemperature : snapshot.genRepetitionPenalty;
   const promptValue = resolvePromptSampler(requestType, sampler, {}, globalValue, localEngine);
@@ -122,10 +149,11 @@ function resolveSamplers(
   snapshot: AiSettingsSnapshot,
   requestType: AIRequestType,
   target: AiEndpointTarget,
+  override?: AiCall['samplerOverride'],
 ): { temperature: ResolvedSampler; repetitionPenalty: ResolvedSampler } {
   return {
-    temperature: resolveSampler(snapshot, requestType, target.localEngine, target, 'temperature'),
-    repetitionPenalty: resolveSampler(snapshot, requestType, target.localEngine, target, 'repetitionPenalty'),
+    temperature: resolveSampler(snapshot, requestType, target.localEngine, target, 'temperature', override?.temperature),
+    repetitionPenalty: resolveSampler(snapshot, requestType, target.localEngine, target, 'repetitionPenalty', override?.repetitionPenalty),
   };
 }
 
@@ -133,24 +161,104 @@ function resolveSamplers(
  * Builds the complete chat-completions body for one call, engine split included.
  *
  * The built-in engine takes its own sampler trio; an external endpoint keeps its own. The capability record
- * decides the reasoning fields, and the two are independent. A target that takes a token budget is capped by
- * one, unless the record rules native reasoning out. The coarse effort hint rides beside the cap on an
- * external target whose record lists the literal, and only when reasoning is engaged, so a plain endpoint is
- * never sent a field it rejects. The penalty ships under both spellings: `repetition_penalty` for
- * vLLM-family servers and the built-in engine, `repeat_penalty` for LM Studio, which ignores the other.
+ * decides the reasoning fields, and the two are independent. A target that takes a token budget is sent one,
+ * unless the record rules native reasoning out. The coarse effort hint rides beside the budget on a target
+ * whose record lists the literal, and only when reasoning is engaged, so a plain endpoint is never sent a
+ * field it rejects. The record's dialect then spells both, so no endpoint's field names live here. The
+ * penalty ships under both spellings: `repetition_penalty` for vLLM-family servers and the built-in engine,
+ * `repeat_penalty` for LM Studio, which ignores the other.
  */
 export function buildRequestBody(snapshot: AiSettingsSnapshot, call: AiCall): AiRequestBody {
   return bodyForTarget(snapshot, call, snapshot.resolveTarget(call.requestType));
 }
 
+/** The parts of a call its output caps depend on. */
+type CapCall = Pick<AiCall, 'requestType' | 'maxTokensOverride'>;
+
+/** The answer cap one call resolves to: the prompt's custom row, the call's own cap, or the target's. */
+function capFor(snapshot: AiSettingsSnapshot, call: CapCall, target: AiEndpointTarget): number | undefined {
+  return internalCapFor(snapshot, call) ?? target.maxTokens;
+}
+
+/** The cap Formamorph sets for this call, or `null` where the call follows the endpoint's own. */
+function internalCapFor(snapshot: AiSettingsSnapshot, call: CapCall): number | null {
+  return customMaxOutput(snapshot.promptMaxOutput, call.requestType) ?? call.maxTokensOverride ?? null;
+}
+
+/** One call's output room: the answer's cap, and the room the context reserve holds back for the reply. */
+export interface OutputCaps {
+  answerCap: number | undefined;
+  /** The Answer Cap plus the budget at the prompt's own percent, never the Thought Ceiling. */
+  reserve: number | undefined;
+}
+
+/** One call's reasoning slice, in the target's spelling, and the output caps that go with it. */
+interface ResolvedReasoning extends OutputCaps {
+  fields: ReasoningBodyFields;
+  /** The effort literal the slice carries, whichever field spelled it. */
+  level: ReasoningEffortField | null;
+  /** The `max_tokens` the request sends. */
+  maxTokens: number | undefined;
+}
+
+/** The Answer Cap plus the budget at the top of the slider. The Answer Cap is the base where the endpoint has none. */
+function thoughtCeiling(answerCap: number | undefined, base: number | undefined): number | undefined {
+  return answerCap === undefined
+    ? undefined
+    : answerCap + Math.round((MAX_REASONING_BUDGET_PCT / 100) * (base ?? answerCap));
+}
+
+/**
+ * What one call says about reasoning, and the caps that hold it. The literal is withheld while reasoning is
+ * engaged nowhere, and a record that rules the model out licenses no off signal. The budget rides on top of
+ * the answer cap where the slice carries a reasoning field or the record knows the model reasons. A request
+ * that reasons with no budget on the wire, and Inline narration, send the Thought Ceiling, since the server
+ * never closes that thought.
+ */
+function resolveReasoning(snapshot: AiSettingsSnapshot, call: CapCall, target: AiEndpointTarget): ResolvedReasoning {
+  const effort = resolveRequestReasoning(
+    call.requestType, snapshot.promptReasoning, snapshot.reasoningEffort, snapshot.thinkingMode,
+    target.reasoning, snapshot.keptReasoning,
+  );
+  const reasons = !reasoningRuledOut(target.reasoning);
+  const takesBudget = target.reasoning.budget === true && reasons;
+  const answerCap = capFor(snapshot, call, target);
+  const planned = reasoningBudget({
+    effort, kind: call.requestType, budgets: snapshot.promptReasoningBudget, base: target.maxTokens, answerCap,
+    floor: takesBudget ? reasoningDialectBudgetFloor(target.reasoning.dialect) : 0,
+  });
+  // Reasoning is engaged somewhere and this model is not ruled out, so the target may hear about it at all.
+  const eligible = snapshot.reasoningEngaged && reasons;
+  const level = snapshot.reasoningEngaged ? reasoningEffortValue(effort, target.reasoning) : null;
+  const budget = takesBudget ? planned.budget : null;
+  const fields = reasoningDialectBody(target.reasoning.dialect, {
+    budget, level, off: eligible && effort === 'none', eligible,
+    unbounded: target.maxTokens === undefined,
+  });
+  const carriesReasoning = Object.keys(fields).length > 0 || target.reasoning.reasons === true;
+  const reserve = carriesReasoning ? planned.maxTokens : answerCap;
+  // Inline narration's own <think> block rides in the answer, whatever the native settings say.
+  const sendsCeiling = nativeReasoningSuppressed(snapshot.thinkingMode, call.requestType)
+    || (carriesReasoning && effort !== 'none' && budget === null);
+  return {
+    fields, level, answerCap, reserve,
+    maxTokens: sendsCeiling ? thoughtCeiling(answerCap, target.maxTokens) : reserve,
+  };
+}
+
+/** The caps the context reserve and the length guidance read for one call. */
+export function outputCaps(snapshot: AiSettingsSnapshot, call: CapCall): OutputCaps {
+  const { answerCap, reserve } = resolveReasoning(snapshot, call, snapshot.resolveTarget(call.requestType));
+  return { answerCap, reserve };
+}
+
 function bodyForTarget(snapshot: AiSettingsSnapshot, call: AiCall, target: AiEndpointTarget): AiRequestBody {
   const { requestType } = call;
   const localEngine = target.localEngine;
-  const maxTokens = call.maxTokensOverride ?? target.maxTokens;
-  const { temperature, repetitionPenalty } = resolveSamplers(snapshot, requestType, target);
+  const { fields: reasoningFields, maxTokens } = resolveReasoning(snapshot, call, target);
+  const { temperature, repetitionPenalty } = resolveSamplers(snapshot, requestType, target, call.samplerOverride);
   const externalOverrides = target.samplerOverrides;
-  // One resolved choice drives both engines: the effort hint outside, the on/off of the token budget inside.
-  const effort = resolvePromptReasoning(requestType, snapshot.promptReasoning, snapshot.reasoningEffort, snapshot.thinkingMode);
+  const tools = offeredTools(call, target);
 
   return {
     model: target.model,
@@ -166,19 +274,22 @@ function bodyForTarget(snapshot: AiSettingsSnapshot, call: AiCall, target: AiEnd
         }),
     ...(temperature.value !== undefined && { temperature: temperature.value }),
     ...(repetitionPenalty.value !== undefined && { repetition_penalty: repetitionPenalty.value, repeat_penalty: repetitionPenalty.value }),
-    ...(target.reasoning.budget && !reasoningRuledOut(target.reasoning)
-      ? reasoningBudgetBody(effort, requestType, snapshot.promptReasoningBudget, maxTokens ?? 0)
-      : {}),
-    // The bundled engine caps by tokens and ignores the hint, so it never receives one — not even once
-    // something answers the levels question for the endpoint whose record it shares.
-    ...(snapshot.reasoningEngaged && !localEngine ? reasoningEffortBody(effort, target.reasoning) : {}),
+    // The bundled engine caps by tokens and ignores the literal, so its row names no level field — not even
+    // once something answers the levels question for the endpoint whose record it shares.
+    ...reasoningFields,
     // Single-paragraph stop, but not in inline-thinking mode — the <think> block needs newlines.
     ...(requestType === 'narration' && snapshot.paragraphLimit === 'single' && snapshot.thinkingMode !== 'inline' && { stop: ['\n'] }),
+    ...(tools && { tools: tools.map(toolSchema), tool_choice: 'auto' }),
   };
 }
 
+/** The functions the call offers where the target is known to take them; null sends none (ADR-0008). */
+function offeredTools<TTool extends OfferedFunction>(call: AiCall<TTool>, target: AiEndpointTarget): readonly TTool[] | null {
+  return call.tools?.length && toolsSupported(target.reasoning) ? call.tools : null;
+}
+
 /** The wire message list: the resolved system message first, then the caller's. */
-function buildMessages(snapshot: AiSettingsSnapshot, call: AiCall): ChatMessage[] {
+function buildMessages(snapshot: AiSettingsSnapshot, call: AiCall): RequestMessage[] {
   return [
     { role: 'system', content: resolveSystemPrompt(call.systemPrompt, snapshot.disableThinking) },
     ...call.messages,
@@ -186,16 +297,23 @@ function buildMessages(snapshot: AiSettingsSnapshot, call: AiCall): ChatMessage[
 }
 
 /** Resolves endpoint, samplers and reasoning into one ready-to-send request. */
-export function buildAiRequestSpec(snapshot: AiSettingsSnapshot, call: AiCall): AiRequestSpec {
+export function buildAiRequestSpec<TTool extends OfferedFunction = OfferedFunction>(
+  snapshot: AiSettingsSnapshot,
+  call: AiCall<TTool>,
+): AiRequestSpec<RequestMessage, TTool> {
   const target = snapshot.resolveTarget(call.requestType);
-  const samplers = resolveSamplers(snapshot, call.requestType, target);
+  const samplers = resolveSamplers(snapshot, call.requestType, target, call.samplerOverride);
+  const reasoning = resolveReasoning(snapshot, call, target);
   return {
     url: target.url,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${target.apiToken}` },
     body: bodyForTarget(snapshot, call, target),
     target,
     requestType: call.requestType,
-    ...(call.maxTokensOverride !== null && call.maxTokensOverride !== undefined
+    ...(reasoning.answerCap !== undefined && { answerCap: reasoning.answerCap }),
+    ...(offeredTools(call, target) && { tools: call.tools }),
+    ...(reasoning.level !== null && { reasoningLevel: reasoning.level }),
+    ...(internalCapFor(snapshot, call) !== null
       ? { maxTokensSource: 'internal' as const }
       : target.maxTokens !== undefined
         ? { maxTokensSource: target.localEngine ? 'local-engine' as const : 'endpoint' as const }

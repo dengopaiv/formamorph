@@ -5,7 +5,8 @@ import { addCopyToStoredWorld, storedWorldReferences } from './addToStoredWorld'
 import WorldStorageService from '@/services/WorldStorageService';
 import type { LibrarySource } from './linkedContent';
 import type { ConnectionPlan } from './worldReferences';
-import type { Dictionary, Entity, GameLocation, Placeholder } from '@/types';
+import { openingsEnabled } from './openings';
+import type { Dictionary, Entity, GameLocation, Placeholder, PlaceholderGroup, Trait, WorldOverview } from '@/types';
 
 vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 
@@ -16,23 +17,29 @@ const empty: ConnectionPlan = { placeholders: {}, locations: {}, newLocations: [
 /** Store one world with the sections `storeWorld` insists on, plus whatever the case needs. */
 async function storeWorld(over: {
   entities?: Entity[]; dictionaries?: Dictionary[]; placeholders?: Placeholder[]; locations?: GameLocation[];
+  openingsEnabled?: boolean; traits?: Trait[]; placeholderGroups?: PlaceholderGroup[];
 } = {}) {
   await WorldStorageService.storeWorld({
     id: 'w-1',
     name: 'Sedge Landing',
     author: 'Ann',
     data: {
-      worldOverview: { name: 'Sedge Landing' },
-      stats: [], traits: [], statUpdates: [],
+      worldOverview: {
+        name: 'Sedge Landing',
+        ...(over.openingsEnabled === false ? { openingsEnabled: false } : {}),
+      },
+      stats: [], traits: (over.traits ?? []) as unknown as unknown[], statUpdates: [],
       entities: (over.entities ?? []) as unknown as unknown[],
       dictionaries: (over.dictionaries ?? []) as unknown as unknown[],
       placeholders: (over.placeholders ?? []) as unknown as unknown[],
       locations: (over.locations ?? []) as unknown as unknown[],
+      ...(over.placeholderGroups ? { placeholderGroups: over.placeholderGroups as unknown as unknown[] } : {}),
     },
   });
 }
 
 async function storedWorld(): Promise<{
+  worldOverview?: WorldOverview;
   entities?: Entity[]; dictionaries?: Dictionary[]; placeholders?: Placeholder[]; locations?: GameLocation[];
 }> {
   return await WorldStorageService.getWorldData('w-1') as never;
@@ -69,6 +76,16 @@ describe('addCopyToStoredWorld', () => {
     for (const id of await WorldStorageService.getWorldIds()) await WorldStorageService.deleteWorld(id);
   });
 
+  it("drops a chip naming one of the world's blueprints from the copy's own text", async () => {
+    const garb: Placeholder = { id: 'garb', name: 'Garb', groupId: 'bp', values: [{ id: 'v1', text: 'tabard' }] };
+    await storeWorld({ placeholders: [garb], placeholderGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' }] });
+
+    const added = await addCopyToStoredWorld('w-1', { id: 'lib-content', name: 'Wren', aiDescription: 'Wears {{ph:garb:world:p1}}.' }, source, empty);
+
+    expect((await storedWorld()).entities?.[0].aiDescription).toBe('Wears .');
+    expect(added.blueprintChipsDropped).toBe(1);
+  });
+
   it('writes a linked copy that follows the library item', async () => {
     await storeWorld();
 
@@ -77,6 +94,22 @@ describe('addCopyToStoredWorld', () => {
 
     expect(data.entities).toHaveLength(1);
     expect(data.entities?.[0].link).toMatchObject({ libraryId: 'lib-1', sourceName: 'Wren', sourceRevision: 'r1' });
+  });
+
+  it("binds the copy's owned trait requirements to the world, and a second copy's owned ids are its own", async () => {
+    await storeWorld({ traits: [{ id: 'n-paladin', name: 'Paladin', statChanges: [] }] });
+    const content: Entity = {
+      id: 'lib-content', name: 'Ash',
+      traits: [{ id: 't-oath', name: 'Oath', statChanges: [], requires: [{ kind: 'trait', id: 'w-paladin', name: 'Paladin' }] }],
+    };
+
+    await addCopyToStoredWorld('w-1', content, source, empty);
+    await addCopyToStoredWorld('w-1', content, source, empty);
+    const [first, second] = (await storedWorld()).entities!;
+
+    expect(first.traits![0]).toMatchObject({ id: 't-oath', requires: [{ kind: 'trait', id: 'n-paladin', name: 'Paladin' }] });
+    expect(second.traits![0].id).not.toBe('t-oath');
+    expect(second.traits![0].requires).toEqual([{ kind: 'trait', id: 'n-paladin', name: 'Paladin' }]);
   });
 
   it('gives the copy its own id, so importing the same component twice leaves two copies', async () => {
@@ -180,5 +213,44 @@ describe('addCopyToStoredWorld', () => {
   it('refuses a world that is gone rather than writing anywhere else', async () => {
     await expect(addCopyToStoredWorld('missing', { id: 'c', name: 'Wren' }, source, empty))
       .rejects.toThrow();
+  });
+});
+
+describe('a copy that brings openings', () => {
+  beforeEach(async () => {
+    for (const id of await WorldStorageService.getWorldIds()) await WorldStorageService.deleteWorld(id);
+  });
+
+  const opener = (text: string): Entity => ({
+    id: 'lib-o',
+    name: 'Tall Marn',
+    openings: [{ id: 'o1', text, kind: 'action' }],
+  });
+
+  it('switches a benched list back on, so the arriving rows can draw', async () => {
+    await storeWorld({ openingsEnabled: false });
+
+    await addCopyToStoredWorld('w-1', opener('Marn hails you from the jetty.'), source, empty);
+
+    expect((await storedWorld()).worldOverview?.openingsEnabled).toBeUndefined();
+  });
+
+  it('leaves the switch alone for a copy with no opening written', async () => {
+    await storeWorld({ openingsEnabled: false });
+
+    await addCopyToStoredWorld('w-1', opener('   '), source, empty);
+
+    expect((await storedWorld()).worldOverview?.openingsEnabled).toBe(false);
+  });
+
+  it('writes no flag into a world that never switched the list off', async () => {
+    await storeWorld();
+
+    await addCopyToStoredWorld('w-1', opener('Marn hails you from the jetty.'), source, empty);
+
+    // The rows themselves switch the list on, so the copy leaves the field absent.
+    const after = await storedWorld();
+    expect(after.worldOverview?.openingsEnabled).toBeUndefined();
+    expect(openingsEnabled(after.worldOverview, after.entities)).toBe(true);
   });
 });

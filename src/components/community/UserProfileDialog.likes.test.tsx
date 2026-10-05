@@ -1,6 +1,7 @@
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { toast } from 'react-toastify';
+import { toastTexts } from '@/test/toastText';
 import { UserProfileDialog } from './UserProfileDialog';
 import { UserProfileContext } from '@/contexts/userProfileStore';
 import UserService from '@/services/UserService';
@@ -110,6 +111,20 @@ describe('reading what an account has liked', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Creations' }));
     await openLikes();
     expect(fetchLikes).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the kept Likes panel when Creations is on show again', async () => {
+    signedInAs('admin');
+    vi.spyOn(UserService, 'fetchLikesGiven').mockResolvedValue({ total: 1, rows: [like()] });
+
+    show();
+    await openLikes();
+    expect(await screen.findByRole('listitem')).toBeTruthy();
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Creations' }));
+
+    // Role queries skip hidden content, so a panel left on show still finds the row.
+    await waitFor(() => expect(screen.queryByRole('listitem')).toBeNull());
   });
 
   it('carries the listing, its author, the like time and a hidden marker', async () => {
@@ -257,7 +272,7 @@ describe('clearing an account’s likes', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Clear all/ }));
     fireEvent.click(await screen.findByRole('button', { name: /continue|confirm|^ok$/i }));
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('You cannot moderate them'));
+    await waitFor(() => expect(toastTexts(vi.mocked(toast.error))).toContain('You cannot moderate themView Details →'));
     expect(screen.getByText('Sedge Landing')).toBeTruthy();
   });
 });

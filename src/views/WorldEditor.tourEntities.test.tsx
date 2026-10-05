@@ -1,0 +1,327 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { AUTHORING_TOUR_SAVE_NOTE_ID, markTutorialSeen, resetTutorials } from '@/lib/tutorials';
+import { reloadTourProgress, writeTourRecord } from '@/lib/authoringTour/progress';
+import { TOUR_STEPS, replayTourSteps } from '@/lib/authoringTour/steps';
+import { NEW_ENTITY_NAME } from '@/lib/blankWorld';
+import WorldStorageService from '../services/WorldStorageService';
+import type { World } from '@/types';
+
+/**
+ * The Authoring Tour's Entities steps, driven through the real editor: the add step, each field step with its
+ * In Play slice, and the roster before and after the entity has a location.
+ */
+
+vi.mock('@/lib/authoringTour/tourImages', () => ({
+  loadTourImage: async (name: string) => `data:image/webp;base64,${name}`,
+}));
+
+vi.mock('../services/WorldStorageService', () => ({
+  default: {
+    initialize: vi.fn(),
+    getWorldMetadata: vi.fn().mockResolvedValue([]),
+    storeWorld: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@/lib/jsonFileWorkerUtils', () => ({
+  serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
+}));
+
+vi.mock('@/lib/jsonMeasureClient', async () => {
+  const { measurePublishBytes } = await import('@/lib/publishLimits');
+  return {
+    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
+    terminateMeasureWorker: vi.fn(),
+  };
+});
+
+vi.mock('react-toastify', () => ({
+  toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
+  ToastContainer: () => null,
+}));
+
+// A case walks up to seven saved steps, which outlasts the default window under the whole suite's load.
+vi.setConfig({ testTimeout: 15_000 });
+
+const storeWorld = vi.mocked(WorldStorageService.storeWorld);
+
+/** A New World overview over the harness's one location and one entity, which the tour must never adopt. */
+const WORLD: World = benchEditorWorld({
+  worldOverview: {
+    name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
+    systemPrompt: '', use3DModel: false, tags: [],
+  },
+  // A New World overview carries no readme or openings, which the overview type calls required.
+} as unknown as Partial<World>);
+
+const TOTAL = TOUR_STEPS.length;
+const indexOf = (id: string) => TOUR_STEPS.findIndex((s) => s.id === id);
+
+const tourBar = () => screen.getByRole('region', { name: 'Authoring Tour' });
+const stepNumber = () => Number(/(\d+) \//.exec(within(tourBar()).getByText(/^Authoring Tour/).textContent!)![1]);
+/** The step note on screen, found by its counter. */
+const stepNote = () => screen.getAllByRole('dialog').find((d) => within(d).queryByText(`${stepNumber()} / ${TOTAL}`))!;
+const noteButton = (name: string) => within(stepNote()).queryByRole('button', { name });
+const addButton = () => screen.getByRole('button', { name: /^Add to (Locations|Entities)$/ });
+
+const inPlay = () => screen.getByRole('region', { name: 'In Play' });
+const playerSees = () => within(inPlay()).getByRole('region', { name: 'Player Sees' });
+const narration = () => within(inPlay()).getByRole('region', { name: 'Narration Prompt Reads' });
+const marks = (el: HTMLElement) => Array.from(el.querySelectorAll('mark')).map((m) => m.textContent);
+const NOT_IN_SCENE = 'The AI never reads an entity with no location';
+const MEET_ONCE_PLACED = 'Players meet this entity once it has a location';
+
+const row = (name: string) => screen.getAllByText(name)
+  .map((el) => el.closest<HTMLElement>('[class*="cursor-pointer"]'))
+  .find(Boolean)!;
+
+/**
+ * Reopens the world as an author who took every step before `stepId` left it: each earlier Add and Use
+ * Example taken, and the tour record pointing at `stepId`.
+ */
+const resumeAt = async (stepId: string) => {
+  const { world, items } = await replayTourSteps(WORLD, indexOf(stepId));
+  writeTourRecord(WORLD.id, { step: stepId, items });
+  const view = renderWorldEditorBench({ ...WORLD, ...world }, 'simple');
+  await screen.findByRole('dialog', { name: TOUR_STEPS[indexOf(stepId)].title });
+  return view;
+};
+
+/** Presses Next and waits for the next step's note. */
+const next = async () => {
+  const at = stepNumber();
+  fireEvent.click(noteButton('Next')!);
+  await waitFor(() => expect(stepNumber()).toBe(at + 1));
+  await screen.findByRole('dialog', { name: TOUR_STEPS[at].title });
+};
+
+/** Moves to `id` the way an author in a hurry does: Add on an add step, then Use Example, then Next. */
+const walkTo = async (id: string) => {
+  while (TOUR_STEPS[stepNumber() - 1].id !== id) {
+    if (TOUR_STEPS[stepNumber() - 1].add) fireEvent.click(addButton());
+    // The one step with no example asks for the author's own click.
+    if (TOUR_STEPS[stepNumber() - 1].id === 'location-starting') {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Starting Location' }));
+    }
+    const example = await waitFor(() => noteButton('Use Example') ?? noteButton('Next')!);
+    if (example.textContent === 'Use Example') {
+      fireEvent.click(example);
+      // A picture example loads its file first.
+      await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+    }
+    await next();
+  }
+};
+
+/** Takes the current step's example. */
+const useExample = () => fireEvent.click(noteButton('Use Example')!);
+
+/** Presses Previous until the tour shows `id`. */
+const backTo = async (id: string) => {
+  while (TOUR_STEPS[stepNumber() - 1].id !== id) {
+    const at = stepNumber();
+    fireEvent.click(noteButton('Previous')!);
+    await waitFor(() => expect(stepNumber()).toBe(at - 1));
+  }
+};
+
+beforeEach(() => {
+  localStorage.clear();
+  resetTutorials();
+  markTutorialSeen(AUTHORING_TOUR_SAVE_NOTE_ID);
+  reloadTourProgress();
+  vi.clearAllMocks();
+});
+
+describe('Authoring Tour — Entities steps', () => {
+  it('runs the six steps after Locations in order, saving each one', async () => {
+    const { ctx } = await resumeAt('add-entity');
+    expect(TOUR_STEPS[indexOf('add-entity') - 1].id).toBe('location-connection');
+    const saved = storeWorld.mock.calls.length;
+
+    await walkTo(TOUR_STEPS[indexOf('entity-ai-description') + 1].id);
+    expect(storeWorld.mock.calls.length - saved).toBe(7);
+    // Locations comes second, so the entity is in the roster while the rest of it is written.
+    expect(TOUR_STEPS.slice(indexOf('add-entity'), indexOf('entity-ai-description') + 1).map((s) => s.id)).toEqual([
+      'add-entity', 'entity-name', 'entity-locations', 'entity-pronouns', 'entity-image', 'entity-player-description',
+      'entity-ai-description',
+    ]);
+
+    const tidewell = ctx().locations.find((l) => l.name === 'The Tidewell')!;
+    const maren = ctx().entities.find((e) => e.id !== 'resident')!;
+    expect(maren).toMatchObject({
+      name: 'Maren', pronouns: 'she/her', locations: [tidewell.id],
+      playerDescription: 'The keeper of the Tidewell, with a warm laugh and faint silver scales along her jaw.',
+      aiDescription: expect.stringMatching(/^Maren tends the Tidewell and has bathed in it every week/),
+    });
+    // The last save holds the placed entity.
+    expect(storeWorld.mock.calls.at(-1)![0]).toMatchObject({
+      data: { entities: expect.arrayContaining([expect.objectContaining({ name: 'Maren', locations: [tidewell.id] })]) },
+    });
+  });
+
+  it('waits for a new entity, then records and selects it', async () => {
+    const { ctx } = await resumeAt('add-entity');
+    // The harness world's own entity was there before the step, so it is not the tour's.
+    expect(noteButton('Next')).toBeDisabled();
+    expect(noteButton('Use Example')).toBeNull();
+
+    fireEvent.click(addButton());
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+    const added = ctx().entities.find((e) => e.id !== 'resident')!;
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Name' })).toHaveTextContent('New Entity'));
+
+    await next();
+    useExample();
+    await waitFor(() => expect(ctx().entities.find((e) => e.id === added.id)?.name).toBe('Maren'));
+    expect(ctx().entities.find((e) => e.id === 'resident')?.name).toBe('Odd Wick');
+  });
+
+  it('keeps Next disabled on the name Add gives until the author changes it', async () => {
+    const { ctx } = await resumeAt('add-entity');
+    fireEvent.click(addButton());
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+    await next();
+    const added = () => ctx().entities.find((e) => e.id !== 'resident')!;
+    expect(added().name).toBe(NEW_ENTITY_NAME);
+    expect(noteButton('Next')).toBeDisabled();
+
+    ctx().updateEntity({ ...added(), name: 'Old Tam' });
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+    ctx().updateEntity({ ...added(), name: '' });
+    await waitFor(() => expect(noteButton('Next')).toBeDisabled());
+    useExample();
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+  });
+
+  it('makes the add step current again when its entity is deleted', async () => {
+    const { ctx } = await resumeAt('entity-ai-description');
+
+    fireEvent.click(within(row('Maren')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(stepNumber()).toBe(indexOf('add-entity') + 1));
+    expect(noteButton('Next')).toBeDisabled();
+    expect(ctx().entities.map((e) => e.id)).toEqual(['resident']);
+  });
+
+  it('completes Locations only when the entity is in a tour location', async () => {
+    const { ctx } = await resumeAt('entity-locations');
+    expect(noteButton('Next')).toBeDisabled();
+
+    // A location outside the tour does not count, though the AI then reads the entity there.
+    const maren = ctx().entities.find((e) => e.name === 'Maren')!;
+    ctx().updateEntity({ ...maren, locations: ['harbor'] });
+    await waitFor(() => expect(within(playerSees()).getByText('While players are at Harbor Steps')).toBeInTheDocument());
+    expect(noteButton('Next')).toBeDisabled();
+
+    const lantern = ctx().locations.find((l) => l.name === 'The Salt Lantern')!;
+    ctx().updateEntity({ ...maren, locations: ['harbor', lantern.id] });
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+    // The roster is the tour location's once the entity is in one.
+    expect(within(playerSees()).getByText('While players are at The Salt Lantern')).toBeInTheDocument();
+  });
+});
+
+describe('In Play — Entities', () => {
+  it('Image: the picture lands on the entity card', async () => {
+    const { ctx } = await resumeAt('entity-image');
+    expect(noteButton('Next')).toBeDisabled();
+    expect(within(playerSees()).queryByRole('img', { name: 'Maren' })).toBeNull();
+
+    fireEvent.click(noteButton('Use Example')!);
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+    expect(ctx().entities.at(-1)?.images).toEqual(['data:image/webp;base64,maren']);
+    expect(within(playerSees()).getByRole('img', { name: 'Maren' })).toHaveAttribute('src', 'data:image/webp;base64,maren');
+    // The roster stays, with nothing of the picture in it.
+    expect(narration().textContent).toContain('- **Maren**');
+    expect(marks(narration())).toEqual([]);
+    expect(within(narration()).getByText('The AI never reads the Image')).toBeInTheDocument();
+  });
+
+  it('Name: shows the list row and the card, and the AI does not read the entity yet', async () => {
+    await resumeAt('entity-name');
+    useExample();
+
+    await waitFor(() => expect(within(playerSees()).getAllByText('Maren')).toHaveLength(2));
+    expect(within(playerSees()).getByText('No description provided.')).toBeInTheDocument();
+    expect(within(narration()).getByText(NOT_IN_SCENE)).toBeInTheDocument();
+  });
+
+  it('Locations: placing the entity puts it in that location’s roster', async () => {
+    await resumeAt('entity-locations');
+    expect(within(playerSees()).getByText(MEET_ONCE_PLACED)).toBeInTheDocument();
+    expect(within(narration()).getByText(NOT_IN_SCENE)).toBeInTheDocument();
+
+    useExample();
+    await waitFor(() => expect(within(playerSees()).getByText('While players are at The Tidewell')).toBeInTheDocument());
+    expect(within(playerSees()).queryByText(MEET_ONCE_PLACED)).toBeNull();
+    // The row and the card, both named.
+    expect(within(playerSees()).getAllByText('Maren')).toHaveLength(2);
+    expect(narration().textContent).toContain('- **Maren**');
+    expect(marks(narration())).toContain('Maren');
+    // Only the tour location's roster: the harness entity is elsewhere.
+    expect(narration().textContent).not.toContain('Odd Wick');
+  });
+
+  it('Pronouns: the card stays with a caption, and the roster marks them', async () => {
+    await resumeAt('entity-pronouns');
+    useExample();
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Pronouns' })).toHaveValue('she/her'));
+    expect(within(playerSees()).getByRole('heading', { name: 'Maren' })).toBeInTheDocument();
+    expect(within(playerSees()).getByText('Players never see the Pronouns')).toBeInTheDocument();
+    await waitFor(() => expect(marks(narration())).toEqual(['she/her']));
+    expect(narration().textContent).toContain('- **pronouns:** she/her');
+  });
+
+  it('Player-Facing Description: shows it on the card, and the roster stays with a caption', async () => {
+    await resumeAt('entity-player-description');
+    useExample();
+
+    await waitFor(() => expect(within(playerSees())
+      .getByText('The keeper of the Tidewell, with a warm laugh and faint silver scales along her jaw.'))
+      .toBeInTheDocument());
+    expect(within(playerSees()).queryByText(MEET_ONCE_PLACED)).toBeNull();
+    expect(narration().textContent).toContain('- **Maren**');
+    expect(narration().textContent).not.toContain('keeper of the Tidewell');
+    expect(marks(narration())).toEqual([]);
+    expect(within(narration()).getByText('The AI never reads the Player-Facing Description')).toBeInTheDocument();
+  });
+
+  it('AI-Facing Description: the card stays with a caption, and the roster marks it', async () => {
+    await resumeAt('entity-ai-description');
+    useExample();
+
+    expect(within(playerSees()).getByRole('heading', { name: 'Maren' })).toBeInTheDocument();
+    expect(within(playerSees()).getByText('Players never see the AI-Facing Description')).toBeInTheDocument();
+    await waitFor(() => expect(marks(narration())).toHaveLength(1));
+    expect(marks(narration())[0]).toMatch(/^Maren tends the Tidewell.*growing stronger\.$/);
+  });
+
+  it('keeps the roster marks on each step when the author goes back', async () => {
+    await resumeAt('entity-ai-description');
+    useExample();
+    await waitFor(() => expect(noteButton('Next')).toBeEnabled());
+
+    await backTo('entity-pronouns');
+    await waitFor(() => expect(marks(narration())).toEqual(['she/her']));
+
+    await backTo('entity-name');
+    await waitFor(() => expect(marks(narration())).toContain('Maren'));
+    expect(within(playerSees()).getByText('While players are at The Tidewell')).toBeInTheDocument();
+  });
+
+  it('captions the row and card only until the entity has a location', async () => {
+    await resumeAt('entity-name');
+    expect(within(playerSees()).getByText(MEET_ONCE_PLACED)).toBeInTheDocument();
+    expect(within(narration()).getByText(NOT_IN_SCENE)).toBeInTheDocument();
+
+    await walkTo('entity-image');
+    expect(within(playerSees()).queryByText(MEET_ONCE_PLACED)).toBeNull();
+    expect(within(narration()).queryByText(NOT_IN_SCENE)).toBeNull();
+    await backTo('entity-name');
+    await waitFor(() => expect(within(playerSees()).getByText('While players are at The Tidewell')).toBeInTheDocument());
+    expect(within(playerSees()).queryByText(MEET_ONCE_PLACED)).toBeNull();
+  });
+});

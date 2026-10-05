@@ -18,8 +18,10 @@ const REVIEW_LABELS: Record<ReviewState, string> = {
  * The worlds come from the author's own linked copies, so there is no world to search for: a world is
  * offered only where they already use the component in it and that world has a listing. An unlisted
  * component offers nothing, because players reach it only inside a world that requires it.
+ *
+ * A prompt has no linked copy and no Listing choice: its rows are every world that has a listing.
  */
-export function CompatibleWorldsSection({ visibility, onVisibilityChange, rows, onRowsChange, disabled, noun }: {
+export function CompatibleWorldsSection({ visibility, onVisibilityChange, rows, onRowsChange, disabled, noun, declared = false }: {
   visibility: ListingVisibility;
   onVisibilityChange: (visibility: ListingVisibility) => void;
   rows: CompatibleWorldRow[];
@@ -27,6 +29,8 @@ export function CompatibleWorldsSection({ visibility, onVisibilityChange, rows, 
   disabled?: boolean;
   /** The kind's own noun, lowercase, so each sentence names what is being published. */
   noun: string;
+  /** The rows are the author's declaration, not linked copies. Hides the Listing choice. */
+  declared?: boolean;
 }) {
   const unlisted = visibility === 'unlisted';
 
@@ -36,6 +40,7 @@ export function CompatibleWorldsSection({ visibility, onVisibilityChange, rows, 
 
   return (
     <div className="mt-4 rounded-md border p-3 space-y-3">
+      {!declared && (
       <div className="flex items-start gap-2">
         <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 w-full space-y-2">
@@ -49,20 +54,25 @@ export function CompatibleWorldsSection({ visibility, onVisibilityChange, rows, 
           <p className="text-meta text-muted-foreground">
             {unlisted
               ? `Unlisted hides this ${noun} from Community Creations. Players receive it only inside a world that requires it.`
-              : `Public lists this ${noun} in Community Creations.`}
+              : `Public lists this ${noun} in Community Creations`}
           </p>
         </div>
       </div>
+      )}
 
-      <div className="space-y-2 border-t pt-3">
+      <div className={declared ? 'space-y-2' : 'space-y-2 border-t pt-3'}>
         <p className="text-label font-medium">Compatible Worlds</p>
         {/* One line, not two: the empty state already says what the list would have held. */}
         <p className="text-meta text-muted-foreground">
           {unlisted
-            ? `An unlisted ${noun} cannot be an add-on.`
-            : rows.length === 0
-              ? `No world has a linked copy of this ${noun} and a listing of its own.`
-              : `Each world here has a linked copy of this ${noun} and its own listing. The world's author reviews each offer.`}
+            ? `An unlisted ${noun} can't be an add-on`
+            : declared
+              ? rows.length === 0
+                ? 'No world has a listing of its own'
+                : `Check the worlds this ${noun} is made for. The world's author reviews each offer.`
+              : rows.length === 0
+                ? `No world has a linked copy of this ${noun} and a listing of its own`
+                : `Each world here has a linked copy of this ${noun} and its own listing. The world's author reviews each offer.`}
         </p>
 
         {/* The checkbox caption, said once for the list rather than on every row. Hidden with the list
@@ -90,7 +100,7 @@ export function CompatibleWorldsSection({ visibility, onVisibilityChange, rows, 
                     <Label htmlFor={boxId} className="block truncate">{row.name}</Label>
                     <p className="text-meta text-muted-foreground">
                       {row.linked
-                        ? (row.reviewState ? REVIEW_LABELS[row.reviewState] : 'Not offered yet.')
+                        ? (row.reviewState ? REVIEW_LABELS[row.reviewState] : 'Not offered yet')
                         : 'Pending removal. This world no longer has a linked copy.'}
                     </p>
                   </div>

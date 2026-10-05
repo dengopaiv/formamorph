@@ -1,7 +1,11 @@
 import type { Connection, Entity, GameLocation } from "@/types";
 import { entityIdsAt, entityIdsAtAny } from "./entityPresence";
 import { effectiveDestinations } from "./locationGraph";
+import { buildTraitContext, traitsInContextOrder } from "./traitTree";
 import { NONE_PLACEHOLDER } from "./promptFallbacks";
+import {
+  decodeVariant, encodeVariant, tokenVariant, variableAxes, variableForToken, withVariant,
+} from "./promptVariables";
 import { xmlEscape } from "./utils";
 
 /** The location a builder is scoped to, or none at all (no world, or nowhere resolved yet). */
@@ -12,6 +16,10 @@ type ContextFormat = "simple" | "markdown" | "xml";
 
 const pickDescription = (preferSummary: boolean, summary?: string, description?: string) =>
   preferSummary ? summary?.trim() || description : description;
+
+/** The field key for the text `pickDescription` chose: `summary` when an authored summary won, else `description`. */
+const descriptionKey = (preferSummary: boolean, summary?: string) =>
+  (preferSummary && summary?.trim() ? "summary" : "description");
 
 /** Which authored text a location or entity reaches the AI as. `none` means the item lists as a bare name. */
 export type ContextDelivery = 'full' | 'summary' | 'none';
@@ -70,7 +78,8 @@ function buildLocationList(
     const hint = hints?.get(item.id)?.trim();
     if (format === "xml") {
       let inner = `  <name>${xmlEscape(item.name)}</name>\n`;
-      if (hasDesc) inner += `  <description>${xmlEscape(desc!)}</description>\n`;
+      const key = descriptionKey(preferSummary, item.aiSummary);
+      if (hasDesc) inner += `  <${key}>${xmlEscape(desc!)}</${key}>\n`;
       if (hint) inner += `  <via>${xmlEscape(hint)}</via>\n`;
       output += `<location>\n${inner}</location>\n`;
       continue;
@@ -113,10 +122,34 @@ export function buildLocationContext(
   let output = field("name", location.name);
   const locationDescription = pickDescription(preferSummary, location.aiSummary, location.aiDescription) || location.description;
   if (locationDescription && locationDescription.trim() !== "") {
-    output += field("description", locationDescription);
+    output += field(descriptionKey(preferSummary, location.aiSummary), locationDescription);
   }
   output += appendAllowedFields(location, AI_LOCATION_FIELDS, field);
   return output;
+}
+
+/** Entity id → the ids of its owned traits in force. Absent entity ⇒ none. */
+export type OwnedTraitsInForce = Readonly<Record<string, readonly string[]>>;
+
+/** How a roster renders: the chip content and format, and each entity's owned traits in force. */
+export type RosterOpts = { preferSummary?: boolean; format?: ContextFormat; nameOnly?: boolean; ownedTraits?: OwnedTraitsInForce };
+
+/** An entity's owned traits in force as roster field lines, or '' when none is. */
+function ownedTraitLines(
+  entity: Entity,
+  ids: readonly string[],
+  preferSummary: boolean,
+  format: ContextFormat,
+  field: (key: string, value: string) => string,
+): string {
+  const traits = entity.traits ?? [];
+  const groups = entity.traitGroups ?? [];
+  const inForce = traitsInContextOrder(ids, traits, groups);
+  if (!inForce.length) return "";
+  if (preferSummary) return field("traits", inForce.map((t) => t.name).join(", "));
+  const block = buildTraitContext(ids, traits, groups, format).split("\n").map((line) => `    ${line}`).join("\n");
+  if (format === "xml") return `  <traits>\n${block}\n  </traits>\n`;
+  return `${format === "markdown" ? "  - **traits:**" : "  traits:"}\n${block}\n`;
 }
 
 /**
@@ -129,13 +162,16 @@ export function buildLocationContext(
  * `key: value` fields indented under it; `'markdown'` makes the name a bold subject bullet with nested
  * bold-key field bullets (`- **Name**` / `  - **key:** value`); `'xml'` wraps each entity in `<entity>` with
  * a `<name>` and one `<key>` child per field.
+ *
+ * `ownedTraits` names each entity's owned traits in force. The full content nests them under a `traits`
+ * field as the Traits chip renders them; the summary content lists their names on one `traits` line.
  */
 export function renderEntityRoster(
   entityIds: string[],
   entities: Entity[],
-  opts: { preferSummary?: boolean; format?: ContextFormat; nameOnly?: boolean } = {},
+  opts: RosterOpts = {},
 ): string {
-  const { preferSummary = false, format = "simple", nameOnly = false } = opts;
+  const { preferSummary = false, format = "simple", nameOnly = false, ownedTraits } = opts;
   if (nameOnly) {
     const names = entityIds
       .map((id) => entities.find((e) => e.id === id)?.name)
@@ -157,24 +193,32 @@ export function renderEntityRoster(
     if (!entityItem) return;
     const entityDescription = pickDescription(preferSummary, entityItem.aiSummary, entityItem.aiDescription);
     const hasDesc = !!entityDescription && entityDescription.trim() !== "";
+    const descKey = descriptionKey(preferSummary, entityItem.aiSummary);
     // Aliases render explicitly (not via the scalar allowlist): joined, and under a spaced label the
     // small models read naturally — except in xml, where a tag name can't contain spaces.
     const aliases = (entityItem.aliases ?? []).map((a) => a.trim()).filter(Boolean);
     const aliasLine = aliases.length
       ? field(xml ? "aliases" : "also known as", aliases.join(", "))
       : "";
+    const pronouns = entityItem.pronouns?.trim();
+    const pronounLine = pronouns ? field("pronouns", pronouns) : "";
+    const traitLines = ownedTraitLines(entityItem, ownedTraits?.[entityItem.id] ?? [], preferSummary, format, field);
     if (xml) {
       let inner = field("name", entityItem.name);
       inner += aliasLine;
-      if (hasDesc) inner += field("description", entityDescription!);
+      inner += pronounLine;
+      if (hasDesc) inner += field(descKey, entityDescription!);
       inner += appendAllowedFields(entityItem, AI_ENTITY_FIELDS, field);
+      inner += traitLines;
       output += `<entity>\n${inner}</entity>\n`;
       return;
     }
     output += head(entityItem.name);
     output += aliasLine;
-    if (hasDesc) output += field("description", entityDescription!);
+    output += pronounLine;
+    if (hasDesc) output += field(descKey, entityDescription!);
     output += appendAllowedFields(entityItem, AI_ENTITY_FIELDS, field);
+    output += traitLines;
   });
 
   // All listed ids failed to resolve to a real entity → treat as empty.
@@ -190,7 +234,7 @@ export function renderEntityRoster(
 export function buildEntityContext(
   location: MaybeLocation,
   entities: Entity[],
-  opts: { preferSummary?: boolean; format?: ContextFormat; nameOnly?: boolean } = {},
+  opts: RosterOpts = {},
 ): string {
   if (!location) return NONE_PLACEHOLDER;
   return renderEntityRoster(entityIdsAt(location.id, entities), entities, opts);
@@ -231,7 +275,7 @@ export function buildSublocationEntitiesContext(
   current: MaybeLocation,
   locations: GameLocation[],
   entities: Entity[],
-  opts: { preferSummary?: boolean; format?: ContextFormat; nameOnly?: boolean; excludeIds?: string[] } = {},
+  opts: RosterOpts & { excludeIds?: string[] } = {},
 ): string {
   if (!current) return NONE_PLACEHOLDER;
   const exclude = new Set(opts.excludeIds ?? []);
@@ -242,7 +286,8 @@ export function buildSublocationEntitiesContext(
 /** One place the player can move to, and how the trip is made. */
 export interface DestinationEntry {
   location: GameLocation;
-  /** A Connection's authored travel hint. Absent for implicit travel and for hintless Connections. */
+  /** The travel hint of the Connection leg that reaches this place. Absent for implicit travel and for a
+   *  hintless leg. */
   hint?: string;
   via: "implicit" | "connection";
 }
@@ -263,7 +308,7 @@ export function navigableDestinationEntries(
     if (!location) continue; // a Connection pointing at a deleted location reaches nowhere
     entries.push({
       location,
-      hint: via.via === "connection" ? via.connection.aiHint : undefined,
+      hint: via.via === "connection" ? via.leg.hint : undefined,
       via: via.via,
     });
   }
@@ -344,14 +389,18 @@ export function buildParentLocationContext(
 export function buildSceneEntitiesContext(
   names: string[],
   entities: Entity[],
-  opts: { preferSummary?: boolean; format?: ContextFormat; nameOnly?: boolean } = {},
+  opts: RosterOpts = {},
 ): string {
   if (names.length === 0) return NONE_PLACEHOLDER;
   if (opts.nameOnly) return names.join(', ');
-  const ids = names
-    .map((n) => entities.find((e) => e.name.trim().toLowerCase() === n.trim().toLowerCase())?.id)
-    .filter((id): id is string => !!id);
+  const ids = names.map((n) => entityNamed(entities, n)?.id).filter((id): id is string => !!id);
   return renderEntityRoster(ids, entities, opts);
+}
+
+/** The entity a narration name refers to, matched without case or edge spaces; none for an ad-hoc name. */
+export function entityNamed(entities: Entity[], name: string): Entity | undefined {
+  const wanted = name.trim().toLowerCase();
+  return entities.find((e) => e.name.trim().toLowerCase() === wanted);
 }
 
 /**
@@ -364,7 +413,7 @@ export function buildSceneEntitiesContext(
 export function scenePresentHere(names: string[], entities: Entity[], hereIds: string[]): string[] {
   const here = new Set(hereIds);
   return names.filter((name) => {
-    const defined = entities.find((e) => e.name.trim().toLowerCase() === name.trim().toLowerCase());
+    const defined = entityNamed(entities, name);
     return !defined || here.has(defined.id);
   });
 }
@@ -401,7 +450,7 @@ export function buildReachableEntitiesContext(
   current: MaybeLocation,
   locations: GameLocation[],
   entities: Entity[],
-  opts: { preferSummary?: boolean; format?: ContextFormat; nameOnly?: boolean; excludeIds?: string[] } = {},
+  opts: RosterOpts & { excludeIds?: string[] } = {},
 ): string {
   if (!current) return NONE_PLACEHOLDER;
   const exclude = new Set(opts.excludeIds ?? []);
@@ -412,10 +461,39 @@ export function buildReachableEntitiesContext(
 /** The axes a scoped context chip carries, as the builders take them. */
 export type ContextOpts = { preferSummary?: boolean; nameOnly?: boolean; format?: ContextFormat };
 
+// What each registry option means to the builders. The ids come from the registry; only their meaning is
+// spelled here, and an option with no meaning throws so the drift guard fails before a prompt renders a
+// raw token.
+const CONTENT_OPTS: Record<string, ContextOpts> = { summary: { preferSummary: true }, name: { nameOnly: true } };
+const FORMATS: Record<string, ContextFormat> = { markdown: "markdown", xml: "xml" };
+
+/** The builders' format for a chip's format option; the default option is the plain shape. */
+export function chipFormat(optionId: string | null): ContextFormat {
+  if (optionId === null) return "simple";
+  const format = FORMATS[optionId];
+  if (!format) throw new Error(`No builder shape for the format option "${optionId}"`);
+  return format;
+}
+
+function chipContent(optionId: string | null): ContextOpts {
+  if (optionId === null) return {};
+  const opts = CONTENT_OPTS[optionId];
+  if (!opts) throw new Error(`No builder option for the content option "${optionId}"`);
+  return opts;
+}
+
+/** The builder options one concrete scoped chip token encodes, read through the same tables as the expander. */
+export function scopedChipOpts(token: string): ContextOpts {
+  const variable = variableForToken(token);
+  if (!variable) throw new Error(`No chip is registered for ${token}`);
+  const selection = decodeVariant(variable, tokenVariant(token));
+  return { ...chipContent(selection.content), format: chipFormat(selection.format) };
+}
+
 /**
- * Every concrete token one scoped chip family produces — scope × content (full/summary/name) × format —
- * mapped to its built value. The id order (scope.content.format) mirrors the chip's own axis order, so the
- * tokens match what `encodeVariant` emits.
+ * Every concrete token one scoped chip family produces — scope × content × format — mapped to its built
+ * value. The content and format options are read from the chip's registry axes, so an option added there
+ * reaches every value builder at once; the scopes are the caller's, since a builder can serve a subset.
  *
  * Shared so the live game and the world editor's preview enumerate the same set: a variant only one of them
  * generates renders as a raw `<TOKEN>` wherever it was missed.
@@ -424,22 +502,17 @@ export function expandScopedTokens(
   base: string,
   scopes: Record<string, (opts: ContextOpts) => string>,
 ): Record<string, string> {
-  const formats: { id: string; format: ContextFormat }[] = [
-    { id: "", format: "simple" },
-    { id: "markdown", format: "markdown" },
-    { id: "xml", format: "xml" },
-  ];
-  const contents: { id: string; opts: ContextOpts }[] = [
-    { id: "", opts: {} },
-    { id: "summary", opts: { preferSummary: true } },
-    { id: "name", opts: { nameOnly: true } },
-  ];
+  const variable = variableForToken(base);
+  if (!variable) throw new Error(`No chip is registered for ${base}`);
+  const axes = variableAxes(variable);
+  const options = (axisId: string): (string | null)[] =>
+    axes.find((axis) => axis.id === axisId)?.options.map((option) => option.id) ?? [null];
   const values: Record<string, string> = {};
   for (const [scope, build] of Object.entries(scopes)) {
-    for (const { id: contentId, opts: contentOpts } of contents) {
-      for (const { id: fmtId, format } of formats) {
-        const id = [scope, contentId, fmtId].filter(Boolean).join(".");
-        values[id ? `${base.slice(0, -1)}|${id}>` : base] = build({ ...contentOpts, format });
+    for (const content of options("content")) {
+      for (const format of options("format")) {
+        const id = encodeVariant(variable, { scope: scope || null, content, format });
+        values[withVariant(base, id)] = build({ ...chipContent(content), format: chipFormat(format) });
       }
     }
   }

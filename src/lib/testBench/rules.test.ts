@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import type {
-  Dictionary, DictionaryEntry, Entity, GameLocation, Placeholder, PlaceholderPin, Stat, Trait, WorldOverview,
+  Dictionary, DictionaryEntry, Entity, GameLocation, Placeholder, PlaceholderPin, Stat, Trait, TraitGroup, TraitLink,
+  TraitRequirement, WorldOverview,
 } from '@/types';
 import { estimateTokens } from '@/lib/memoryUtils';
 import { IMAGE_CAPS } from '@/lib/imageOptim';
 import { phValueId, phValues } from '@/test/placeholderValues';
 import {
-  applyRuleFix, runRules, groupFindings, isAdvancedRule, isRuleFixable, selectMatchingFindings,
+  applyRuleFix, bearerWorldOf, runRules, groupFindings, isAdvancedRule, isRuleFixable, selectMatchingFindings,
   MATCHING_RULES, RULES, STAT_CODE_EXECUTION, STAT_CODE_UNKNOWN_NAME, type RuleWorld,
 } from './rules';
+import { syncBlueprintCopies } from '@/lib/blueprintCopies';
+import { allPlaceholders } from '@/lib/placeholderHomes';
+import { placeholderSelection } from '@/lib/placeholderTree';
 
 /** A described entity at the starting location — what keeps the completeness rules quiet about a fixture
  *  that is about something else entirely. */
@@ -279,6 +283,16 @@ describe('reference-integrity rules', () => {
     expect(runRules(toggled('s1'))).toEqual([]);
   });
 
+  it('flags an owned trait toggling a stat that doesn’t exist', () => {
+    const found = only(base({
+      stats: [stat({ id: 's1', name: 'Mana' })],
+      entities: [resident, { id: 'e-you', name: 'Wanderer', customPersona: true, traits: [
+        trait({ id: 't1', name: 'Blessed', statToggles: [{ statId: 'gone', enabled: true }] }),
+      ] }],
+    }), 'trait-toggle-missing-stat');
+    expect(found.map((f) => f.items[0].id)).toEqual(['t1']);
+  });
+
   it('flags a pin to a placeholder that doesn’t exist, from any of the four sources, opening on the source', () => {
     const hue: Placeholder = { id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) };
     const gone = { placeholderId: 'gone', value: 'red' };
@@ -362,6 +376,17 @@ describe('reference-integrity rules', () => {
   it('reports a broken chip in the overview as the overview', () => {
     const found = only(base({
       worldOverview: { name: 'Sedge Landing', description: '', systemPrompt: 'You are {{ph:gone:world:pl1}}.' } as WorldOverview,
+    }), 'chip-unknown-placeholder');
+    expect(found).toHaveLength(1);
+    expect(found[0].items[0]).toMatchObject({ id: 'overview', section: 'overview' });
+  });
+
+  it('reports a broken chip in a custom prompt as the overview', () => {
+    const found = only(base({
+      worldOverview: {
+        name: 'Sedge Landing', description: '', systemPrompt: '',
+        promptOverrides: { systemPrompt: 'Narrate. {{ph:gone:world:pl1}}' },
+      } as WorldOverview,
     }), 'chip-unknown-placeholder');
     expect(found).toHaveLength(1);
     expect(found[0].items[0]).toMatchObject({ id: 'overview', section: 'overview' });
@@ -607,6 +632,24 @@ describe('reachability rules', () => {
     expect(runRules(world([{ id: 'e1', name: 'Farm Visitors' }]))).toEqual([]);
   });
 
+  it('flags an entity with no code name once the world has stat code, and quiets once it is named', () => {
+    const coded = (name: string, code = 'return 1;') => base({
+      entities: [{ id: 'e1', name, locations: ['l1'] }],
+      stats: [stat({ id: 's1', name: 'Vigor', code })],
+    });
+    const found = only(coded(''), 'entity-no-code-name');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('warning');
+    expect(found[0].items.map((i) => i.id)).toEqual(['e1']);
+    expect(found[0].message).toBe('An entity has no name, so stat code can’t reach it');
+    expect(RULES.find((rule) => rule.id === 'entity-no-code-name')?.summary(2)).toBe('2 entities have no code name, so stat code can’t reach them');
+    // A name of only a chip no placeholder answers is written, but reads as no code name.
+    const [chipOnly] = only(coded('{{ph:gone:world:Gone}}'), 'entity-no-code-name');
+    expect(chipOnly.message).toMatch(/^“.+” has no code name, so stat code can’t reach it$/);
+    expect(only(coded('Maren'), 'entity-no-code-name')).toEqual([]);
+    expect(only(coded('', ''), 'entity-no-code-name')).toEqual([]);
+  });
+
   it('flags a disabled stat no trait ever enables, and quiets when one does', () => {
     const disabled = (toggles: Trait[]) => base({
       stats: [stat({ id: 's1', name: 'Corruption', enabled: false })],
@@ -621,6 +664,17 @@ describe('reachability rules', () => {
     expect(only(offOnly, 'stat-disabled-forever')).toHaveLength(1);
 
     expect(runRules(disabled([trait({ id: 't1', name: 'Cursed', statToggles: [{ statId: 's1', enabled: true }] })]))).toEqual([]);
+  });
+
+  it('counts a persona entity’s owned trait as enabling a disabled stat, and a cast entity’s as not', () => {
+    const cursed = trait({ id: 't1', name: 'Cursed', statToggles: [{ statId: 's1', enabled: true }] });
+    const ownedBy = (entity: Partial<Entity>) => base({
+      stats: [stat({ id: 's1', name: 'Corruption', enabled: false })],
+      entities: [resident, { id: 'e-you', name: 'Wanderer', ...entity, traits: [cursed] }],
+    });
+    expect(only(ownedBy({ customPersona: true }), 'stat-disabled-forever')).toEqual([]);
+    expect(only(ownedBy({ persona: true }), 'stat-disabled-forever')).toEqual([]);
+    expect(only(ownedBy({}), 'stat-disabled-forever')).toHaveLength(1);
   });
 
   it('catches the Centaur Breeder class of defects together', () => {
@@ -836,6 +890,12 @@ describe('stat sanity rules', () => {
     expect(found[0].items[1].section).toBe('traits');
   });
 
+  it('reads a persona entity’s owned trait for a clamped starting delta', () => {
+    const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
+    const w = { ...oneStat({ starting: 0 }), entities: [resident, { id: 'e-you', name: 'Wanderer', customPersona: true, traits: [ashen] }] };
+    expect(only(w, 'stat-trait-delta-clamped').map((f) => f.items.map((i) => i.id))).toEqual([['s1', 't1']]);
+  });
+
   it('counts the floor the trait itself raises, not just the authored min', () => {
     // A trait that lifts the min to where the stat already sits leaves its own penalty nowhere to go.
     const raises = trait({
@@ -895,8 +955,8 @@ describe('stat sanity rules', () => {
 
   it('says nothing when the code builds on the stat’s own value, which is what the trait moved', () => {
     const ashen = trait({ id: 't1', name: 'Ashen', statChanges: [{ statId: 's1', type: 'starting', value: -10 }] });
-    // Both ways code can find itself: the injected id, and its own name as a literal.
-    const byId = 'const me = stats.find(s => s.id === currentStatId); return Math.min(me.value + 1, me.max);';
+    // Both ways code can find itself by a literal: its own id, and its own name.
+    const byId = 'const me = Object.values(stats).find(s => s.id === "s1"); return Math.min(me.value + 1, me.max);';
     const byName = 'const me = stats.find(s => s.name === "Fertility"); return me.value + 1;';
     expect(only(oneStat({ starting: 40, code: byId }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
     expect(only(oneStat({ starting: 40, code: byName }, [ashen]), 'stat-code-overrides-trait')).toEqual([]);
@@ -1005,6 +1065,17 @@ describe('the unused-placeholder rule', () => {
     }), 'placeholder-unused')).toEqual([]);
   });
 
+  it('routes a placeholder pinned only by an owned trait to the pinned rule', () => {
+    const w = base({
+      placeholders: [{ id: 'p1', name: 'Hue', values: phValues(['red', 'blue']) }],
+      entities: [resident, { id: 'e-you', name: 'Wanderer', customPersona: true, traits: [
+        trait({ id: 't1', name: 'Dyed', placeholderPins: [{ placeholderId: 'p1', value: 'red' }] }),
+      ] }],
+    });
+    expect(only(w, 'placeholder-unused')).toEqual([]);
+    expect(only(w, 'placeholder-pinned-unused').map((f) => f.items.map((i) => i.id))).toEqual([['p1', 't1']]);
+  });
+
   it('counts a chip in a stat description as a use', () => {
     const w = base({
       placeholders: [{ id: 'p1', name: 'Vice', values: phValues(['ale']) }],
@@ -1013,11 +1084,48 @@ describe('the unused-placeholder rule', () => {
     expect(only(w, 'placeholder-unused')).toEqual([]);
   });
 
+  it('counts a chip in a custom prompt as a use, switched on or not', () => {
+    // The rule's fix deletes what it flags, so a miss here deletes a placeholder a prompt still reads.
+    for (const choicesPromptEnabled of [true, false]) {
+      expect(only(base({
+        worldOverview: {
+          name: 'Sedge Landing', description: '', systemPrompt: '',
+          promptOverrides: { choicesPrompt: 'Offer replies. {{ph:p1:world:pl1}}', choicesPromptEnabled },
+        } as WorldOverview,
+        placeholders: [{ id: 'p1', name: 'Tone', values: phValues(['calm']) }],
+      }), 'placeholder-unused')).toEqual([]);
+    }
+  });
+
   it('counts a chip in the world blurb as a use', () => {
     expect(only(base({
       worldOverview: { name: 'Sedge Landing', description: 'A fen of {{ph:p1:world:pl1}}.', systemPrompt: '' } as WorldOverview,
       placeholders: [{ id: 'p1', name: 'Weather', values: phValues(['rain']) }],
     }), 'placeholder-unused')).toEqual([]);
+  });
+});
+
+describe('the unused-placeholder rules over blueprints and copies', () => {
+  const garb = { id: 'garb', name: 'Class Garb', values: phValues(['a tabard']), groupId: 'bp' };
+  const groups = [{ id: 'bp', name: 'Blueprints', parentId: null, order: 0, system: 'blueprints' as const }];
+  const pins = [{ placeholderId: 'garb', value: 'a tabard' }];
+  const copyOnAlbus = (text?: string): Entity => ({
+    ...resident, id: 'albus', name: 'Albus', ...(text ? { aiDescription: text } : {}),
+    placeholders: [{ id: 'c-garb', name: 'Class Garb', values: [], blueprintId: 'garb' }],
+  });
+
+  it('reads a blueprint as placed wherever a copy of it is, and never lists a copy', () => {
+    const placed = base({ placeholders: [garb], placeholderGroups: groups, entities: [copyOnAlbus('Wears {{ph:c-garb:world:pl1}}.')] });
+    expect(runRules(placed).map((f) => f.ruleId)).toEqual([]);
+    const pinned = base({ ...placed, traits: [trait({ id: 't1', name: 'Paladin', placeholderPins: pins })] });
+    expect(runRules(pinned).map((f) => f.ruleId)).toEqual([]);
+  });
+
+  it('still flags a pinned blueprint whose copies sit in no text', () => {
+    const unplaced = base({ placeholders: [garb], placeholderGroups: groups, entities: [copyOnAlbus()], traits: [trait({ id: 't1', name: 'Paladin', placeholderPins: pins })] });
+    const found = runRules(unplaced);
+    expect(found.map((f) => f.ruleId)).toEqual(['placeholder-pinned-unused']);
+    expect(found[0].items.map((i) => i.id)).toEqual(['garb', 't1']);
   });
 });
 
@@ -1146,7 +1254,7 @@ describe('the deferred reference checks', () => {
       { id: 'market', name: 'The Long Market' },
     ],
     entities: [resident, { ...resident, id: 'e-m', name: 'Stallkeep', locations: ['market'] }],
-    connections: [{ id: 'c1', from, to, twoWay: true }],
+    connections: [{ id: 'c1', a: from, b: to, aToB: {}, bToA: {} }],
   });
 
   it('flags a travel link with a dead endpoint, naming the end that still exists', () => {
@@ -1442,10 +1550,14 @@ describe('entity completeness rules', () => {
 });
 
 describe('trait group rules', () => {
-  const grouped = (over: { exclusive?: boolean; defaults?: number; members?: number }) => {
-    const { exclusive = true, defaults = 0, members = 2 } = over;
+  // `max: null` is a group with no limit.
+  const grouped = (over: { min?: number; max?: number | null; defaults?: number; members?: number }) => {
+    const { min, max = 1, defaults = 0, members = 2 } = over;
     return base({
-      traitGroups: [{ id: 'g1', name: 'Origin', parentId: null, exclusive }],
+      traitGroups: [{
+        id: 'g1', name: 'Origin', parentId: null,
+        ...(max === null ? {} : { maxPicks: max }), ...(min === undefined ? {} : { minPicks: min }),
+      }],
       traits: Array.from({ length: members }, (_, i) => trait({
         id: `t${i + 1}`, name: `Origin ${i + 1}`, groupId: 'g1', isDefault: i < defaults,
       })),
@@ -1453,7 +1565,7 @@ describe('trait group rules', () => {
   };
 
   it('flags an exclusive group defaulting two traits at once', () => {
-    const found = only(grouped({ defaults: 2 }), 'trait-group-multiple-defaults');
+    const found = only(grouped({ defaults: 2 }), 'trait-group-defaults-over-max');
     expect(found).toHaveLength(1);
     expect(found[0].severity).toBe('warning');
     expect(found[0].message).toContain('Origin 1 and Origin 2');
@@ -1461,8 +1573,95 @@ describe('trait group rules', () => {
     expect(runRules(grouped({ defaults: 1 }))).toEqual([]);
   });
 
-  it('lets a non-exclusive group default whatever it likes', () => {
-    expect(only(grouped({ exclusive: false, defaults: 2 }), 'trait-group-multiple-defaults')).toEqual([]);
+  it('flags defaults over any maximum, and passes defaults at the maximum', () => {
+    const found = only(grouped({ max: 2, members: 3, defaults: 3 }), 'trait-group-defaults-over-max');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toBe('“Origin” allows 2 active traits but marks Origin 1, Origin 2 and Origin 3 as defaults — only 2 can actually apply');
+    expect(only(grouped({ max: 2, members: 3, defaults: 2 }), 'trait-group-defaults-over-max')).toEqual([]);
+  });
+
+  it('flags Always On traits that can be active together past the max, naming them', () => {
+    const w = grouped({ members: 3 });
+    const fixed = { ...w, traits: w.traits!.map((t) => (t.id === 't3' ? t : { ...t, mode: 'alwaysOn' as const })) };
+    const found = only(fixed, 'trait-group-always-on-over-max');
+    expect(found.map((f) => f.message)).toEqual([
+      '“Origin” allows at most 1 pick but Origin 1 and Origin 2 are Always On and can be active together',
+    ]);
+    expect(found[0].items.map((i) => i.id)).toEqual(['g1', 't1', 't2']);
+  });
+
+  it('never counts an Always On trait’s Default toward defaults over the max', () => {
+    const w = grouped({ defaults: 2 });
+    const one = { ...w, traits: w.traits!.map((t) => (t.id === 't2' ? { ...t, mode: 'alwaysOn' as const } : t)) };
+    expect(only(one, 'trait-group-defaults-over-max')).toEqual([]);
+  });
+
+  it('lets a group with no maximum default whatever it likes', () => {
+    expect(only(grouped({ max: null, defaults: 2 }), 'trait-group-defaults-over-max')).toEqual([]);
+  });
+
+  it('flags a minimum above the maximum, and passes a minimum at it', () => {
+    const found = only(grouped({ min: 3, max: 2, members: 3, defaults: 2 }), 'trait-group-min-above-max');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('error');
+    expect(found[0].message).toBe('“Origin” needs at least 3 picks but allows at most 2');
+    expect(found[0].items.map((i) => i.id)).toEqual(['g1']);
+    expect(only(grouped({ min: 2, max: 2, members: 3, defaults: 2 }), 'trait-group-min-above-max')).toEqual([]);
+  });
+
+  it('flags a group whose defaults fall short of its minimum, and passes once they meet it', () => {
+    const found = only(grouped({ min: 2, max: null, members: 3, defaults: 1 }), 'trait-group-defaults-below-min');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('error');
+    expect(found[0].message).toBe('“Origin” needs at least 2 picks but a new game starts with 1 — the defaults don’t meet the minimum');
+    expect(found[0].items.map((i) => i.id)).toEqual(['g1', 't1']);
+    expect(only(grouped({ min: 2, max: null, members: 3, defaults: 2 }), 'trait-group-defaults-below-min')).toEqual([]);
+    expect(only(grouped({ members: 3, defaults: 0 }), 'trait-group-defaults-below-min')).toEqual([]);
+  });
+
+  it('counts a gated default that starts unselected as missing', () => {
+    const w = base({
+      traitGroups: [{ id: 'g1', name: 'Origin', parentId: null, minPicks: 1 }],
+      traits: [
+        trait({ id: 't1', name: 'Origin 1', groupId: 'g1', isDefault: true, requires: [{ kind: 'trait', id: 'key' }] }),
+        trait({ id: 't2', name: 'Origin 2', groupId: 'g1' }),
+        trait({ id: 'key', name: 'Key' }),
+      ],
+    });
+    expect(only(w, 'trait-group-defaults-below-min')).toHaveLength(1);
+  });
+
+  it('flags a group whose minimum outruns the traits that can unlock, naming the stuck ones', () => {
+    const stuck = (min: number) => base({
+      traitGroups: [{ id: 'g1', name: 'Origin', parentId: null, minPicks: min }],
+      traits: [
+        trait({ id: 't1', name: 'Origin 1', groupId: 'g1', isDefault: true }),
+        trait({ id: 't2', name: 'Origin 2', groupId: 'g1', requires: [{ kind: 'trait', id: 'loop' }] }),
+        trait({ id: 'loop', name: 'Loop', requires: [{ kind: 'trait', id: 't2' }] }),
+      ],
+    });
+    const found = only(stuck(2), 'trait-group-min-unreachable');
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('error');
+    expect(found[0].message).toBe('“Origin” needs at least 2 picks but only 1 of its traits can ever unlock');
+    expect(found[0].items.map((i) => i.id)).toEqual(['g1', 't2']);
+    expect(only(stuck(1), 'trait-group-min-unreachable')).toEqual([]);
+  });
+
+  it('leaves the defaults finding to the unreachable one for the same group', () => {
+    const w = grouped({ min: 3, max: null, members: 2, defaults: 2 });
+    expect(only(w, 'trait-group-min-unreachable')).toHaveLength(1);
+    expect(only(grouped({ min: 3, max: null, members: 2, defaults: 0 }), 'trait-group-defaults-below-min')).toEqual([]);
+  });
+
+  it('leaves the defaults finding to the minimum-above-maximum one for the same group', () => {
+    const w = grouped({ min: 3, max: 2, members: 4, defaults: 0 });
+    expect(only(w, 'trait-group-min-above-max')).toHaveLength(1);
+    expect(only(w, 'trait-group-defaults-below-min')).toEqual([]);
+  });
+
+  it('passes a group whose count is met by its defaults', () => {
+    expect(runRules(grouped({ min: 1, max: 1, members: 2, defaults: 1 }))).toEqual([]);
   });
 
   it('flags an exclusive group holding fewer than two traits — a choice that isn’t a choice', () => {
@@ -1475,7 +1674,599 @@ describe('trait group rules', () => {
   });
 
   it('leaves a small non-exclusive group alone — a folder is not a choice', () => {
-    expect(only(grouped({ exclusive: false, members: 1 }), 'trait-group-too-small')).toEqual([]);
+    expect(only(grouped({ max: null, members: 1 }), 'trait-group-too-small')).toEqual([]);
+  });
+});
+
+describe('trait gate rules', () => {
+  const needs = (id: string, ...requires: TraitRequirement[]): TraitRequirement[] => [{ kind: 'trait', id }, ...requires];
+  const gated = (id: string, requires: TraitRequirement[], over: Partial<Trait> = {}): Trait =>
+    trait({ id, name: id.toUpperCase(), requires, ...over });
+  const ash: Entity = { ...resident, id: 'ash', name: 'Ash', persona: true };
+  const gates = (traits: Trait[], over: Partial<RuleWorld> = {}) => base({ traits, ...over });
+  const ids = (found: ReturnType<typeof runRules>) => found.map((f) => f.items.map((i) => i.id));
+
+  describe('never-unlockable sets', () => {
+    const rule = 'trait-requirement-never-unlockable';
+
+    it('flags two traits that only require each other, naming both', () => {
+      const found = only(gates([gated('a', needs('b')), gated('b', needs('a'))]), rule);
+      expect(ids(found)).toEqual([['a', 'b']]);
+      expect(found[0].severity).toBe('error');
+      expect(found[0].message).toBe('“A” and “B” can never unlock — no pick or persona can meet their requirements');
+    });
+
+    it('lists each separate set as its own finding', () => {
+      const w = gates([gated('a', needs('b')), gated('b', needs('a')), gated('c', needs('d')), gated('d', needs('c'))]);
+      expect(ids(only(w, rule))).toEqual([['a', 'b'], ['c', 'd']]);
+    });
+
+    it('flags a trait whose only requirement is its own pick-one sibling', () => {
+      const w = gates(
+        [gated('a', needs('b'), { groupId: 'g' }), trait({ id: 'b', name: 'B', groupId: 'g' })],
+        { traitGroups: [{ id: 'g', name: 'Stance', parentId: null, maxPicks: 1 }] },
+      );
+      const found = only(w, rule);
+      expect(ids(found)).toEqual([['a']]);
+      expect(found[0].message).toBe('“A” can never unlock — no pick or persona can meet its requirements');
+    });
+
+    it('passes a loop that opens through a third trait', () => {
+      const w = gates([gated('a', needs('b', { kind: 'trait', id: 'c' })), gated('b', needs('a')), trait({ id: 'c', name: 'C' })]);
+      expect(runRules(w)).toEqual([]);
+    });
+
+    it('flags a loop that closes through a group', () => {
+      const w = gates(
+        [gated('a', [{ kind: 'group', id: 'g' }]), gated('b', needs('a'), { groupId: 'g' })],
+        { traitGroups: [{ id: 'g', name: 'Bond', parentId: null }] },
+      );
+      expect(ids(only(w, rule)).map((set) => [...set].sort())).toEqual([['a', 'b']]);
+    });
+
+    it('opens a chain rooted in a persona, and not in an entity that is not one', () => {
+      const chain = [gated('a', [{ kind: 'playingAs', id: 'ash' }]), gated('b', needs('a'))];
+      expect(runRules(gates(chain, { entities: [resident, ash] }))).toEqual([]);
+      expect(ids(only(gates(chain, { entities: [resident, { ...ash, persona: false }] }), rule))).toEqual([['a', 'b']]);
+    });
+
+    it('opens through a named entity that bears the target, and stays stuck behind one that does not', () => {
+      const paladin = trait({ id: 'paladin', name: 'Paladin' });
+      const named = (id: string) => gated('sq', [{ kind: 'trait', id: 'paladin', bearer: { kind: 'entity', id } }]);
+      expect(runRules(gates([named('ash')], { entities: [resident, { ...ash, traits: [paladin] }] }))).toEqual([]);
+      // The world's own Paladin is not Ash's, so "Ash: Paladin" stays stuck.
+      expect(ids(only(gates([named('ash'), paladin], { entities: [resident, ash] }), rule))).toEqual([['sq']]);
+    });
+
+    it('leaves a trait stuck only behind a deleted target to the unresolved rule, dependents included', () => {
+      const w = gates([gated('t', needs('gone')), gated('u', needs('t'))]);
+      expect(runRules(w).map((f) => [f.ruleId, f.items.map((i) => i.id)]))
+        .toEqual([['trait-requirement-unresolved', ['t']]]);
+    });
+
+    it('shows a loop hidden behind a deleted target once the author removes the dead requirement', () => {
+      const loop = (a: TraitRequirement[]) => gates([gated('a', a), gated('b', needs('a'))]);
+      expect(only(loop(needs('gone', { kind: 'trait', id: 'b' })), rule)).toEqual([]);
+      expect(ids(only(loop(needs('b')), rule))).toEqual([['a', 'b']]);
+    });
+  });
+
+  describe('unresolved requirements', () => {
+    const rule = 'trait-requirement-unresolved';
+
+    it('names each deleted trait, group, and entity by its stored name', () => {
+      const w = gates([gated('a', [
+        { kind: 'trait', id: 'x', name: 'Tamed' },
+        { kind: 'group', id: 'y', name: 'Bond' },
+        { kind: 'playingAs', id: 'z', name: 'Ash' },
+      ])]);
+      const found = only(w, rule);
+      expect(ids(found)).toEqual([['a']]);
+      expect(found[0].severity).toBe('error');
+      expect(found[0].message).toBe('“A” requires “Tamed”, “any Bond” and “playing as Ash”, which this world no longer has');
+    });
+
+    it('reads a requirement with no stored name as its editor chip does', () => {
+      const w = gates([gated('a', [{ kind: 'trait', id: 'x' }]), gated('b', [{ kind: 'group', id: 'y' }]), gated('c', [{ kind: 'playingAs', id: 'z' }])]);
+      expect(only(w, rule).map((f) => f.message)).toEqual([
+        '“A” requires “a missing trait”, which this world no longer has',
+        '“B” requires “any trait in a missing group”, which this world no longer has',
+        '“C” requires “playing as a missing persona”, which this world no longer has',
+      ]);
+    });
+
+    it('lists only the dead requirements of a trait that has live ones too', () => {
+      const found = only(gates([gated('a', needs('b', { kind: 'trait', id: 'x', name: 'Tamed' })), trait({ id: 'b', name: 'B' })]), rule);
+      expect(found[0].message).toBe('“A” requires “Tamed”, which this world no longer has');
+    });
+
+    it('resolves a target by id, whatever name it was stored under', () => {
+      const w = gates([gated('a', [{ kind: 'trait', id: 'b', name: 'Old Name' }]), trait({ id: 'b', name: 'B' })]);
+      expect(runRules(w)).toEqual([]);
+    });
+  });
+
+  describe('gated defaults', () => {
+    const rule = 'trait-default-gated';
+    const def = { isDefault: true };
+
+    it('flags a default whose requirement no default meets, and says what it requires', () => {
+      const w = gates([gated('a', needs('b'), def), trait({ id: 'b', name: 'B' })]);
+      const found = only(w, rule);
+      expect(ids(found)).toEqual([['a']]);
+      expect(found[0].severity).toBe('warning');
+      expect(found[0].message).toBe('“A” is marked default but starts unselected — no starting default or persona choice meets “B”');
+      expect(only(gates([gated('a', needs('b'), def), trait({ id: 'b', name: 'B', ...def })]), rule)).toEqual([]);
+    });
+
+    it('flags each default down a chain that has no open root', () => {
+      const w = gates([gated('a', needs('b'), def), gated('b', needs('c'), def), trait({ id: 'c', name: 'C' })]);
+      expect(ids(only(w, rule))).toEqual([['a'], ['b']]);
+    });
+
+    it('passes a default that some persona choice opens', () => {
+      const w = (entities: Entity[]) => gates([gated('a', needs('b', { kind: 'playingAs', id: 'ash' }), def), trait({ id: 'b', name: 'B' })], { entities });
+      expect(runRules(w([resident, ash]))).toEqual([]);
+      const found = only(w([resident, { ...ash, persona: false }]), rule);
+      expect(ids(found)).toEqual([['a']]);
+      expect(found[0].message).toBe('“A” is marked default but starts unselected — no starting default or persona choice meets “B” or “playing as Ash”');
+    });
+
+    it('leaves a default in a never-unlockable set to the error rule', () => {
+      const w = gates([gated('a', needs('b'), def), gated('b', needs('a'), def)]);
+      expect(runRules(w).map((f) => f.ruleId)).toEqual(['trait-requirement-never-unlockable']);
+    });
+
+    it('leaves a default behind a deleted target to the unresolved rule', () => {
+      const w = gates([gated('a', needs('gone'), def)]);
+      expect(runRules(w).map((f) => f.ruleId)).toEqual(['trait-requirement-unresolved']);
+    });
+
+    it('opens a default whose prerequisite is only stuck behind a deleted target', () => {
+      // Fixing the dead target opens the prerequisite, and it is a default, so the dependent starts selected.
+      const w = gates([gated('t', needs('gone'), def), gated('u', needs('t'), def)]);
+      expect(only(w, rule)).toEqual([]);
+    });
+
+    describe('per bearer', () => {
+      // Blueprints: Races (Human, Elf) and one default-on ability per race, gated on it.
+      const blueprinted = [
+        trait({ id: 'human', name: 'Human', groupId: 'races' }),
+        trait({ id: 'elf', name: 'Elf', groupId: 'races' }),
+        gated('stubborn', needs('human'), { ...def, groupId: 'abilities' }),
+        gated('keen', needs('elf'), { ...def, groupId: 'abilities' }),
+      ];
+      const traitGroups = [
+        { id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' as const },
+        { id: 'races', name: 'Races', parentId: 'blueprints', maxPicks: 1 },
+        { id: 'abilities', name: 'Racial Abilities', parentId: 'blueprints' },
+      ];
+      const links = (race: string): TraitLink[] => [
+        {
+          id: `l-races-${race}`, originalId: 'races', kind: 'group', originalName: 'Races', groupId: null,
+          overrides: { [race]: { isDefault: { value: true, blueprint: false } } },
+        },
+        { id: `l-abilities-${race}`, originalId: 'abilities', kind: 'group', originalName: 'Racial Abilities', groupId: null },
+      ];
+      const persona = (id: string, race: string): Entity => ({ ...resident, id, name: id, persona: true, traitLinks: links(race) });
+      const albus = (race: string) => persona('albus', race);
+      const sylvie = (race: string) => persona('sylvie', race);
+      const linked = (entities: Entity[], over: Partial<RuleWorld> = {}) =>
+        gates(blueprinted, { traitGroups, entities: [resident, ...entities], ...over });
+
+      it('passes a default one bearer keeps, though another bearer turns it off under its own race', () => {
+        expect(only(linked([albus('human'), sylvie('elf')]), rule)).toEqual([]);
+      });
+
+      it('flags a default no bearer keeps, and names what it requires', () => {
+        const found = only(linked([albus('human'), sylvie('human')]), rule);
+        expect(ids(found)).toEqual([['keen']]);
+        expect(found[0].message).toBe('“KEEN” is marked default but starts unselected — no starting default or persona choice meets “Elf”');
+      });
+
+      it('counts a default the Custom Persona entity keeps under None', () => {
+        const newcomer: Entity = { ...resident, id: 'cp', name: 'Newcomer', customPersona: true, traitLinks: links('elf') };
+        expect(only(linked([albus('human'), newcomer]), rule)).toEqual([]);
+      });
+    });
+  });
+});
+
+describe('trait link rules', () => {
+  const needs = (id: string): TraitRequirement[] => [{ kind: 'trait', id }];
+  const link = (id: string, originalId: string, kind: TraitLink['kind'], extra: Partial<TraitLink> = {}): TraitLink =>
+    ({ id, originalId, kind, originalName: originalId, groupId: null, ...extra });
+  // Root: Faithful. Blueprints: Smite (requires Faithful), and Classes holding Paladin and Wizard.
+  const faithful = trait({ id: 'faithful', name: 'Faithful' });
+  const blueprinted = [
+    trait({ id: 'smite', name: 'Smite', groupId: 'blueprints', requires: needs('faithful') }),
+    trait({ id: 'paladin', name: 'Paladin', groupId: 'classes' }),
+    trait({ id: 'wizard', name: 'Wizard', groupId: 'classes' }),
+  ];
+  const traitGroups = [
+    { id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' as const },
+    { id: 'classes', name: 'Classes', parentId: 'blueprints' },
+  ];
+  const albus = (over: Partial<Entity> = {}): Entity => ({ ...resident, id: 'albus', name: 'Albus', ...over });
+  /** The Custom Persona entity: the player's own under None. */
+  const newcomer = (over: Partial<Entity> = {}): Entity => ({ ...resident, id: 'cp', name: 'Newcomer', customPersona: true, ...over });
+  const linked = (entities: Entity[], over: Partial<RuleWorld> = {}) =>
+    base({ traits: [faithful, ...blueprinted], traitGroups, entities: [resident, ...entities], ...over });
+  const opened = (found: ReturnType<typeof runRules>) => found.map((f) => f.items.map((i) => i.id));
+
+  describe('never-unlockable per bearer', () => {
+    const rule = 'trait-requirement-never-unlockable';
+
+    it('names the bearer and the requirement it can never meet, and opens the link', () => {
+      const found = only(linked([albus({ traitLinks: [link('l-smite', 'smite', 'trait')] })]), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” links “Smite” but can never meet “Faithful”, so it never unlocks']);
+      expect(opened(found)).toEqual([['l-smite']]);
+      expect(found[0].items[0].section).toBe('traits');
+    });
+
+    it('passes once the bearer links what the trait requires', () => {
+      const w = linked([albus({ traitLinks: [link('l-smite', 'smite', 'trait'), link('l-faithful', 'faithful', 'trait')] })]);
+      expect(only(w, rule)).toEqual([]);
+    });
+
+    it('opens the link that brings a stuck trait inside a linked group', () => {
+      const w = linked([albus({ traitLinks: [link('l-classes', 'classes', 'group')] })], {
+        traits: [faithful, ...blueprinted.map((t) => (t.id === 'paladin' ? { ...t, requires: needs('faithful') } : t))],
+      });
+      const found = only(w, rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” links “Paladin” but can never meet “Faithful”, so it never unlocks']);
+      expect(opened(found)).toEqual([['l-classes']]);
+    });
+
+    it('leaves an owned trait behind a deleted target to the unresolved rule', () => {
+      const vow = trait({ id: 'vow', name: 'Vow', requires: [{ kind: 'trait', id: 'gone', name: 'Tamed' }] });
+      const found = runRules(linked([albus({ traits: [vow] })])).filter((f) => f.section === 'traits');
+      expect(found.map((f) => [f.ruleId, f.message])).toEqual([['trait-requirement-unresolved', '“Vow” requires “Tamed”, which this world no longer has']]);
+      expect(opened(found)).toEqual([['vow']]);
+    });
+
+    it('names an owned trait with its own row', () => {
+      const vow = trait({ id: 'vow', name: 'Vow', requires: needs('faithful') });
+      const found = only(linked([albus({ traits: [vow] })]), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” has “Vow” but can never meet “Faithful”, so it never unlocks']);
+      expect(opened(found)).toEqual([['vow']]);
+    });
+
+    it('checks a Persona as if picked, so the root it joins can meet the requirement', () => {
+      const smite = { traitLinks: [link('l-smite', 'smite', 'trait')] };
+      expect(only(linked([albus({ ...smite, persona: true })]), rule)).toEqual([]);
+      expect(opened(only(linked([albus(smite)]), rule))).toEqual([['l-smite']]);
+    });
+
+    it('checks a persona-only entity, which is only present when picked', () => {
+      const smite = trait({ id: 'smite', name: 'Smite', groupId: 'blueprints', requires: needs('oath') });
+      const w = linked([albus({ persona: true, personaOnly: true, traitLinks: [link('l-smite', 'smite', 'trait')] })], {
+        traits: [faithful, smite, trait({ id: 'oath', name: 'Oath', groupId: 'blueprints' })],
+      });
+      const found = only(w, rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” links “Smite” but can never meet “Oath”, so it never unlocks']);
+      expect(opened(found)).toEqual([['l-smite']]);
+    });
+
+    it('checks the Custom Persona entity as the None player, so the root it joins can meet the requirement', () => {
+      expect(only(linked([newcomer({ traitLinks: [link('cp-smite', 'smite', 'trait')] })]), rule)).toEqual([]);
+    });
+
+    it('names the Custom Persona entity once the root no longer offers what its link requires', () => {
+      // Faithful moves into Blueprints, so the root no longer offers it.
+      const cp = newcomer({ traitLinks: [link('cp-smite', 'smite', 'trait')] });
+      const found = only(linked([cp], { traits: [{ ...faithful, groupId: 'blueprints' }, ...blueprinted] }), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Newcomer” links “Smite” but can never meet “Faithful”, so it never unlocks']);
+      expect(opened(found)).toEqual([['cp-smite']]);
+    });
+
+    it('names each bearer when a set spans two', () => {
+      const oath = trait({ id: 'oath', name: 'Oath', requires: [{ kind: 'trait', id: 'smite', bearer: { kind: 'entity', id: 'albus' } }] });
+      const found = only(linked([albus({ traitLinks: [link('l-smite', 'smite', 'trait')] }), albus({ id: 'bree', name: 'Bree', traits: [oath] })], {
+        traits: [faithful, ...blueprinted.map((t) => (t.id === 'smite' ? { ...t, requires: [{ kind: 'trait' as const, id: 'oath', bearer: { kind: 'entity' as const, id: 'bree' } }] } : t))],
+      }), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Smite” on “Albus” and “Oath” on “Bree” can never unlock — no pick or persona can meet their requirements']);
+      expect(opened(found)).toEqual([['l-smite', 'oath']]);
+      // Two entities that share a name are still two bearers.
+      const twin = only(linked([albus({ traitLinks: [link('l-smite', 'smite', 'trait')] }), albus({ id: 'bree', traits: [oath] })], {
+        traits: [faithful, ...blueprinted.map((t) => (t.id === 'smite' ? { ...t, requires: [{ kind: 'trait' as const, id: 'oath', bearer: { kind: 'entity' as const, id: 'bree' } }] } : t))],
+      }), rule);
+      expect(twin.map((f) => f.message)).toEqual(['“Smite” on “Albus” and “Oath” on “Albus” can never unlock — no pick or persona can meet their requirements']);
+    });
+  });
+
+  describe('pick counts per bearer', () => {
+    const classes = (over: Partial<TraitGroup>) => traitGroups.map((g) => (g.id === 'classes' ? { ...g, ...over } : g));
+    const withClasses = (over: Partial<TraitGroup>, entities: Entity[], traits = [faithful, ...blueprinted]) =>
+      linked(entities, { traitGroups: classes(over), traits });
+    const bearing = (id: string, name: string) => albus({ id, name, traitLinks: [link(`l-${id}`, 'classes', 'group')] });
+
+    it('flags an unreachable minimum on each bearer that links the group, and opens the link', () => {
+      const w = withClasses({ minPicks: 3 }, [bearing('albus', 'Albus'), bearing('bree', 'Bree')]);
+      const found = only(w, 'trait-group-min-unreachable');
+      expect(found.map((f) => f.message)).toEqual([
+        '“Classes” on “Albus” needs at least 3 picks but only 2 of its traits can ever unlock',
+        '“Classes” on “Bree” needs at least 3 picks but only 2 of its traits can ever unlock',
+      ]);
+      expect(opened(found)).toEqual([['l-albus'], ['l-bree']]);
+      expect(only(withClasses({ minPicks: 2 }, [bearing('albus', 'Albus')]), 'trait-group-min-unreachable')).toEqual([]);
+    });
+
+    it('checks the defaults of a linked group on the bearer that holds it', () => {
+      const defaulted = [faithful, ...blueprinted.map((t) => (t.id === 'paladin' ? { ...t, isDefault: true } : t))];
+      const w = withClasses({ minPicks: 1 }, [bearing('albus', 'Albus'), albus({ id: 'bree', name: 'Bree' })], defaulted);
+      // Both bearers' entities hold the same default, so the group is met wherever it is linked.
+      expect(only(w, 'trait-group-defaults-below-min')).toEqual([]);
+      const short = only(withClasses({ minPicks: 1 }, [bearing('albus', 'Albus')]), 'trait-group-defaults-below-min');
+      expect(short.map((f) => f.message)).toEqual([
+        '“Classes” on “Albus” needs at least 1 pick but a new game starts with 0 — the defaults don’t meet the minimum',
+      ]);
+      expect(opened(short)).toEqual([['l-albus']]);
+    });
+
+    it('flags Always On traits past the max on each bearer that links the group, and opens the link', () => {
+      const fixed = [faithful, ...blueprinted.map((t) => (t.groupId === 'classes' ? { ...t, mode: 'alwaysOn' as const } : t))];
+      const found = only(withClasses({ maxPicks: 1 }, [bearing('albus', 'Albus')], fixed), 'trait-group-always-on-over-max');
+      expect(found.map((f) => f.message)).toEqual([
+        '“Classes” on “Albus” allows at most 1 pick but Paladin and Wizard are Always On and can be active together',
+      ]);
+      expect(found[0].severity).toBe('warning');
+      expect(opened(found)).toEqual([['l-albus', 'l-albus', 'l-albus']]);
+      expect(only(withClasses({ maxPicks: 2 }, [bearing('albus', 'Albus')], fixed), 'trait-group-always-on-over-max')).toEqual([]);
+    });
+
+    it('checks a minimum above the maximum and defaults over the maximum on the linked group', () => {
+      const defaulted = [faithful, ...blueprinted.map((t) => (t.groupId === 'classes' ? { ...t, isDefault: true } : t))];
+      const w = withClasses({ minPicks: 2, maxPicks: 1 }, [bearing('albus', 'Albus')], defaulted);
+      expect(only(w, 'trait-group-min-above-max').map((f) => f.message))
+        .toEqual(['“Classes” on “Albus” needs at least 2 picks but allows at most 1']);
+      const over = only(w, 'trait-group-defaults-over-max');
+      expect(over.map((f) => f.message)).toEqual([
+        '“Classes” on “Albus” allows one active trait but marks Paladin and Wizard as defaults — only one can actually apply',
+      ]);
+      expect(opened(over)).toEqual([['l-albus', 'l-albus', 'l-albus']]);
+    });
+
+    it('reports a short minimum only when every persona choice falls short', () => {
+      // Playing Ash drops the trait that names Ash, so the group is short then and met under None.
+      const ash = albus({ id: 'ash', name: 'Ash', persona: true, traits: [trait({ id: 'paladin-own', name: 'Oathbound' })] });
+      const w = linked([ash], {
+        traitGroups: [{ id: 'g', name: 'Vows', parentId: null, minPicks: 2 }],
+        traits: [
+          trait({ id: 'v1', name: 'Vow 1', groupId: 'g' }),
+          trait({ id: 'v2', name: 'Vow 2', groupId: 'g', requires: [{ kind: 'trait', id: 'paladin-own', bearer: { kind: 'entity', id: 'ash' } }] }),
+        ],
+      });
+      expect(only(w, 'trait-group-min-unreachable')).toEqual([]);
+    });
+
+    it('names an entity-owned group with its bearer', () => {
+      const own = albus({
+        traitGroups: [{ id: 'oaths', name: 'Oaths', parentId: null, minPicks: 2 }],
+        traits: [trait({ id: 'o1', name: 'Oath 1', groupId: 'oaths', isDefault: true })],
+      });
+      const found = only(linked([own]), 'trait-group-min-unreachable');
+      expect(found.map((f) => f.message)).toEqual(['“Oaths” on “Albus” needs at least 2 picks but only 1 of its traits can ever unlock']);
+      expect(opened(found)).toEqual([['oaths']]);
+    });
+  });
+
+  describe('redundant links', () => {
+    const rule = 'trait-link-redundant';
+
+    it('reports a link whose original another link’s group already brings, whatever the order', () => {
+      for (const order of [[0, 1], [1, 0]]) {
+        const w = linked([albus({ traitLinks: [
+          link('l-classes', 'classes', 'group', { order: order[0] }), link('l-paladin', 'paladin', 'trait', { order: order[1] }),
+        ] })]);
+        const found = only(w, rule);
+        expect(found.map((f) => f.message)).toEqual(['“Albus” links “Paladin”, which its link to “Classes” already brings']);
+        expect(opened(found)).toEqual([['l-paladin']]);
+        expect(found[0].severity).toBe('warning');
+      }
+    });
+
+    it('reports the later of two links to the same original in tree order, which the resolver skips', () => {
+      const found = only(linked([albus({ traitLinks: [link('l-1', 'smite', 'trait', { order: 1 }), link('l-2', 'smite', 'trait', { order: 0 })] })]), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” links “Smite” twice']);
+      expect(opened(found)).toEqual([['l-1']]);
+    });
+
+    it('leaves a link to a missing original alone', () => {
+      expect(only(linked([albus({ traitLinks: [link('l-1', 'gone', 'trait'), link('l-2', 'gone', 'trait')] })]), rule)).toEqual([]);
+    });
+  });
+
+});
+
+describe('blueprint and copy rules', () => {
+  const tabard = phValueId('a tabard');
+  const placeholderGroups = [{ id: 'bp', name: 'Blueprints', parentId: null, order: 0, system: 'blueprints' as const }];
+  const traitGroups = [{ id: 'tbp', name: 'Blueprints', parentId: null, system: 'blueprints' as const }];
+  const garb: Placeholder = { id: 'garb', name: 'Class Garb', values: phValues(['a tabard', 'blue robes']), groupId: 'bp' };
+  // Trim's value reaches Class Garb, so a bearer of Trim needs a copy of both.
+  const trim: Placeholder = { id: 'trim', name: 'Trim', values: [{ id: 'v-trim', text: 'hem of {{ph:garb:world:pl2}}' }], groupId: 'bp' };
+  const tabardPin: PlaceholderPin = { placeholderId: 'garb', value: 'a tabard', valueId: tabard };
+  // Paladin and Tailor place what they use, so the unused rules stay quiet.
+  const paladin = trait({ id: 'paladin', name: 'Paladin', groupId: 'tbp', aiDescription: 'Wears {{ph:garb:world:pl1}}.', placeholderPins: [tabardPin] });
+  const tailor = trait({ id: 'tailor', name: 'Tailor', groupId: 'tbp', aiDescription: 'Sews a {{ph:trim:world:pl3}}.' });
+  const linkTo = (original: Trait): TraitLink =>
+    ({ id: `l-${original.id}`, originalId: original.id, kind: 'trait', originalName: original.name, groupId: null });
+  const copyOf = (blueprintId: string, extra: Partial<Placeholder> = {}): Placeholder =>
+    ({ id: `c-${blueprintId}`, name: blueprintId, values: [], blueprintId, ...extra });
+  const removesTabard = { valueOverrides: { [tabard]: { removed: true as const } } };
+  const rewordsTabard = { valueOverrides: { [tabard]: { text: { value: 'a gilded tabard', blueprint: 'a tabard' } } } };
+  const albus = (over: Partial<Entity> = {}): Entity =>
+    ({ ...resident, id: 'albus', name: 'Albus', traitLinks: [linkTo(paladin)], placeholders: [copyOf('garb')], ...over });
+  const blueprinted = (entities: Entity[], over: Partial<RuleWorld> = {}) => base({
+    placeholders: [garb, trim], placeholderGroups, traits: [paladin, tailor], traitGroups, entities: [resident, ...entities], ...over,
+  });
+  const opened = (found: ReturnType<typeof runRules>) => found.map((f) => f.items.map((i) => [i.id, i.section]));
+  /** The row the Placeholders tab selects for an item id. */
+  const rowOf = (w: RuleWorld, id: string) => placeholderSelection(allPlaceholders(w), id)?.row.placeholder;
+
+  it('raises nothing for a bearer that holds the copy its link needs', () => {
+    expect(runRules(blueprinted([albus()])).map((f) => f.ruleId)).toEqual([]);
+  });
+
+  describe('a pin naming a value the copy removed', () => {
+    const rule = 'copy-pin-removed-value';
+
+    it('warns when a linked trait’s blueprint pin names a value the bearer’s copy removed, and opens the copy', () => {
+      const w = blueprinted([albus({ placeholders: [copyOf('garb', removesTabard)] })]);
+      const found = only(w, rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus.Class Garb” removes “a tabard”, the value “Trait: Paladin” pins — the pin applies nothing']);
+      expect(found[0].severity).toBe('warning');
+      expect(opened(found)).toEqual([[['c-garb', 'placeholders'], ['l-paladin', 'traits']]]);
+      expect(rowOf(w, found[0].items[0].id)?.id).toBe('c-garb');
+    });
+
+    it('stays quiet when the copy rewords the pinned value or removes another one', () => {
+      expect(only(blueprinted([albus({ placeholders: [copyOf('garb', rewordsTabard)] })]), rule)).toEqual([]);
+      const removesRobes = { valueOverrides: { [phValueId('blue robes')]: { removed: true as const } } };
+      expect(only(blueprinted([albus({ placeholders: [copyOf('garb', removesRobes)] })]), rule)).toEqual([]);
+    });
+
+    it('reads the root trait through each entity that can play it, and never through the cast', () => {
+      const root = { ...paladin, groupId: null };
+      const removed = copyOf('garb', removesTabard);
+      const w = blueprinted([
+        { ...resident, id: 'wanderer', name: 'Wanderer', persona: true, placeholders: [removed] },
+        { ...resident, id: 'cp', name: 'Newcomer', customPersona: true, placeholders: [{ ...removed, id: 'c-cp' }] },
+        { ...resident, id: 'cast', name: 'Hesk', placeholders: [{ ...removed, id: 'c-cast' }] },
+      ], { traits: [root, tailor] });
+      expect(opened(only(w, rule))).toEqual([
+        [['c-garb', 'placeholders'], ['paladin', 'traits']],
+        [['c-cp', 'placeholders'], ['paladin', 'traits']],
+      ]);
+    });
+
+    it('warns for a pin aimed straight at the copy, and leaves it out of the unknown-value rule', () => {
+      const own = trait({ id: 'own', name: 'Oath', placeholderPins: [{ placeholderId: 'c-garb', value: 'a tabard', valueId: tabard }] });
+      const w = blueprinted([albus({ traitLinks: [], traits: [own], placeholders: [copyOf('garb', removesTabard)] })]);
+      expect(opened(only(w, rule))).toEqual([[['c-garb', 'placeholders'], ['own', 'traits']]]);
+      expect(only(w, 'placeholder-pin-unknown-value')).toEqual([]);
+    });
+
+    it('reads a pin at a copy through its blueprint, so a live blueprint value is no unknown value', () => {
+      const own = trait({ id: 'own', name: 'Oath', placeholderPins: [{ placeholderId: 'c-garb', value: 'a tabard', valueId: tabard }] });
+      const w = blueprinted([albus({ traitLinks: [], traits: [own] })]);
+      expect(only(w, 'placeholder-pin-unknown-value')).toEqual([]);
+      const gone = blueprinted([albus({ traitLinks: [], traits: [{ ...own, placeholderPins: [{ placeholderId: 'c-garb', value: 'a cape', valueId: 'v:cape' }] }] })]);
+      const found = only(gone, 'placeholder-pin-unknown-value');
+      expect(found.map((f) => f.message)).toEqual(['“Trait: Albus\'s Oath” pins “Albus.Class Garb” to a value it no longer has — “a cape” is forced as written']);
+      expect(opened(found)).toEqual([[['own', 'traits'], ['c-garb', 'placeholders']]]);
+    });
+
+    it('warns once for each removed value one trait pins', () => {
+      const removesBoth = { valueOverrides: { [tabard]: { removed: true as const }, [phValueId('blue robes')]: { removed: true as const } } };
+      const both = { ...paladin, placeholderPins: [tabardPin, { placeholderId: 'garb', value: 'blue robes', valueId: phValueId('blue robes') }] };
+      const found = only(blueprinted([albus({ placeholders: [copyOf('garb', removesBoth)] })], { traits: [both, tailor] }), rule);
+      expect(found.map((f) => f.message)).toEqual([
+        '“Albus.Class Garb” removes “a tabard”, the value “Trait: Paladin” pins — the pin applies nothing',
+        '“Albus.Class Garb” removes “blue robes”, the value “Trait: Paladin” pins — the pin applies nothing',
+      ]);
+    });
+  });
+
+  describe('a blueprint chip or pin where it doesn’t belong', () => {
+    const rule = 'blueprint-refused-field';
+    const chip = 'with {{ph:garb:world:pl9}}';
+
+    it('warns for a blueprint chip in an entity, a location, an owned trait and a world value, each opening its row', () => {
+      const w = blueprinted([albus({
+        aiDescription: `Walks ${chip}.`,
+        traits: [trait({ id: 'own', name: 'Oath', playerDescription: chip })],
+      })], {
+        locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, playerDescription: chip }],
+        placeholders: [garb, trim, { id: 'mood', name: 'Mood', values: [{ id: 'v-m', text: chip }] }],
+      });
+      const found = only(w, rule);
+      expect(found.map((f) => f.message)).toEqual([
+        '“Albus” holds a chip of the blueprint “Class Garb”, but only world traits, blueprint values and copy values take blueprint chips',
+        '“Harbor Steps” holds a chip of the blueprint “Class Garb”, but only world traits, blueprint values and copy values take blueprint chips',
+        '“Albus\'s Oath” holds a chip of the blueprint “Class Garb”, but only world traits, blueprint values and copy values take blueprint chips',
+        '“Mood” holds a chip of the blueprint “Class Garb”, but only world traits, blueprint values and copy values take blueprint chips',
+      ]);
+      expect(found[0].severity).toBe('warning');
+      expect(opened(found)).toEqual([
+        [['albus', 'entities']], [['harbor', 'locations']], [['own', 'traits']], [['mood', undefined]],
+      ]);
+    });
+
+    it('leaves a blueprint chip in a world trait, a blueprint value and a copy value, and a copy chip in its owner’s text', () => {
+      const w = blueprinted([albus({
+        aiDescription: 'Wears {{ph:c-garb:world:pl8}}.',
+        traitLinks: [linkTo(paladin), linkTo(tailor)],
+        placeholders: [copyOf('garb'), copyOf('trim', { values: [{ id: 'mine', text: chip }] })],
+      })]);
+      expect(only(w, rule)).toEqual([]);
+    });
+
+    it('warns for a blueprint pin on a location, a stat band, a world value or an owned trait, and not on a world trait, a link or a blueprint value', () => {
+      const override = { paladin: { placeholderPins: { value: [tabardPin], blueprint: [] } } };
+      const w = blueprinted([albus({
+        traitLinks: [{ ...linkTo(paladin), overrides: override }],
+        traits: [trait({ id: 'own', name: 'Oath', placeholderPins: [tabardPin] })],
+      })], {
+        locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, placeholderPins: [tabardPin] }],
+        stats: [stat({ id: 's1', name: 'Hunger', descriptors: [{ id: 'd1', threshold: 20, description: 'Starving', placeholderPins: [tabardPin] }] })],
+        placeholders: [
+          garb, { ...trim, values: [{ ...trim.values[0], pins: [tabardPin] }] },
+          { id: 'mood', name: 'Mood', values: [{ id: 'v-m', text: 'grim', pins: [tabardPin] }] },
+        ],
+      });
+      const found = only(w, rule);
+      const tail = 'pins the blueprint “Class Garb”, but only world traits, blueprint values and copy values pin blueprints';
+      expect(found.map((f) => f.message)).toEqual([
+        `“Hunger ≤ 20” ${tail}`, `“Location: Harbor Steps” ${tail}`, `“Trait: Albus's Oath” ${tail}`, `“Mood = grim” ${tail}`,
+      ]);
+      expect(opened(found)).toEqual([[['s1', 'stats']], [['harbor', 'locations']], [['own', 'traits']], [['mood', 'placeholders']]]);
+    });
+  });
+
+  describe('an edited copy nothing uses', () => {
+    const rule = 'copy-edited-unused';
+
+    it('notes an edited copy with no trait or chip that uses it, and opens the copy', () => {
+      const w = blueprinted([albus({ traitLinks: [], placeholders: [copyOf('garb', rewordsTabard)] })]);
+      const found = only(w, rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus.Class Garb” is edited, but no trait or chip uses it']);
+      expect(found[0].severity).toBe('info');
+      expect(opened(found)).toEqual([[['c-garb', 'placeholders']]]);
+      expect(rowOf(w, found[0].items[0].id)?.id).toBe('c-garb');
+    });
+
+    it('stays quiet while a trait or a chip in the owner’s text uses it, and for an untouched copy', () => {
+      const edited = [copyOf('garb', rewordsTabard)];
+      expect(only(blueprinted([albus({ placeholders: edited })]), rule)).toEqual([]);
+      expect(only(blueprinted([albus({ traitLinks: [], placeholders: edited, aiDescription: 'In {{ph:c-garb:world:pl8}}.' })]), rule)).toEqual([]);
+      expect(only(blueprinted([albus({ traitLinks: [] })]), rule)).toEqual([]);
+    });
+  });
+
+  describe('a bearer without a copy it needs', () => {
+    const rule = 'copy-missing';
+
+    it('warns for a bearer whose linked trait pins a blueprint it holds no copy of, and opens the bearer and the link', () => {
+      const found = only(blueprinted([albus({ placeholders: [] })]), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” needs a copy of “Class Garb” for “Paladin” but has none, so it reads the blueprint']);
+      expect(found[0].severity).toBe('warning');
+      expect(opened(found)).toEqual([[['albus', 'entities'], ['l-paladin', 'traits']]]);
+    });
+
+    it('names the copy whose values reach a blueprint the bearer lacks', () => {
+      const found = only(blueprinted([albus({ traitLinks: [linkTo(tailor)], placeholders: [copyOf('trim')] })]), rule);
+      expect(found.map((f) => f.message)).toEqual(['“Albus” needs a copy of “Class Garb” for “Albus.Trim” but has none, so it reads the blueprint']);
+      expect(opened(found)).toEqual([[['albus', 'entities'], ['c-trim', 'placeholders']]]);
+    });
+
+    it('stays quiet once the reconcile has run', () => {
+      const w = blueprinted([albus({ traitLinks: [linkTo(paladin), linkTo(tailor)], placeholders: [] })]);
+      expect(only(w, rule)).toHaveLength(2);
+      const entities = syncBlueprintCopies({ ...bearerWorldOf(w), placeholders: w.placeholders ?? [], placeholderGroups: w.placeholderGroups ?? [] });
+      expect(only({ ...w, entities }, rule)).toEqual([]);
+    });
   });
 });
 
@@ -1524,7 +2315,7 @@ describe('placeholder pin rules', () => {
 
   describe('conflicts across sources', () => {
     const pinTo = (value: string): PlaceholderPin => ({ placeholderId: 'p1', value });
-    const origin = { id: 'g1', name: 'Origin', parentId: null, exclusive: true };
+    const origin = { id: 'g1', name: 'Origin', parentId: null, maxPicks: 1 };
     const contest = (over: Partial<RuleWorld>): RuleWorld => ({ ...placed, placeholders: [hue], ...over });
 
     it('names every source that can pin the placeholder at once, and the one precedence picks', () => {
@@ -1552,6 +2343,34 @@ describe('placeholder pin rules', () => {
         ],
       }), 'placeholder-pin-conflict');
       expect(found.message).toContain('“Trait: Woven” wins whenever it is in force');
+    });
+
+    it('reads a cast entity’s owned trait as a rival that wins in its own text', () => {
+      const [found] = only(contest({
+        traits: [trait({ id: 't1', name: 'Sworn', placeholderPins: [pinTo('red')] })],
+        entities: [{ id: 'ash', name: 'Ash', traits: [trait({ id: 'o1', name: 'Tamed', placeholderPins: [pinTo('blue')] })] }],
+      }), 'placeholder-pin-conflict');
+      expect(found.message).toBe('“Hue” is pinned by “Trait: Sworn” and “Trait: Ash\'s Tamed” — “Trait: Ash\'s Tamed” wins whenever it is in force');
+      expect(found.items).toContainEqual({ id: 'o1', name: 'Tamed', section: 'traits' });
+    });
+
+    it('stays quiet for two Personas whose links pin one world placeholder to different values', () => {
+      // Only one is played; the other wins in its own text. The cast entity's link still rivals the world trait.
+      const paladin = trait({ id: 'paladin', name: 'Paladin', groupId: 'blueprints' });
+      const link = (id: string, value: string): TraitLink => ({
+        id, originalId: 'paladin', kind: 'trait', originalName: 'Paladin', groupId: null,
+        overrides: { paladin: { placeholderPins: { value: [pinTo(value)], blueprint: [] } } },
+      });
+      const persona = (id: string, value: string, over: Partial<Entity> = {}): Entity =>
+        ({ id, name: id, persona: true, traitLinks: [link(`l-${id}`, value)], ...over });
+      const two = contest({
+        traitGroups: [{ id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+        traits: [paladin],
+        entities: [persona('Albus', 'red'), persona('Sylvie', 'blue')],
+      });
+      expect(only(two, 'placeholder-pin-conflict')).toEqual([]);
+      const [found] = only({ ...two, entities: [persona('Albus', 'red'), persona('Ash', 'blue', { persona: false })] }, 'placeholder-pin-conflict');
+      expect(found.message).toBe('“Hue” is pinned by “Trait: Albus\'s Paladin” and “Trait: Ash\'s Paladin” — “Trait: Ash\'s Paladin” wins whenever it is in force');
     });
 
     it('stays quiet for pins that can never be in force together: exclusive siblings, bands of one stat', () => {
@@ -2816,6 +3635,7 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'dictionary-secondary-without-primary': 'advanced',
   'entity-long-description-no-summary': 'advanced',
   'entity-name-in-wildcard-pool': 'advanced',
+  'entity-no-code-name': 'advanced',
   'placeholder-dangling-reference': 'advanced',
   'placeholder-duplicate-slot': 'advanced',
   'placeholder-empty-record': 'advanced',
@@ -2828,6 +3648,10 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'placeholder-pin-cycle': 'advanced',
   'placeholder-pin-self': 'advanced',
   'placeholder-pin-unknown-value': 'advanced',
+  'copy-pin-removed-value': 'advanced',
+  'blueprint-refused-field': 'advanced',
+  'copy-edited-unused': 'advanced',
+  'copy-missing': 'advanced',
   'placeholder-unused': 'advanced',
   'placeholder-pinned-unused': 'advanced',
   'placeholder-shared-weight-unknown-value': 'advanced',
@@ -2870,8 +3694,17 @@ const RULE_SCOPE: Record<string, 'simple' | 'advanced'> = {
   'stat-percentage-bounds': 'simple',
   'stat-starting-out-of-range': 'simple',
   'stat-update-unknown-stat': 'simple',
-  'trait-group-multiple-defaults': 'simple',
+  'trait-group-defaults-over-max': 'simple',
+  'trait-group-always-on-over-max': 'simple',
+  'trait-group-min-above-max': 'simple',
+  'trait-group-min-unreachable': 'simple',
+  'trait-group-defaults-below-min': 'simple',
   'trait-group-too-small': 'simple',
+  'trait-default-gated': 'simple',
+  'trait-requirement-never-unlockable': 'simple',
+  'trait-requirement-unresolved': 'simple',
+  // A link row's menu removes it in both modes.
+  'trait-link-redundant': 'simple',
   'world-empty-system-prompt': 'simple',
   'world-no-readme': 'simple',
   'world-oversized-images': 'simple',

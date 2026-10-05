@@ -10,18 +10,27 @@
 import { withEntityLocations } from '@/lib/entityPresence';
 import { linkToSource, type LibrarySource, type LinkableContent } from '@/lib/linkedContent';
 import { kindOf } from '@/lib/librarySources';
+import { hasAuthoredOpenings, openingsEnabled, setOpeningsEnabled } from '@/lib/openings';
 import { adoptBookPlaceholders, adoptEntityPlaceholders } from '@/lib/placeholderHomes';
 import { randomUUID } from '@/lib/uuid';
 import { unresolvedReferences, type ConnectionPlan, type ReferenceRow } from '@/lib/worldReferences';
 import WorldStorageService from '@/services/WorldStorageService';
-import type { Dictionary, Entity, GameLocation, Placeholder } from '@/types';
+import { adoptOwnedTraits } from '@/lib/portableTraits';
+import { dropBookBlueprintChips, dropEntityBlueprintChips } from '@/lib/blueprintChips';
+import { blueprintIds } from '@/lib/placeholderBlueprints';
+import { bindCarriedBlueprints, blueprintBindWorld } from '@/lib/blueprintTravel';
+import type { Dictionary, Entity, GameLocation, Placeholder, PlaceholderGroup, Trait, TraitGroup, WorldOverview } from '@/types';
 
 /** The world slices this pass reads out of a stored record. */
 interface StoredContent extends Record<string, unknown> {
+  worldOverview?: WorldOverview;
   entities?: Entity[];
   dictionaries?: Dictionary[];
   placeholders?: Placeholder[];
+  placeholderGroups?: PlaceholderGroup[];
   locations?: GameLocation[];
+  traits?: Trait[];
+  traitGroups?: TraitGroup[];
 }
 
 /** One stored world, named for a picker and for what a failure says. */
@@ -58,21 +67,26 @@ export async function storedWorldReferences(
  * @param content - The content to copy in
  * @param source - The library item the copy follows
  * @param plan - What each open reference resolves to here
+ * @returns How many blueprint chips the copy's own text lost
  */
 export async function addCopyToStoredWorld(
   worldId: string, content: LinkableContent, source: LibrarySource, plan: ConnectionPlan,
-): Promise<void> {
+): Promise<{ blueprintChipsDropped: number }> {
   const kind = kindOf(content);
+  let dropped = 0;
   await WorldStorageService.updateWorldContent(worldId, (raw) => {
     const data = raw as StoredContent;
     const shared = data.placeholders ?? [];
     const locations = data.locations ?? [];
     const withId = { ...content, id: randomUUID() } as LinkableContent;
+    const blueprints = blueprintIds(data);
 
     if (kind === 'dictionary') {
       const adopted = adoptBookPlaceholders(withId as Dictionary, shared, plan.placeholders);
+      const scrubbed = dropBookBlueprintChips(adopted.book, blueprints);
+      dropped = scrubbed.dropped;
       const book: Dictionary = {
-        ...adopted.book,
+        ...scrubbed.book,
         link: {
           ...linkToSource(source),
           ...(Object.keys(adopted.connections).length ? { connections: adopted.connections } : {}),
@@ -85,28 +99,41 @@ export async function addCopyToStoredWorld(
       };
     }
 
-    const adopted = adoptEntityPlaceholders(withId as Entity, shared, plan.placeholders);
+    const bound = bindCarriedBlueprints(withId as Entity, blueprintBindWorld(data));
+    const adopted = adoptEntityPlaceholders(bound.entity, shared, plan.placeholders);
     const places = [...locations, ...plan.newLocations];
     const known = new Set(places.map((place) => place.id));
-    const { locationRefs = [], ...rest } = adopted.entity;
+    const scrubbed = dropEntityBlueprintChips(adopted.entity, blueprints);
+    dropped = bound.dropped + scrubbed.dropped;
+    const { locationRefs = [], ...rest } = scrubbed.entity;
     // A membership the world cannot place is dropped rather than left pointing at a location it has not got.
     const used = Object.fromEntries(locationRefs.flatMap((ref) => {
       const id = plan.locations[ref.id] ?? ref.id;
       return known.has(id) ? [[ref.id, id]] : [];
     }));
     const connections = { ...adopted.connections, ...used };
+    const kept = data.entities ?? [];
     const entity: Entity = {
-      ...withEntityLocations(rest as Entity, Object.values(used)),
+      ...adoptOwnedTraits(withEntityLocations(rest as Entity, Object.values(used)), {
+        traits: data.traits ?? [], traitGroups: data.traitGroups ?? [], entities: kept,
+      }),
       link: {
         ...linkToSource(source),
         ...(Object.keys(connections).length ? { connections } : {}),
       },
     };
+    // A switched-off list would bench the arriving openings, so the copy switches it back on, exactly as
+    // the World Editor's own add does.
+    const overview = hasAuthoredOpenings(entity) && !openingsEnabled(data.worldOverview, [...kept, entity, ...places])
+      ? { worldOverview: { ...(data.worldOverview as WorldOverview), ...setOpeningsEnabled(true) } }
+      : {};
     return {
       ...data,
-      entities: [...(data.entities ?? []), entity],
+      ...overview,
+      entities: [...kept, entity],
       ...(adopted.toAdd.length ? { placeholders: [...shared, ...adopted.toAdd] } : {}),
       ...(plan.newLocations.length ? { locations: places } : {}),
     };
   });
+  return { blueprintChipsDropped: dropped };
 }

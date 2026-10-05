@@ -1,11 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { toast } from 'react-toastify';
 import { GenerateImageButton } from './GenerateImageButton';
+import { ThemedToastContainer } from '@/components/ThemedToastContainer';
+import { closeErrorDetails } from '@/lib/errorDetails';
+import { resetEndpointReachableCache } from '@/lib/useEndpointReachable';
+
+vi.mock('@/components/theme-provider', () => ({ useTheme: () => ({ resolvedTheme: 'dark' }) }));
 
 // The dialog reads the whole image-gen settings block; only the endpoint/provider fields matter here.
+const preset = vi.hoisted(() => ({ imageProvider: 'a1111', imageModel: '' }));
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
-    imageProvider: 'a1111', imageEndpoint: 'http://x', imageApiToken: '', imageModel: '',
+    imageProvider: preset.imageProvider, imageEndpoint: 'http://x', imageApiToken: '', imageModel: preset.imageModel,
     imagePositivePrompt: '', imageNegativePrompt: '', imageSteps: 20, imageCfg: 7, imageSampler: 'Euler a',
     imagePortraitWidth: 512, imagePortraitHeight: 768, imageLandscapeWidth: 768, imageLandscapeHeight: 512,
     imageAdetailer: false, imageWorkflow: '', imageInvokeEncoder: '', imageInvokeVae: '', imageInvokeBoard: '',
@@ -31,6 +38,13 @@ const generateImage = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/imageGen', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/imageGen')>()),
   generateImage,
+}));
+
+// Each provider's protocol is covered in imageGen/probe.test.ts; here only the answer matters.
+const probeImageEndpoint = vi.hoisted(() => vi.fn(() => Promise.resolve('ok')));
+vi.mock('@/lib/imageGen/probe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/imageGen/probe')>()),
+  probeImageEndpoint,
 }));
 
 const props = {
@@ -126,5 +140,54 @@ describe('GenerateImageButton preview pane', () => {
       expect.arrayContaining(['absolute', 'inset-0', 'h-full', 'w-full', 'object-contain']),
     );
     expect(screen.queryByText('The image appears here.')).toBeNull();
+  });
+});
+
+describe('GenerateImageButton error toast', () => {
+  beforeEach(() => { generateImage.mockReset(); });
+
+  it("offers View Details on a provider refusal, and the window shows the provider's reply", async () => {
+    const { generateImage: realGenerate } = await vi.importActual<typeof import('@/lib/imageGen')>('@/lib/imageGen');
+    generateImage.mockImplementation(realGenerate);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"detail":"Sampler not found: Euler z"}', { status: 422 })));
+    try {
+      render(<><ThemedToastContainer /><GenerateImageButton {...props} tags="1girl" /></>);
+      openDialog();
+      fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+
+      fireEvent.click(await screen.findByRole('button', { name: 'View Details →' }));
+      const details = await screen.findByRole('dialog', { name: 'Error Details' });
+      expect(details.textContent).toContain('Response:\n{"detail":"Sampler not found: Euler z"}');
+    } finally {
+      vi.unstubAllGlobals();
+      act(() => { toast.dismiss(); closeErrorDetails(); });
+    }
+  });
+});
+
+describe('GenerateImageButton reachability badge', () => {
+  beforeEach(() => {
+    resetEndpointReachableCache();
+    probeImageEndpoint.mockReset();
+    Object.assign(preset, { imageProvider: 'a1111', imageModel: '' });
+  });
+
+  it('shows under the preset picker what the active image server answered', async () => {
+    Object.assign(preset, { imageModel: 'pony' });
+    probeImageEndpoint.mockResolvedValue('unknownModel');
+    render(<GenerateImageButton {...props} />);
+    openDialog();
+    const picker = screen.getByRole('combobox', { name: 'Preset' }).parentElement!;
+    await waitFor(() => expect(picker.textContent).toContain('Reachable, but no "pony"'));
+    expect(probeImageEndpoint).toHaveBeenCalledWith('a1111', 'http://x', '', 'pony');
+  });
+
+  it('shows no badge and sends no probe for NovelAI', async () => {
+    Object.assign(preset, { imageProvider: 'novelai' });
+    render(<GenerateImageButton {...props} />);
+    openDialog();
+    expect(screen.getByRole('combobox', { name: 'Preset' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Recheck' })).toBeNull();
+    expect(probeImageEndpoint).not.toHaveBeenCalled();
   });
 });

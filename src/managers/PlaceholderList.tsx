@@ -1,23 +1,24 @@
-import { useMemo, useState } from 'react';
-import { Link2, ArrowUpFromLine, BookOpen, Folder, User } from 'lucide-react';
-import { randomUUID } from '@/lib/uuid';
-import { remintPlaceholderDef } from '@/lib/placeholders';
+import { useMemo, useState, type ReactNode } from 'react';
+import { Link2, ArrowUpFromLine, BookOpen, CornerDownRight, Folder, LayoutTemplate, User } from 'lucide-react';
 import { removePlaceholderGroup } from '@/lib/placeholderGroups';
+import { blueprintMoveRefusal, copyName, type BlueprintRefusal } from '@/lib/placeholderBlueprints';
 import { allPlaceholders, placeholderList, withPlaceholderList } from '@/lib/placeholderHomes';
 import {
-  applyPlaceholderDrop, chipValueFor, getPlaceholderDropProjection, ownedDescendants, placeholderRows,
-  placeholderUsedByMap, promotePlaceholder, releasePlaceholderOwners, removeChipValueFrom,
-  removeCollapsedPlaceholderRows, removePlaceholderCascade, type PlaceholderTreeRow,
+  applyPlaceholderDrop, getPlaceholderDropProjection, placeholderRows, placeholderUsedByMap, promotePlaceholder,
+  removeCollapsedPlaceholderRows,
 } from '@/lib/placeholderTree';
 import {
-  applyScopedPlaceholderDrop, placeholderDropAllowed, placeholderTreeNodes, type PlaceholderTreeNode,
+  applyScopedPlaceholderDrop, ownerPlaceholderNodes, placeholderDropAllowed, placeholderTreeNodes, type PlaceholderTreeNode,
 } from '@/lib/placeholderScopes';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Tip } from '@/components/ui/tooltip';
 import { EmptyListHint } from '@/components/EmptyListHint';
 import { TREE_INDENT } from '@/components/EditorRow';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
 import { usePlaceholderStore } from '@/contexts/PlaceholderStoreContext';
+import { useGameDataOptional } from '@/contexts/GameDataContext';
+import type { PlaceholderSlices } from '@/lib/placeholderHomes';
+import { BlueprintRefusalNotice } from './BlueprintRefusalNotice';
+import { usePlaceholderRowActions } from './usePlaceholderRowActions';
 import { SortableTree, type SortableTreeAdapter } from './SortableTree';
 
 /**
@@ -36,67 +37,33 @@ import { SortableTree, type SortableTreeAdapter } from './SortableTree';
  * this component only wires them to the shared drag-tree scaffold. Adding is the caller's concern (a
  * toolbar button), mirroring how the World Editor and library editor place their own.
  */
-const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; onSelect: (id: string | null) => void }) => {
-  const { placeholders, setPlaceholders, removePlaceholder, placedIds, lists, setLists, scope } = usePlaceholderStore();
-  // The placeholder a delete is waiting on, held so the confirmation can name what goes with it.
-  const [pendingDelete, setPendingDelete] = useState<PlaceholderTreeRow | null>(null);
-  const doomed = useMemo(
-    () => (pendingDelete ? ownedDescendants(placeholders, pendingDelete.placeholder.id) : []),
-    [placeholders, pendingDelete],
-  );
-
-  /** Delete a placeholder, plus the value its holder held it through — a value pointing at something just
-   *  deleted on purpose is a red `?` nobody asked for. A top-level row has no holder and only goes itself. */
-  const remove = (id: string, holderId: string | null) => {
-    if (holderId === null) removePlaceholder(id);
-    else setPlaceholders((prev) =>
-      releasePlaceholderOwners(removeChipValueFrom(removePlaceholderCascade(prev, id), holderId, id)));
-    // Selection speaks in row ids, and every row this placeholder reached goes with it.
-    if (selectedId?.split('/').includes(id)) onSelect(null);
+const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  /** Opens a row's fresh duplicate, given the id of the placeholder it copies; absent, the row is selected. */
+  openDuplicate?: (rowId: string, sourceId: string) => void;
+}) => {
+  const { placeholders, setPlaceholders, placedIds, lists, setLists, scope } = usePlaceholderStore();
+  const world = useGameDataOptional();
+  // The last move across the Blueprints edge that was refused, and whether it was the group's removal.
+  const [refusal, setRefusal] = useState<{ refusal: BlueprintRefusal; removing: boolean } | null>(null);
+  /** Write every list, unless the change carries a placeholder across the Blueprints edge that something
+   *  still holds on its side. */
+  const commitLists = (next: PlaceholderSlices, removing = false) => {
+    if (!setLists) return;
+    const refused = world ? blueprintMoveRefusal(world.getWorldData(), next) : null;
+    setRefusal(refused && { refusal: refused, removing });
+    if (!refused) setLists(next);
   };
-
-  const askRemove = (node: PlaceholderTreeRow) => {
-    const { placeholder, shared, holderId } = node;
-    // A shared row is a reference, never a possession: removing it removes the reference and the original
-    // stays for everyone else holding it.
-    if (shared && holderId !== null) {
-      setPlaceholders((prev) => releasePlaceholderOwners(removeChipValueFrom(prev, holderId, placeholder.id)));
-      return;
-    }
-    // Nothing else goes with it, so there is nothing to warn about.
-    if (!ownedDescendants(placeholders, placeholder.id).length) remove(placeholder.id, holderId);
-    else setPendingDelete(node);
-  };
-
-  const duplicate = (row: PlaceholderTreeRow) => {
-    setPlaceholders((prev) => {
-      const i = prev.findIndex((p) => p.id === row.placeholder.id);
-      if (i === -1) return prev;
-      // Re-mint value-chip placements so the copy never shares a nested Unique roll with the original.
-      const source = prev[i];
-      const copy = { ...remintPlaceholderDef(source), id: randomUUID(), name: `${source.name} (Copy)` };
-      // Selection speaks in row ids. Only a copy that stays owned lands under the row it came from; a copy
-      // of a shared row belongs to nobody, so its row is a top-level one named by its id alone.
-      onSelect(copy.ownerId && row.parentId ? `${row.parentId}/${copy.id}` : copy.id);
-      // Inserted right after its source, which is what keeps it in the source's list (see `scatterPlaceholders`).
-      const next = [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)];
-      // A copy of an owned row belongs where the original does, which only holds once its owner holds it.
-      const ownerId = copy.ownerId;
-      return ownerId
-        ? next.map((p) => (p.id === ownerId ? { ...p, values: [...p.values, chipValueFor(copy.id)] } : p))
-        : next;
-    });
-  };
+  const { rowRules, dialog } = usePlaceholderRowActions({ selectedId, onSelect, openDuplicate });
 
   // The tree, the rows that hold at least one other (which drives the chevron), and who holds whom — each
   // derived once per change. `getVisible` runs on every drag frame, so re-walking there is a per-frame cost.
   // Over a world the tree spans every list; bound to one owner's section it draws that list, still looking
   // chip targets and holders up across the world; bound to a lone list (the library) it is that list.
   const nodes = useMemo((): PlaceholderTreeNode[] => {
-    if (lists && !scope) return placeholderTreeNodes(lists);
-    const list = lists && scope ? placeholderList(lists, scope) : placeholders;
-    const all = lists ? allPlaceholders(lists) : placeholders;
-    return placeholderRows(list, all).map((row) => ({ ...row, kind: 'placeholder', home: scope ?? { kind: 'world' } }));
+    if (lists) return scope ? ownerPlaceholderNodes(lists, scope) : placeholderTreeNodes(lists);
+    return placeholderRows(placeholders, placeholders).map((row) => ({ ...row, kind: 'placeholder', home: scope ?? { kind: 'world' } }));
   }, [placeholders, lists, scope]);
   const parentRowIds = useMemo(
     () => new Set(nodes.map((r) => r.parentId).filter((id): id is string => id !== null)),
@@ -108,7 +75,7 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
     const context = { placedIds: placedIds?.() };
     if (lists && setLists && !scope) {
       const next = applyScopedPlaceholderDrop(lists, collapsed, activeId, overId, offsetLeft, TREE_INDENT, context);
-      if (next) setLists(next);
+      if (next) commitLists(next);
       return;
     }
     if (lists && setLists && scope) {
@@ -132,6 +99,23 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
     },
     onDrop,
     rowSpec: (node) => {
+      if (node.kind === 'group' && node.group.system === 'blueprints') {
+        return {
+          lead: 'chevron',
+          collapseLabels: ['Expand group', 'Collapse group'],
+          icon: <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden />,
+          label: node.group.name,
+          name: node.group.name,
+          labelClass: 'font-medium',
+          removeTitle: 'Remove Blueprints',
+          remove: () => {
+            if (!lists) return;
+            const next = removePlaceholderGroup(lists.placeholderGroups ?? [], lists.placeholders ?? [], node.id);
+            commitLists({ placeholders: next.placeholders, entities: lists.entities ?? [], dictionaries: lists.dictionaries ?? [], placeholderGroups: next.groups }, true);
+            if (selectedId === node.id) onSelect(null);
+          },
+        };
+      }
       if (node.kind === 'group') {
         // A folder over shared rows: deleting it lifts what it holds to its parent. Nothing to duplicate,
         // since a copy of the placeholders inside would need re-minting nobody asked for.
@@ -168,26 +152,44 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
         };
       }
       const { placeholder, shared, holderId } = node;
+      const { copy, duplicate, remove, removeBlocked } = rowRules(node);
+      const copyOwner = copy?.owner;
+      const blueprint = copy?.blueprint;
       // "Used by" belongs on the original, where the author reads it before dragging: it says whether the
       // drag will take the placeholder or share it.
       const usedBy = holderId === null ? usedByMap.get(placeholder.id) : undefined;
+      const blueprintName = blueprint?.name ?? placeholder.name;
+      const untouchedCopy = !!copy?.untouched;
+      const jump = (to: string, tip: string, glyph: ReactNode) => (
+        <Tip tip={tip} labelsChild={false}>
+          <button
+            type="button"
+            aria-label={`Open ${to === placeholder.id ? placeholder.name : blueprintName}`}
+            onClick={(e) => { e.stopPropagation(); onSelect(to); }}
+            className="shrink-0 px-0.5"
+          >
+            {glyph}
+          </button>
+        </Tip>
+      );
+      const copyGlyph = <Link2 className="h-3.5 w-3.5 opacity-50" />;
       return {
         // Every placeholder can hold another, so a row holding none reserves the slot for alignment.
         lead: parentRowIds.has(node.id) ? 'chevron' : 'spacer',
         collapseLabels: ['Expand nested placeholders', 'Collapse nested placeholders'],
-        icon: shared ? (
-          <Tip tip={`Shared — open ${placeholder.name}`} labelsChild={false}>
-            <button
-              type="button"
-              aria-label={`Open ${placeholder.name}`}
-              onClick={(e) => { e.stopPropagation(); onSelect(placeholder.id); }}
-              className="shrink-0 px-0.5"
-            >
-              <Link2 className="h-3.5 w-3.5" />
-            </button>
-          </Tip>
-        ) : undefined,
-        label: placeholder.name,
+        icon: shared ? jump(placeholder.id, `Shared, opens ${placeholder.name}`, <CornerDownRight className="h-3.5 w-3.5" />)
+          // A scoped list holds no blueprint row to open.
+          : copyOwner && blueprint && !scope ? jump(blueprint.id, `Copy of ${blueprintName}, opens it${untouchedCopy ? '' : '. Modified for this entity'}`, copyGlyph)
+          : copyOwner ? (
+            <Tip tip={`Copy of ${blueprintName}${untouchedCopy ? '' : '. Modified for this entity'}`} labelsChild={false}>
+              <span className="shrink-0 px-0.5" aria-label="Copy">{copyGlyph}</span>
+            </Tip>
+          ) : undefined,
+        overridden: copyOwner && !untouchedCopy ? 'Modified for this entity' : undefined,
+        // A copy reads as its owner's, named after its blueprint live.
+        label: copyOwner
+          ? <PlaceholderText text={copyName(copyOwner.name, blueprint?.name ?? placeholder.name)} placeholders={placeholders} />
+          : placeholder.name,
         name: placeholder.name,
         meta: usedBy ? `Used by ${usedBy.count}` : undefined,
         metaTitle: usedBy ? `Held as a value of ${usedBy.names.join(', ')}` : undefined,
@@ -199,8 +201,9 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
         // The affordance has to say what it does: a shared row's X unhooks the reference, and only an
         // owned or top-level row's deletes anything.
         removeTitle: shared && holderId !== null ? 'Remove Reference' : 'Delete',
-        remove: () => askRemove(node),
-        duplicate: () => duplicate(node),
+        remove,
+        removeBlocked,
+        duplicate,
       };
     },
   };
@@ -208,18 +211,16 @@ const PlaceholderList = ({ selectedId, onSelect }: { selectedId: string | null; 
   if (nodes.length === 0) return <EmptyListHint noun="placeholders" />;
   return (
     <>
+      {refusal && (
+        <BlueprintRefusalNotice
+          refusal={refusal.refusal}
+          removing={refusal.removing}
+          placeholders={placeholders}
+          onDismiss={() => setRefusal(null)}
+        />
+      )}
       <SortableTree adapter={adapter} selectedId={selectedId} onSelect={onSelect} />
-      <ConfirmDialog
-        open={!!pendingDelete}
-        onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
-        title={`Delete ${pendingDelete?.placeholder.name ?? ''}?`}
-        description={`This also deletes what it owns: ${doomed.map((p) => p.name).join(', ')}.`}
-        onConfirm={() => {
-          if (pendingDelete) remove(pendingDelete.placeholder.id, pendingDelete.holderId);
-          setPendingDelete(null);
-        }}
-        onCancel={() => setPendingDelete(null)}
-      />
+      {dialog}
     </>
   );
 };

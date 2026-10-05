@@ -232,10 +232,15 @@ export function buildSceneList(args: {
   entities: Entity[];
   narrationSoFar: string;
   priorNarration: string;
+  /** The list on screen, for the no-planner parse to add to. */
+  previous?: SceneEntity[];
 }): SceneEntity[] {
-  const { cast, entities, narrationSoFar, priorNarration } = args;
+  const { cast, entities, narrationSoFar, priorNarration, previous = [] } = args;
   if (!cast) {
-    return findEntityNames(stripQuotedSpeech(narrationSoFar), entities).map((name) => ({ name, revealed: true }));
+    // A partial parse only adds to the list; the end-of-narration read removes who left.
+    const kept = new Set(previous.map((se) => se.name.toLowerCase()));
+    const found = findEntityNames(stripQuotedSpeech(narrationSoFar), entities).filter((name) => !kept.has(name.toLowerCase()));
+    return [...previous, ...found.map((name) => ({ name, revealed: true }))];
   }
   const revealedIn = `${priorNarration}\n${narrationSoFar}`;
   const definedByLower = new Map(entities.map((e) => [e.name.trim().toLowerCase(), e.name]));
@@ -431,7 +436,7 @@ export async function runStagedPlanning(ctx: {
   lastStory: string;
   entities: Entity[];
   presentEntityIds: string[];
-  /** Selected trait names — used to recognize the player when the director names them instead of labeling. */
+  /** The persona's name and aliases — used to recognize the player when the director names them instead of labeling. */
   playerNames: string[];
   characterDiaries: boolean;
   /** Run the per-character motivation passes concurrently (they're independent) instead of one at a time. */
