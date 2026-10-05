@@ -301,13 +301,14 @@ The **12.0 tok/s** figure was measured with every collective detouring through h
 pod's card-to-card copies were silently returning zeros. It is a floor. How much a healthy pod beats it
 is unknown, and it is the number that decides whether this is usable.
 
-### P4 · Featherless — does it serve the Mistral-Medium-3.5 base?
+### P4 · ~~Featherless — does it serve the Mistral-Medium-3.5 base?~~ — **Closed, 2026-09-16**
 
-**State:** Blocked on one unverified fact, and the route does not exist until it is answered.
-
-Not blocked by size: the $25 Premium tier has no model-size cap (only the $10 Basic tier is capped, at
-15B). What gates it is the 100-download auto-onboarding threshold and, more seriously, whether their
-stack serves that base at all. See `behemoth-128b.md` in this directory.
+**State:** Wrong question. The base itself *is* served (`mistralai/Mistral-Medium-3.5-128B`), and so are
+models up to 2.78T. What is missing is **every community finetune above the ~70B class**. All 42 models
+above 100B are vendor releases. No Behemoth, no Agatha-111B, no Precog-123B, while Precog-24B, Anubis-70B
+and Sicarius's 70Bs are all there. Behemoth runs on a rented pod or not at all. Byproduct: the base can
+be screened on Featherless to see how much of v3's refusing it brings. See `behemoth-128b.md` in this
+directory.
 
 ### P5 · Endpoint presets still cannot be exported
 

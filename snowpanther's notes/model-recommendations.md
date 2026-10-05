@@ -374,7 +374,10 @@ recommends** — checked against their live `/v1/models`:
 | `SicariusSicariiStuff/Assistant_Pepe_8B` | W-10 8.8 | llama31-8b | **1** |
 | `deepseek-ai/DeepSeek-V4-Flash` | §4 cloud pick | deepseek4-284b | 4 |
 
-No Behemoth: the classes stop around 70B/120B, so 123B is genuinely out of reach here. Everything else is in.
+No Behemoth, and not because of size. Featherless serves models up to 2.78T, including the
+`Mistral-Medium-3.5-128B` base, but every model above 100B is a vendor release. **Community finetunes stop at
+the ~70B class** (checked 2026-09-16; also missing are Agatha-111B and Precog-123B), so 123B finetunes are
+out of reach here. Everything else is in.
 
 ### The split works, and it fits in one $25 plan
 
@@ -525,6 +528,10 @@ Ordered by expected value:
 5. **Screen `Artemis-31B-v1.1`** — verify the thinking-template handling before judging the score.
 6. **Re-pull UGI for the August models** — MeroMero v2, Artemis, Dominatrix, StyleTune-31B, Ornith and
    GLM-5.3 are all absent from the current CSV. The willingness numbers are worth having before screening.
+   **Re-pulled 2026-09-16** (CSV last updated 2026-09-05, 1,309 rows, up from 1,295). Still absent, along
+   with Behemoth-128B-v3 and Orion. All 14 new rows are closed frontier models: Gemini 3.6/3.7/3.8 Flash,
+   GPT-6 Astra and Grok 4.6. Top Writing is 78.55 (Gemini 3.8 Flash), but W/10 is 1.8–3.2 across all of
+   them, so none challenges DeepSeek V4 Flash (7.2) as the cloud pick.
 7. **Consider `Qwen3.8-27B-Dominatrix`** once it has a few weeks of community signal.
 8. **Leave tier-4 alone.** No viable backfill candidate exists in this wave.
 
@@ -549,7 +556,7 @@ then re-rank this doc.
 - [Hugging Face Model API](https://huggingface.co/api/models) — release dates, all-time downloads, licenses,
   GGUF filenames and exact byte sizes (pulled live 2026-08-21).
 - [UGI Leaderboard](https://huggingface.co/spaces/DontPlanToEnd/UGI-Leaderboard) — `ugi-leaderboard-data.csv`,
-  1,295 models. Columns used: `Writing ✍️`, `W/10 👍`, `#P`, `Is Thinking Model`, `Release Date`.
+  1,295 models (re-checked 2026-09-16: 1,309, no new open-weight rows). Columns used: `Writing ✍️`, `W/10 👍`, `#P`, `Is Thinking Model`, `Release Date`.
 - [OpenRouter models API](https://openrouter.ai/api/v1/models) — cloud pricing and context lengths.
 - [RunPod pricing](https://www.runpod.io/pricing) — GPU $/hr (Community and Secure Cloud) and storage rates,
   pulled 2026-08-21.
