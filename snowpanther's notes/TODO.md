@@ -52,9 +52,9 @@ commits. Every pre-sync tip is kept as `pre-3.1/<branch>`; the older `pre-2.19/<
 
 | Branch | Carries | Behind upstream | On `origin` |
 |---|---|---|---|
-| `main` | nothing of ours — a clean mirror of upstream | 0 | see I2 |
-| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | see I2 |
-| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** | 0 | see I2 |
+| `main` | nothing of ours — a clean mirror of upstream | 0 | in sync, pushed 2026-10-05 |
+| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | in sync, pushed 2026-10-05 |
+| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** | 0 | in sync, pushed 2026-10-05 |
 | `keyboard-tree-nesting` | the pre-rebuild line, kept only as history | not synced | left alone — delete it when you are done with it |
 | `Colossally-expensive-curiosities` | nothing any more — its doc is now `snowpanther's notes/behemoth-128b.md` | not synced | on `origin`; retire when you say so |
 
@@ -71,8 +71,21 @@ extracted into `TextEndpointEditor`** (the cleartext warning moved there), **Too
 
 ### I2 · Bring upstream v3.1.2 (1,594 commits) into every branch
 
-**State:** Built, unverified — 2026-10-05. Both branches merged, gates below. Not yet heard by NVDA or run
-against a live endpoint.
+**State:** Built, unverified — 2026-10-05. Both branches merged and pushed with their `pre-3.1/*` tags.
+Not yet heard by NVDA or run against a live endpoint.
+
+**Gates, 2026-10-05:** typecheck, lint and build clean on both. Capped suite: `description-consistency`
+18,142 tests, every failure explained; `keyboard-tree-nesting-2.19` the same. What remains is
+`GameViewer.surfaceRequest`, which fails and passes on clean upstream too (*"Keep Playing"* not found), and
+heavy view tests that time out under load and pass alone.
+
+- **The keyboard branch's grip label is upstream's again** (*"Drag to reorder or nest"*). Ours added the
+  keys, but the tip is also the grip's accessible name, so NVDA read them on every row after the drag
+  handle's description had already read them — and 53 of upstream's new tests find rows by the short name.
+  Sighted keyboard users now learn the keys from the help topic and the guide, not the tooltip. Worth
+  hearing in K1.
+- **Upstream v3 indexes every `docs/*.md` for in-app help.** `Changelog.Fork.md` is on its
+  `NON_GUIDE_PAGES` list now, or it would show up as a help page and in search.
 
 - **`keyboard-tree-nesting-2.19`:** 5 conflicts, all in the drag trees and the guide. Upstream had not
   built keyboard nesting itself. Every new trait-tree row kind (entity nodes, links, blueprints) now carries
