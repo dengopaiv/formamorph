@@ -346,6 +346,32 @@ directory.
 There is no import path in the app; moving a preset between installs is a localStorage edit. §13 of the
 endpoint notes documents the procedure by hand. Nothing has been built, and nothing is planned.
 
+### P6 · Run the two EXL3 recipes — Artemis 6.0 bpw on one card, Behemoth 5.0 bpw on two
+
+**State:** Built, unverified. Written 2026-10-05 from source, never run on a pod.
+
+`runpod-exl3-recipes.md`, plus three new optional settings in `pod-setup.sh` (`MAX_SEQ`, `TABBY_REF`,
+`THINKING_BUDGET`) and a re-run that stops the old server first. The questions only a pod can answer:
+- Does Behemoth 5.0 fit 2× A40 at 32k?
+- Does exllamav3 1.5.x load a quant made with 1.4.2?
+- Does Artemis's cache shrink for its sliding-window layers? That decides whether 64k fits one 48 GB card.
+- Does Artemis skip stat passes with thinking off?
+
+The comparison that matters for Behemoth is the **Q6_K GGUF on 3× A40 under KoboldCpp**, which stopped
+refusing (`behemoth-128b.md`). Time one turn early in a session and one late, on each.
+
+### P7 · Formamorph can't switch thinking on through TabbyAPI
+
+**State:** Filed. No code.
+
+TabbyAPI is an `unknown` dialect to the app, which therefore sends `thinking_budget_tokens` and
+`reasoning_effort`. TabbyAPI accepts the budget only as `reasoning_budget_tokens` (or `reasoning_budget`,
+`thinking_budget`, `thinking_token_budget`). It passes `reasoning_effort` to the template, which Gemma 4's
+template ignores, since it switches on `enable_thinking`. So per-prompt reasoning control never reaches a
+Gemma 4 model on TabbyAPI. The workaround is server-wide (`THINKING_BUDGET`). The fix is a `tabby` row in
+`src/lib/reasoningDialect.ts` plus whatever identifies the endpoint as TabbyAPI. The latter is the harder
+part. That could interest upstream, since TabbyAPI is a common self-host.
+
 ---
 
 # C · Chores that will cost something if they are left
@@ -482,6 +508,10 @@ first — that is what this section is for.
 
 # 🗓️ Recently landed
 
+- **2026-10-05** — `runpod-model-candidates.md` (which Behemoth and Artemis quants can reach the app;
+  Artemis-31B-v1.2 is on Featherless unquantised) and `runpod-exl3-recipes.md` (the two EXL3 recipes; see
+  **P6**, **P7**). Also recorded: Behemoth stopped refusing on a Q6 GGUF, and KoboldAI Lite's 147,444 is a
+  count of characters, not tokens.
 - **2026-09-07** — all four branches synced onto upstream `46ea181c`, 58 commits, **no conflicts and no
   re-expression needed** — the opposite of the previous sync. Upstream's new work (Android, the website,
   the gesture reader) landed beside ours rather than through it. The one thing that reached us is the

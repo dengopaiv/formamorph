@@ -20,11 +20,25 @@
 # generated coherent prose (finish_reason "stop") on cards whose direct GPU-to-GPU copies return zeros.
 # Two faults were found by running it and are fixed above: the peer-to-peer check was too small to be
 # reliable, and the install fought the image's torch. Not yet run against a 100GB-class model.
+#
+# Optional settings, as environment variables in front of the command. Added 2026-10-05 for
+# runpod-exl3-recipes.md and NOT YET RUN on a pod — the verified run above used none of them:
+#   MAX_SEQ=65536           context length and cache size, in tokens; a multiple of 256 (default 32768)
+#   TABBY_REF=<40-char sha> check TabbyAPI out at this commit instead of main. GitHub only serves a commit
+#                           by its full SHA; the one runpod-exl3.md §17 measured is
+#                           e632af41eba68abeadc3437c62674360f2f8cbf1
+#   THINKING_BUDGET=400     turn the model's thinking on for every request, capped at this many tokens.
+#                           For Gemma 4 models, whose template the app cannot switch (recipes, Artemis).
+# Running the script again with different settings is the way to change them: it stops the running server
+# first, and the venv, the clone and the weights already on disk are reused.
 
 set -uo pipefail
 
 MODEL_REPO="${1:-}"
 REVISION="${2:-}"   # branch, for the repos that put each bpw on its own branch (15.0)
+MAX_SEQ="${MAX_SEQ:-32768}"
+TABBY_REF="${TABBY_REF:-}"
+THINKING_BUDGET="${THINKING_BUDGET:-}"
 WORK="${WORK:-/workspace}"
 [ -d "$WORK" ] || WORK=/root
 LOG="$WORK/pod-setup.log"
@@ -35,6 +49,10 @@ MODELS="${MODELS:-/root/models}"   # container disk: local NVMe, and far faster 
 # --- re-exec into the background so the SSH call that started this returns at once ----------------
 if [ "${POD_SETUP_CHILD:-0}" != "1" ]; then
   [ -n "$MODEL_REPO" ] || { echo "usage: pod-setup.sh <hf-repo-id> [branch]   # branch only for repos that put each bpw on its own"; exit 2; }
+  case "$MAX_SEQ" in ''|*[!0-9]*) echo "MAX_SEQ must be a number of tokens"; exit 2;; esac
+  [ $((MAX_SEQ % 256)) -eq 0 ] || { echo "MAX_SEQ must be a multiple of 256 (TabbyAPI refuses anything else)"; exit 2; }
+  case "$THINKING_BUDGET" in *[!0-9]*) echo "THINKING_BUDGET must be a number of tokens"; exit 2;; esac
+  [ -z "$TABBY_REF" ] || [ ${#TABBY_REF} -eq 40 ] || { echo "TABBY_REF must be the full 40-character commit SHA; GitHub will not serve a short one"; exit 2; }
   echo "RUNNING" > "$STATUS"
   POD_SETUP_CHILD=1 nohup bash "$0" "$MODEL_REPO" "$REVISION" >"$LOG" 2>&1 &
   echo "started; watch $LOG, status in $STATUS"
@@ -93,9 +111,14 @@ PY_BIN="$VENV/bin/python"
 [ -d /root/tabbyAPI ] || git clone --depth 1 https://github.com/theroyallab/tabbyAPI /root/tabbyAPI \
   || fail "clone failed"
 cd /root/tabbyAPI || fail "no /root/tabbyAPI"
+if [ -n "$TABBY_REF" ]; then
+  # The clone is shallow, so the commit has to be fetched by itself before it can be checked out.
+  git fetch -q --depth 1 origin "$TABBY_REF" && git checkout -q FETCH_HEAD || fail "could not check out TabbyAPI $TABBY_REF"
+fi
+echo "TabbyAPI at $(git rev-parse --short HEAD)"
 "$PY_BIN" -m pip install -q --upgrade pip || fail "pip upgrade failed"
 "$PY_BIN" -m pip install -e ".[cu12]" -q || fail "pip install failed"
-"$PY_BIN" -c "import exllamav3, torch; print('exllamav3 imported; torch', torch.__version__)" \
+"$PY_BIN" -c "import exllamav3, torch, importlib.metadata as m; print('exllamav3', m.version('exllamav3'), 'imported; torch', torch.__version__)" \
   || fail "exllamav3 will not import"
 
 # --- model ----------------------------------------------------------------------------------------
@@ -118,20 +141,31 @@ network:
 model:
   model_dir: $MODELS
   model_name: $NAME
-  max_seq_len: 32768
-  cache_size: 32768
+  max_seq_len: $MAX_SEQ
+  cache_size: $MAX_SEQ
   cache_mode: Q8
-  tensor_parallel: true
+  tensor_parallel: true    # TabbyAPI ignores this on a one-GPU pod (it checks the device count first)
   tensor_parallel_backend: nccl
   gpu_split_auto: true
   autosplit_reserve: [96]
   chunk_size: 2048
 YAML
+if [ -n "$THINKING_BUDGET" ]; then
+  # Server-wide: every request thinks, narration and stat passes alike. The app's own budget field is
+  # spelled thinking_budget_tokens, which TabbyAPI does not accept, so this is the only budget in force.
+  cat >> /root/tabbyAPI/config.yml <<YAML
+  template_vars_default: {enable_thinking: true}
+  reasoning_budget_tokens: $THINKING_BUDGET
+YAML
+fi
 cat /root/tabbyAPI/config.yml
 
 # --- run -------------------------------------------------------------------------------------------
 step "Starting TabbyAPI"
 cd /root/tabbyAPI || fail "no /root/tabbyAPI"
+# A second run of this script is how settings change, so a server from the first run may still hold the
+# port and the VRAM. Stop it and give the cards a moment to free.
+if pkill -f "$PY_BIN main.py"; then echo "stopped the TabbyAPI already running"; sleep 5; fi
 NCCL_P2P_DISABLE=1 nohup "$PY_BIN" main.py > "$WORK/tabby.log" 2>&1 &
 echo "server starting; its own log is $WORK/tabby.log"
 

@@ -477,6 +477,10 @@ It returns in about a second, because the script backgrounds itself. After that:
 A 70 GB download at `hf_transfer` speeds is a few minutes; the load from container disk is about 14
 seconds. If `pod-status` still says `RUNNING` after twenty minutes, read the log rather than waiting.
 
+**Optional settings, added 2026-10-05 and not yet run:** `MAX_SEQ`, `TABBY_REF` and `THINKING_BUDGET`, as
+environment variables in front of the command. Running the script again is how a setting changes: it stops
+the server from the first run. Meanings and examples are in [`runpod-exl3-recipes.md`](runpod-exl3-recipes.md).
+
 ### What it does, and why each step is there
 
 1. **Peer-to-peer test** (§8), before 70 GB is downloaded.

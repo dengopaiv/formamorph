@@ -6,7 +6,8 @@
 measurement, it says so.
 
 The procedure for actually standing a pod up is [`runpod-exl3.md`](runpod-exl3.md); this file only says
-which model goes into it. Behemoth's own history (refusals, the Featherless dead end, the 2026-08-23
+which model goes into it, and [`runpod-exl3-recipes.md`](runpod-exl3-recipes.md) has the exact commands for
+the two EXL3 picks. Behemoth's own history (refusals, the Featherless dead end, the 2026-08-23
 measurements) is [`behemoth-128b.md`](behemoth-128b.md).
 
 ---
@@ -96,13 +97,12 @@ same as his Behemoth repos):
 which carries `architecture/gemma4.py`. Note this is newer than the 1.4.2 that `runpod-exl3.md` §17
 measured, so that whole verified install path is now on a different engine version.
 
-**Script caveat, unverified.** `pod-setup.sh` writes `tensor_parallel: true` unconditionally. On a
-single card that is either a no-op or a load error; nobody has tried it. If TabbyAPI refuses to load,
-set it to `false` in `/root/tabbyAPI/config.yml` and restart. The `max_seq_len: 32768` it writes is also
-the thing to raise if long context is the reason for renting.
+**The `tensor_parallel: true` that `pod-setup.sh` writes is harmless on one card.** TabbyAPI checks the
+device count first and skips all split logic when there is one GPU (read from its source, `be74bf0`; not yet
+seen on a pod). Context length is now the script's `MAX_SEQ` setting.
 
-Usage, once that holds: `bash pod-setup.sh MikeRoz/Artemis-v1.2-6.00bpw-h8-exl3`, then the tunnel and
-preset from `runpod-exl3.md` §12–§13 unchanged.
+**The step-by-step is [`runpod-exl3-recipes.md`](runpod-exl3-recipes.md)**, including why Formamorph can't
+switch Artemis's thinking on through TabbyAPI, and what to do about that.
 
 ---
 
@@ -170,8 +170,8 @@ nothing in stability.
 The refusals, which this note first named as the real problem, are no longer seen: a **Q6_K GGUF on 3× A40
 under KoboldCpp** stopped refusing (2026-10-05, weights unchanged; see `behemoth-128b.md`). That run is
 also the comparison any EXL3 session now has to beat. It slows down late in long sessions, around 90k of
-147,444 *characters* in KoboldAI Lite's counter, which is roughly a full 32k-token window. At 5.0 bpw on two cards, EXL3 would be about a fifth smaller than Q6_K, use one
-card fewer, and quantise the cache cleanly. Nobody has measured whether it is faster at that length.
+147,444 *characters* in KoboldAI Lite's counter, which is roughly a full 32k-token window. At 5.0 bpw on
+two cards, EXL3 would be about a quarter smaller than Q6_K (80.6 against 107.8 GB), use one card fewer, and quantise the cache cleanly. Nobody has measured whether it is faster at that length.
 
 ---
 
