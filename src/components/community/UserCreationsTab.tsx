@@ -1,25 +1,24 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { BookOpen, Download, Earth, EyeOff, MessageSquare, PersonStanding, User } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Download, EyeOff, MessageSquare } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CachedThumbnail } from "@/lib/useCachedThumbnail";
 import { LikeButton } from "@/components/community/LikeButton";
-import { CATALOG_KINDS, KIND_LABELS, type CatalogKind } from "@/lib/catalogKinds";
+import { CATALOG_KINDS, KIND_ICONS, KIND_LABELS, showsMorphArt, type CatalogKind } from "@/lib/catalogKinds";
+import { EntityPlaceholderArt } from "@/components/EntityPlaceholderArt";
 import UserService from "@/services/UserService";
 import { API_BASE_URL } from "@/lib/apiBase";
 import type { ProfileCreation } from "@/types";
 import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { thumbFit } from "@/lib/thumbAspect";
+import { thumbAspectFor, thumbFit } from "@/lib/thumbAspect";
+import { parseServerDate } from "@/lib/serverDate";
 
-/** The icon each kind wears, matching the Community Creations header so the three read the same way. */
-const KIND_ICONS: Record<CatalogKind, typeof Earth> = {
-  world: Earth,
-  entity: User,
-  dictionary: BookOpen,
-  model: PersonStanding,
-};
+/** Most recently updated first, so an author's active work leads. */
+function byUpdatedDesc(a: ProfileCreation, b: ProfileCreation): number {
+  return (parseServerDate(b.updatedAt)?.getTime() ?? 0) - (parseServerDate(a.updatedAt)?.getTime() ?? 0);
+}
 
 /** The list's own box: a fixed scroller in a dialog, nothing at all on a page. */
 function ListFrame({ layout, children }: { layout: 'dialog' | 'page'; children: ReactNode }) {
@@ -70,10 +69,11 @@ export function UserCreationsTab({ userId, username, onOpenListing, listingHref,
       .then((rows) => {
         if (cancelled) return;
 
-        setCreations(rows);
+        const sorted = [...rows].sort(byUpdatedDesc);
+        setCreations(sorted);
         // Opened on something they actually make: defaulting to worlds showed an empty list to anyone
         // whose account is all entities, with the reason two clicks away.
-        setKind(rows[0]?.kind ?? 'world');
+        setKind(sorted[0]?.kind ?? 'world');
       })
       .catch((e: Error) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setIsLoading(false); });
@@ -82,7 +82,7 @@ export function UserCreationsTab({ userId, username, onOpenListing, listingHref,
   }, [userId]);
 
   const counts = useMemo(() => {
-    const tally = { world: 0, entity: 0, dictionary: 0, model: 0 } satisfies Record<CatalogKind, number>;
+    const tally = { world: 0, entity: 0, dictionary: 0, model: 0, prompt: 0 } satisfies Record<CatalogKind, number>;
     for (const row of creations) tally[row.kind] += 1;
 
     return tally;
@@ -129,20 +129,26 @@ export function UserCreationsTab({ userId, username, onOpenListing, listingHref,
             const Icon = KIND_ICONS[k];
 
             return (
-              // The count is the visible content, so the aria-label keeps it and the tip only names the kind.
-              <Tip key={k} tip={KIND_LABELS[k].many} labelsChild={false}>
-                <ToggleGroupItem
-                  value={k}
-                  // Kept in place rather than dropped when empty: a filter row that changes shape per person
-                  // moves the kind you wanted under the cursor of the one you didn't.
-                  disabled={counts[k] === 0}
-                  className="gap-1.5"
-                  aria-label={`${KIND_LABELS[k].many} (${counts[k]})`}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span className="text-meta tabular-nums">{counts[k]}</span>
-                </ToggleGroupItem>
-              </Tip>
+              <Fragment key={k}>
+                {/* Prompts sit apart from the content kinds, as in Community Creations. */}
+                {k === 'prompt' && (
+                  <span role="separator" aria-orientation="vertical" className="mx-1 h-5 w-hairline shrink-0 bg-border" />
+                )}
+                {/* The count is the visible content, so the aria-label keeps it and the tip only names the kind. */}
+                <Tip tip={KIND_LABELS[k].many} labelsChild={false}>
+                  <ToggleGroupItem
+                    value={k}
+                    // Kept in place rather than dropped when empty: a filter row that changes shape per person
+                    // moves the kind you wanted under the cursor of the one you didn't.
+                    disabled={counts[k] === 0}
+                    className="gap-1.5"
+                    aria-label={`${KIND_LABELS[k].many} (${counts[k]})`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span className="text-meta tabular-nums">{counts[k]}</span>
+                  </ToggleGroupItem>
+                </Tip>
+              </Fragment>
             );
           })}
         </ToggleGroup>
@@ -152,25 +158,25 @@ export function UserCreationsTab({ userId, username, onOpenListing, listingHref,
           stretch it to the height of the window every time somebody clicked their name. A page has the
           room, so it lets the list run and scrolls with everything else. */}
       <ListFrame layout={layout}>
-        {/* A column under the filter above it rather than edge-to-edge: the rows are short, and letting
-            them run the full width of the dialog left the counts stranded away from the names. The
-            left pad is the matching half of the scroll viewport's own right-hand scrollbar gutter, and
-            belongs only where that gutter is. */}
+        {/* Two columns where the width allows. The dialog's left pad matches the scroll viewport's
+            right-hand scrollbar gutter, and belongs only where that gutter is. */}
         <ul className={cn(
-          'mx-auto w-full space-y-2',
-          layout === 'dialog' ? 'max-w-[22rem] pl-[11px]' : 'max-w-[26rem]'
+          'grid w-full grid-cols-1 gap-2 md:grid-cols-2',
+          layout === 'dialog' && 'pl-[11px]'
         )}>
           {shown.map((item) => (
             <li key={item.id} className="flex items-center gap-2 rounded-md border p-2 min-w-0">
               <div className="h-10 w-10 shrink-0 overflow-hidden rounded bg-muted">
-                {item.thumbnailFile && (
+                {showsMorphArt(item) ? (
+                  <EntityPlaceholderArt id={item.id} name={item.name} />
+                ) : item.thumbnailFile && (
                   <CachedThumbnail
                     file={item.thumbnailFile}
                     url={`${API_BASE_URL}/thumbnails/${item.thumbnailFile}`}
                     updatedAt={item.updatedAt}
                     alt={item.name}
-                    className={cn('h-full w-full', thumbFit(item.kind === 'entity' ? 'portrait' : 'landscape'))}
-                    aspect={item.kind === 'entity' ? 'portrait' : 'landscape'}
+                    className={cn('h-full w-full', thumbFit(thumbAspectFor(item.kind)))}
+                    aspect={thumbAspectFor(item.kind)}
                   />
                 )}
               </div>
@@ -197,7 +203,7 @@ export function UserCreationsTab({ userId, username, onOpenListing, listingHref,
                 )}
 
                 <p className="flex items-center gap-3 text-meta text-muted-foreground">
-                  <LikeButton likes={item.likes} />
+                  <LikeButton count={item.likes} />
                   <span className="inline-flex items-center gap-1">
                     <Download className="h-3 w-3" aria-hidden />
                     <span className="tabular-nums">{item.downloads}</span>

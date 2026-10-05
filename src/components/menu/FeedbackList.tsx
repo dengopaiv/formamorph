@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { toast } from "react-toastify";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toastError } from "@/lib/linkToast";
 import { ChevronUp, Lock, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +28,12 @@ interface FeedbackListProps {
   category?: FeedbackCategory;
   /** How to order the list. The server's default is newest first. */
   sort?: string;
+  /** Narrow to threads whose title or body holds this text. */
+  search?: string;
+  /** The page on screen, 1-based. The parent owns it, so it outlives an open thread. */
+  page: number;
+  /** Asks the parent for another page: the pager, or a page past the end after a reload. */
+  onPageChange: (page: number) => void;
   /** Bumped by the parent after something changes a thread, to pull the change in. */
   refreshNonce?: number;
   /** Open one thread. */
@@ -41,14 +47,15 @@ interface FeedbackListProps {
  * public suggestion board and the Admin Panel's queues — which differ only in what they ask for.
  */
 export function FeedbackList({
-  active, type, scope, status, category, sort, refreshNonce = 0, onOpen, emptyLabel = 'Nothing here yet.',
+  active, type, scope, status, category, sort, search, page, onPageChange, refreshNonce = 0, onOpen,
+  emptyLabel = 'Nothing here yet.',
 }: FeedbackListProps) {
   const [threads, setThreads] = useState<FeedbackThread[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  // Set when a multi-status page came back short, so the list can say so instead of looking complete.
-  const [truncated, setTruncated] = useState(false);
+  // Read through a ref so a caller's inline handler does not rebuild the load and refetch every render.
+  const onPageChangeRef = useRef(onPageChange);
+  onPageChangeRef.current = onPageChange;
   // Ids with a vote in flight, so a double click can't send two of the same request.
   const [voting, setVoting] = useState<Set<string>>(new Set());
 
@@ -64,8 +71,14 @@ export function FeedbackList({
   // render look like a filter change and refetch forever. The request is rebuilt from it.
   const statusKey = Array.isArray(status) ? status.join(',') : status ?? '';
 
-  const load = useCallback(async () => {
-    if (!active) return;
+  // `isCurrent` turns false when the list unmounts or a newer load replaces this one, so a late answer
+  // sets no state and an older filter's rows never land over a newer one's.
+  const load = useCallback(async (isCurrent: () => boolean) => {
+    if (!active) {
+      // The load this one replaces no longer clears the flag for itself.
+      setIsLoading(false);
+      return;
+    }
 
     const asked = statusKey ? (statusKey.split(',') as FeedbackStatus[]) : [];
     const statusArg = asked.length > 1 ? asked : asked[0];
@@ -73,23 +86,39 @@ export function FeedbackList({
     setIsLoading(true);
     try {
       const result = await FeedbackService.list({
-        type, page, limit: PAGE_SIZE, scope, status: statusArg, category, sort,
+        type, page, limit: PAGE_SIZE, scope, status: statusArg, category, sort, search,
       });
+      if (!isCurrent()) return;
+      // Triage can move the last rows out from under the page. Land on the last page that remains, and
+      // keep the old rows until it loads rather than flashing the empty label.
+      const lastPage = Math.max(Math.ceil(result.total / PAGE_SIZE), 1);
+      if (page > lastPage) {
+        onPageChangeRef.current(lastPage);
+        return;
+      }
       setThreads(result.threads);
       setTotal(result.total);
-      setTruncated(result.truncated ?? false);
     } catch (error) {
-      toast.error((error as Error).message || 'Failed to load these');
+      if (!isCurrent()) return;
+      toastError(error, 'Failed to load these');
       setThreads([]);
     } finally {
-      setIsLoading(false);
+      if (isCurrent()) setIsLoading(false);
     }
-  }, [active, type, page, scope, statusKey, category, sort]);
+  }, [active, type, page, scope, statusKey, category, sort, search]);
 
-  useEffect(() => { load(); }, [load, refreshNonce]);
+  useEffect(() => {
+    let current = true;
+    load(() => current);
+    return () => { current = false; };
+  }, [load, refreshNonce]);
 
-  // A filter change would otherwise land on whatever page the previous list was showing.
-  useEffect(() => { setPage(1); }, [type, statusKey, category, scope, sort]);
+  // A vote outlives no filter change, only the list itself, so it needs the mount and not a per-load flag.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const toggleVote = async (thread: FeedbackThread) => {
     if (voting.has(thread.id)) return;
@@ -97,13 +126,15 @@ export function FeedbackList({
     setVoting((prev) => new Set(prev).add(thread.id));
     try {
       const updated = await FeedbackService.setVote(thread.id, !thread.voted);
+      if (!mountedRef.current) return;
       // Patched in place rather than reloading: re-sorting the board under a click would move the row
       // out from under the pointer.
       setThreads((prev) => prev.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)));
     } catch (error) {
-      toast.error((error as Error).message || 'Failed to record your vote');
+      // Still said after an unmount: the vote failed whether or not the list is there to show it.
+      toastError(error, 'Failed to record your vote');
     } finally {
-      setVoting((prev) => {
+      if (mountedRef.current) setVoting((prev) => {
         const next = new Set(prev);
         next.delete(thread.id);
         return next;
@@ -121,13 +152,6 @@ export function FeedbackList({
 
   return (
     <>
-      {truncated && (
-        <p role="status" className="mb-2 rounded-md bg-warning/10 px-3 py-2 text-meta text-warning">
-          This page is incomplete — the server returned fewer rows than were asked for. Filter by a single
-          status to see all of them.
-        </p>
-      )}
-
       <div
         className={`space-y-2 min-w-0 transition-opacity${isRefreshing ? ' opacity-50 pointer-events-none' : ''}`}
         aria-busy={isLoading}
@@ -229,14 +253,14 @@ export function FeedbackList({
             isRefreshing ? ' opacity-50 pointer-events-none' : ''
           }`}
         >
-          <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(p - 1, 1))} disabled={page <= 1}>
+          <Button variant="outline" size="sm" onClick={() => onPageChange(Math.max(page - 1, 1))} disabled={page <= 1}>
             Previous
           </Button>
           <span className="px-2 text-label">Page {page} of {totalPages}</span>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
+            onClick={() => onPageChange(Math.min(page + 1, totalPages))}
             disabled={page >= totalPages}
           >
             Next

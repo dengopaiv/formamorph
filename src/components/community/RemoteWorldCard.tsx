@@ -1,20 +1,28 @@
+import { memo } from "react";
 import { EyeOff, Download, MessageSquare, Puzzle, Trash2, ShieldAlert, ShieldCheck, TicketX } from "lucide-react";
 import { ActionIcon } from "@/lib/actionIcons";
 import { Progress } from "@/components/ui/progress";
 import { Tip } from "@/components/ui/tooltip";
 import IndeterminateProgress from "@/components/ui/indeterminate-progress";
 import { cn } from "@/lib/utils";
+import { mayPressHeart } from '@/lib/anonymousLikes';
 import { CachedThumbnail } from "@/lib/useCachedThumbnail";
 import { CardTags, type WorldRecord } from "@/components/WorldDetails";
 import { LikeButton } from "@/components/community/LikeButton";
+import { likeCountOf } from "@/lib/likeCount";
 import { WorldCardShell } from "@/components/WorldCardShell";
 import { type DownloadState } from "@/lib/downloadState";
-import { KIND_LABELS, kindOf } from "@/lib/catalogKinds";
-import { thumbFit, type ThumbAspect } from "@/lib/thumbAspect";
+import { KIND_LABELS, kindOf, kindHasMorphArt, kindHasThumbnail, showsMorphArt } from "@/lib/catalogKinds";
+import { KindArt } from "@/components/community/KindArt";
+import { EntityPlaceholderArt } from "@/components/EntityPlaceholderArt";
+import { cardLayoutFor, thumbAspectFor, thumbFit } from "@/lib/thumbAspect";
 import { isQuarantined, quarantineDaysLeft, quarantineDeadline } from "@/lib/quarantine";
 import WorldStorageService from "@/services/WorldStorageService";
+import { useListingPrefetch } from "@/lib/useListingPrefetch";
 import { UserAvatar } from "@/components/UserAvatar";
 import { RoleBadge } from "@/components/RoleBadge";
+import { SupporterBadge } from "@/components/SupporterBadge";
+import { SUPPORTER_NAME_STYLES, flairTier } from "@/lib/supporterFlair";
 import { canModerate, isStaff } from "@/lib/roles";
 import { TutorialPopover } from "@/components/TutorialPopover";
 import { PlaceBadges } from "@/components/PlaceBadges";
@@ -44,12 +52,18 @@ interface RemoteWorldCardProps {
   onLike?: (world: WorldRecord, liked: boolean) => Promise<void>;
   /** Starts authentication for a guest Like without mutating the listing. */
   onGuestLike?: (world: WorldRecord) => void;
+  /** Whether this shell takes a signed-out reader's like at all. Off sends them to `onGuestLike`. */
+  guestLikes?: boolean;
+  /** Whether the server takes one right now. Off still lets a filled heart clear. */
+  serverTakesLikes?: boolean;
   /** Opens the quarantine dialog. Admin surfaces only. */
   onQuarantine?: (world: WorldRecord) => void;
   /** Lifts a quarantine. Admin surfaces only. */
   onRelease?: (world: WorldRecord) => void;
   /** Where this listing placed — the badge travels with the world, not with the tab it was won in. */
   placements?: ContestPlacement[];
+  /** Opens a contest this listing placed in, from its place chip. */
+  onOpenContest?: (contestId: string) => void;
   /** Take this listing out of the contest it was entered in. Offered on the contest tab, to its author. */
   onWithdraw?: (world: WorldRecord) => void;
   /** Opens the add-on review. On the author's own world listing only: a review is a world author's
@@ -61,17 +75,22 @@ interface RemoteWorldCardProps {
 }
 
 /** A single card in the community browser grid: thumbnail with a contextual download/hide overlay, plus title,
- *  description, author, counts, tags, and (for owners/admins) a delete control. */
-export function RemoteWorldCard({
+ *  description, author, counts, tags, and (for owners/admins) a delete control.
+ *  Memoized: a catalog refresh that keeps a row's object skips its card. */
+export const RemoteWorldCard = memo(function RemoteWorldCard({
   world, downloadState: dlState, downloadProgress, isAuthenticated, currentUser,
-  onView, onHideWorld, onHideAuthor, onHideTag, onContextualDownload, onDeviceDownload, onDelete, onLike, onGuestLike, onQuarantine, onRelease,
-  placements = [], onWithdraw, onManageAddons, likeTutorial, likeTutorialNav,
+  onView, onHideWorld, onHideAuthor, onHideTag, onContextualDownload, onDeviceDownload, onDelete, onLike, onGuestLike, guestLikes = false, serverTakesLikes = false, onQuarantine, onRelease,
+  placements = [], onOpenContest, onWithdraw, onManageAddons, likeTutorial, likeTutorialNav,
 }: RemoteWorldCardProps) {
   // Get the world ID (server uses _id)
   const worldId = world._id || world.id;
+  const authorTier = flairTier(world.author?.supporter);
+  const prefetch = useListingPrefetch(worldId);
   // Player-facing noun for this listing's kind (World / Entity / Dictionary), for the download tooltips.
   const noun = KIND_LABELS[kindOf(world)].one.toLowerCase();
-  const thumbAspect: ThumbAspect = kindOf(world) === 'entity' ? 'portrait' : 'landscape';
+  const isAvatar = kindOf(world) === 'model';
+  const thumbAspect = thumbAspectFor(kindOf(world));
+  const layout = cardLayoutFor(thumbAspect);
   const thumbClass = cn("w-full h-full", thumbFit(thumbAspect));
 
   // Whether to offer the moderation controls at all. What the server will actually allow is narrower —
@@ -100,13 +119,18 @@ export function RemoteWorldCard({
     ? onManageAddons
     : undefined;
 
+  const open = () => onView(world);
+
   const likeControl = (
     <LikeButton
-      likes={world.likes || 0}
+      count={likeCountOf(world)}
       liked={world.liked}
       // Static on your own listing, which the server refuses: liking it would make the count say how much
       // somebody has published rather than how many people liked it.
-      onToggle={onLike && isAuthenticated && !isOwnedByUser
+      onToggle={onLike && mayPressHeart({
+        signedIn: isAuthenticated, ownListing: Boolean(isOwnedByUser),
+        guestLikes, serverTakesLikes, liked: world.liked,
+      })
         ? (next) => onLike(world, next)
         : !isAuthenticated && onGuestLike ? async () => { onGuestLike(world); } : undefined}
     />
@@ -120,9 +144,14 @@ export function RemoteWorldCard({
           ? "border-info bg-info/10 ring-1 ring-info"
           : "bg-card",
       )}
-      onClick={() => onView(world)}
+      onClick={open}
+      onOpen={open}
+      {...prefetch}
+      layout={layout}
       name={world.name}
       description={world.description}
+      // An Avatar's description is its generated credit line, so a file crediting nobody has none to show.
+      omitEmptyDescription={isAvatar}
       thumbnailOverlay={downloadProgress !== undefined ? (
         // Downloading: a centered status bar. -1 ⇒ size unknown.
         <div
@@ -136,10 +165,10 @@ export function RemoteWorldCard({
           )}
         </div>
       ) : (
-        /* Both actions fade in when the art is hovered, so an idle card is all art: a top-right
-           cluster with download — the primary action — in the corner, clear of names expanding at
-           the bottom. Icon reflects whether the world is new, current (refresh), or has an update. */
-        <div className="absolute top-1 right-1 z-10 flex gap-1">
+        /* Both actions fade in when the art is hovered, so an idle card is all art: a cluster with
+           download — the primary action — in the corner opposite the name. Icon reflects whether the
+           world is new, current (refresh), or has an update. */
+        <div className={cn("absolute right-1 z-10 flex gap-1", layout === 'split' ? "bottom-1" : "top-1")}>
           {onHideWorld && <Tip tip="Hide this world">
             <button
               onClick={(e) => { e.stopPropagation(); onHideWorld(worldId); }}
@@ -174,7 +203,11 @@ export function RemoteWorldCard({
           </Tip>}
         </div>
       )}
-      thumbnail={world.thumbnail_file ? (
+      thumbnail={!kindHasThumbnail(kindOf(world)) ? (
+        <KindArt kind={kindOf(world)} />
+      ) : showsMorphArt(world) ? (
+        <EntityPlaceholderArt id={worldId} name={world.name ?? ''} />
+      ) : world.thumbnail_file ? (
         <CachedThumbnail
           file={world.thumbnail_file}
           url={`${WorldStorageService.API_URL}/thumbnails/${world.thumbnail_file}`}
@@ -189,21 +222,24 @@ export function RemoteWorldCard({
           alt={world.name}
           className={thumbClass}
         />
+      ) : kindHasMorphArt(kindOf(world)) ? (
+        <EntityPlaceholderArt id={worldId} name={world.name ?? ''} />
       ) : undefined}
       author={(
         <span className="inline-flex items-center gap-1.5 min-w-0">
-          <UserAvatar username={world.author?.username} avatarUrl={world.author?.avatarUrl} size="xs" />
+          <UserAvatar username={world.author?.username} avatarUrl={world.author?.avatarUrl} supporter={world.author?.supporter} size="xs" />
           <Tip
             tip={world.author?.username && onHideAuthor ? `Hide all worlds by ${world.author.username}` : undefined}
             labelsChild={false}
           >
             <span
               onClick={(e) => { e.stopPropagation(); if (world.author?.username) onHideAuthor?.(world.author.username); }}
-              className={world.author?.username && onHideAuthor ? "cursor-pointer hover:line-through truncate" : "truncate"}
+              className={cn("truncate", authorTier && SUPPORTER_NAME_STYLES[authorTier], world.author?.username && onHideAuthor && "cursor-pointer hover:line-through")}
             >
               By {world.author?.username || "Unknown"}
             </span>
           </Tip>
+          {authorTier && <SupporterBadge tier={authorTier} since={world.author?.supporter?.since} />}
           <RoleBadge role={world.author?.role} />
         </span>
       )}
@@ -235,11 +271,12 @@ export function RemoteWorldCard({
 
       {/* Won a contest: said on the card itself, so the honor is visible wherever the world is found
           rather than only in the tab the contest was run in. */}
-      <PlaceBadges placements={placements} className="mb-2" />
+      <PlaceBadges placements={placements} className="mb-2" shine onSelect={onOpenContest} />
 
       {/* Tags */}
       <div className="mb-2">
-        <CardTags tags={world.tags || []} onHide={onHideTag} />
+        {/* An Avatar never carries tags, so it has no tag line. */}
+        <CardTags tags={world.tags || []} onHide={onHideTag} omitEmpty={isAvatar} />
       </div>
 
       {/* Only its author and the admins ever see this card, so the deadline is said plainly rather than
@@ -320,4 +357,4 @@ export function RemoteWorldCard({
       )}
     </WorldCardShell>
   );
-}
+});

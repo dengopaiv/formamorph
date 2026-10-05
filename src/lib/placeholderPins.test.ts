@@ -1,10 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { GameLocation, Placeholder, PlaceholderPin, Trait } from '@/types';
-import { phValues } from '@/test/placeholderValues';
+import type { Entity, GameLocation, PersonaRef, Placeholder, PlaceholderPin, Trait, TraitLink } from '@/types';
+import { phValueId, phValues } from '@/test/placeholderValues';
+import { readerFor } from './blueprints';
 import { decodePlaceholderToken } from './placeholders';
 import {
-  activePlaceholderPins, addPinAt, allPinTexts, collectPinLayers, collectPins, pinConflict, pinSourceKey, pinSourcesOfKind,
-  pinsTargeting, removePinAt, updatePinAt, valuePinRollChips, type PinnableStat,
+  activePlaceholderPins, addPinAt, allPinTexts, bindBlueprintPins, canCommitPinSource, collectPinLayers, collectPins, commitPinSource, pinConflict,
+  pinKindsFor, pinSourceKey, pinSourcesOfKind, pinsTargeting, pinTarget, pinTargetFilter, removePinAt, sameSource, updatePinAt,
+  valuePinRollChips, withPinnedValue, type PinnableStat,
 } from './placeholderPins';
 
 const P = (id: string, values: string[]): Placeholder => ({ id, name: id, values: phValues(values) });
@@ -306,6 +308,11 @@ describe('allPinTexts — every text any source could pin', () => {
     });
     expect(out).toEqual({ town: ['Marrow', 'Fen', 'Moor', 'Ash'] });
   });
+
+  it('walks an entity’s owned trait pins too', () => {
+    const out = allPinTexts({ entities: [{ traits: [trait('t', [pin('town', 'Tame')])] }], placeholders: [P('town', ['Sedge'])] });
+    expect(out).toEqual({ town: ['Tame'] });
+  });
 });
 
 describe('valuePinRollChips — a World chip per placeholder whose values pin', () => {
@@ -427,7 +434,7 @@ describe('pinConflict — who else pins it, and who wins', () => {
     const exclusive = {
       ...base, locations: [], stats: [], placeholders: [P('town', ['Marrow'])],
       traits: [T('above', { groupId: 'g' }), T('below', { groupId: 'g' })],
-      traitGroups: [{ id: 'g', name: 'Hair', parentId: null, exclusive: true }],
+      traitGroups: [{ id: 'g', name: 'Hair', parentId: null, maxPicks: 1 }],
     } as unknown as EditorWorld;
     expect(pinConflict(exclusive, 'town', { kind: 'trait', id: 'above' })).toBeNull();
   });
@@ -533,6 +540,218 @@ describe('pin write-back — add, update and remove on the source a row names', 
   });
 });
 
+describe('owned traits as pin sources — the world’s traits, then each cast entity’s', () => {
+  const ash = {
+    id: 'ash', name: 'Ash',
+    traitGroups: [{ id: 'g-bond', name: 'Bond', parentId: null, maxPicks: 1 }],
+    traits: [
+      trait('tamed', [pin('town', 'Tame')], { name: 'Tamed', groupId: 'g-bond' }),
+      trait('wild', [pin('town', 'Wild')], { name: 'Wild', groupId: 'g-bond' }),
+    ],
+  };
+  const world = {
+    traits: [trait('sworn', [pin('town', 'Marrow')], { name: 'Sworn' })],
+    traitGroups: [],
+    entities: [ash],
+    placeholders: [P('town', ['Marrow'])],
+  } as unknown as EditorWorld;
+
+  it('lists an owned trait’s pin under its owner’s name, after the world’s traits', () => {
+    expect(pinsTargeting(world, 'town').map((r) => r.label)).toEqual(['Trait: Sworn', "Trait: Ash's Tamed", "Trait: Ash's Wild"]);
+    expect(pinSourcesOfKind(world, 'trait', 'town').map((o) => o.label)).toEqual(['Sworn', "Ash's Tamed", "Ash's Wild"]);
+  });
+
+  it('lets a cast entity’s owned trait beat the player’s world trait, since it lays last in its own text', () => {
+    const fromSworn = pinConflict(world, 'town', { kind: 'trait', id: 'sworn' })!;
+    expect(fromSworn.winner?.label).toBe("Trait: Ash's Wild");
+    expect(fromSworn.rule).toBe('order');
+    expect(pinConflict(world, 'town', { kind: 'trait', id: 'tamed' })!.winner).toBeNull();
+  });
+
+  it('never pits two cast entities’ traits against each other', () => {
+    const bo = { id: 'bo', name: 'Bo', traits: [trait('feral', [pin('town', 'Feral')], { name: 'Feral' })] };
+    const both = { ...world, entities: [ash, bo] } as unknown as EditorWorld;
+    expect(pinConflict(both, 'town', { kind: 'trait', id: 'feral' })!.rivals.map((r) => r.label)).toEqual(['Trait: Sworn']);
+  });
+
+  it('pits a Persona’s trait against a cast entity’s, which wins in its own text', () => {
+    // Mira is listed after Bo, so order alone would hand her the win.
+    const bo = { id: 'bo', name: 'Bo', traits: [trait('feral', [pin('town', 'Feral')], { name: 'Feral' })] };
+    const mira = { id: 'mira', name: 'Mira', persona: true, traits: [trait('sworn-m', [pin('town', 'Oath')], { name: 'Oath' })] };
+    const both = { ...world, traits: [], entities: [bo, mira] } as unknown as EditorWorld;
+    const fromMira = pinConflict(both, 'town', { kind: 'trait', id: 'sworn-m' })!;
+    expect(fromMira.rivals.map((r) => r.label)).toEqual(["Trait: Bo's Feral"]);
+    expect(fromMira.winner?.label).toBe("Trait: Bo's Feral");
+  });
+
+  it('never pits two Personas’ traits against each other: only one is played, and each wins in its own text', () => {
+    const mira = { id: 'mira', name: 'Mira', persona: true, traits: [trait('oath', [pin('town', 'Oath')], { name: 'Oath' })] };
+    const nell = { id: 'nell', name: 'Nell', persona: true, traits: [trait('vow', [pin('town', 'Vow')], { name: 'Vow' })] };
+    const both = { ...world, traits: [], entities: [mira, nell] } as unknown as EditorWorld;
+    expect(pinConflict(both, 'town', { kind: 'trait', id: 'oath' })).toBeNull();
+    const withWorld = { ...world, entities: [mira, nell] } as unknown as EditorWorld;
+    expect(pinConflict(withWorld, 'town', { kind: 'trait', id: 'oath' })!.rivals.map((r) => r.label)).toEqual(['Trait: Sworn']);
+  });
+
+  it('never pits an owned trait against its exclusive sibling', () => {
+    const fromTamed = pinConflict(world, 'town', { kind: 'trait', id: 'tamed' })!;
+    expect(fromTamed.rivals.map((r) => r.label)).toEqual(['Trait: Sworn']);
+  });
+
+  it('writes an owned trait’s pin back to its entity and hands the entity to its writer', () => {
+    const next = updatePinAt(world, { kind: 'trait', id: 'wild' }, pin('town', 'Wild'), pin('town', 'Feral'));
+    expect(next.entities![0].traits![1].placeholderPins).toEqual([pin('town', 'Feral')]);
+    expect(next.traits).toBe(world.traits);
+    const updateTrait = vi.fn();
+    const updateEntity = vi.fn();
+    commitPinSource(next, { kind: 'trait', id: 'wild' }, { updateTrait, updateEntity });
+    expect(updateEntity).toHaveBeenCalledWith(next.entities![0]);
+    expect(updateTrait).not.toHaveBeenCalled();
+    const onlyEntity = vi.fn();
+    expect(canCommitPinSource({ kind: 'trait', id: 'wild' }, { updateEntity: onlyEntity })).toBe(true);
+    commitPinSource(next, { kind: 'trait', id: 'wild' }, { updateEntity: onlyEntity });
+    expect(onlyEntity).toHaveBeenCalledWith(next.entities![0]);
+  });
+});
+
+describe('link pin lists as pin sources — a link’s overridden pins, listed per bearer', () => {
+  const worldGarb: Placeholder = { id: 'garb', name: 'Class Garb', values: phValues(['Robe', 'Plate']) };
+  const plate = pin('garb', 'Plate', phValueId('Plate'));
+  const paladin = trait('paladin', [plate], { name: 'Paladin', groupId: 'blueprints' });
+  /** A link to Paladin; with `pins` it overrides the original's list, else it reads the list live. */
+  const link = (id: string, pins?: PlaceholderPin[]): TraitLink => ({
+    id, originalId: 'paladin', kind: 'trait', originalName: 'Paladin', groupId: null, order: 0,
+    ...(pins ? { overrides: { paladin: { placeholderPins: { value: pins, blueprint: paladin.placeholderPins! } } } } : {}),
+  });
+  const world = {
+    traits: [paladin],
+    traitGroups: [{ id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+    entities: [
+      { id: 'albus', name: 'Albus', traitLinks: [link('l-albus', [pin('garb', 'Gilded plate')])] },
+      { id: 'mira', name: 'Mira', traitLinks: [link('l-mira', [pin('garb', 'Robe', phValueId('Robe'))])] },
+      { id: 'bo', name: 'Bo', traitLinks: [link('l-bo')] },
+      { id: 'cp', name: 'Newcomer', customPersona: true, traitLinks: [link('l-you', [pin('garb', 'Robe')])] },
+    ],
+    placeholders: [worldGarb],
+  } as unknown as EditorWorld;
+  const mira = { kind: 'trait' as const, id: 'paladin', link: { bearerId: 'mira', linkId: 'l-mira' } };
+  const newcomer = { kind: 'trait' as const, id: 'paladin', link: { bearerId: 'cp', linkId: 'l-you' } };
+
+  it('lists each link’s own list under its bearer, the Custom Persona entity’s before the cast’s, and leaves a link reading the original live out', () => {
+    const rows = pinsTargeting(world, 'garb');
+    expect(rows.map((r) => [r.label, r.pin.value])).toEqual([
+      ['Trait: Paladin', 'Plate'], ["Trait: Newcomer's Paladin", 'Robe'], ["Trait: Albus's Paladin", 'Gilded plate'], ["Trait: Mira's Paladin", 'Robe'],
+    ]);
+    expect(rows[3].source).toEqual(mira);
+  });
+
+  it('keeps link rows out of the add and re-aim pickers', () => {
+    expect(pinSourcesOfKind(world, 'trait', 'garb').map((o) => o.label)).toEqual(['Paladin']);
+  });
+
+  it('writes a pin edit to the link’s list, snapshot kept, and hands the bearer to its writer', () => {
+    const [row] = pinsTargeting(world, 'garb').filter((r) => sameSource(r.source, mira));
+    const next = updatePinAt(world, row.source, row.pin, plate);
+    expect(next.entities![1].traitLinks![0].overrides).toEqual({ paladin: { placeholderPins: { value: [plate], blueprint: [plate] } } });
+    expect(next.traits).toBe(world.traits);
+    const updateEntity = vi.fn();
+    commitPinSource(next, row.source, { updateTrait: vi.fn(), updateEntity });
+    expect(updateEntity).toHaveBeenCalledWith(next.entities![1]);
+  });
+
+  it('starts a link’s list from the original’s when the link still reads it live', () => {
+    const bo = { kind: 'trait' as const, id: 'paladin', link: { bearerId: 'bo', linkId: 'l-bo' } };
+    const next = addPinAt(world, bo, pin('garb', 'Chain'));
+    expect(next.entities![2].traitLinks![0].overrides).toEqual({
+      paladin: { placeholderPins: { value: [plate, pin('garb', 'Chain')], blueprint: [plate] } },
+    });
+  });
+
+  it('empties the link’s list on removing its last pin, which then lays nothing', () => {
+    const [row] = pinsTargeting(world, 'garb').filter((r) => sameSource(r.source, mira));
+    const next = removePinAt(world, row.source, row.pin);
+    expect(next.entities![1].traitLinks![0].overrides).toEqual({ paladin: { placeholderPins: { value: [], blueprint: [plate] } } });
+    expect(pinsTargeting(next, 'garb').map((r) => r.label)).toEqual(['Trait: Paladin', "Trait: Newcomer's Paladin", "Trait: Albus's Paladin"]);
+  });
+
+  it('writes the Custom Persona entity’s link list back through the entity writer', () => {
+    const [row] = pinsTargeting(world, 'garb').filter((r) => sameSource(r.source, newcomer));
+    const next = addPinAt(world, row.source, pin('town', 'Marrow'));
+    expect(next.entities![3].traitLinks![0].overrides!.paladin.placeholderPins!.value).toEqual([pin('garb', 'Robe'), pin('town', 'Marrow')]);
+    const updateEntity = vi.fn();
+    commitPinSource(next, row.source, { updateTrait: vi.fn(), updateEntity });
+    expect(updateEntity).toHaveBeenCalledWith(next.entities![3]);
+  });
+
+  it('pits a cast entity’s link list against the player’s, never against another cast entity’s', () => {
+    const conflict = pinConflict(world, 'garb', mira)!;
+    // The original's own row reads as the player's, as every world trait row does.
+    expect(conflict.rivals.map((r) => r.label)).toEqual(['Trait: Paladin', "Trait: Newcomer's Paladin"]);
+    expect(conflict.winner).toBeNull();
+  });
+});
+
+describe('bindBlueprintPins — a blueprint pin traced to the placeholder its bearer reads', () => {
+  const garb: Placeholder = { id: 'garb', name: 'Garb', values: [{ id: 'v-white', text: 'white tabard' }, { id: 'v-mail', text: 'mail' }] };
+  const copy = (id: string, overrides: Placeholder['valueOverrides']): Placeholder =>
+    ({ id, name: 'Garb', values: [], blueprintId: 'garb', valueOverrides: overrides });
+  const reworded = (id: string, text: string) => copy(id, { 'v-white': { text: { value: text, blueprint: 'white tabard' } } });
+  const albus: Entity = { id: 'albus', name: 'Albus', placeholders: [reworded('albus-garb', 'sun-disc tabard')] };
+  const bree: Entity = { id: 'bree', name: 'Bree' };
+  const mira: Entity = { id: 'mira', name: 'Mira', placeholders: [copy('mira-garb', { 'v-white': { removed: true } })] };
+  const newcomer: Entity = { id: 'cp', name: 'Newcomer', customPersona: true, placeholders: [reworded('cp-garb', 'plain tabard')] };
+  const world = { placeholders: [garb, P('town', ['Marrow'])], entities: [albus, bree, mira, newcomer] };
+  const white = pin('garb', 'white tabard', 'v-white');
+  const town = pin('town', 'Marrow');
+  const paladin = trait('paladin', [white, town]);
+  const as = (entity: Entity | null, isPlayer = false, persona?: PersonaRef) => readerFor(persona, entity, isPlayer);
+
+  it('aims the pin at the bearer’s copy, valued as the copy rewords it, and leaves every other pin as stored', () => {
+    expect(bindBlueprintPins(paladin, world, as(albus)).placeholderPins).toEqual([pin('albus-garb', 'sun-disc tabard', 'v-white'), town]);
+  });
+
+  it('reads the blueprint for a bearer without a copy, so the trait comes back as is', () => {
+    expect(bindBlueprintPins(paladin, world, as(bree))).toBe(paladin);
+  });
+
+  it('drops a pin naming a value the copy removed, so it lays nothing', () => {
+    expect(bindBlueprintPins(paladin, world, as(mira)).placeholderPins).toEqual([town]);
+  });
+
+  it('carries a free-text pin to the copy with its text', () => {
+    const gilt = trait('gilt', [pin('garb', 'gilt thread')]);
+    expect(bindBlueprintPins(gilt, world, as(albus)).placeholderPins).toEqual([pin('albus-garb', 'gilt thread')]);
+  });
+
+  it('reads the Custom Persona entity’s copy for the player under None and under a library persona without its own', () => {
+    const plain = pin('cp-garb', 'plain tabard', 'v-white');
+    expect(bindBlueprintPins(paladin, world, as(null, true, { source: 'none' })).placeholderPins).toEqual([plain, town]);
+    const lib: Entity = { id: 'lib', name: 'Lib' };
+    expect(bindBlueprintPins(paladin, world, as(lib, true, { source: 'library', entityId: 'lib' })).placeholderPins).toEqual([plain, town]);
+    // A library persona's own copy wins over the Custom Persona entity's.
+    const own = { ...lib, placeholders: [reworded('lib-garb', 'sea-green tabard')] };
+    expect(bindBlueprintPins(paladin, world, as(own, true, { source: 'library', entityId: 'lib' })).placeholderPins)
+      .toEqual([pin('lib-garb', 'sea-green tabard', 'v-white'), town]);
+  });
+
+  it('reads a world persona’s own copy only, and never the Custom Persona entity’s for a cast entity', () => {
+    expect(bindBlueprintPins(paladin, world, as(bree, true, { source: 'world', entityId: 'bree' }))).toBe(paladin);
+    expect(bindBlueprintPins(paladin, world, as(bree, false, { source: 'none' }))).toBe(paladin);
+  });
+
+  it('returns the trait itself when nothing it pins is a blueprint', () => {
+    const plain = trait('plain', [town]);
+    expect(bindBlueprintPins(plain, world, as(albus))).toBe(plain);
+    const none = trait('none', []);
+    expect(bindBlueprintPins(none, world, as(albus))).toBe(none);
+  });
+
+  it('finds a pin’s editor target by id alone', () => {
+    expect(pinTarget(white, world.placeholders)).toBe(garb);
+    expect(pinTarget(pin('albus-garb', 'sun-disc tabard', 'v-white'), world.placeholders)).toBeUndefined();
+  });
+});
+
 describe('pinSourcesOfKind — what the add and re-aim pickers offer', () => {
   const world = {
     traits: [trait('kin', []), trait('sworn', [])],
@@ -568,5 +787,74 @@ describe('pinSourcesOfKind — what the add and re-aim pickers offer', () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(pinSourceKey({ kind: 'descriptor', statId: 'hunger', descriptorId: 1 }))
       .not.toBe(pinSourceKey({ kind: 'descriptor', statId: 'hunger', descriptorId: '1x' }));
+  });
+});
+
+describe('pins on blueprints — only blueprint-side sources name a blueprint, and none names a copy', () => {
+  const garb: Placeholder = {
+    id: 'garb', name: 'Garb', groupId: 'bp',
+    values: [{ id: 'v-white', text: 'white tabard' }, { id: 'v-mail', text: 'mail' }],
+  };
+  const copy: Placeholder = {
+    id: 'albus-garb', name: 'Garb', blueprintId: 'garb', values: [{ id: 'v-rust', text: 'rust cloak' }],
+    valueOverrides: { 'v-white': { text: { value: 'sun-disc tabard', blueprint: 'white tabard' } }, 'v-mail': { removed: true } },
+  };
+  const sash: Placeholder = { id: 'sash', name: 'Sash', groupId: 'bp', values: [{ id: 'v-red', text: 'red' }] };
+  // A part Garb owns: its values sit under a blueprint.
+  const trim: Placeholder = { id: 'trim', name: 'Trim', ownerId: 'garb', values: [{ id: 'v-gilt', text: 'gilt' }] };
+  const town = P('town', ['Marrow']);
+  const ash: Entity = { id: 'ash', name: 'Ash', placeholders: [copy], traits: [trait('tamed', [])] };
+  const world = {
+    traits: [trait('paladin', [])],
+    traitGroups: [],
+    entities: [ash],
+    locations: [location('fen', [])],
+    stats: [{ ...stat('hunger', 50, [{ threshold: 20, pins: [] }]), name: 'Hunger', type: 'number' }],
+    placeholders: [garb, trim, sash, town, copy],
+    placeholderGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' as const }],
+  } as unknown as EditorWorld;
+  const offers = (source: Parameters<typeof pinTargetFilter>[1], w: EditorWorld | null = world) =>
+    [garb, sash, town, copy].filter(pinTargetFilter(w, source)).map((p) => p.id);
+
+  it('lets a world trait and a link’s pins list name a blueprint, never a copy', () => {
+    expect(offers({ kind: 'trait', id: 'paladin' })).toEqual(['garb', 'sash', 'town']);
+    expect(offers({ kind: 'trait', id: 'paladin', link: { bearerId: 'ash', linkId: 'l' } })).toEqual(['garb', 'sash', 'town']);
+  });
+
+  it('lets a blueprint’s values, its parts’ values and a copy’s values name a blueprint', () => {
+    expect(offers({ kind: 'value', placeholderId: 'garb', valueId: 'v-white' })).toEqual(['garb', 'sash', 'town']);
+    expect(offers({ kind: 'value', placeholderId: 'trim', valueId: 'v-gilt' })).toEqual(['garb', 'sash', 'town']);
+  });
+
+  it('keeps a copy’s values off its own blueprint, which would pin the copy itself', () => {
+    expect(offers({ kind: 'value', placeholderId: 'albus-garb', valueId: 'v-rust' })).toEqual(['sash', 'town']);
+  });
+
+  it('keeps blueprints from an owned trait, a location, a band and a world value', () => {
+    expect(offers({ kind: 'trait', id: 'tamed' })).toEqual(['town']);
+    expect(offers({ kind: 'location', id: 'fen' })).toEqual(['town']);
+    expect(offers({ kind: 'descriptor', statId: 'hunger', descriptorId: 'hunger-b0' })).toEqual(['town']);
+    expect(offers({ kind: 'value', placeholderId: 'town', valueId: town.values[0].id })).toEqual(['town']);
+  });
+
+  it('keeps copies out with no world behind the editor', () => {
+    expect(offers({ kind: 'trait', id: 'paladin' }, null)).toEqual(['garb', 'sash', 'town']);
+  });
+
+  it('offers a blueprint’s Pins section only trait and value sources, each blueprint-side', () => {
+    expect(pinKindsFor(world, 'garb').map((k) => k.kind)).toEqual(['trait', 'value']);
+    expect(pinKindsFor(world, 'town').map((k) => k.kind)).toEqual(['descriptor', 'location', 'trait', 'value']);
+    expect(pinSourcesOfKind(world, 'trait', 'garb').map((s) => s.label)).toEqual(['paladin']);
+    const valueOwners = (id: string) => pinSourcesOfKind(world, 'value', id).map((s) => (s.source as { placeholderId: string }).placeholderId);
+    expect(valueOwners('garb')).toEqual(['trim', 'sash']);
+    expect(valueOwners('sash')).toEqual(['garb', 'garb', 'trim', 'albus-garb']);
+    expect(pinSourcesOfKind(world, 'trait', 'town').map((s) => s.label)).toEqual(['paladin', "Ash's tamed"]);
+  });
+
+  it('reads a copy’s values as the copy reads them, so a picked value keeps the blueprint’s id', () => {
+    const onCopy = pin('albus-garb', '');
+    expect(pinTarget(onCopy, world.placeholders)?.values.map((v) => v.text)).toEqual(['sun-disc tabard', 'rust cloak']);
+    expect(withPinnedValue(onCopy, 'sun-disc tabard', world.placeholders)).toEqual(pin('albus-garb', 'sun-disc tabard', 'v-white'));
+    expect(withPinnedValue(onCopy, 'mail', world.placeholders)).toEqual(pin('albus-garb', 'mail'));
   });
 });

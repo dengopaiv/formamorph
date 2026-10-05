@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildEntityCardData, parseEntityCardData, ENTITY_FILE_KIND } from './entityFile';
+import { buildEntityCardData, parseEntityCardData, importCharacterFile, ENTITY_FILE_KIND } from './entityFile';
+import { readLibraryDetails } from './contentAuthor';
 import { embedEntityCard, readEntityCard } from './entityCard';
+import { PLAYER_NAME } from './builtinPlaceholders';
+import { SELF_ENTITY, adoptOwnedTraits } from './portableTraits';
 import type { Entity } from '@/types';
 import { phValues } from '@/test/placeholderValues';
 
@@ -17,6 +20,26 @@ const entity: Entity = {
   model: { data: 'data:model', type: 'model/gltf-binary' },
   sound: { data: 'data:sound', type: 'audio/mpeg' },
 };
+
+describe('entity author credits', () => {
+  it('keeps a pen name through the card container in library metadata only', async () => {
+    const bytes = embedEntityCard(fakeWebp(), JSON.stringify(buildEntityCardData(entity, undefined, {}, { author: 'River Quill' })), { w: 4, h: 4 });
+    const file = new File([bytes], 'guide.webp', { type: 'image/webp' });
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => bytes.buffer });
+    const imported = await importCharacterFile(file);
+    expect(imported.libraryDetails?.author).toBe('River Quill');
+    expect(imported.entity).not.toHaveProperty('author');
+  });
+
+  it('accepts older cards and ignores malformed credits', () => {
+    expect(buildEntityCardData(entity)).not.toHaveProperty('author');
+    for (const author of [undefined, null, 42, {}]) {
+      const raw = { ...buildEntityCardData(entity), author };
+      expect(readLibraryDetails(raw)).toBeUndefined();
+      expect(parseEntityCardData(raw)).not.toHaveProperty('author');
+    }
+  });
+});
 
 // A minimal simple-lossy WebP container to embed into (framing only; the bitstream bytes are arbitrary).
 function fakeWebp(): Uint8Array {
@@ -182,6 +205,31 @@ describe('embed → read → parse chain', () => {
   });
 });
 
+describe('a character card’s Persona mark and pronouns', () => {
+  const persona: Entity = { ...entity, persona: true, pronouns: 'she/her' };
+
+  it('travel through a WebP card and come back on the import', () => {
+    const bytes = embedEntityCard(fakeWebp(), JSON.stringify(buildEntityCardData(persona)), { w: 4, h: 4 });
+    const parsed = parseEntityCardData(JSON.parse(readEntityCard(bytes) as string));
+    expect(parsed.persona).toBe(true);
+    expect(parsed.pronouns).toBe('she/her');
+  });
+
+  it('are left off a card for an entity without them', () => {
+    const card = buildEntityCardData({ ...entity, persona: false, pronouns: '' });
+    expect(card).not.toHaveProperty('persona');
+    expect(card).not.toHaveProperty('pronouns');
+    expect(parseEntityCardData(card)).not.toHaveProperty('persona');
+    expect(parseEntityCardData(card)).not.toHaveProperty('pronouns');
+  });
+
+  it('drop junk values rather than import them', () => {
+    const parsed = parseEntityCardData({ formamorphKind: 'entity', name: 'X', persona: 'yes', pronouns: 7 });
+    expect(parsed).not.toHaveProperty('persona');
+    expect(parsed).not.toHaveProperty('pronouns');
+  });
+});
+
 /**
  * Listing tags on a character card.
  *
@@ -239,5 +287,140 @@ describe("the author's brief on a card", () => {
     // The brief's chip reaches a world def, so it rides along as shared — the same route every other
     // text field's chips take since the owned/shared split.
     expect(buildEntityCardData(brief, [town]).sharedPlaceholders).toEqual([town]);
+  });
+});
+
+describe('a character card’s openings', () => {
+  const withOpenings: Entity = {
+    id: 'w',
+    name: 'Wren',
+    openings: [
+      { id: 'o1', text: 'Wren waves from the jetty.', kind: 'narration' },
+      { id: 'o2', text: 'I call out to Wren.', kind: 'action' },
+    ],
+    openingWeights: { o2: 3 },
+  };
+
+  it('come back in order under fresh ids, with the weights re-keyed', () => {
+    const bytes = embedEntityCard(fakeWebp(), JSON.stringify(buildEntityCardData(withOpenings)), { w: 4, h: 4 });
+    const parsed = parseEntityCardData(JSON.parse(readEntityCard(bytes) as string));
+    const openings = parsed.openings ?? [];
+    expect(openings.map((o) => [o.text, o.kind])).toEqual([
+      ['Wren waves from the jetty.', 'narration'],
+      ['I call out to Wren.', 'action'],
+    ]);
+    expect(openings.map((o) => o.id)).not.toContain('o1');
+    expect(openings.map((o) => o.id)).not.toContain('o2');
+    expect(parsed.openingWeights).toEqual({ [openings[1].id]: 3 });
+  });
+
+  it('keep the stored user macro through a card round trip', () => {
+    const entity: Entity = { id: 'w', name: 'Wren', openings: [{ id: 'o1', text: `Wren greets ${PLAYER_NAME.token}.`, kind: 'narration' }] };
+    const bytes = embedEntityCard(fakeWebp(), JSON.stringify(buildEntityCardData(entity)), { w: 4, h: 4 });
+    expect(parseEntityCardData(JSON.parse(readEntityCard(bytes) as string)).openings?.[0].text).toBe('Wren greets {{user}}.');
+  });
+
+  it('carry the shared placeholders an opening’s chips use', () => {
+    const town = { id: 'town', name: 'Town', values: phValues(['Sedge']) };
+    const unused = { id: 'unused', name: 'Weather', values: phValues(['Rain']) };
+    const card = buildEntityCardData(
+      { id: 'w', name: 'Wren', openings: [{ id: 'o1', text: 'Dawn in {{ph:town:world:p1}}.', kind: 'narration' }] },
+      [town, unused],
+    );
+    expect(card.sharedPlaceholders).toEqual([town]);
+  });
+
+  it('are left off a card for an entity with none', () => {
+    const card = buildEntityCardData({ id: 'q', name: 'Plain', openings: [] });
+    expect(card).not.toHaveProperty('openings');
+    expect(card).not.toHaveProperty('openingWeights');
+  });
+
+  it('are absent, with no error, on a card written before openings', () => {
+    const parsed = parseEntityCardData({ formamorphKind: 'entity', name: 'Old' });
+    expect(parsed).not.toHaveProperty('openings');
+    expect(parsed).not.toHaveProperty('openingWeights');
+  });
+
+  it('drop junk rows rather than import them', () => {
+    const parsed = parseEntityCardData({
+      formamorphKind: 'entity',
+      name: 'X',
+      openings: [null, { text: 5 }, { id: 'a', text: 'Kept.', kind: 'bogus' }],
+      openingWeights: 'heavy',
+    });
+    expect(parsed.openings?.map((o) => [o.text, o.kind])).toEqual([['Kept.', 'action']]);
+    expect(parsed).not.toHaveProperty('openingWeights');
+  });
+});
+
+/** Owned traits on a character card: the card names what a requirement points at outside the entity. */
+describe('a character card’s owned traits', () => {
+  const tamer: Entity = {
+    id: 'ash', name: 'Ash', persona: true,
+    traitGroups: [{ id: 'g-bond', name: 'Bond', parentId: null, maxPicks: 1 }],
+    traits: [
+      { id: 't-tamed', name: 'Tamed', groupId: 'g-bond', statChanges: [], isDefault: true },
+      {
+        id: 't-oath', name: 'Oath', statChanges: [],
+        requires: [
+          { kind: 'trait', id: 't-tamed' },
+          { kind: 'trait', id: 'w-paladin' },
+          { kind: 'playingAs', id: 'ash' },
+        ],
+      },
+    ],
+  };
+  const origin = { traits: [{ id: 'w-paladin', name: 'Paladin', statChanges: [] }], traitGroups: [], entities: [tamer] };
+  const roundTrip = (card: unknown) => parseEntityCardData(JSON.parse(JSON.stringify(card)));
+
+  it('keeps inward ids and outward names through the card', () => {
+    const parsed = roundTrip(buildEntityCardData(tamer, undefined, {}, undefined, origin));
+    expect(parsed.traitGroups).toEqual(tamer.traitGroups);
+    expect(parsed.traits!.map((t) => t.id)).toEqual(['t-tamed', 't-oath']);
+    expect(parsed.traits![0].isDefault).toBe(true);
+    expect(parsed.traits![1].requires).toEqual([
+      { kind: 'trait', id: 't-tamed' },
+      { kind: 'trait', id: 'w-paladin', name: 'Paladin' },
+      { kind: 'playingAs', id: SELF_ENTITY, name: 'Ash' },
+    ]);
+  });
+
+  it('binds on import to the one trait in the new world carrying the name', () => {
+    const parsed = roundTrip(buildEntityCardData(tamer, undefined, {}, undefined, origin));
+    const world = { traits: [{ id: 'n-paladin', name: 'Paladin', statChanges: [] }], traitGroups: [], entities: [] };
+    const adopted = adoptOwnedTraits(parsed, world);
+    expect(adopted.traits![1].requires).toEqual([
+      { kind: 'trait', id: 't-tamed' },
+      { kind: 'trait', id: 'n-paladin', name: 'Paladin' },
+      { kind: 'playingAs', id: parsed.id, name: 'Ash' },
+    ]);
+  });
+
+  it('reads stat effects as stored (Q9) and drops junk rows', () => {
+    const parsed = parseEntityCardData({
+      formamorphKind: 'entity', name: 'X',
+      traits: [
+        {
+          id: 'a', name: 'A',
+          statChanges: [{ statId: 's', value: 5, type: 'min' }, { statId: 7, value: 1 }],
+          statToggles: [{ statId: 's', enabled: true }, { statId: 's' }],
+        },
+        { id: 7, name: 'B' }, 'junk', { id: 'c', name: 'C', requires: [{ kind: 'weird', id: 'x' }, { kind: 'group', id: 'g' }] },
+      ],
+      traitGroups: [{ id: 'g', name: 'G', parentId: 5 }, null],
+    });
+    expect(parsed.traits).toEqual([
+      { id: 'a', name: 'A', statChanges: [{ statId: 's', value: 5, type: 'min' }], statToggles: [{ statId: 's', enabled: true }] },
+      { id: 'c', name: 'C', statChanges: [], requires: [{ kind: 'group', id: 'g' }] },
+    ]);
+    expect(parsed.traitGroups).toEqual([{ id: 'g', name: 'G', parentId: null }]);
+  });
+
+  it('are absent, with no error, on a card written before owned traits', () => {
+    expect(buildEntityCardData(entity)).not.toHaveProperty('traits');
+    const parsed = parseEntityCardData({ formamorphKind: 'entity', name: 'Old' });
+    expect(parsed).not.toHaveProperty('traits');
+    expect(parsed).not.toHaveProperty('traitGroups');
   });
 });

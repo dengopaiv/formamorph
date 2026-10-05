@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
@@ -43,8 +44,8 @@ const WORLD: World = benchEditorWorld({
 
 /** Both column labels, so a label that moves between the columns fails rather than passing twice. */
 const FIELD_LABELS = new RegExp(
-  '^(World Name|Author|Tags|Thumbnail|3D Player Avatar|Custom Player Avatar|Background Music'
-  + '|World Description|Readme|System Prompt Addition|Custom Prompts)$',
+  '^(World Name|Author|Tags|Thumbnail|3D Player Avatar|Custom Player Avatar|Allowed Personas|Starts On|Background Music'
+  + '|Player-Facing Description|Readme|AI-Facing Description|Custom Prompts)$',
 );
 
 /** The labels of one editor pane, in document order. Read from the pane rather than the page: both columns
@@ -73,7 +74,7 @@ const shownReadmeTab = () => within(readmeStrip()).getAllByRole('tab')
 
 /** Which custom-prompt kind the picker has open. Its items are radios, not tabs — and so is the editor's
  *  own Simple/Advanced switch, so the selection is read by kind name rather than by walking the DOM. */
-const PROMPT_KINDS = ['Narration', 'Choices', 'Stats', 'Opening'];
+const PROMPT_KINDS = ['Narration', 'Choices', 'Stats', 'Openings'];
 
 const openPromptKind = () => screen.getAllByRole('radio')
   .filter((r) => r.getAttribute('data-state') === 'on')
@@ -112,7 +113,7 @@ describe('the World Editor Overview columns', () => {
     await screen.findByLabelText('World Name');
     expect(leftLabels()).toEqual([
       'World Name', 'Author', 'Tags', 'Thumbnail', '3D Player Avatar', 'Custom Player Avatar',
-      'Background Music',
+      'Allowed Personas', 'Starts On', 'Background Music',
     ]);
   });
 
@@ -120,11 +121,11 @@ describe('the World Editor Overview columns', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     await screen.findByLabelText('World Name');
     expect(rightLabels()).toEqual([
-      'World Description', 'Readme', 'System Prompt Addition', 'Custom Prompts',
+      'Player-Facing Description', 'Readme', 'AI-Facing Description', 'Custom Prompts',
     ]);
   });
 
-  it('drops the avatar upload from the left column in Simple mode, keeping the order', async () => {
+  it('drops the avatar upload and the persona rules from the left column in Simple mode, keeping the order', async () => {
     renderWorldEditorBench(WORLD, 'simple');
     await screen.findByLabelText('World Name');
     expect(leftLabels()).toEqual([
@@ -135,7 +136,24 @@ describe('the World Editor Overview columns', () => {
   it('drops Custom Prompts from the right column in Simple mode, keeping the order', async () => {
     renderWorldEditorBench(WORLD, 'simple');
     await screen.findByLabelText('World Name');
-    expect(rightLabels()).toEqual(['World Description', 'Readme', 'System Prompt Addition']);
+    expect(rightLabels()).toEqual(['Player-Facing Description', 'Readme', 'AI-Facing Description']);
+  });
+
+  it.each(['simple', 'advanced'] as const)('puts an ⓘ tip beside each description caption in %s mode', async (mode) => {
+    renderWorldEditorBench(WORLD, mode);
+    await screen.findByLabelText('World Name');
+    const pane = document.querySelector<HTMLElement>('[data-panel-id="editor-detail"]')!;
+    for (const [caption, reader] of [
+      ['Player-Facing Description', /AI never reads it/],
+      ['AI-Facing Description', /Players never see it/],
+    ] as const) {
+      const row = within(pane).getByText(caption).parentElement!;
+      const info = within(row).getByRole('button', { name: 'More info' });
+      fireEvent.click(info);
+      expect(await screen.findByText(reader)).toBeTruthy();
+      fireEvent.click(info);
+      await waitFor(() => expect(screen.queryByText(reader)).toBeNull());
+    }
   });
 
   // The button's width comes from the box it shares with the picture, so what this can assert in jsdom is
@@ -151,7 +169,94 @@ describe('the World Editor Overview columns', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     const box = await screen.findByRole('checkbox', { name: /3D Player Avatar/ });
     const row = box.closest('div');
-    expect(within(row as HTMLElement).getByText('The player can customize it.')).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText('The player can customize it')).toBeInTheDocument();
+  });
+});
+
+describe('the Overview persona rules', () => {
+  const allowed = () => screen.getByRole('radiogroup', { name: 'Allowed Personas' });
+  const startsOn = () => screen.getByRole('combobox', { name: 'Starts On' });
+  // The Select's pointer open does not fire inside the bench; the keyboard open does.
+  const openStartsOn = async (user: ReturnType<typeof userEvent.setup>) => { startsOn().focus(); await user.keyboard('{Enter}'); };
+  const withPersonas = (overview: Partial<World['worldOverview']> = {}, extra: object[] = []) => benchEditorWorld({
+    ...WORLD,
+    worldOverview: { ...WORLD.worldOverview, ...overview },
+    entities: [
+      { id: 'e1', name: 'Maren', playerDescription: '', aiDescription: '', persona: true },
+      { id: 'e2', name: 'Tobin', playerDescription: '', aiDescription: '', persona: true },
+      ...extra,
+    ],
+  } as unknown as Partial<World>);
+
+  it('reads absent rules as Any on the player default, and Any writes no field', async () => {
+    const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
+    await screen.findByLabelText('World Name');
+    expect(within(allowed()).getByRole('radio', { name: 'Any' })).toHaveAttribute('data-state', 'on');
+    expect(screen.getByText('Lets players pick any persona, their own included')).toBeInTheDocument();
+    expect(startsOn()).toHaveTextContent("Player's Default");
+
+    fireEvent.click(within(allowed()).getByRole('radio', { name: 'World Only' }));
+    await waitFor(() => expect(ctx().worldOverview.allowedPersonas).toBe('world'));
+    fireEvent.click(within(allowed()).getByRole('radio', { name: 'Any' }));
+    await waitFor(() => expect(ctx().worldOverview.allowedPersonas).toBeUndefined());
+  });
+
+  it('keeps its value when the active item is clicked again', async () => {
+    const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
+    await screen.findByLabelText('World Name');
+    fireEvent.click(within(allowed()).getByRole('radio', { name: 'World Only' }));
+    fireEvent.click(within(allowed()).getByRole('radio', { name: 'World Only' }));
+    expect(ctx().worldOverview.allowedPersonas).toBe('world');
+  });
+
+  it('says World Only works like Any while no entity has a Persona role', async () => {
+    renderWorldEditorBench(WORLD, 'advanced');
+    await screen.findByLabelText('World Name');
+    fireEvent.click(within(allowed()).getByRole('radio', { name: 'World Only' }));
+    expect(await screen.findByText('Works like Any until you give an entity a Persona role')).toBeInTheDocument();
+  });
+
+  it('writes each Starts On pick, and the player default writes no field', async () => {
+    const user = userEvent.setup();
+    const { ctx } = renderWorldEditorBench(withPersonas(), 'advanced');
+    await screen.findByLabelText('World Name');
+    await openStartsOn(user);
+    await user.click(await screen.findByRole('option', { name: 'Tobin' }));
+    await waitFor(() => expect(ctx().worldOverview.startPersona).toEqual({ source: 'world', entityId: 'e2' }));
+    await openStartsOn(user);
+    await user.click(await screen.findByRole('option', { name: 'None' }));
+    await waitFor(() => expect(ctx().worldOverview.startPersona).toEqual({ source: 'none' }));
+    await openStartsOn(user);
+    await user.click(await screen.findByRole('option', { name: "Player's Default" }));
+    await waitFor(() => expect(ctx().worldOverview.startPersona).toBeUndefined());
+  });
+
+  it("offers only the world's personas under World Only, on the first by default", async () => {
+    const user = userEvent.setup();
+    renderWorldEditorBench(withPersonas({ allowedPersonas: 'world' }), 'advanced');
+    await screen.findByLabelText('World Name');
+    expect(screen.getByText('Limits players to the personas this world defines')).toBeInTheDocument();
+    expect(startsOn()).toHaveTextContent('Maren');
+    await openStartsOn(user);
+    await screen.findByRole('option', { name: 'Tobin' });
+    expect(screen.queryByRole('option', { name: "Player's Default" })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'None' })).toBeNull();
+  });
+
+  it('names the Custom Persona entity in place of None', async () => {
+    const user = userEvent.setup();
+    renderWorldEditorBench(withPersonas({ allowedPersonas: 'world' }, [
+      { id: 'cp', name: 'Wanderer', playerDescription: '', aiDescription: '', customPersona: true },
+    ]), 'advanced');
+    await screen.findByLabelText('World Name');
+    await openStartsOn(user);
+    expect(await screen.findByRole('option', { name: 'Wanderer' })).toBeInTheDocument();
+  });
+
+  it('reads a pick of an entity that is no longer a persona as the default', async () => {
+    renderWorldEditorBench(withPersonas({ startPersona: { source: 'world', entityId: 'gone' } }), 'advanced');
+    await screen.findByLabelText('World Name');
+    expect(startsOn()).toHaveTextContent("Player's Default");
   });
 });
 

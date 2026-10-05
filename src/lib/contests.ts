@@ -4,7 +4,7 @@
  * tab, its slim bar and their tests all read the same answers from here.
  */
 import { parseServerDate } from './serverDate';
-import { isContestEvent, placeOf, placementsOf, resultsAnnounced } from './serverEvents';
+import { eventState, isContestEvent, placeOf, placementsOf } from './serverEvents';
 import type { WorldRecord } from '@/components/WorldDetails';
 import type { ContestPlace, ServerEvent } from '@/types';
 
@@ -21,32 +21,26 @@ export type ContestPhase = 'live' | 'judging' | 'decided';
 const byNewestStart = (a: ServerEvent, b: ServerEvent): number =>
   (parseServerDate(b.startsAt)?.getTime() ?? 0) - (parseServerDate(a.startsAt)?.getTime() ?? 0);
 
-/** Whether a contest is inside its window — running now, rather than scheduled or over. */
-export function isContestRunning(event: ServerEvent, now: Date = new Date()): boolean {
-  if (event.cancelledAt) return false;
-  const starts = parseServerDate(event.startsAt);
-  const ends = parseServerDate(event.endsAt);
-  if (!starts || !ends) return false;
-  return starts.getTime() <= now.getTime() && now.getTime() < ends.getTime();
-}
-
 /**
- * Which of its three states a contest is in.
+ * Which of its three states a contest is in, as players see it — `eventState` in player words.
  *
- * The announcement outranks the clock: a contest decided early is decided, and one whose window is still
- * open on a slow clock has not reopened for entries.
+ * @returns null for a contest players never see: one not started yet, or called off
  */
-export function contestPhase(event: ServerEvent, now: Date = new Date()): ContestPhase {
-  if (resultsAnnounced(event)) return 'decided';
-  return isContestRunning(event, now) ? 'live' : 'judging';
+export function contestPhase(event: ServerEvent, now: Date = new Date()): ContestPhase | null {
+  const state = eventState(event, now);
+  if (state === 'active') return 'live';
+  if (state === 'judging') return 'judging';
+  if (state === 'ended') return 'decided';
+  return null;
 }
 
-/** The contests among a list of events, running ones first and then newest window first. */
+/** The contests among a list of events that players may browse, running ones first and then newest window first. */
 export function contestsOf(events: ServerEvent[], now: Date = new Date()): ServerEvent[] {
+  // Staff read the same feed with scheduled and canceled events in it; those stay on the Events tab.
   return events
-    .filter((event) => isContestEvent(event) && !event.cancelledAt)
+    .filter((event) => isContestEvent(event) && contestPhase(event, now) !== null)
     .sort((a, b) => {
-      const running = Number(isContestRunning(b, now)) - Number(isContestRunning(a, now));
+      const running = Number(contestPhase(b, now) === 'live') - Number(contestPhase(a, now) === 'live');
       if (running !== 0) return running;
       return byNewestStart(a, b);
     });
@@ -60,7 +54,7 @@ export function contestsOf(events: ServerEvent[], now: Date = new Date()): Serve
  * offering an entry the server would refuse is worse than offering none.
  */
 export function activeContestOf(events: ServerEvent[], now: Date = new Date()): ServerEvent | null {
-  return events.find((event) => isContestEvent(event) && isContestRunning(event, now)) ?? null;
+  return events.find((event) => isContestEvent(event) && contestPhase(event, now) === 'live') ?? null;
 }
 
 /**
@@ -69,16 +63,9 @@ export function activeContestOf(events: ServerEvent[], now: Date = new Date()): 
  * What the end-of-contest poster is still owed for. Read from the contests feed rather than the events
  * poll, which carries only what is running: a player who launches the app the morning after a deadline
  * was never online for the transition, and the poll has nothing left to tell them.
- *
- * The clock is checked rather than `contestPhase`, which reads a contest that has not started yet as
- * judging — staff see scheduled ones in this feed.
  */
 export function judgingContestsOf(events: ServerEvent[], now: Date = new Date()): ServerEvent[] {
-  return events.filter((event) => {
-    if (!isContestEvent(event) || event.cancelledAt || resultsAnnounced(event)) return false;
-    const ends = parseServerDate(event.endsAt);
-    return Boolean(ends && ends.getTime() <= now.getTime());
-  });
+  return events.filter((event) => isContestEvent(event) && contestPhase(event, now) === 'judging');
 }
 
 /**
@@ -131,13 +118,70 @@ export function shuffleWithSeed<T>(items: T[], seed: number): T[] {
 const likesOf = (record: WorldRecord): number => Number(record.likes ?? 0) || 0;
 
 /**
+ * What a stamp that cannot be read counts as, so it sorts last rather than first.
+ *
+ * A finite sentinel rather than infinity: two unreadable stamps must still compare as level, and
+ * `Infinity - Infinity` is not a number at all.
+ */
+export const UNKNOWN_PUBLISH_TIME = Number.MAX_SAFE_INTEGER;
+
+/** When a listing was published, as an instant. */
+export const publishedAtOf = (record: WorldRecord): number => {
+  // Checked for a string first: the catalog row is untyped, `parseServerDate` takes one, and a record
+  // built from a publish body rather than fetched carries no stamp at all.
+  const stamp = record.created_at;
+  const parsed = typeof stamp === 'string' ? parseServerDate(stamp) : null;
+  return parsed?.getTime() ?? UNKNOWN_PUBLISH_TIME;
+};
+
+/** What a standings order reads off one contest entry. */
+export interface Standing {
+  likes: number;
+  /** When the listing was published, in milliseconds. `UNKNOWN_PUBLISH_TIME` where no stamp reads. */
+  publishedAt: number;
+}
+
+/**
+ * Contest entries in standings order: most likes first, and the earliest published first among equals.
+ *
+ * Likes alone leave level entries in whatever order the catalog handed them over in, which is a list
+ * that reshuffles itself between two visits that changed nothing — and a contest whose entries are
+ * level is exactly when that is most visible.
+ */
+export function standingsOrder<T extends Standing>(entries: readonly T[]): T[] {
+  return [...entries].sort((a, b) => b.likes - a.likes || a.publishedAt - b.publishedAt);
+}
+
+/**
+ * The like counts that two or more entries share.
+ *
+ * What the Podium dialog marks an entry by. Sorted neighbors say which entry leads, not whether the
+ * two are level or a single like apart, and a judge has to see every tie before they announce one.
+ */
+export function tiedLikeCounts(entries: readonly Standing[]): Set<number> {
+  const seen = new Set<number>();
+  const shared = new Set<number>();
+
+  entries.forEach(({ likes }) => {
+    if (seen.has(likes)) shared.add(likes);
+    else seen.add(likes);
+  });
+
+  return shared;
+}
+
+/**
  * The order a contest's entries are shown in.
  *
- * While the contest runs the order is shuffled per visit, so entering early is not itself an advantage.
- * Once judging starts the shuffle would only obscure the standings, so entries settle by likes — and the
- * podium is pinned to the front of them, gold then silver then bronze.
+ * While the contest runs or is judged the order is shuffled per visit, so neither entering early nor the
+ * like counts decide what a player sees first. Once results are announced, entries settle by likes — and
+ * the podium is pinned to the front of them, in the order the podium itself is stored in.
  *
- * @param seed - The visit's shuffle seed; only read while the contest is live
+ * Level like counts break by publish time, earliest first. Likes alone leave their order to however the
+ * catalog happened to arrive, which is a list that reshuffles itself between two visits that changed
+ * nothing — and a contest whose entries are level is exactly when that is most visible.
+ *
+ * @param seed - The visit's shuffle seed; only read before results are announced
  */
 export function orderContestEntries(
   entries: WorldRecord[],
@@ -146,13 +190,16 @@ export function orderContestEntries(
   now: Date = new Date(),
 ): WorldRecord[] {
   if (!event) return entries;
-  if (contestPhase(event, now) === 'live') return shuffleWithSeed(entries, seed);
+  if (contestPhase(event, now) !== 'decided') return shuffleWithSeed(entries, seed);
 
-  const byLikes = [...entries].sort((a, b) => likesOf(b) - likesOf(a));
+  const byLikes = standingsOrder(entries.map((record) => ({
+    record, likes: likesOf(record), publishedAt: publishedAtOf(record),
+  }))).map(({ record }) => record);
   const placed: WorldRecord[] = [];
 
-  // Walked in podium order rather than filtered, so the three lead in the order they placed rather than
-  // in whatever order likes happened to leave them.
+  // Walked in podium order rather than filtered, so the placed worlds lead in the order they placed
+  // rather than in whatever order likes happened to leave them. The array order is the display order,
+  // shared place and all, so worlds that tied keep the order the server stored them in.
   placementsOf(event).forEach((placement) => {
     const record = byLikes.find((entry) => String(entry._id || entry.id) === placement.worldId);
     if (record) placed.push(record);
@@ -201,7 +248,7 @@ export interface ContestSection {
   contests: ServerEvent[];
 }
 
-/** The heading over everything still going on — running, being judged, or not yet started. */
+/** The heading over everything still going on — running or being judged. */
 const CURRENT_LABEL = 'Current';
 
 /** The heading a contest whose start cannot be read is filed under, rather than being dropped. */

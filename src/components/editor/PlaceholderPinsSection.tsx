@@ -7,16 +7,17 @@ import { HelpButton } from '@/components/HelpButton';
 import { PinConflictNote } from '@/components/editor/PinConflictNote';
 import { PinValueField } from '@/components/editor/PinValueField';
 import {
-  addPinAt, PIN_KINDS, pinSourceKey, pinSourceOwnerId, pinSourcesOfKind, pinsTargeting, removePinAt,
-  sameSource, updatePinAt,
+  addPinAt, commitPinSource, pinKindsFor, pinSourceKey, pinSourcesOfKind, pinsTargeting,
+  removePinAt, sameSource, updatePinAt,
   type PinEditorWorld, type PinRow, type PinSourceKind, type PinSourceRef,
 } from '@/lib/placeholderPins';
-import type { GameLocation, Placeholder, PlaceholderPin, Stat, Trait } from '@/types';
+import type { Entity, GameLocation, Placeholder, PlaceholderPin, Stat, Trait } from '@/types';
 
 /** The world the section reads pins from and writes them back to: the four source lists, and the writer
  *  for each. The world editor's data store is one. */
 export interface PinsWorld extends PinEditorWorld {
   updateTrait: (trait: Trait) => void;
+  updateEntity: (entity: Entity) => void;
   updateLocation: (location: GameLocation) => void;
   updateStat: (stat: Stat) => void;
   updatePlaceholder: (placeholder: Placeholder) => void;
@@ -25,8 +26,10 @@ export interface PinsWorld extends PinEditorWorld {
 /**
  * Every pin aimed at one placeholder, from any source, as one list: strongest kind first, each row naming
  * its source. The pins live on their sources — this section only gathers them — so a value edit, a re-aim
- * or a removal here is written to the trait, location, stat or placeholder that holds the pin. Add picks
- * the kind of source, then the source, and writes an empty pin there for the row's value field to fill.
+ * or a removal here is written to the trait, location, stat or placeholder that holds the pin. A link's
+ * overridden pins list lists too, under its bearer: its source is fixed, and an edit rewrites the override.
+ * Add picks the kind of source, then the source, and writes an empty pin there for the row's
+ * value field to fill.
  */
 export function PlaceholderPinsSection({ world, placeholder }: {
   world: PinsWorld;
@@ -38,19 +41,12 @@ export function PlaceholderPinsSection({ world, placeholder }: {
   const placeholders = world.placeholders;
   const rows = useMemo(() => pinsTargeting(world, placeholder.id), [world, placeholder.id]);
   const options = (kind: PinSourceKind) => pinSourcesOfKind(world, kind, placeholder.id);
+  const kinds = pinKindsFor(world, placeholder.id);
 
-  /** Where a rewritten source of each kind goes back to — one row, so a new source is a row and not a
-   *  case. The id is the record the pin sits on, which the source table already names. */
-  const writeBack: Record<PinSourceKind, (next: PinEditorWorld, id: string) => void> = {
-    trait: (next, id) => { const t = next.traits?.find((x) => x.id === id); if (t) world.updateTrait(t); },
-    location: (next, id) => { const l = next.locations?.find((x) => x.id === id); if (l) world.updateLocation(l); },
-    descriptor: (next, id) => { const s = next.stats?.find((x) => x.id === id); if (s) world.updateStat(s); },
-    value: (next, id) => { const p = next.placeholders.find((x) => x.id === id); if (p) world.updatePlaceholder(p); },
-  };
   /** Hand each source that `next` rewrote back to its writer. `next` carries every change at once, so a
    *  source written twice lands the same record twice, which is harmless. */
   const commit = (next: PinEditorWorld, ...sources: PinSourceRef[]) => {
-    for (const source of sources) writeBack[source.kind](next, pinSourceOwnerId(source));
+    for (const source of sources) commitPinSource(next, source, world);
   };
   const setPin = (row: PinRow, next: PlaceholderPin) => commit(updatePinAt(world, row.source, row.pin, next), row.source);
   const remove = (row: PinRow) => commit(removePinAt(world, row.source, row.pin), row.source);
@@ -71,12 +67,12 @@ export function PlaceholderPinsSection({ world, placeholder }: {
         <HelpButton topicId="worldEditor.pinsOnPlaceholder" className="h-6 w-6" />
       </div>
       {rows.length === 0 && !draft && (
-        <p className="text-helper text-muted-foreground">Nothing pins this placeholder.</p>
+        <p className="text-helper text-muted-foreground">Nothing pins this placeholder</p>
       )}
       {rows.map((row, index) => (
         <div key={`${pinSourceKey(row.source)}:${index}`} className="space-y-1">
           <div className="flex space-x-2">
-            <Select value={pinSourceKey(row.source)} onValueChange={(key) => {
+            <Select value={pinSourceKey(row.source)} disabled={row.source.kind === 'trait' && !!row.source.link} onValueChange={(key) => {
               const picked = options(row.source.kind).find((o) => pinSourceKey(o.source) === key);
               if (picked) reaim(row, picked.source);
             }}>
@@ -110,7 +106,7 @@ export function PlaceholderPinsSection({ world, placeholder }: {
                 <SelectValue placeholder="Kind of source" />
               </SelectTrigger>
               <SelectContent>
-                {PIN_KINDS.map((k) => <SelectItem key={k.kind} value={k.kind}>{k.label}</SelectItem>)}
+                {kinds.map((k) => <SelectItem key={k.kind} value={k.kind}>{k.label}</SelectItem>)}
               </SelectContent>
             </Select>
             {draft.kind && (
@@ -133,7 +129,7 @@ export function PlaceholderPinsSection({ world, placeholder }: {
             </Button>
           </div>
           {draft.kind && draftOptions.length === 0 && (
-            <p className="text-meta text-muted-foreground pl-1">{PIN_KINDS.find((k) => k.kind === draft.kind)?.empty}</p>
+            <p className="text-meta text-muted-foreground pl-1">{kinds.find((k) => k.kind === draft.kind)?.empty}</p>
           )}
         </div>
       )}

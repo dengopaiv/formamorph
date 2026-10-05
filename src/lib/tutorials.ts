@@ -18,12 +18,35 @@ export interface TutorialEntry {
   body?: string;
   /** Term-and-gloss lines, for a control whose sides are worth naming side by side. */
   points?: { term: string; text: string }[];
+  /** Replaces "Got It" on a lone note. */
+  primaryLabel?: string;
+  /** A second action beside the first. Either one retires the note. */
+  secondaryLabel?: string;
 }
+
+/** The Authoring Tour offer. Every place that offers the tour shares this one seen-state. */
+export const AUTHORING_TOUR_OFFER_ID = 'authoring-tour-offer';
+/** The offer's body on a world that is not new, where Start Tour builds a new one. */
+export const AUTHORING_TOUR_FIRST_VISIT_BODY = 'Build a new world one field at a time, with an example for every step';
+
+/** The Authoring Tour's one-time note on Save. The tour shows it, so it has no registry entry. */
+export const AUTHORING_TOUR_SAVE_NOTE_ID = 'authoring-tour-save';
+
+/** The World Editor's Simple vs. Advanced note. The Authoring Tour's mode step retires it. */
+export const EDITOR_MODE_TUTORIAL_ID = 'world-editor-mode-toggle';
 
 /** Registry order is display order: the first unseen entry for a screen is the one that shows. */
 export const TUTORIALS: readonly TutorialEntry[] = [
   {
-    id: 'world-editor-mode-toggle',
+    id: AUTHORING_TOUR_OFFER_ID,
+    screen: 'worldEditor',
+    title: 'Take the Authoring Tour?',
+    body: 'Build this world one field at a time, with an example for every step',
+    primaryLabel: 'Start Tour',
+    secondaryLabel: 'No Thanks',
+  },
+  {
+    id: EDITOR_MODE_TUTORIAL_ID,
     screen: 'worldEditor',
     title: 'Simple vs. Advanced',
     points: [
@@ -43,12 +66,13 @@ export const TUTORIALS: readonly TutorialEntry[] = [
   {
     id: 'community-kind-tabs',
     screen: 'community',
-    title: 'Worlds, Entities, Dictionaries & Avatars',
+    title: 'Worlds, Entities, Dictionaries, Avatars & Prompts',
     points: [
       { term: 'Worlds', text: 'Complete adventures to play' },
       { term: 'Entities', text: 'Characters and creatures to add to yours' },
       { term: 'Dictionaries', text: "Lore books that teach the AI your world's terms" },
       { term: 'Avatars', text: 'Player models to wear in any world' },
+      { term: 'Prompts', text: 'Prompt presets that change how the AI writes' },
     ],
   },
   {
@@ -144,6 +168,11 @@ function subscribe(onChange: () => void): () => void {
 
 const EMPTY: string[] = [];
 
+/** Whether the note with this id has been read. */
+export function useTutorialSeen(id: string): boolean {
+  return useSyncExternalStore(subscribe, () => snapshot.includes(id), () => false);
+}
+
 /** How many tutorials have been dismissed — drives the Settings reset control's state and hint. */
 export function useSeenTutorialCount(): number {
   return useSyncExternalStore(subscribe, () => snapshot, () => EMPTY).length;
@@ -165,6 +194,12 @@ function republishTop() {
 function subscribeScreens(onChange: () => void): () => void {
   screenListeners.add(onChange);
   return () => { screenListeners.delete(onChange); };
+}
+
+/** Whether `screen` is the innermost screen on view. Another layer that points at the screen's controls
+ *  follows this, so it stands down under a screen layered on top, as the screen's own tutorials do. */
+export function useTutorialScreenOnTop(screen: TutorialScreen): boolean {
+  return useSyncExternalStore(subscribeScreens, () => topScreen, () => null) === screen;
 }
 
 /** Where the reader is in a screen's tour, and how to move. `total` is 1 for a lone explanation. */

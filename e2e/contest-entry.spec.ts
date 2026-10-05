@@ -1,10 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
 import { openApp, gotoDev, signIn } from './app';
+import { REASONING_CATALOG_URL } from '../src/lib/reasoningCatalog';
 
 /**
  * Publishing a world into a running contest, end to end: sign in, publish with the entry switch on, and
  * find the listing in both the Contest tab and the catalog it also belongs to. Then the other half of a
- * contest's life — an admin announces the podium, and the place badge reaches the author's own library.
+ * contest's life — an admin builds a shared 1st place in the Podium dialog, announces it, and the result
+ * reaches the band, the cards and the bar the author reads it on.
  *
  * This one needs a server. Every part of the entry — the switch's own visibility, the flag riding the
  * publish body, the tab reading the entries back — is covered against mocks in the unit suite; what no
@@ -130,25 +132,85 @@ async function registerAccount(): Promise<{ username: string; password: string }
   return credentials;
 }
 
+/** One placeable entry, reduced to what the flow has to name it by. */
+interface Entry {
+  id: string;
+  /** Who published it. Every run publishes the same bundled world, so the author is what tells two apart. */
+  author: string;
+  publishedAt: string;
+}
+
 /**
- * Another entry in this contest, so the podium has a gold to sit above this run's silver.
+ * The contest's other entries, oldest listing first — which is the order the server stores a tie in.
  *
- * Null when this run's world is the only entry — a contest with one entrant can only award one place,
- * and the flow falls back to gold rather than inventing a second entrant to test the ordinal with.
+ * Empty when this run's world is the only one. A tie needs two worlds, and the caller fails on that
+ * rather than inventing a second entrant or passing quietly.
  *
  * @param mine - The listing id to exclude
  */
-async function entryOtherThan(mine: string): Promise<string | null> {
+async function entriesOtherThan(mine: string): Promise<Entry[]> {
   const response = await fetch(`${API}/worlds?page=1&limit=1000`);
-  if (!response.ok) return null;
+  if (!response.ok) return [];
   const catalog = ((await response.json()) as {
-    data?: { id: string; contest_event_id?: string | null; quarantined_at?: string | null }[];
+    data?: {
+      id: string;
+      created_at: string;
+      author?: { username?: string } | null;
+      contest_event_id?: string | null;
+      quarantined_at?: string | null;
+    }[];
   }).data ?? [];
 
-  const other = catalog.find((row) => row.contest_event_id === contest!.id
-    && row.id !== mine
-    && !row.quarantined_at);
-  return other ? other.id : null;
+  return catalog
+    .filter((row) => row.contest_event_id === contest!.id
+      && row.id !== mine
+      && !row.quarantined_at
+      && Boolean(row.author?.username))
+    .map((row) => ({ id: row.id, author: row.author!.username!, publishedAt: row.created_at }))
+    .sort((a, b) => a.publishedAt.localeCompare(b.publishedAt));
+}
+
+/**
+ * Close the contest, so the admin tools offer the podium.
+ *
+ * Announcing is offered on a contest that has stopped taking entries, and this run publishes into one
+ * that is still open — so the window is moved rather than waited out. It is the same transition a
+ * contest makes on its own; only the clock is skipped.
+ */
+async function closeContest(): Promise<void> {
+  const closed = await fetch(`${API}/events/${contest!.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ endsAt: new Date(Date.now() - 60_000).toISOString() }),
+  });
+  expect(closed.ok, `could not close the contest for judging: ${await closed.text()}`).toBe(true);
+}
+
+/**
+ * Close whatever dialogs are open, the way a player closes them.
+ *
+ * A modal puts everything behind it out of the accessibility tree, so the footer's account button is
+ * unreachable while one stands — and both halves of this flow leave one open: publishing leaves the
+ * world's own details dialog, announcing leaves the admin panel.
+ */
+async function closeDialogs(page: Page): Promise<void> {
+  const dialogs = page.getByRole('dialog');
+  for (let open = await dialogs.count(); open > 0; open -= 1) {
+    await page.keyboard.press('Escape');
+    await expect(dialogs).toHaveCount(open - 1);
+  }
+}
+
+/** Sign the current account out through the account dialog, so the next one can sign in. */
+async function signOut(page: Page): Promise<void> {
+  await closeDialogs(page);
+  await gotoDev(page, 'mainMenu', { modal: 'profile' });
+  await page.getByRole('button', { name: 'Logout' }).click();
+  // Off the profile route before the next sign-in. The account dialog is one surface signed in or out,
+  // so a route still pointing at it re-opens it over the menu the moment there is an account again.
+  await gotoDev(page, 'mainMenu');
+  await closeDialogs(page);
+  await page.getByRole('button', { name: 'Login' }).waitFor();
 }
 
 /** Everything this flow legitimately talks to runs on this machine: the dev server, the local API, and
@@ -156,7 +218,15 @@ async function entryOtherThan(mine: string): Promise<string | null> {
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
- * Refuse every off-machine request, and remember it.
+ * The one off-machine address this flow ignores: the public reasoning catalog, which the app reads once
+ * per launch to learn which model ids think. Ignored, not allowed — it is cut off like everything else,
+ * and nothing asserts that it was asked for. Imported rather than written out again, so moving the
+ * catalog re-opens this decision instead of quietly widening it.
+ */
+const IGNORED_OFF_MACHINE = new Set([REASONING_CATALOG_URL]);
+
+/**
+ * Refuse every off-machine request, and remember the ones nobody expected.
  *
  * The app reads its API base from `VITE_API_URL_DEV` at dev-server start, and the default in `.env` is
  * the live workshop. A run against a dev server started without the override would otherwise publish a
@@ -167,7 +237,7 @@ async function pinToLocalApi(page: Page): Promise<string[]> {
   await page.route('**/*', (route) => {
     const url = route.request().url();
     if (LOCAL_HOSTS.has(new URL(url).hostname)) return route.continue();
-    stray.push(url);
+    if (!IGNORED_OFF_MACHINE.has(url)) stray.push(url);
     return route.abort();
   });
   return stray;
@@ -240,7 +310,9 @@ test('a world published with the entry switch on shows up in the contest tab', a
   const catalogEntry = page.getByText(`By ${username}`, { exact: true });
   await expect(catalogEntry).toBeVisible();
 
-  await page.getByRole('button', { name: 'Contest' }).click();
+  // Exact: the menu's event banner behind this dialog is a button too, and a contest whose own title
+  // carries the word would otherwise match it as well.
+  await page.getByRole('button', { name: 'Contest', exact: true }).click();
   // The bar's Rules button, not the contest's title: the title also sits in the menu's event banner
   // behind this dialog. What ties the grid below to *this* contest is the entry itself — the tab shows
   // only worlds carrying the contest's id, so a listing appearing here is the server having stored it.
@@ -251,7 +323,17 @@ test('a world published with the entry switch on shows up in the contest tab', a
   expect(stray).toEqual([]);
 });
 
-test('an announced podium reaches the player surfaces it was published from', async ({ page }, testInfo) => {
+/**
+ * A shared 1st place, built in the Podium dialog and read back on the surfaces players use.
+ *
+ * A tie crosses every layer this project keeps apart — the dialog derives the places, the server stores
+ * an order inside one place, and three player surfaces read a repeated place back. Each layer has its own
+ * tests against its own seam; none of them can show that the four agree, which is what this does.
+ *
+ * First rather than third place, deliberately: gold is where a surface that kept the old "one winner"
+ * shape still renders something, so a wrong answer here looks right rather than blank.
+ */
+test('a tie built in the podium dialog reaches the band, the cards and the bar', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'one viewport is enough for a server flow');
   test.skip(Boolean(unavailable), unavailable);
   test.skip(Boolean(cannotAnnounce), cannotAnnounce);
@@ -267,33 +349,124 @@ test('an announced podium reaches the player surfaces it was published from', as
   const listingId = ((await mine.json()) as { data?: { id: string }[] }).data?.[0]?.id;
   expect(listingId, 'the published listing is not on the author’s own list').toBeTruthy();
 
-  // Second place rather than first, deliberately: gold is the one place a badge that ignored the podium
-  // and simply said "winner" would still get right.
-  const otherEntry = await entryOtherThan(listingId!);
-  const podium = otherEntry
-    ? [{ place: 1, worldId: otherEntry }, { place: 2, worldId: listingId }]
-    : [{ place: 1, worldId: listingId }];
-  const expectedPlace = otherEntry ? '2nd Place' : '1st Place';
-
-  const announced = await fetch(`${API}/events/${running.id}/results`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ placements: podium }),
+  // This run's world publishes last, so the entry it ties with is always the older of the two — which
+  // makes the band's order an assertion with a right answer rather than whichever way it came out.
+  const others = await entriesOtherThan(listingId!);
+  // A failure rather than a skip, unlike the preconditions above. Those say this machine cannot run the
+  // flow; this one says the contest is short an entry the suite itself publishes one test earlier. A skip
+  // here would report green while the tie — the whole subject — went unexercised.
+  expect(others.length,
+    'the contest has no second entry to tie with — run the entry flow against it first (see e2e/README.md)')
+    .toBeGreaterThan(0);
+  const partner = others[0];
+  // A third entry takes the place after the tie, where the seed holds one. The newest, so it is never
+  // the partner. Without it the podium is 1, 1 and the sole-place half of the journey does not run.
+  const runnerUp = others.length > 1 ? others[others.length - 1] : null;
+  testInfo.annotations.push({
+    type: 'podium', description: runnerUp ? '1, 1, 2' : '1, 1 — the seed holds no third entry',
   });
-  expect(announced.ok, `the announce was refused: ${await announced.text()}`).toBe(true);
 
-  // Nothing about the placement is stored locally, so the library learns it by reading the archive again.
-  await page.reload();
+  await closeContest();
+
+  // The judge is not the entrant. Announcing is an admin's, and the server refuses an admin their own
+  // entry, so the dialog half of this flow runs on the other account.
+  await signOut(page);
+  await signIn(page, ADMIN.username, ADMIN.password);
+
+  // Without `tab`, because `#dev?modal=adminPanel&tab=events` serves the canned calendar instead of the
+  // server's. The tab is clicked the way an admin clicks it, and the list is the real one.
+  await gotoDev(page, 'mainMenu', { modal: 'adminPanel' });
+  await page.getByRole('tab', { name: 'Events' }).click();
+  await page.getByRole('button', { name: 'Announce Results' }).click();
+
+  const podiumDialog = page.getByRole('dialog').filter({ hasText: `Announce Results — ${running.title}` });
+  const entryCards = podiumDialog.getByRole('group', { name: 'Entries' }).getByRole('button');
+  // By author, not by name: every run publishes the same bundled world, so the entries in the grid all
+  // read alike and only the credit line tells them apart.
+  const entryOf = (author: string) => entryCards.filter({ hasText: `by ${author}` });
+
+  await entryOf(username).click();
+  await entryOf(partner.author).click();
+
+  const rows = podiumDialog.getByRole('list', { name: 'Podium' }).getByRole('listitem');
+  await expect(rows).toHaveCount(2);
+  // Only the second row is asserted, before and after. The first derives 1st from its position whatever
+  // the toggle does, so reading it proves nothing the shape does not already guarantee.
+  await expect(rows.nth(1)).toContainText('2nd Place');
+  await rows.nth(1).getByRole('checkbox').check();
+  await expect(rows.nth(1)).toContainText('1st Place');
+
+  // A tie takes no place away: the row after a shared 1st is 2nd, not 3rd.
+  if (runnerUp) {
+    await entryOf(runnerUp.author).click();
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(2)).toContainText('2nd Place');
+  }
+
+  await podiumDialog.getByRole('button', { name: 'Announce Results' }).click();
+  await expect(podiumDialog).toBeHidden();
+
+  // Back to the account that entered, on the surfaces its author reads.
+  await signOut(page);
+  await signIn(page, username, password);
+
+  await gotoDev(page, 'mainMenu', { modal: 'community' });
+  await page.getByRole('button', { name: 'Contest', exact: true }).click();
+
+  // The bar counts the shared place instead of naming one of two winners, and counts what placed below.
+  const barLine = runnerUp ? '2 worlds tied for 1st · 1 more placed' : '2 worlds tied for 1st';
+  await expect(page.getByText(barLine, { exact: true })).toBeVisible();
+
+  // Every placed world gets its own plate, and the two that share 1st are deliberately identical — so
+  // what tells them from a sole winner is that there are two of them wearing the same metal.
+  const band = page.getByTestId('podium-card');
+  await expect(band).toHaveCount(runnerUp ? 3 : 2);
+  await expect(band.nth(0)).toContainText('1st Place');
+  await expect(band.nth(1)).toContainText('1st Place');
+  // Publish time decides the order inside a place, so the older listing leads however the judge listed
+  // them — this run put its own world in the dialog first and it is the newer of the two.
+  await expect(band.nth(0)).toContainText(`by ${partner.author}`);
+  await expect(band.nth(1)).toContainText(`by ${username}`);
+
+  // Each tied world's catalog card, one author at a time: the grid pages, and both entries carry the same
+  // world name, so a search by author is the only way to be sure which card the badge is on.
+  const goldBadge = page.getByText(`1st Place — ${running.title}`);
+  // Scoped to the grid, because the menu behind the browser is still in the page and the author's own
+  // library card wears this badge too.
+  const catalogBadge = page.getByRole('tabpanel').getByText(`1st Place — ${running.title}`);
+  // A decided contest pins its podium to the front of the entry list, so both tied cards are on the first
+  // page however many others were entered — and both stay there under an author search, which is why this
+  // counts rather than narrowing to one card at a time. Exactly two: a badge that reached only one of the
+  // tied worlds leaves one, and a badge that ignored the podium and marked an entry that did not place
+  // leaves three or more.
+  await expect(catalogBadge).toHaveCount(2);
+  for (const author of [username, partner.author]) {
+    await expect(page.getByText(`By ${author}`, { exact: true })).toBeVisible();
+  }
+
+  // The sole place after the tie: silver on the band and one silver badge in the grid. A stored
+  // 1, 1, 3 shows bronze here instead.
+  if (runnerUp) {
+    await expect(band.nth(2)).toContainText('2nd Place');
+    await expect(band.nth(2)).toContainText(`by ${runnerUp.author}`);
+    await expect(page.getByRole('tabpanel').getByText(`2nd Place — ${running.title}`)).toHaveCount(1);
+  }
+
+  // And the author's own downloaded copy, on a fresh launch. Nothing about the placement is stored
+  // locally, so the library learns it by reading the archive again. The bare path rather than a reload:
+  // the dev route is still pointing at the community browser, which would come back up over the library.
+  await page.goto('/');
   await page.waitForFunction(() => '__fmDev' in window);
-  await page.getByText('Loaded default worlds').waitFor({ state: 'visible' });
-
-  const badge = page.getByText(`${expectedPlace} — ${running.title}`);
-  await expect(badge.first()).toBeVisible();
+  // The library's own card, not the seeding toast: the worlds are already stored by now, and a launch
+  // that finds them there says nothing.
+  const libraryCard = page.getByText(worldName, { exact: true }).first();
+  await libraryCard.waitFor();
+  await expect(goldBadge.first()).toBeVisible();
 
   // And again one click in: the details modal is where the honor used to be lost.
-  await page.getByText(worldName, { exact: true }).first().click();
+  await libraryCard.click();
   const details = page.getByRole('dialog').filter({ hasText: worldName });
-  await expect(details.getByText(`${expectedPlace} — ${running.title}`)).toBeVisible();
+  await expect(details.getByText(`1st Place — ${running.title}`)).toBeVisible();
 
   expect(stray).toEqual([]);
 });

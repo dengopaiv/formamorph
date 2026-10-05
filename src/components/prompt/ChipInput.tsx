@@ -12,10 +12,11 @@ import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext
 import { ChipVocabularyContext, type ChipVocabulary } from '@/lib/chipVocabulary';
 import { cn } from '@/lib/utils';
 import { VariableNode, PromptDragContext } from './VariableNode';
-import { buildEditorState, serializeRoot } from './promptFieldState';
+import { buildEditorState, createEchoLedger, serializeRoot } from './promptFieldState';
 import { ChipTypeaheadPlugin } from './ChipTypeahead';
 import { ChipInsertTargetPlugin } from './ChipInsertTarget';
 import { ChipDragPlugin } from './ChipDrag';
+import { RefusedChipPastePlugin } from './PromptTokenPastePlugin';
 
 /**
  * A one-line chip editor shaped like an ordinary text input — for name fields, where the full prompt editor's
@@ -45,28 +46,25 @@ function ValueSyncPlugin({ value, onChange, parse }: {
   parse: ChipVocabulary['parse'];
 }) {
   const [editor] = useLexicalComposerContext();
-  const expected = useRef(value);
+  const [echoes] = useState(() => createEchoLedger(value));
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const parseRef = useRef(parse);
   parseRef.current = parse;
 
   useEffect(() => {
-    if (value === expected.current) return;
-    expected.current = value;
+    if (echoes.receive(value)) return;
     editor.update(() => buildEditorState(value, parseRef.current));
-  }, [value, editor]);
+  }, [value, editor, echoes]);
 
   useEffect(
     () => editor.registerUpdateListener(({ editorState }) => {
       editorState.read(() => {
         const next = serializeRoot();
-        if (next === expected.current) return;
-        expected.current = next;
-        onChangeRef.current(next);
+        if (echoes.send(next)) onChangeRef.current(next);
       });
     }),
-    [editor],
+    [editor, echoes],
   );
   return null;
 }
@@ -281,6 +279,7 @@ const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, classN
           <Surface placeholder={placeholder} ariaLabel={ariaLabel} className={className} multiline={multiline} />
           <HistoryPlugin />
           <ValueSyncPlugin value={value} onChange={onChange} parse={vocabulary.parse} />
+          {vocabulary.refuses && <RefusedChipPastePlugin vocab={vocabulary} />}
           {!multiline && <SingleLinePlugin onSubmit={onSubmit} />}
           {(onFocus || onBlur) && <FocusPlugin onFocus={onFocus} onBlur={onBlur} />}
           {autoFocus && <AutoFocusPlugin />}

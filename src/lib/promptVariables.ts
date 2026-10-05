@@ -23,6 +23,10 @@ export interface PromptVariantAxis {
   toggle?: boolean;
   /** Help shown beside a toggle axis's checkbox. */
   help?: string;
+  /** Show the stored choice and take no input. For an axis whose options exist but cannot differ here. */
+  readOnly?: boolean;
+  /** One line under a read-only axis: why it takes no input, and what unlocks it. */
+  readOnlyHelp?: string;
   /** Lay the options out this many per row instead of all on one. For axes with enough options that a
    *  single row squeezes the labels unreadably. */
   columns?: number;
@@ -47,7 +51,7 @@ export interface PromptVariable {
 /** Every prompt editor maps to one of these kinds (mirrors the Settings → Output → Turn Extras toggles).
  *  The last four are authoring-time, not turn-time: they drive the world editor's ✨ buttons rather than
  *  anything in the turn pipeline, so they carry none of the runtime context chips. */
-export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'summary' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'playerdesc' | 'aidesc' | 'aisummary' | 'desccheck';
+export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'summary' | 'milestone' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'discover' | 'playerdesc' | 'aidesc' | 'aisummary' | 'desccheck';
 
 const SUMMARY_VARIANT: PromptVariant = {
   id: 'summary',
@@ -92,6 +96,17 @@ const CONTENT_AXIS: PromptVariantAxis = {
   ],
 };
 
+// The persona is one entity, so its content axis speaks of one person rather than of each item in a list.
+const PERSONA_CONTENT_AXIS: PromptVariantAxis = {
+  id: 'content',
+  label: 'Content',
+  options: [
+    { id: null, label: 'Full', help: "Sends the persona's name, aliases, pronouns, and full description" },
+    { id: 'summary', label: 'Summary', help: 'Sends the short AI summary, or the full description if there is none' },
+    { id: 'name', label: 'Name', help: 'Sends only the name and pronouns, for use inside a sentence' },
+  ],
+};
+
 // Shared "how the block is shaped" axis (mirrors the Default/Simple presets): Simple = plain text; Default =
 // markdown. The labels-style preset strips this axis back to plain (see sectionStyle `stripChipFormat`).
 const FORMAT_AXIS: PromptVariantAxis = {
@@ -121,13 +136,24 @@ const STAT_MEANING_AXIS: PromptVariantAxis = {
 };
 
 // Each variable gets a fixed palette slot so its color is stable everywhere (chip + preview, every prompt).
-const WORLD: PromptVariable = { token: '<WORLD DESCRIPTION>', label: 'World', color: HIGHLIGHT_PALETTE[0] };
+const WORLD: PromptVariable = { token: '<WORLD DESCRIPTION>', label: 'World', color: HIGHLIGHT_PALETTE[0], affixable: true };
 const STATS: PromptVariable = { token: '<STATS DESCRIPTION>', label: 'Stats', color: HIGHLIGHT_PALETTE[1], axes: [STAT_VALUES_AXIS, STAT_STATUS_AXIS, STAT_MEANING_AXIS, FORMAT_AXIS] };
 const TRAITS: PromptVariable = { token: '<TRAITS DESCRIPTION>', label: 'Traits', color: HIGHLIGHT_PALETTE[2], axes: [FORMAT_AXIS] };
 const LOCATION: PromptVariable = { token: '<LOCATION>', label: 'Location', color: HIGHLIGHT_PALETTE[3], axes: [LOCATION_SCOPE_AXIS, CONTENT_AXIS, FORMAT_AXIS], affixable: true };
+// The entity the player plays. Affixable so a placement can carry its own heading, which then disappears
+// with the value when no persona is set.
+const PERSONA: PromptVariable = { token: '<PERSONA>', label: 'Persona', color: HIGHLIGHT_PALETTE[17], axes: [PERSONA_CONTENT_AXIS, FORMAT_AXIS], affixable: true };
 const NOTES: PromptVariable = { token: '<NOTES>', label: 'Notes', color: HIGHLIGHT_PALETTE[4], affixable: true };
 const LENGTH: PromptVariable = { token: '<LENGTH GUIDANCE>', label: 'Length Guidance', color: HIGHLIGHT_PALETTE[5] };
-const MARKDOWN: PromptVariable = { token: '<MARKDOWN GUIDANCE>', label: 'Markdown Guidance', color: HIGHLIGHT_PALETTE[6] };
+const MARKDOWN: PromptVariable = {
+  token: '<MARKDOWN GUIDANCE>',
+  label: 'Markdown Guidance',
+  color: HIGHLIGHT_PALETTE[6],
+  variants: [
+    { id: null, label: 'Guidance', help: 'Tells the AI how to use Markdown, or to write plain prose while Markdown is off' },
+    { id: 'definitions', label: 'Definitions', help: 'Lists the inline syntax the story displays, with no usage direction. Empty while Markdown is off.' },
+  ],
+};
 // Director prompt only: expands to the cast-size guidance derived from the Limit Active Characters setting.
 const ACTIVE_CHARACTER: PromptVariable = { token: '<ACTIVE CHARACTER GUIDANCE>', label: 'Active Character Guidance', color: HIGHLIGHT_PALETTE[13] };
 // Entities are one chip whose `scope` axis picks here / sub-locations / reachable siblings.
@@ -138,6 +164,7 @@ const DICTIONARY: PromptVariable = {
   token: '<DICTIONARY>',
   label: 'Dictionary',
   color: HIGHLIGHT_PALETTE[11],
+  affixable: true,
   variants: [
     { id: null, label: 'Foreground', help: 'Keyword-triggered lore placed late for high recency — the "## Foreground Lore" block.' },
     { id: 'before', label: 'Background', help: 'Lore placed early with the world setup — the "## Background Lore" block.' },
@@ -167,6 +194,15 @@ const TIME: PromptVariable = { token: '<TIME>', label: 'Time', color: HIGHLIGHT_
 // those people and no others. A value token like <NARRATION> — never a context block.
 const IN_FRAME: PromptVariable = { token: '<IN FRAME>', label: 'In Frame', color: HIGHLIGHT_PALETTE[8] };
 
+// Character-note pass only: two headed blocks, each rendering its own header or nothing. The later
+// material is empty on a first note, so a first note and a rewrite share one template.
+const FIRST_PASSAGE: PromptVariable = { token: '<FIRST PASSAGE>', label: 'First Passage', color: HIGHLIGHT_PALETTE[10] };
+const LATER_MATERIAL: PromptVariable = { token: '<LATER MATERIAL>', label: 'Later Material', color: HIGHLIGHT_PALETTE[12] };
+
+// Milestone selector only: two headed, numbered digest lists. The remembered list is empty on a first run.
+const REMEMBERED_MOMENTS: PromptVariable = { token: '<REMEMBERED MOMENTS>', label: 'Remembered Moments', color: HIGHLIGHT_PALETTE[11] };
+const NEW_MOMENTS: PromptVariable = { token: '<NEW MOMENTS>', label: 'New Moments', color: HIGHLIGHT_PALETTE[15] };
+
 // The AI Language setting, as the directive the prompt actually carries (lib/languages `languageDirective`).
 // Placement is the author's: the default templates put it last, where recency makes a small model honor it,
 // and an author who knows their model better can move it. Renders nothing at all for English or a blank
@@ -179,12 +215,12 @@ export const NOW_LINE_VARIABLES: PromptVariable[] = [LOCATION, ENTITIES, TIME, N
 
 /** All known variables — used by the parser to recognize any token regardless of which prompt it's in. */
 export const ALL_PROMPT_VARIABLES: PromptVariable[] = [
-  WORLD, STATS, TRAITS, LOCATION, ENTITIES, NOTES, DICTIONARY, LENGTH, MARKDOWN, ACTIVE_CHARACTER, PLAYER_ACTION, NARRATION, CHARACTER, SUBJECT,
-  TIME, IN_FRAME, LANGUAGE, FACETS,
+  WORLD, STATS, TRAITS, PERSONA, LOCATION, ENTITIES, NOTES, DICTIONARY, LENGTH, MARKDOWN, ACTIVE_CHARACTER, PLAYER_ACTION, NARRATION, CHARACTER, SUBJECT,
+  TIME, IN_FRAME, LANGUAGE, FIRST_PASSAGE, LATER_MATERIAL, REMEMBERED_MOMENTS, NEW_MOMENTS, FACETS,
 ];
 
 /** The context chips every system prompt can reference; GameViewer substitutes them uniformly. */
-const CONTEXT_VARS: PromptVariable[] = [WORLD, STATS, TRAITS, LOCATION, ENTITIES, NOTES, TIME];
+const CONTEXT_VARS: PromptVariable[] = [WORLD, STATS, TRAITS, PERSONA, LOCATION, ENTITIES, NOTES, TIME];
 
 /** Which variables each prompt's toolbar offers. Every kind gets the shared context chips (even when its
  *  default text doesn't use them); some add their own extras (narration's length/markdown, character's name). */
@@ -196,6 +232,7 @@ export const PROMPT_KIND_VARIABLES: Record<PromptKind, PromptVariable[]> = {
   statupdates: [...CONTEXT_VARS],
   location: [...CONTEXT_VARS],
   summary: [...CONTEXT_VARS],
+  milestone: [...CONTEXT_VARS],
   diary: [...CONTEXT_VARS],
   director: [...CONTEXT_VARS, ACTIVE_CHARACTER],
   character: [CHARACTER, ...CONTEXT_VARS],
@@ -203,6 +240,7 @@ export const PROMPT_KIND_VARIABLES: Record<PromptKind, PromptVariable[]> = {
   timepassed: [...CONTEXT_VARS],
   timeopening: [...CONTEXT_VARS],
   scenetags: [...CONTEXT_VARS],
+  discover: [...CONTEXT_VARS],
   // Authoring prompts run in the world editor, where no turn is in flight and the runtime context chips
   // would have nothing to resolve against — so they offer only their own per-kind tokens. The summary pass
   // is kind-agnostic (it condenses whatever text it is handed), so it offers none at all.
@@ -223,6 +261,7 @@ export const PROMPT_KIND_USER_VARIABLES: Partial<Record<PromptKind, PromptVariab
   statupdates: [PLAYER_ACTION, NARRATION],
   location: [PLAYER_ACTION, NARRATION],
   summary: [PLAYER_ACTION, NARRATION],
+  milestone: [REMEMBERED_MOMENTS, NEW_MOMENTS],
   director: [PLAYER_ACTION, NARRATION],
   timepassed: [PLAYER_ACTION, NARRATION],
   // The opening pass runs on turn one, where the player's action is "start the game" — only the narration
@@ -231,6 +270,7 @@ export const PROMPT_KIND_USER_VARIABLES: Partial<Record<PromptKind, PromptVariab
   // The tag pass reads the prose of this turn and who the composer put in frame. The player's action is
   // deliberately absent: what was attempted is not what the picture shows.
   scenetags: [NARRATION, IN_FRAME],
+  discover: [CHARACTER, FIRST_PASSAGE, LATER_MATERIAL],
 };
 
 const VAR_BY_BASE = new Map(ALL_PROMPT_VARIABLES.map((v) => [v.token, v]));
@@ -285,7 +325,7 @@ export const ALL_VARIANT_IDS: string[] = [
 /**
  * The token grammar, shared by the template parser, the style downcast and the chip editor:
  *
- *     `<BASE [|variantId] [|pre="…"] [|post="…"]>`
+ *     `<BASE [|variantId] [|pre="…"] [|post="…"] [|format=markdown|xml] [|header="…"]>`
  *
  * Affixes are the connective words around a chip used inside a sentence ("Now you are at X, inside Y"),
  * and they render only when the chip has a value — see `renderPromptTemplate`. They live in the token
@@ -306,12 +346,11 @@ const TOKEN_BASES = ALL_PROMPT_VARIABLES.map((v) => v.token.slice(0, -1)) // dro
   .join('|');
 // `[^"]+` (not `*`): an empty affix has no canonical spelling, so `pre=""` must not parse.
 const AFFIX_BODY = '"([^"]+)"';
+// Header uses JSON string escaping; affixes retain their literal grammar.
+const HEADER_BODY = '"((?:[^"\\\\\\x00-\\x1f]|\\\\(?:["\\\\/bfnrt]|u[0-9a-fA-F]{4}))*)"';
 export const TOKEN_PATTERN =
   `(?:${TOKEN_BASES})(?:\\|(?:${ALL_VARIANT_IDS.map(escapeRegExp).join('|')}))?` +
-  `(?:\\|pre=${AFFIX_BODY})?(?:\\|post=${AFFIX_BODY})?>`;
-
-/** Longest an affix may be. They are connective phrases, not prose. */
-export const AFFIX_MAX_LENGTH = 40;
+  `(?:\\|pre=${AFFIX_BODY})?(?:\\|post=${AFFIX_BODY})?(?:\\|format=(markdown|xml))?(?:\\|header=${HEADER_BODY})?>`;
 
 /** The character an affix cannot contain (it delimits the affix in the token). */
 export const AFFIX_FORBIDDEN = '"';
@@ -323,13 +362,16 @@ export interface TokenParts {
   variantId: string | null;
   pre: string;
   post: string;
+  header?: string;
+  /** Header-only selection; omitted for Simple and kept separate from body lookup keys. */
+  headerFormat?: 'markdown' | 'xml';
   key: string;
 }
 
 // Anchored, non-global twin of the parser's regex, with the pieces captured.
 const TOKEN_EXACT = new RegExp(
   `^(${TOKEN_BASES})(?:\\|(${ALL_VARIANT_IDS.map(escapeRegExp).join('|')}))?` +
-    `(?:\\|pre=${AFFIX_BODY})?(?:\\|post=${AFFIX_BODY})?>$`,
+    `(?:\\|pre=${AFFIX_BODY})?(?:\\|post=${AFFIX_BODY})?(?:\\|format=(markdown|xml))?(?:\\|header=${HEADER_BODY})?>$`,
 );
 
 /** Take a token apart, or null when it isn't a canonical token. */
@@ -338,22 +380,26 @@ export function splitToken(token: string): TokenParts | null {
   if (!m) return null;
   const base = `${m[1]}>`;
   const variantId = m[2] ?? null;
-  return { base, variantId, pre: m[3] ?? '', post: m[4] ?? '', key: withVariant(base, variantId) };
+  return { base, variantId, pre: m[3] ?? '', post: m[4] ?? '', key: withVariant(base, variantId),
+    ...(m[5] === 'markdown' || m[5] === 'xml' ? { headerFormat: m[5] } : {}),
+    ...(m[6] !== undefined ? { header: JSON.parse(`"${m[6]}"`) as string } : {}) };
 }
 
 /** Build a canonical token from its pieces. Empty affixes are omitted, so there is exactly one spelling
  *  of any given token — the property the round-trip guarantee rests on. */
-export function joinToken(parts: { base: string; variantId?: string | null; pre?: string; post?: string }): string {
+export function joinToken(parts: { base: string; variantId?: string | null; pre?: string; post?: string; header?: string; headerFormat?: 'markdown' | 'xml' }): string {
   const inner = parts.base.slice(0, -1);
   const variant = parts.variantId ? `|${parts.variantId}` : '';
   const pre = parts.pre ? `|pre="${parts.pre}"` : '';
   const post = parts.post ? `|post="${parts.post}"` : '';
-  return `${inner}${variant}${pre}${post}>`;
+  const header = parts.header ? `|header=${JSON.stringify(parts.header)}` : '';
+  const format = parts.headerFormat ? `|format=${parts.headerFormat}` : '';
+  return `${inner}${variant}${pre}${post}${format}${header}>`;
 }
 
-/** True when `text` is usable as an affix (short enough, and free of the delimiter). */
+/** True when `text` is free of the affix delimiter. */
 export function isValidAffix(text: string): boolean {
-  return text.length <= AFFIX_MAX_LENGTH && !text.includes(AFFIX_FORBIDDEN);
+  return !text.includes(AFFIX_FORBIDDEN);
 }
 
 /** The base token (`<…>`) of a possibly-variant token, e.g. `<LOCATION|summary>` → `<LOCATION>`. */

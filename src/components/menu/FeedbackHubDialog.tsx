@@ -9,6 +9,8 @@ interface FeedbackHubDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Branch to open on; the dev-router uses this to land on either directly. */
   initialTab?: MyFeedbackTabKey;
+  /** Changes with each outside request, so a repeat request selects its tab again. */
+  requestKey?: string;
   /** Fired when a thread is read or replied to, so the count on the button outside stays in step. */
   onChanged?: () => void;
 }
@@ -22,12 +24,12 @@ interface FeedbackHubDialogProps {
  * same thing already filed get filed again. Triage stays in the Admin Panel: reading a thread and
  * deciding what happens to it are different jobs, even for the person who can do both.
  */
-export function FeedbackHubDialog({ open, onOpenChange, initialTab, onChanged }: FeedbackHubDialogProps) {
+export function FeedbackHubDialog({ open, onOpenChange, initialTab, requestKey, onChanged }: FeedbackHubDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* No description: the tab labels say what each list is. `aria-describedby={undefined}` is Radix's
           opt-out, otherwise it warns about the missing one. */}
-      <DialogContent aria-describedby={undefined} className="sm:max-w-[900px] h-[90dvh] flex flex-col overflow-hidden">
+      <DialogContent surface="feedbackHub" aria-describedby={undefined} className="sm:max-w-[900px] h-[90dvh] flex flex-col overflow-hidden">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <MessageSquarePlus className="h-4 w-4" /> Feedback
@@ -37,7 +39,7 @@ export function FeedbackHubDialog({ open, onOpenChange, initialTab, onChanged }:
         {/* `min-w-0`: DialogContent is a grid, and a grid item's `min-width: auto` lets a wide thread
             widen the dialog past its max width instead of being contained. */}
         <ScrollArea className="flex-1 min-h-0 min-w-0 px-1">
-          <MyFeedbackSection active={open} initialTab={initialTab} onChanged={onChanged} />
+          <MyFeedbackSection active={open} initialTab={initialTab} requestKey={requestKey} onChanged={onChanged} />
         </ScrollArea>
       </DialogContent>
     </Dialog>

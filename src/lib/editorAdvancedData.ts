@@ -5,7 +5,8 @@
  */
 import { hasValue } from './editorMode';
 import { allPlaceholders } from './placeholderHomes';
-import { storedOpeningCue } from './openingCue';
+import { openingTexts } from './openings';
+import { worldAllowedPersonas, worldStartPersona } from './personaPick';
 import { storedWorldPrompt, WORLD_PROMPT_KINDS } from './worldPrompt';
 import type { Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
 
@@ -31,14 +32,16 @@ export function worldUsesAdvancedFeatures(w: AdvancedDataInput): boolean {
     e.enabled === false || e.constant || e.useRegex || e.recursive ||
     hasValue(e.scanDepth) || hasValue(e.secondaryKeys)))) return true;
   if (WORLD_PROMPT_KINDS.some((kind) => hasValue(storedWorldPrompt(w.worldOverview, kind)))) return true;
-  if (hasValue(storedOpeningCue(w.worldOverview))) return true;
+  if (openingTexts(w.worldOverview).length > 0) return true;
+  if (worldAllowedPersonas(w.worldOverview) !== 'any' || worldStartPersona(w.worldOverview)) return true;
   if ((w.stats ?? []).some((s) =>
     hasValue(s.beforeCode) || hasValue(s.code) || hasValue(s.descriptors) ||
     s.noIncrease || s.noIncreaseMax || s.noDecrease || s.noDecreaseMax)) return true;
   if ((w.entities ?? []).some((e) =>
-    hasValue(e.aliases) || hasValue(e.aiSummary) || hasValue(e.type) || hasValue(e.model) ||
-    hasValue(e.imageTags))) return true;
-  if ((w.locations ?? []).some((l) => hasValue(l.aiSummary) || hasValue(l.ambientSound) || hasValue(l.imageTags))) return true;
+    e.persona || hasValue(e.aliases) || hasValue(e.aiSummary) || hasValue(e.type) || hasValue(e.model) ||
+    hasValue(e.imageTags) || openingTexts(e).length > 0)) return true;
+  if ((w.locations ?? []).some((l) =>
+    hasValue(l.aiSummary) || hasValue(l.ambientSound) || hasValue(l.imageTags) || openingTexts(l).length > 0)) return true;
   if ((w.traits ?? []).some((t) => hasValue(t.statToggles) || hasValue(t.placeholderPins))) return true;
   return false;
 }

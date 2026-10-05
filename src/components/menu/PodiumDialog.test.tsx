@@ -1,6 +1,8 @@
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { toast } from 'react-toastify';
+import { toastTexts } from '@/test/toastText';
 import { PodiumDialog } from './PodiumDialog';
 import EventService from '@/services/EventService';
 import WorldStorageService from '@/services/WorldStorageService';
@@ -41,6 +43,8 @@ const listing = (over: Record<string, unknown> = {}) => ({
 });
 
 /** Three placeable entries, in the order the tests name them. */
+const fourth = () => listing({ _id: 'w4', name: 'Fourth Wall', author: { id: 'u5', username: 'lark' } });
+
 const three = () => [
   listing(),
   listing({ _id: 'w2', name: 'Ninth Wave Shoals', author: { id: 'u3', username: 'corrin' } }),
@@ -55,9 +59,37 @@ const catalog = (worlds: Record<string, unknown>[]) => {
 const entry = (name: string) =>
   within(screen.getByRole('group', { name: 'Entries' })).getByRole('button', { name: new RegExp(name) });
 
-/** The slot a place is staged in, read off the podium row above the grid. */
-const slot = (label: string) =>
-  within(screen.getByLabelText('Podium')).getByText(label).closest('div')?.parentElement as HTMLElement;
+/** The podium rows above the grid, top down. */
+const rows = () => within(screen.getByLabelText('Podium')).getAllByRole('listitem');
+
+/**
+ * The grid's cards in the order it draws them, named from the worlds a test put in the catalog.
+ *
+ * Read off each card's own heading rather than its whole text, which also carries the author, the
+ * like count and whatever badges the card is wearing.
+ */
+const gridOrder = (names: string[]): string[] =>
+  within(screen.getByRole('group', { name: 'Entries' })).getAllByRole('button')
+    .map((card) => names.find((name) => within(card).queryByText(name)) ?? 'unknown');
+
+/**
+ * The podium as it reads, top down: one `1st Place / Pearl of the Undertow` per row.
+ *
+ * An empty podium is one row carrying the line that says how to start one, and no clear button — so it
+ * reads as no places staged rather than as a row with nothing in it.
+ */
+const staged = (): string[] => rows()
+  .filter((row) => within(row).queryByRole('button', { name: /^Clear / }))
+  .map((row) => {
+    const place = within(row).getByText(/^\d(?:st|nd|rd) Place$/).textContent;
+    const name = within(row).getByRole('button', { name: /^Clear / })
+      .getAttribute('aria-label')?.replace('Clear ', '');
+    return `${place} / ${name}`;
+  });
+
+/** The Tie With Above checkbox on the row holding this world. Radix renders it as a button. */
+const tie = (name: string) =>
+  screen.getByRole('checkbox', { name: `Tie With Above: ${name}` }) as HTMLButtonElement;
 
 const saveButton = () => screen.getByRole('button', { name: /Announce Results|Save Podium/ }) as HTMLButtonElement;
 
@@ -88,13 +120,96 @@ describe('the gallery', () => {
     expect(await screen.findByText('Nothing was entered into this contest.')).toBeTruthy();
   });
 
-  it('opens with three empty places', async () => {
+  it('opens with an empty podium and says how to start one', async () => {
     catalog(three());
 
     render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
     await screen.findByText('Pearl of the Undertow');
 
-    expect(within(screen.getByLabelText('Podium')).getAllByText('Empty')).toHaveLength(3);
+    expect(staged()).toEqual([]);
+    expect(screen.getByText('Click an entry to start the podium')).toBeTruthy();
+  });
+});
+
+describe('the standings in the grid', () => {
+  const names = ['Pearl of the Undertow', 'Ninth Wave Shoals', 'Salt-Bright Reaches'];
+
+  /** The three entries with like counts of their own, handed over in no particular order. */
+  const ranked = (over: Record<string, Record<string, unknown>> = {}) => [
+    listing({ likes: 4, ...over.w1 }),
+    listing({ _id: 'w2', name: 'Ninth Wave Shoals', likes: 12, ...over.w2 }),
+    listing({ _id: 'w3', name: 'Salt-Bright Reaches', likes: 9, ...over.w3 }),
+  ];
+
+  it('leads with the most-liked entry, so the standings are the first thing read', async () => {
+    catalog(ranked());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    expect(gridOrder(names)).toEqual([
+      'Ninth Wave Shoals', 'Salt-Bright Reaches', 'Pearl of the Undertow',
+    ]);
+  });
+
+  it('breaks a level count by publish time, earliest first', async () => {
+    // Likes alone leave level entries in whatever order the catalog arrived in, which is an order that
+    // can change between two visits that changed nothing.
+    catalog(ranked({
+      w1: { likes: 12, created_at: '2026-07-14T09:00:00.000Z' },
+      w2: { created_at: '2026-07-20T09:00:00.000Z' },
+      w3: { likes: 12, created_at: '2026-07-02T09:00:00.000Z' },
+    }));
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    expect(gridOrder(names)).toEqual([
+      'Salt-Bright Reaches', 'Pearl of the Undertow', 'Ninth Wave Shoals',
+    ]);
+  });
+
+  it('marks every entry level with another, and leaves a count of its own unmarked', async () => {
+    catalog(ranked({ w1: { likes: 12 } }));
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    expect(within(entry('Pearl of the Undertow')).getByText('Tied')).toBeTruthy();
+    expect(within(entry('Ninth Wave Shoals')).getByText('Tied')).toBeTruthy();
+    expect(within(entry('Salt-Bright Reaches')).queryByText('Tied')).toBeNull();
+  });
+
+  it('marks nothing when every entry has a count of its own', async () => {
+    // The guard above must not simply mark every card.
+    catalog(ranked());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    expect(within(screen.getByRole('group', { name: 'Entries' })).queryByText('Tied')).toBeNull();
+  });
+
+  it('says the mark in words, so it does not rest on a color alone', async () => {
+    catalog(ranked({ w1: { likes: 12 } }));
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    expect(screen.getByRole('button', { name: /Pearl of the Undertow.*Tied on 12 likes/s })).toBeTruthy();
+  });
+
+  it('sorts an entry nobody may place with the rest, still wearing its reason', async () => {
+    // A blocked entry is still a standing. Dropping it to the bottom would misreport the contest, and
+    // a judge who cannot see it leads is a judge who cannot see the tie under it either.
+    catalog(ranked({ w2: { author: { id: 'judge', username: 'an-admin' } } }));
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    expect(gridOrder(names)[0]).toBe('Ninth Wave Shoals');
+    expect((entry('Ninth Wave Shoals') as HTMLButtonElement).disabled).toBe(true);
+    expect(within(entry('Ninth Wave Shoals')).getByText('Your entry')).toBeTruthy();
   });
 });
 
@@ -141,18 +256,21 @@ describe('assembling the podium', () => {
     await screen.findByText('Pearl of the Undertow');
 
     fireEvent.click(entry('Pearl of the Undertow'));
-    expect(slot('1st Place')).toHaveTextContent('Pearl of the Undertow');
+    expect(staged()).toEqual(['1st Place / Pearl of the Undertow']);
 
     fireEvent.click(entry('Ninth Wave Shoals'));
-    expect(slot('2nd Place')).toHaveTextContent('Ninth Wave Shoals');
-
     fireEvent.click(entry('Salt-Bright Reaches'));
-    expect(slot('3rd Place')).toHaveTextContent('Salt-Bright Reaches');
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Ninth Wave Shoals',
+      '3rd Place / Salt-Bright Reaches',
+    ]);
   });
 
   it('takes a lone placed entry off the podium on the next click', async () => {
     // It cannot step down to silver: there would be nobody on gold, and a podium with a hole in it is
-    // one the server refuses. So the only move left from the bottom step is off.
+    // one the server refuses. So the only move left from the bottom row is off.
     catalog(three());
 
     render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
@@ -161,10 +279,10 @@ describe('assembling the podium', () => {
     fireEvent.click(entry('Pearl of the Undertow'));
     fireEvent.click(entry('Pearl of the Undertow'));
 
-    expect(within(screen.getByLabelText('Podium')).getAllByText('Empty')).toHaveLength(3);
+    expect(staged()).toEqual([]);
   });
 
-  it('trades places with the step below rather than doubling up on it', async () => {
+  it('trades places with the row below rather than doubling up on it', async () => {
     catalog(three());
 
     render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
@@ -174,9 +292,10 @@ describe('assembling the podium', () => {
     fireEvent.click(entry('Ninth Wave Shoals'));
     fireEvent.click(entry('Pearl of the Undertow'));
 
-    expect(slot('1st Place')).toHaveTextContent('Ninth Wave Shoals');
-    expect(slot('2nd Place')).toHaveTextContent('Pearl of the Undertow');
-    expect(slot('3rd Place')).toHaveTextContent('Empty');
+    expect(staged()).toEqual([
+      '1st Place / Ninth Wave Shoals',
+      '2nd Place / Pearl of the Undertow',
+    ]);
   });
 
   it('never lets one world hold two places', async () => {
@@ -189,11 +308,13 @@ describe('assembling the podium', () => {
     fireEvent.click(entry('Ninth Wave Shoals'));
     fireEvent.click(entry('Pearl of the Undertow'));
 
-    expect(within(screen.getByLabelText('Podium')).getAllByText('Pearl of the Undertow')).toHaveLength(1);
+    expect(staged().filter((row) => row.endsWith('Pearl of the Undertow'))).toHaveLength(1);
   });
 
-  it('leaves a full podium alone when a fourth entry is clicked', async () => {
-    catalog([...three(), listing({ _id: 'w4', name: 'Fourth Wall', author: { id: 'u5', username: 'lark' } })]);
+  it('seats a fourth entry on the bottom step rather than inventing a 4th place', async () => {
+    // The podium holds three steps, not three worlds. A fourth click cannot take 4th place, so it
+    // shares 3rd — which is the only reading that leaves 1, 2, 3, 3 reachable.
+    catalog([...three(), fourth()]);
 
     render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
     await screen.findByText('Fourth Wall');
@@ -203,8 +324,13 @@ describe('assembling the podium', () => {
     fireEvent.click(entry('Salt-Bright Reaches'));
     fireEvent.click(entry('Fourth Wall'));
 
-    expect(within(screen.getByLabelText('Podium')).queryByText('Fourth Wall')).toBeNull();
-    expect(slot('3rd Place')).toHaveTextContent('Salt-Bright Reaches');
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Ninth Wave Shoals',
+      '3rd Place / Salt-Bright Reaches',
+      '3rd Place / Fourth Wall',
+    ]);
+    expect(tie('Fourth Wall')).toBeChecked();
   });
 
   it('promotes what was below when the top place is cleared', async () => {
@@ -216,10 +342,9 @@ describe('assembling the podium', () => {
     fireEvent.click(entry('Pearl of the Undertow'));
     fireEvent.click(entry('Ninth Wave Shoals'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear 1st Place' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Pearl of the Undertow' }));
 
-    expect(slot('1st Place')).toHaveTextContent('Ninth Wave Shoals');
-    expect(slot('2nd Place')).toHaveTextContent('Empty');
+    expect(staged()).toEqual(['1st Place / Ninth Wave Shoals']);
   });
 
   it('closes the gap when a place is cleared from the middle', async () => {
@@ -232,11 +357,318 @@ describe('assembling the podium', () => {
     fireEvent.click(entry('Ninth Wave Shoals'));
     fireEvent.click(entry('Salt-Bright Reaches'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear 2nd Place' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Ninth Wave Shoals' }));
 
-    expect(slot('1st Place')).toHaveTextContent('Pearl of the Undertow');
-    expect(slot('2nd Place')).toHaveTextContent('Salt-Bright Reaches');
-    expect(slot('3rd Place')).toHaveTextContent('Empty');
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Salt-Bright Reaches',
+    ]);
+  });
+});
+
+describe('sharing a place', () => {
+  it('offers no tie on the first row, which has nothing above it', async () => {
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+
+    expect(screen.queryByRole('checkbox', { name: 'Tie With Above: Pearl of the Undertow' })).toBeNull();
+    expect(tie('Ninth Wave Shoals')).toBeTruthy();
+  });
+
+  it('makes the tie from the keyboard alone', async () => {
+    // A judge who never touches the mouse still has to be able to share a place.
+    const user = userEvent.setup();
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+
+    tie('Ninth Wave Shoals').focus();
+    expect(document.activeElement).toBe(tie('Ninth Wave Shoals'));
+    await user.keyboard(' ');
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '1st Place / Ninth Wave Shoals',
+    ]);
+  });
+
+  it('makes a tie and derives every later place again', async () => {
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+
+    fireEvent.click(tie('Ninth Wave Shoals'));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '1st Place / Ninth Wave Shoals',
+      '2nd Place / Salt-Bright Reaches',
+    ]);
+  });
+
+  it('follows a tie with 2nd, then 3rd, and seats the next click tied on 3rd', async () => {
+    // A tie takes no place away, so the judge decides how many winners there are.
+    const fifth = listing({ _id: 'w5', name: 'Fifth Season', author: { id: 'u6', username: 'wren' } });
+    catalog([...three(), fourth(), fifth]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Fifth Season');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+    fireEvent.click(entry('Fourth Wall'));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '1st Place / Ninth Wave Shoals',
+      '2nd Place / Salt-Bright Reaches',
+      '3rd Place / Fourth Wall',
+    ]);
+
+    fireEvent.click(entry('Fifth Season'));
+
+    expect(staged()[4]).toBe('3rd Place / Fifth Season');
+    expect(tie('Fifth Season')).toBeChecked();
+  });
+
+  it('marks the tied world with its shared place in the grid too', async () => {
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+
+    expect(entry('Ninth Wave Shoals')).toHaveTextContent('1st Place');
+  });
+
+  it('breaks the tie again and puts the row back on its own step', async () => {
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Ninth Wave Shoals',
+    ]);
+  });
+
+  it('refuses a break that would leave a row with no place at all', async () => {
+    // Two worlds share 3rd. Untie the last and it is 4th, which is no step on this podium — so the
+    // checkbox is unavailable and the way out is to clear the row.
+    catalog([...three(), fourth()]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Fourth Wall');
+
+    ['Pearl of the Undertow', 'Ninth Wave Shoals', 'Salt-Bright Reaches', 'Fourth Wall']
+      .forEach((name) => fireEvent.click(entry(name)));
+
+    expect(staged()[3]).toBe('3rd Place / Fourth Wall');
+
+    expect(tie('Fourth Wall').disabled).toBe(true);
+    // A control that is unavailable says why, rather than leaving a judge to guess at a grey box.
+    expect(within(rows()[3]).getByText('The podium ends at 3rd place')).toBeTruthy();
+    expect(within(rows()[2]).queryByText('The podium ends at 3rd place')).toBeNull();
+
+    fireEvent.click(tie('Fourth Wall'));
+    expect(staged()[3]).toBe('3rd Place / Fourth Wall');
+  });
+
+  it('refuses a break higher up that would push the bottom row past 3rd place', async () => {
+    // 1, 1, 2, 3 with the tie for 1st broken is 1, 2, 3, 4. The row that loses its place is not the
+    // one toggled, and the refusal still lands on the checkbox a judge is about to use.
+    catalog([...three(), fourth()]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Fourth Wall');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+    fireEvent.click(entry('Fourth Wall'));
+
+    expect(tie('Ninth Wave Shoals').disabled).toBe(true);
+    expect(within(rows()[1]).getByText('The podium ends at 3rd place')).toBeTruthy();
+  });
+
+  it('breaks a tie while every row still has a place, however many rows there are', async () => {
+    // Four worlds share 1st. Untie the last and it takes 2nd: the tie took no place away.
+    catalog([...three(), fourth()]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Fourth Wall');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    ['Ninth Wave Shoals', 'Salt-Bright Reaches', 'Fourth Wall'].forEach((name) => {
+      fireEvent.click(entry(name));
+      fireEvent.click(tie(name));
+    });
+    expect(staged()[3]).toBe('1st Place / Fourth Wall');
+
+    expect(tie('Fourth Wall').disabled).toBe(false);
+    fireEvent.click(tie('Fourth Wall'));
+    expect(staged()[3]).toBe('2nd Place / Fourth Wall');
+  });
+
+  it('keeps the podium shape when a tied row trades with the one below', async () => {
+    // The flag belongs to the row, not to the world in it, so a trade moves two names and leaves
+    // 1, 1, 2 as 1, 1, 2.
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+
+    fireEvent.click(entry('Ninth Wave Shoals'));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '1st Place / Salt-Bright Reaches',
+      '2nd Place / Ninth Wave Shoals',
+    ]);
+  });
+
+  it('shows the worlds sharing a place in publish order, whatever order they were clicked', async () => {
+    // The server sorts a shared place by publish time before it stores the positions, so a dialog left
+    // in click order would show an order the save then changes.
+    catalog([
+      listing({ created_at: '2026-07-20T09:00:00.000Z' }),
+      listing({
+        _id: 'w2', name: 'Ninth Wave Shoals', author: { id: 'u3', username: 'corrin' },
+        created_at: '2026-07-05T09:00:00.000Z',
+      }),
+    ]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+
+    expect(staged()).toEqual([
+      '1st Place / Ninth Wave Shoals',
+      '1st Place / Pearl of the Undertow',
+    ]);
+  });
+
+  it('leaves the order of places nobody shares alone', async () => {
+    // The guard above must sort inside a shared place only. The earliest-published world here holds
+    // 2nd, and a sort over the whole list would hand it 1st off an order nobody chose.
+    catalog([
+      listing({ created_at: '2026-07-20T09:00:00.000Z' }),
+      listing({
+        _id: 'w2', name: 'Ninth Wave Shoals', author: { id: 'u3', username: 'corrin' },
+        created_at: '2026-07-05T09:00:00.000Z',
+      }),
+    ]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Ninth Wave Shoals',
+    ]);
+  });
+
+  it('leaves the survivors of a shared place on that place when the row above them is cleared', async () => {
+    // Clearing one of two 2nd places must not promote the other to a shared 1st. The removal was meant
+    // to take one world off the podium, not to award another a place nobody gave it.
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+    fireEvent.click(tie('Salt-Bright Reaches'));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Ninth Wave Shoals',
+      '2nd Place / Salt-Bright Reaches',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Ninth Wave Shoals' }));
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Salt-Bright Reaches',
+    ]);
+  });
+
+  it('sends the repeated place in the request body, one row per world', async () => {
+    const announce = vi.spyOn(EventService, 'announceResults').mockResolvedValue(contest);
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(announce).toHaveBeenCalledWith('c1', [
+      { place: 1, worldId: 'w1' },
+      { place: 1, worldId: 'w2' },
+      { place: 2, worldId: 'w3' },
+    ]));
+  });
+
+  it('writes the tied worlds onto one preview line', async () => {
+    catalog(three());
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={contest} />);
+    await screen.findByText('Pearl of the Undertow');
+
+    fireEvent.click(entry('Pearl of the Undertow'));
+    fireEvent.click(entry('Ninth Wave Shoals'));
+    fireEvent.click(entry('Salt-Bright Reaches'));
+    fireEvent.click(tie('Ninth Wave Shoals'));
+    fireEvent.click(tie('Salt-Bright Reaches'));
+
+    expect(screen.getByText(
+      'First place: Pearl of the Undertow by mirelle, Ninth Wave Shoals by corrin and Salt-Bright Reaches by ashgrove',
+    )).toBeTruthy();
+    expect(screen.queryByText(/Second place|Third place/)).toBeNull();
   });
 });
 
@@ -272,8 +704,9 @@ describe('announcing', () => {
     fireEvent.click(entry('Pearl of the Undertow'));
     fireEvent.click(entry('Ninth Wave Shoals'));
 
-    expect(screen.getByText('1st Place: Pearl of the Undertow by mirelle')).toBeTruthy();
-    expect(screen.getByText('2nd Place: Ninth Wave Shoals by corrin')).toBeTruthy();
+    // The broadcast's own ordinals, not the plate's: the preview's job is the message before it is sent.
+    expect(screen.getByText('First place: Pearl of the Undertow by mirelle')).toBeTruthy();
+    expect(screen.getByText('Second place: Ninth Wave Shoals by corrin')).toBeTruthy();
   });
 
   it('sends the whole podium in one call, once', async () => {
@@ -311,7 +744,7 @@ describe('announcing', () => {
     fireEvent.click(entry('Pearl of the Undertow'));
     fireEvent.click(saveButton());
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('You cannot place your own entry'));
+    await waitFor(() => expect(toastTexts(vi.mocked(toast.error))).toContain('You cannot place your own entryView Details →'));
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
@@ -333,9 +766,71 @@ describe('editing an announced podium', () => {
     render(<PodiumDialog open onOpenChange={() => {}} contest={announced} />);
     await screen.findByText('Salt-Bright Reaches');
 
-    expect(slot('1st Place')).toHaveTextContent('Pearl of the Undertow');
-    expect(slot('2nd Place')).toHaveTextContent('Ninth Wave Shoals');
-    expect(slot('3rd Place')).toHaveTextContent('Empty');
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '2nd Place / Ninth Wave Shoals',
+    ]);
+  });
+
+  it('opens with a published tie intact', async () => {
+    const tied: ServerEvent = serverEvent({
+      ...announced,
+      placements: [
+        { place: 1, worldId: 'w1', worldName: 'Pearl of the Undertow', authorName: 'mirelle' },
+        { place: 1, worldId: 'w2', worldName: 'Ninth Wave Shoals', authorName: 'corrin' },
+        { place: 2, worldId: 'w3', worldName: 'Salt-Bright Reaches', authorName: 'ashgrove' },
+        { place: 3, worldId: 'w4', worldName: 'Fourth Wall', authorName: 'lark' },
+      ],
+    });
+    catalog([...three(), fourth()]);
+
+    render(<PodiumDialog open onOpenChange={() => {}} contest={tied} />);
+    await screen.findByText('Salt-Bright Reaches');
+
+    expect(staged()).toEqual([
+      '1st Place / Pearl of the Undertow',
+      '1st Place / Ninth Wave Shoals',
+      '2nd Place / Salt-Bright Reaches',
+      '3rd Place / Fourth Wall',
+    ]);
+    expect(tie('Ninth Wave Shoals')).toBeChecked();
+    expect(tie('Salt-Bright Reaches')).not.toBeChecked();
+    expect(tie('Fourth Wall')).not.toBeChecked();
+  });
+
+  it('keeps a half-built draft when the list behind the dialog re-renders', async () => {
+    // The staging effect re-seeds on a real change to the published podium, not on a fresh event object
+    // handed down by the list. A correction half made must survive the poll behind it.
+    catalog(three());
+
+    const { rerender } = render(<PodiumDialog open onOpenChange={() => {}} contest={announced} />);
+    await screen.findByText('Salt-Bright Reaches');
+
+    fireEvent.click(tie('Ninth Wave Shoals'));
+    expect(staged()[1]).toBe('1st Place / Ninth Wave Shoals');
+
+    rerender(<PodiumDialog open onOpenChange={() => {}} contest={serverEvent({ ...announced })} />);
+
+    expect(staged()[1]).toBe('1st Place / Ninth Wave Shoals');
+  });
+
+  it('re-seeds when the published podium gains a tie', async () => {
+    // The guard above must not freeze the draft: a podium that really changed has to reach the dialog.
+    catalog(three());
+
+    const { rerender } = render(<PodiumDialog open onOpenChange={() => {}} contest={announced} />);
+    await screen.findByText('Salt-Bright Reaches');
+    expect(staged()[1]).toBe('2nd Place / Ninth Wave Shoals');
+
+    rerender(<PodiumDialog open onOpenChange={() => {}} contest={serverEvent({
+      ...announced,
+      placements: [
+        { place: 1, worldId: 'w1', worldName: 'Pearl of the Undertow', authorName: 'mirelle' },
+        { place: 1, worldId: 'w2', worldName: 'Ninth Wave Shoals', authorName: 'corrin' },
+      ],
+    })} />);
+
+    await waitFor(() => expect(staged()[1]).toBe('1st Place / Ninth Wave Shoals'));
   });
 
   it('offers a save rather than an announce, and previews nothing', async () => {

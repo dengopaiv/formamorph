@@ -31,9 +31,13 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { WorldCardShell } from '@/components/WorldCardShell';
 import { CardTags } from '@/components/WorldDetails';
 import { Settings, Plus, GripVertical, Copy, X } from 'lucide-react';
-import { useSettings } from '@/contexts/SettingsContext';
+import { useSettingsSource, type useSettings } from '@/contexts/SettingsContext';
 import { useTheme } from './theme-provider';
 import { hslTripleToHex, hexToHslTriple } from '@/lib/hslColor';
+import { QUOTE_CLASS } from '@/lib/quoteSegments';
+
+/** The theme the preview seeds from; the live contexts unless a caller supplies its own. */
+export type ThemePreviewSource = Pick<ReturnType<typeof useSettings>, 'themeColor'> & Pick<ReturnType<typeof useTheme>, 'resolvedTheme'>;
 
 interface TokenDef {
   token: string;
@@ -79,6 +83,10 @@ const TOKEN_GROUPS: { title: string; tokens: TokenDef[] }[] = [
       { token: '--info-foreground', label: 'Info text' },
       { token: '--overlay', label: 'Overlay' },
     ],
+  },
+  {
+    title: 'Story text',
+    tokens: [{ token: '--dialogue', label: 'Dialogue' }],
   },
   {
     title: 'Chrome',
@@ -148,6 +156,15 @@ function PreviewPanel() {
         </p>
       </div>
 
+      {/* Painted from the token directly, so the sample shows even with the Quote Color setting off. */}
+      <p className="narration-text">
+        Lorem ipsum dolor sit amet.{' '}
+        <span className={QUOTE_CLASS} style={{ color: 'hsl(var(--dialogue))' }}>
+          “Consectetur adipiscing elit, sed do eiusmod?”
+        </span>{' '}
+        Tempor incididunt ut labore et dolore magna aliqua.
+      </p>
+
       <Tabs defaultValue="general">
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
@@ -180,7 +197,7 @@ function PreviewPanel() {
           </Row>
 
           <Row label="Categories" hint="Multiselect with chips.">
-            <MultiSelect options={MULTI_OPTIONS} defaultValue={['a', 'b']} onValueChange={noop} placeholder="Select…" hideSelectAll className="w-full" />
+            <MultiSelect options={MULTI_OPTIONS} defaultValue={['a', 'b']} onValueChange={noop} placeholder="Select…" className="w-full" />
           </Row>
 
           <Row label="Amount" hint="Sed do eiusmod.">
@@ -269,9 +286,10 @@ function PreviewPanel() {
   );
 }
 
-function ThemePreviewDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { themeColor } = useSettings();
-  const { resolvedTheme } = useTheme();
+function ThemePreviewDialog({ open, onOpenChange, source }: { open: boolean; onOpenChange: (v: boolean) => void; source?: ThemePreviewSource }) {
+  const { themeColor } = useSettingsSource(source);
+  const liveTheme = useTheme();
+  const resolvedTheme = source?.resolvedTheme ?? liveTheme.resolvedTheme;
   const [values, setValues] = useState<Record<string, string>>({});
 
   // Seed from the live theme whenever the dialog opens or the underlying theme changes beneath it.
@@ -342,14 +360,14 @@ function ThemePreviewDialog({ open, onOpenChange }: { open: boolean; onOpenChang
 }
 
 /** Button + dialog to inspect and live-edit every theme token; drop into settings beside Theme Color. */
-export function ThemePreviewButton() {
+export function ThemePreviewButton({ source }: { source?: ThemePreviewSource }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
         Preview theme…
       </Button>
-      <ThemePreviewDialog open={open} onOpenChange={setOpen} />
+      <ThemePreviewDialog open={open} onOpenChange={setOpen} source={source} />
     </>
   );
 }

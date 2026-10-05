@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, ArrowLeftRight, Plus, X } from 'lucide-react';
 import { useGameData } from '@/contexts/GameDataContext';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Hint } from '@/components/ui/typography';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -12,12 +11,14 @@ import {
   connectionTargets,
   connectionsAt,
   createConnection,
+  legFrom,
   withDirection,
-  withHint,
   type ConnectionDirection,
 } from '@/lib/connectionEditing';
-import type { GameLocation } from '@/types';
+import { otherLeg } from '@/lib/locationGraph';
+import type { Connection, GameLocation, LegKey } from '@/types';
 import { Tip } from '@/components/ui/tooltip';
+import { TravelHintPair } from '@/components/editor/TravelHintPair';
 
 /** The direction control's options in the order they're offered, worded from the panel that's open. */
 const DIRECTIONS: { value: ConnectionDirection; label: string }[] = [
@@ -31,6 +32,16 @@ const DIRECTION_ICONS: Record<ConnectionDirection, typeof ArrowRight> = {
   outgoing: ArrowRight,
   incoming: ArrowLeft,
 };
+
+/** The legs a Connection has, seen from `locationId`: the trip leaving first, then the trip arriving. */
+function legsAt(connection: Connection, locationId: string): { key: LegKey; word: 'To' | 'From' }[] {
+  const out = legFrom(connection, locationId);
+  const back = otherLeg(out);
+  return [
+    ...(connection[out] ? [{ key: out, word: 'To' as const }] : []),
+    ...(connection[back] ? [{ key: back, word: 'From' as const }] : []),
+  ];
+}
 
 /**
  * The Connections on one location's editor panel: add, retarget direction, hint, delete.
@@ -62,11 +73,11 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
   };
 
   return (
-    <div className="space-y-2">
+    <div data-tour-anchor="location-connections" className="space-y-2">
       <Label className="block">Connections</Label>
       <Hint>
-        A Connection is the travel rule for a pair of locations. Without one, a location still connects to
-        its parent, its children, and its siblings.
+        Sets the travel rule for a pair of locations. Without one, a location still connects to its parent,
+        its children, and its siblings.
       </Hint>
       {views.map(({ connection, partnerId, direction }) => {
         const Icon = DIRECTION_ICONS[direction];
@@ -102,11 +113,15 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
                 <ToggleGroupItem key={d.value} value={d.value} className="flex-1">{d.label}</ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <Input
-              value={connection.aiHint || ''}
-              onChange={(e) => updateConnection(withHint(connection, e.target.value))}
-              placeholder="Travel Hint, e.g. through the shimmering portal"
-              aria-label={`Travel Hint for the Connection to ${partnerName}`}
+            <TravelHintPair
+              connection={connection}
+              legs={legsAt(connection, location.id).map(({ key, word }) => ({
+                key,
+                label: `${word} ${partnerName}`,
+                name: `Travel Hint ${word.toLowerCase()} ${partnerName}`,
+              }))}
+              idPrefix={`connection-${connection.id}`}
+              onChange={updateConnection}
             />
           </div>
         );

@@ -1,9 +1,7 @@
-import { randomUUID } from "@/lib/uuid";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer, defaultRangeExtractor, type Range } from '@tanstack/react-virtual';
 import { useDictionaryStore } from '@/contexts/DictionaryStoreContext';
 import { usePlaceholderStore } from '@/contexts/PlaceholderStoreContext';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EditorRow, EditorRowList } from '@/components/EditorRow';
 import { X, ChevronRight, ChevronDown, Copy, FilePlus } from 'lucide-react';
 import {
@@ -13,12 +11,14 @@ import { useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { useEditorDragActive } from '@/components/dnd/dragInvariants';
-import { reorderBooks, moveEntryInBooks, duplicateEntryInBooks } from '@/lib/dictionaryTree';
+import { reorderBooks, moveEntryInBooks, dictionaryEntryLabel } from '@/lib/dictionaryTree';
 import { EmptyListHint } from '@/components/EmptyListHint';
 import type { Dictionary, DictionaryEntry } from '@/types';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
 import { ContentLinkIcon } from '@/components/ContentLinkStatus';
 import { useEditorMode } from '@/lib/editorMode';
+import { cn } from '@/lib/utils';
+import { useDictionaryActions, useDictionaryCollapse, type DictionaryCollapse } from './useDictionaryActions';
 
 /** One entry ("page") row inside a book zone: grip handle + enabled toggle + name + duplicate/delete. */
 function EntryRow({ entry, selected, onSelect, onToggleEnabled, onDuplicate, onRemove }: {
@@ -49,7 +49,7 @@ function EntryRow({ entry, selected, onSelect, onToggleEnabled, onDuplicate, onR
       selected={selected}
       onSelect={() => onSelect(entry.id)}
       checkbox={advanced ? { checked: entry.enabled !== false, onChange: (v) => onToggleEnabled(entry, v) } : undefined}
-      label={<PlaceholderText text={entry.name || entry.key?.[0] || 'Untitled'} placeholders={placeholders} />}
+      label={<PlaceholderText text={dictionaryEntryLabel(entry)} placeholders={placeholders} />}
       actions={[
         { icon: <Copy className="h-4 w-4" />, title: 'Duplicate', onClick: () => onDuplicate(entry.id) },
         { icon: <X className="h-4 w-4" />, title: 'Delete', onClick: () => onRemove(entry.id) },
@@ -228,7 +228,7 @@ function DictZone({ bookId, position, entries, collapsed, onToggleCollapse, flat
                 onRemove={onRemoveEntry}
               />
             ))}
-            {!flat && entries.length === 0 && <p className="px-2 py-1 text-meta text-muted-foreground">Drag entries here.</p>}
+            {!flat && entries.length === 0 && <p className="px-2 py-1 text-meta text-muted-foreground">Drag entries here</p>}
           </EditorRowList>
           )}
         </StableSortableContext>
@@ -238,10 +238,12 @@ function DictZone({ bookId, position, entries, collapsed, onToggleCollapse, flat
 }
 
 /** One book ("dictionary") — a collapsible, reorderable, selectable header over two entry zones. */
-function BookRow({ book, collapsed, collapsedZones, selectedId, onToggleCollapse, onToggleZone, onSelect, onToggleEnabled, onAddEntry, onDeleteBook, entryHandlers }: {
+function BookRow({ book, addEntryTourAnchor, collapsed, collapsedZones, selectedId, onToggleCollapse, onToggleZone, onSelect, onToggleEnabled, onAddEntry, onDeleteBook, entryHandlers }: {
   book: Dictionary;
+  /** The Authoring Tour anchor on this book's Add entry button. */
+  addEntryTourAnchor?: string;
   collapsed: boolean;
-  collapsedZones: Set<string>;
+  collapsedZones: ReadonlySet<string>;
   selectedId: string | null;
   onToggleCollapse: (id: string) => void;
   onToggleZone: (key: string) => void;
@@ -249,12 +251,7 @@ function BookRow({ book, collapsed, collapsedZones, selectedId, onToggleCollapse
   onToggleEnabled: (book: Dictionary, enabled: boolean) => void;
   onAddEntry: (bookId: string) => void;
   onDeleteBook: (bookId: string) => void;
-  entryHandlers: {
-    onSelectEntry: (id: string) => void;
-    onToggleEntryEnabled: (entry: DictionaryEntry, enabled: boolean) => void;
-    onDuplicateEntry: (id: string) => void;
-    onRemoveEntry: (id: string) => void;
-  };
+  entryHandlers: EntryHandlers;
 }) {
   const { advanced } = useEditorMode();
   const { placeholders } = usePlaceholderStore();
@@ -263,10 +260,6 @@ function BookRow({ book, collapsed, collapsedZones, selectedId, onToggleCollapse
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 1 : undefined };
   const selected = selectedId === book.id;
   const faded = book.enabled === false;
-  // Memoized so a book's two zones keep one array each across a re-render, rather than re-filtering into
-  // fresh ones every frame of a drag.
-  const before = useMemo(() => book.entries.filter((e) => e.position === 'before'), [book.entries]);
-  const after = useMemo(() => book.entries.filter((e) => e.position !== 'before'), [book.entries]);
   const enabledCount = book.entries.filter((e) => e.enabled !== false).length;
 
   return (
@@ -289,35 +282,74 @@ function BookRow({ book, collapsed, collapsedZones, selectedId, onToggleCollapse
         meta={advanced ? `${enabledCount}/${book.entries.length}` : book.entries.length}
         metaTitle={advanced ? 'Enabled entries / total entries' : 'Entries'}
         actions={[
-          { icon: <FilePlus className="h-4 w-4" />, title: 'Add entry', onClick: () => onAddEntry(book.id) },
+          {
+            icon: <FilePlus className="h-4 w-4" />, title: 'Add entry', onClick: () => onAddEntry(book.id),
+            tourAnchor: addEntryTourAnchor,
+          },
           { icon: <X className="h-4 w-4" />, title: 'Delete dictionary', onClick: () => onDeleteBook(book.id) },
         ]}
       />
       {!collapsed && (
-        <div className="p-2 pl-6 flex flex-col gap-2">
-          <DictZone
-            bookId={book.id} position="before" entries={before} flat={!advanced}
-            collapsed={collapsedZones.has(`${book.id}:before`)} onToggleCollapse={() => onToggleZone(`${book.id}:before`)}
-            selectedId={selectedId} {...entryHandlers}
-          />
-          <DictZone
-            bookId={book.id} position="after" entries={after} flat={!advanced}
-            collapsed={collapsedZones.has(`${book.id}:after`)} onToggleCollapse={() => onToggleZone(`${book.id}:after`)}
-            selectedId={selectedId} {...entryHandlers}
-          />
-        </div>
+        <BookZones
+          book={book} className="p-2 pl-6" collapsedZones={collapsedZones} selectedId={selectedId}
+          onToggleZone={onToggleZone} entryHandlers={entryHandlers}
+        />
       )}
     </div>
   );
 }
 
+type EntryHandlers = {
+  onSelectEntry: (id: string) => void;
+  onToggleEntryEnabled: (entry: DictionaryEntry, enabled: boolean) => void;
+  onDuplicateEntry: (id: string) => void;
+  onRemoveEntry: (id: string) => void;
+};
+
+/** A book's two entry zones, under its row or, with the row hidden, at the top level. */
+function BookZones({ book, className, collapsedZones, selectedId, onToggleZone, entryHandlers }: {
+  book: Dictionary;
+  className?: string;
+  collapsedZones: ReadonlySet<string>;
+  selectedId: string | null;
+  onToggleZone: (key: string) => void;
+  entryHandlers: EntryHandlers;
+}) {
+  const { advanced } = useEditorMode();
+  // Memoized so a book's two zones keep one array each across a re-render, rather than re-filtering into
+  // fresh ones every frame of a drag.
+  const before = useMemo(() => book.entries.filter((e) => e.position === 'before'), [book.entries]);
+  const after = useMemo(() => book.entries.filter((e) => e.position !== 'before'), [book.entries]);
+  return (
+    <div className={cn('flex flex-col gap-2', className)}>
+      <DictZone
+        bookId={book.id} position="before" entries={before} flat={!advanced}
+        collapsed={collapsedZones.has(`${book.id}:before`)} onToggleCollapse={() => onToggleZone(`${book.id}:before`)}
+        selectedId={selectedId} {...entryHandlers}
+      />
+      <DictZone
+        bookId={book.id} position="after" entries={after} flat={!advanced}
+        collapsed={collapsedZones.has(`${book.id}:after`)} onToggleCollapse={() => onToggleZone(`${book.id}:after`)}
+        selectedId={selectedId} {...entryHandlers}
+      />
+    </div>
+  );
+}
+
 /** The Dictionary tab's book tree: reorderable books, each with Background/Foreground zones; entries drag
- *  within a zone, between zones, and across books (one unified drag context). */
-const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; onSelect: (id: string) => void }) => {
-  const { dictionaries, setDictionaries, addDictionaryEntry, updateDictionary, removeDictionary, removeDictionaryEntry } = useDictionaryStore();
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [collapsedZones, setCollapsedZones] = useState<Set<string>>(new Set());
-  const [bookToDelete, setBookToDelete] = useState<string | null>(null);
+ *  within a zone, between zones, and across books (one unified drag context). `hideBookRow` drops the book
+ *  rows and shows the entries at the top level, for a host that edits one book. A host that unmounts the tree
+ *  passes its own `collapse`, so the folds survive. */
+const DictionaryTree = ({ selectedId, onSelect, hideBookRow = false, collapse: hostCollapse }: {
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  hideBookRow?: boolean;
+  collapse?: DictionaryCollapse;
+}) => {
+  const { dictionaries, setDictionaries, updateDictionary } = useDictionaryStore();
+  const ownCollapse = useDictionaryCollapse();
+  const collapse = hostCollapse ?? ownCollapse;
+  const actions = useDictionaryActions({ selectedId, onSelect, collapse });
   // While a book is being dragged, collapse every book: they can be large and can't nest, so a compact
   // list reorders cleanly. This is transient (doesn't touch the persistent `collapsed` set).
   const [draggingBook, setDraggingBook] = useState(false);
@@ -337,17 +369,6 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
     if (id.startsWith('zone:')) return id.split(':')[1];
     return findEntry(id)?.bookId ?? null;
   };
-
-  const toggleCollapse = (id: string) => setCollapsed((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
-  const toggleZone = (key: string) => setCollapsedZones((prev) => {
-    const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
 
   const handleDragStart = ({ active }: DragStartEvent) => {
     const id = String(active.id);
@@ -388,20 +409,6 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
     setDictionaries(moveEntryInBooks(dictionaries, activeId, targetBookId, targetPosition, overEntryId));
   };
 
-  const duplicateEntry = (id: string) => {
-    const { books, newId } = duplicateEntryInBooks(dictionaries, id);
-    setDictionaries(books);
-    if (newId) onSelect(newId);
-  };
-
-  const addEntry = (bookId: string) => {
-    const id = randomUUID();
-    // Name is left blank so the tree and the prompt label fall back to the first keyword until the author names it.
-    addDictionaryEntry(bookId, { id, name: '', key: [], value: '' });
-    setCollapsed((prev) => { const next = new Set(prev); next.delete(bookId); return next; });
-    onSelect(id);
-  };
-
   const entryHandlers = {
     onSelectEntry: onSelect,
     onToggleEntryEnabled: (entry: DictionaryEntry, enabled: boolean) => {
@@ -409,8 +416,8 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
         ...b, entries: b.entries.map((e) => (e.id === entry.id ? { ...e, enabled } : e)),
       })));
     },
-    onDuplicateEntry: duplicateEntry,
-    onRemoveEntry: (id: string) => { removeDictionaryEntry(id); if (id === selectedId) onSelect(''); },
+    onDuplicateEntry: actions.duplicateEntry,
+    onRemoveEntry: actions.removeEntry,
   };
 
   if (!dictionaries.length) {
@@ -427,37 +434,40 @@ const DictionaryTree = ({ selectedId, onSelect }: { selectedId: string | null; o
         // Re-measure continuously so the drag tracks the layout as books collapse/expand mid-drag.
         measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
       >
-        <StableSortableContext items={dictionaries} strategy={verticalListSortingStrategy}>
+        {hideBookRow ? (
           <div className="flex flex-col gap-3">
             {dictionaries.map((book) => (
+              <BookZones
+                key={book.id} book={book} collapsedZones={collapse.zones} selectedId={selectedId}
+                onToggleZone={collapse.toggleZone} entryHandlers={entryHandlers}
+              />
+            ))}
+          </div>
+        ) : (
+        <StableSortableContext items={dictionaries} strategy={verticalListSortingStrategy}>
+          <div className="flex flex-col gap-3">
+            {dictionaries.map((book, i) => (
               <BookRow
                 key={book.id}
                 book={book}
-                collapsed={draggingBook || collapsed.has(book.id)}
-                collapsedZones={collapsedZones}
+                addEntryTourAnchor={i === 0 ? 'dictionary-add-entry' : undefined}
+                collapsed={draggingBook || collapse.collapsed.has(book.id)}
+                collapsedZones={collapse.zones}
                 selectedId={selectedId}
-                onToggleCollapse={toggleCollapse}
-                onToggleZone={toggleZone}
+                onToggleCollapse={collapse.toggle}
+                onToggleZone={collapse.toggleZone}
                 onSelect={onSelect}
                 onToggleEnabled={(b, enabled) => updateDictionary({ ...b, enabled })}
-                onAddEntry={addEntry}
-                onDeleteBook={setBookToDelete}
+                onAddEntry={actions.addEntry}
+                onDeleteBook={actions.askRemoveBook}
                 entryHandlers={entryHandlers}
               />
             ))}
           </div>
         </StableSortableContext>
+        )}
       </EditorDndContext>
-      <ConfirmDialog
-        open={!!bookToDelete}
-        onOpenChange={(open) => !open && setBookToDelete(null)}
-        title="Delete Dictionary"
-        description="Delete this dictionary and all of its entries? This cannot be undone."
-        onConfirm={() => {
-          if (bookToDelete) { removeDictionary(bookToDelete); if (bookToDelete === selectedId) onSelect(''); }
-          setBookToDelete(null);
-        }}
-      />
+      {actions.dialog}
     </>
   );
 };

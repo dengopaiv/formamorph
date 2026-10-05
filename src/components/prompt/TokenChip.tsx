@@ -2,7 +2,11 @@ import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import { Chip } from '@/components/Chip';
 import { chipTokenKey } from '@/lib/promptVariables';
 import { CHIP_TOKEN_ATTR } from '@/lib/editorFieldFocus';
+import { tintMarkStyle, TINT_MARK_CLASS } from '@/lib/previewTint';
+import { Tip } from '@/components/ui/tooltip';
 import type { ChipVocabulary } from '@/lib/chipVocabulary';
+import BuiltinMark from './BuiltinMark';
+import BlueprintMark from './BlueprintMark';
 
 /**
  * One chip token drawn as its pill: the shared chip shape, the vocabulary's accent, and the
@@ -27,33 +31,67 @@ export interface TokenChipProps extends Omit<ComponentPropsWithoutRef<'span'>, '
   tip?: string;
   onRemove?: (label: string) => void;
   grabbable?: boolean;
+  /** Display the placement's conditional text in the editor. */
+  showAffixes?: boolean;
+  startsOnEmptyLine?: boolean;
 }
 
 export const TokenChip = forwardRef<HTMLSpanElement, TokenChipProps>(function TokenChip(
-  { token, vocab, neutral, tip, onRemove, grabbable, className, ...rest },
+  { token, vocab, neutral, tip, onRemove, grabbable, showAffixes, startsOnEmptyLine = true, className, ...rest },
   ref,
 ) {
   const color = neutral ? undefined : vocab.color(token);
   // Reflect the mode in the chip text so it's readable at a glance, not only in the pop-out.
   const variantLabel = vocab.variantLabel(token);
   const name = vocab.label(token);
+  const shown = vocab.display?.(token) ?? (variantLabel ? `${name} (${variantLabel})` : name);
   // What the chip will become, for the tooltip — the label already says which placeholder it is.
   const hint = vocab.hint?.(token);
+  const affixes = showAffixes ? vocab.affixes(token) : null;
+  const header = showAffixes ? vocab.headerBoundaries?.(token) : null;
+  const hasAffixes = !!(header || affixes?.pre || affixes?.post);
+  const affixText = (value: string, emptyLine: boolean) => value.split(/(\r?\n)/).map((part, index) => {
+    if (/^\r?\n$/.test(part)) {
+      const showMarker = emptyLine;
+      emptyLine = true;
+      return showMarker ? (
+        <span key={index} data-affix-newline="" aria-hidden="true">
+          <Tip tip={`Included only when ${name} has a value`} labelsChild={false}>
+            <mark className={`${TINT_MARK_CLASS} cursor-pointer before:content-['↵'] before:select-none`} style={tintMarkStyle(color)} />
+          </Tip>
+          {part}
+        </span>
+      ) : part;
+    }
+    if (!part.trim()) return part;
+    emptyLine = false;
+    return (
+      <Tip key={index} tip={`Included only when ${name} has a value`} labelsChild={false}>
+        <mark className={`${TINT_MARK_CLASS} cursor-pointer`} style={tintMarkStyle(color)}>{part}</mark>
+      </Tip>
+    );
+  });
   return (
     <span
       ref={ref}
       {...{ [CHIP_TOKEN_ATTR]: chipTokenKey(token) }}
       {...rest}
-      className={className ?? 'inline-block align-baseline'}
+      className={className ?? `${hasAffixes ? 'inline' : 'inline-block'} align-baseline`}
     >
+      {header && affixText(header.pre, startsOnEmptyLine)}
+      {affixes?.pre && affixText(affixes.pre, header ? true : startsOnEmptyLine)}
       <Chip
-        label={vocab.display?.(token) ?? (variantLabel ? `${name} (${variantLabel})` : name)}
+        label={vocab.builtin?.(token)
+          ? <><BuiltinMark />{vocab.display?.(token) ?? name}</>
+          : vocab.blueprint?.(token) ? <><BlueprintMark />{shown}</> : shown}
         removeLabel={name}
         tip={tip ?? (hint ? `${name} — ${hint}` : undefined)}
         onRemove={onRemove}
         grabbable={grabbable}
         style={color ? { backgroundColor: color, color: '#000' } : undefined}
       />
+      {affixes?.post && affixText(affixes.post, false)}
+      {header?.post && affixText(header.post, false)}
     </span>
   );
 });

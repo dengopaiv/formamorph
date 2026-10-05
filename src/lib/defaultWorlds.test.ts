@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   DEFAULT_WORLDS, isDefaultWorldId, readDeletedDefaultWorlds, tombstoneDefaultWorld,
@@ -15,6 +16,12 @@ describe('isDefaultWorldId', () => {
 
   it.each(['uploaded-123', 'custom', ''])('rejects the non-default id %s', (id) => {
     expect(isDefaultWorldId(id)).toBe(false);
+  });
+
+  it('lists exactly the bundled world files, so the seeder finds each one', () => {
+    const files = Object.keys(import.meta.glob('../defaultworlds/*.json'))
+      .map((path) => path.replace('../defaultworlds/', '').replace('.json', ''));
+    expect(DEFAULT_WORLDS.map((w) => w.id).sort()).toEqual(files.sort());
   });
 });
 

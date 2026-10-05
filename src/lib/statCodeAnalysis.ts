@@ -1,25 +1,27 @@
 /**
- * Reading stat code without running it: what a caret can be completed with, and what looks wrong.
+ * Reading sandboxed code without running it: what a caret can be completed with, and what looks wrong.
  *
  * Both halves are plain functions over a code string — the editor's autocomplete source and linter are
- * thin adapters over these, so the behavior is testable without an editor mounted. Everything they know
- * about the sandbox comes from `statCodeSurface`; nothing here widens what QuickJS exposes.
+ * thin adapters over these, so the behavior is testable without an editor mounted. What the code can
+ * reach comes from the surface it is read against; nothing here widens what QuickJS exposes.
  */
 
 import { javascriptLanguage } from '@codemirror/lang-javascript';
 import type { SyntaxNode, Tree } from '@lezer/common';
 import type { PlaceholderOwners } from '@/lib/placeholderHomes';
 import { placeholderKindNoun } from '@/lib/placeholders';
+import { hasEntityKey } from '@/lib/statCodeNames';
 import { findSlotRanges, parseTemplateSlots } from '@/lib/statCodeTemplates';
 import type { Placeholder } from '@/types';
 import {
-  BUILTIN_MEMBERS, DELTA_FIELDS, DELTA_MEMBERS, PREVIOUS_FIELDS, SANDBOX_BUILTINS, SANDBOX_GLOBALS, SANDBOX_KNOWN_NAMES,
-  SELF_WRITABLE_FIELDS, STAT_FIELDS, TRAIT_ENTRY_FIELDS, TRAIT_WRITABLE_FIELD, nearestName, nearestSurfaceName,
-  placeholderEntryFields,
-  type SurfaceEntry,
+  nearestName, surfaceHasGlobal, surfaceKnownNames, type CodeSurface, type SurfaceEntry,
+} from '@/lib/codeSurface';
+import {
+  CLOCK_MEMBERS, CLOCK_PREVIOUS_FIELDS, DELTA_FIELDS, DELTA_MEMBERS, PREVIOUS_FIELDS, SELF_WRITABLE_FIELDS, STAT_CODE_SURFACE, STAT_FIELDS,
+  DICTIONARY_FIELDS, ENTITY_FIELDS, PERSONA_FIELDS, TRAIT_ENTRY_FIELDS, TRAIT_WRITABLE_FIELD, placeholderEntryFields,
 } from '@/lib/statCodeSurface';
 import {
-  isPlaceholderEntryMember, placeholderKeyWinner, placeholderPathDots, placeholderPathLabel, placeholderPathMap,
+  isPlaceholderEntryMember, placeholderKeyWinner, placeholderPathLabel, placeholderPathMap,
   walkPlaceholderPath, type PlaceholderPathMap, type PlaceholderPathNode,
 } from '@/lib/statCodePaths';
 
@@ -51,10 +53,39 @@ export interface CompletionResult {
   options: CodeCompletion[];
 }
 
-/** The world's placeholders, and the entity or book each scoped one lives on. */
+/** One owner of placeholders by id, under its code name. */
+export interface CodeOwnerName {
+  id: string;
+  name: string;
+}
+
+/** The world's placeholders, the entity or book each scoped one lives on, and every book. */
 export interface CodePlaceholders {
   list: readonly Placeholder[];
   owners?: PlaceholderOwners;
+  /** Every dictionary in authored order. Absent, dictionary names are neither offered nor checked. */
+  dictionaries?: readonly CodeOwnerName[];
+}
+
+/** One trait as a template slot lists it, placed in its holder's tree. */
+export interface CodeTraitPlace {
+  id: string;
+  name: string;
+  /** Group names under their code names, outermost first. Empty at the top level. */
+  path: readonly string[];
+  /** Its place in its holder's Traits tab. Absent ⇒ list order. */
+  tabPosition?: number;
+}
+
+/** One entity as the editor reads it: its code name and the code names of its trait set, owned or linked. */
+export interface CodeEntityNames extends CodeOwnerName {
+  traits: readonly CodeTraitPlace[];
+  /** Whether a persona choice can play it, so `persona.placeholders` can reach its own. */
+  persona: boolean;
+  /** Its Entity folder names, outermost first. Absent ⇒ top level. */
+  folder?: readonly string[];
+  /** Its place in the Entities tab. Absent ⇒ authored order. */
+  tabPosition?: number;
 }
 
 export interface AnalysisOptions {
@@ -64,11 +95,31 @@ export interface AnalysisOptions {
   placeholders?: CodePlaceholders;
   /** The world's trait names, in authored order. Absent, trait names are neither offered nor checked. */
   traits?: readonly string[];
+  /** The world's entities, in authored order. Absent, entity and persona trait names are neither offered nor
+   *  checked. A library entity can carry another name, so an unknown one is only a warning. */
+  entities?: readonly CodeEntityNames[];
   /** The world's stat names, in authored order. Absent, stat names are neither offered nor checked. */
   statNames?: readonly string[];
   /** The name of the stat the code belongs to, so a write through `stats` to that name counts as its own. */
   selfName?: string;
 }
+
+/** The options a reader takes for any surface. */
+export interface SurfaceAnalysisOptions extends AnalysisOptions {
+  /** What the code can reach. */
+  surface: CodeSurface;
+}
+
+/** Which of the stat-code maps the surface injects, and so which of their rules apply. */
+function statRulesOf(surface: CodeSurface) {
+  const has = (name: string) => surface.statMaps && surfaceHasGlobal(surface, name);
+  return {
+    stats: has('stats'), self: has('self'), placeholders: has('placeholders'), traits: has('traits'), persona: has('persona'),
+    entities: has('entities'), dictionaries: has('dictionaries'),
+  };
+}
+
+type StatRules = ReturnType<typeof statRulesOf>;
 
 const parse = (code: string): Tree => javascriptLanguage.parser.parse(code);
 
@@ -126,10 +177,10 @@ function statLikeNames(code: string, tree: Tree): Map<string, string> {
   return names;
 }
 
-/** Whether stat-like source reaches the current stat's own entry: `self`, `stats` indexed by its own name,
- *  or an equality lookup by `currentStatId` (a `!==` lookup finds some other stat). */
+/** Whether stat-like source reaches the current stat's own entry: `self`, or `stats` indexed by its own name.
+ *  A `!==` against `self.id` finds some other stat, so it doesn't count. */
 const reachesOwnStat = (text: string, selfName?: string) =>
-  /\bself\b/.test(text) || /(?<![!=])===?\s*currentStatId\b|\bcurrentStatId\s*===?(?!=)/.test(text)
+  /\bself\b/.test(text.replace(/!==?\s*self\.id\b|\bself\.id\s*!==?/g, ''))
   || (selfName !== undefined && indexesStat(text, selfName));
 
 /**
@@ -168,7 +219,11 @@ function expressionBeforeDot(code: string, dotPos: number): string | null {
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 /** What one entry of a name-keyed sandbox map is called in a message. */
-type EntryNoun = 'placeholder' | 'trait' | 'stat';
+type EntryNoun = 'placeholder' | 'trait' | 'stat' | 'entity' | 'dictionary';
+
+const PLURAL: Record<EntryNoun, string> = {
+  placeholder: 'placeholders', trait: 'traits', stat: 'stats', entity: 'entities', dictionary: 'dictionaries',
+};
 
 /** One entry per distinct name of a `kind` of map entry. `dotted` keeps only the names a `.` can reach; the
  *  rest need bracket syntax. */
@@ -181,6 +236,50 @@ function mapNameEntries(names: readonly string[], kind: EntryNoun, dotted: boole
 /** `root.Name` or `root["Name"]`: an expression that is one entry of the map `root`. */
 const entryExpression = (root: string) => new RegExp(`^${root}(\\??\\.[A-Za-z_$][\\w$]*|\\??\\.?\\[\\s*(["'])[^"'\\\\]*\\2\\s*\\])$`);
 const TRAIT_ENTRY_EXPRESSION = entryExpression('traits');
+const PERSONA_TRAITS_EXPRESSION = /^persona\??\.traits$/;
+const PERSONA_TRAIT_ENTRY_EXPRESSION = entryExpression('persona\\??\\.traits');
+const ENTITY_ENTRY_EXPRESSION = entryExpression('entities');
+const DICTIONARY_ENTRY_EXPRESSION = entryExpression('dictionaries');
+/** One key of a member chain, by dot or by quoted bracket; the name is in group 1 or group 2. No
+ *  backreference, so the pattern can repeat in one expression. */
+const KEY_STEP = String.raw`(?:\??\.([A-Za-z_$][\w$]*)|\??\.?\[\s*["']([^"'\\]*)["']\s*\])`;
+const ENTITY_TRAITS_EXPRESSION = new RegExp(`^entities${KEY_STEP}\\??\\.traits$`);
+const ENTITY_TRAIT_ENTRY_EXPRESSION = new RegExp(`^entities${KEY_STEP}\\??\\.traits${KEY_STEP}$`);
+/** Text that ends in `entities[`. */
+const ENTITIES_BRACKET = /\bentities\s*(\?\.)?\[\s*$/;
+/** Text that ends in `dictionaries[`. */
+const DICTIONARIES_BRACKET = /\bdictionaries\s*(\?\.)?\[\s*$/;
+/** Text that ends in `entities.Name.traits[`, its entity name captured. */
+const ENTITY_TRAITS_BRACKET = new RegExp(`\\bentities\\s*${KEY_STEP}\\s*\\??\\.\\s*traits\\s*(\\?\\.)?\\[\\s*$`);
+
+/** The entity an `entities.Name…` expression names, from a match of one of the patterns above. */
+const entityNamed = (match: RegExpExecArray) => match[1] ?? match[2];
+
+/** One entry per distinct entity name. `dotted` keeps only the names a `.` can reach. */
+const entityNameEntries = (entities: readonly CodeEntityNames[], dotted: boolean): SurfaceEntry[] =>
+  mapNameEntries(keyedEntityNames(entities), 'entity', dotted);
+
+/** The entity names the sandbox keys. */
+export const keyedEntityNames = (entities: readonly CodeEntityNames[]): string[] =>
+  entities.map((entity) => entity.name).filter(hasEntityKey);
+
+/** The trait names of the last authored entity called `name`, as the sandbox keys it. An unnamed one is not keyed. */
+export const traitsOfEntity = (entities: readonly CodeEntityNames[], name: string): readonly string[] | null =>
+  keyedEntity(entities, name)?.traits.map((trait) => trait.name) ?? null;
+
+/** The last authored entity called `name`, which the sandbox keys. An unnamed one is not keyed. */
+export const keyedEntity = (entities: readonly CodeEntityNames[], name: string): CodeEntityNames | undefined =>
+  (hasEntityKey(name) ? entities.findLast((entity) => entity.name === name) : undefined);
+
+/** The trait names a persona in the world can hold, or null when no entities are given. */
+export const personaTraitsOf = (entities: readonly CodeEntityNames[] | undefined): readonly string[] | null =>
+  (entities ? entities.filter((entity) => entity.persona).flatMap((entity) => entity.traits.map((trait) => trait.name)) : null);
+
+/** One entry per distinct persona trait name. `dotted` keeps only the names a `.` can reach. */
+const personaTraitEntries = (names: readonly string[], dotted: boolean): SurfaceEntry[] =>
+  [...new Set(names)]
+    .filter((name) => !dotted || IDENTIFIER.test(name))
+    .map((name) => ({ name, detail: 'trait', info: `The “${name}” trait a persona in this world holds.` }));
 
 /** One member step of a path: `.Name`, `?.Name`, `["Name"]`, `?.["Name"]`. */
 const PATH_STEP = /^\s*(?:\?\.)?(?:\.?\[\s*(["'])([^"'\\]*)\1\s*\]|\.([A-Za-z_$][\w$]*))/;
@@ -191,12 +290,17 @@ const PATH_STEP = /^\s*(?:\?\.)?(?:\.?\[\s*(["'])([^"'\\]*)\1\s*\]|\.([A-Za-z_$]
  * reads as no path at all rather than as a wrong one.
  *
  * Read from the text, as `expressionBeforeDot` is, because a completion runs on half-typed code the grammar
- * cannot parse. `placeholderChain` reads the same grammar off the tree, where a check needs each segment's
+ * cannot parse. `placeholderChainRoute` reads the same grammar off the tree, where a check needs each segment's
  * own span to underline; neither can do the other's job, and a test holds the two to the same answers.
  */
 function placeholderPathSegments(expression: string): string[] | null {
   if (!/^placeholders(?![\w$])/.test(expression)) return null;
-  let rest = expression.slice('placeholders'.length);
+  return pathSteps(expression.slice('placeholders'.length));
+}
+
+/** The keys of a member chain's text, or null where a step is not a plain key. */
+function pathSteps(text: string): string[] | null {
+  let rest = text;
   const segments: string[] = [];
   while (rest.trim().length > 0) {
     const step = PATH_STEP.exec(rest);
@@ -207,9 +311,57 @@ function placeholderPathSegments(expression: string): string[] | null {
   return segments;
 }
 
+/** Which tree a placeholder chain walks: the world's `placeholders`, or one owner entry's `placeholders`. */
+type PlaceholderRouteKind = 'world' | 'entity' | 'persona' | 'dictionary';
+
+/** One placeholder chain: where it starts, the owner's name where an entry names one, and its keys. */
+interface PlaceholderRoute {
+  kind: PlaceholderRouteKind;
+  owner?: string;
+  segments: string[];
+}
+
+/** The global each route hangs off. */
+const ROUTE_GLOBAL: Record<PlaceholderRouteKind, keyof StatRules> = {
+  world: 'placeholders', entity: 'entities', persona: 'persona', dictionary: 'dictionaries',
+};
+
+/** `persona.placeholders`, or `entities.Name.placeholders` and `dictionaries.Name.placeholders`. */
+const OWNER_ROUTE = new RegExp(`^(?:(persona)|(entities|dictionaries)${KEY_STEP})\\??\\.placeholders(?![\\w$])`);
+
+/** The route a chain's text names, or null for anything that is not a placeholder chain. */
+function placeholderRouteOf(expression: string): PlaceholderRoute | null {
+  const world = placeholderPathSegments(expression);
+  if (world) return { kind: 'world', segments: world };
+  const match = OWNER_ROUTE.exec(expression);
+  const segments = match && pathSteps(expression.slice(match[0].length));
+  if (!match || !segments) return null;
+  if (match[1]) return { kind: 'persona', segments };
+  return { kind: match[2] === 'entities' ? 'entity' : 'dictionary', owner: match[3] ?? match[4], segments };
+}
+
 /** The map a set of options describes, built through the one resolver. */
 const pathMapOf = (placeholders: CodePlaceholders): PlaceholderPathMap =>
   placeholderPathMap({ list: placeholders.list, owners: placeholders.owners });
+
+/** An owner node that holds nothing, for an owner the world knows with no placeholders of its own. */
+const emptyOwner = (name: string): PlaceholderPathNode => ({ name, placeholder: null, path: [name], children: [] });
+
+/** The node a route starts from: null for the world's map, the owner's node, or every playable entity's node
+ *  for `persona`. Undefined for an owner the world lacks or the surface doesn't inject. */
+function routeStart(
+  route: PlaceholderRoute, placeholders: CodePlaceholders, options: AnalysisOptions, rules: StatRules,
+): PlaceholderPathNode | null | undefined {
+  if (!rules[ROUTE_GLOBAL[route.kind]]) return undefined;
+  if (route.kind === 'world') return null;
+  const map = pathMapOf(placeholders);
+  if (route.kind === 'persona') {
+    const played = (options.entities ?? []).filter((entity) => entity.persona);
+    return { ...emptyOwner('persona'), children: played.flatMap((entity) => map.owners.get(entity.id)?.children ?? []) };
+  }
+  const named = (route.kind === 'entity' ? options.entities : placeholders.dictionaries)?.findLast((owner) => owner.name === route.owner);
+  return named ? map.owners.get(named.id) ?? emptyOwner(named.name) : undefined;
+}
 
 /** One node as a completion: the placeholder it reads, or the owner whose placeholders it carries. */
 function nodeEntry(node: PlaceholderPathNode): SurfaceEntry {
@@ -221,30 +373,6 @@ function nodeEntry(node: PlaceholderPathNode): SurfaceEntry {
   return { name: node.name, detail: 'placeholder', info: `The “${node.name}” placeholder in this world.${held}` };
 }
 
-/**
- * The top level of the map as completions: one per key, then the exact path for every name more than one
- * thing claims. The paths lead, because a bare ambiguous name reaches only one of them.
- */
-function topLevelEntries(map: PlaceholderPathMap): { entries: SurfaceEntry[]; paths: SurfaceEntry[] } {
-  const shared = new Set(
-    map.claims.filter((claim) => placeholderKeyWinner(map, claim.key).count > 1).map((claim) => claim.key),
-  );
-  const paths: SurfaceEntry[] = [];
-  const seen = new Set<string>();
-  for (const claim of map.claims) {
-    if (!shared.has(claim.key) || claim.node.path.length < 2) continue;
-    const label = placeholderPathDots(claim.node.path);
-    if (label === null || seen.has(label)) continue;
-    seen.add(label);
-    paths.push({
-      name: label,
-      detail: claim.node.placeholder ? 'placeholder' : 'owner',
-      info: `“${placeholderPathLabel(claim.node.path)}”: exact path. The bare name resolves to a different placeholder.`,
-    });
-  }
-  const entries = map.top.filter((node) => IDENTIFIER.test(node.name)).map(nodeEntry);
-  return { entries, paths };
-}
 /** One entry of `stats`, the key literal or computed: every key reads a stat, if only a blank one. */
 const STAT_ENTRY_EXPRESSION = /^stats(\??\.[A-Za-z_$][\w$]*|\??\.?\[[^[\]]*\])$/;
 /** One stat picked out of `Object.values(stats)`, the call's arguments captured. `filter` hands back another
@@ -282,16 +410,17 @@ function indexesStat(text: string, name: string): boolean {
  * owns — each as a name, since the bracket is where a name no dot can reach is written.
  */
 function placeholderKeysInBrackets(
-  code: string, stringFrom: number, placeholders: CodePlaceholders,
+  code: string, stringFrom: number, placeholders: CodePlaceholders, options: AnalysisOptions, rules: StatRules,
 ): SurfaceEntry[] | null {
   const open = code.lastIndexOf('[', stringFrom);
   if (open === -1) return null;
-  const segments = placeholderPathSegments(expressionBeforeDot(code, open) ?? '');
-  if (segments === null) return null;
+  const route = placeholderRouteOf(expressionBeforeDot(code, open) ?? '');
+  const start = route && routeStart(route, placeholders, options, rules);
+  if (!route || start === undefined) return null;
   const map = pathMapOf(placeholders);
   // Keys only, never paths: one bracket holds one key, so a path has to be written bracket by bracket.
-  if (segments.length === 0) return map.top.map(nodeEntry);
-  const { node, rest } = walkPlaceholderPath(map, segments);
+  if (!start && route.segments.length === 0) return map.top.map(nodeEntry);
+  const { node, rest } = walkPlaceholderPath(map, route.segments, start);
   return rest.length === 0 && node ? node.children.map(nodeEntry) : [];
 }
 
@@ -301,14 +430,11 @@ function placeholderKeysInBrackets(
  * reads as an entry being named, so a half-typed name still offers the members it will have.
  */
 function placeholderMembersAt(
-  placeholders: CodePlaceholders, segments: readonly string[],
+  placeholders: CodePlaceholders, segments: readonly string[], start: PlaceholderPathNode | null,
 ): readonly SurfaceEntry[] | null {
   const map = pathMapOf(placeholders);
-  if (segments.length === 0) {
-    const { entries, paths } = topLevelEntries(map);
-    return [...paths, ...entries];
-  }
-  const { node, rest } = walkPlaceholderPath(map, segments);
+  if (!start && segments.length === 0) return map.top.filter((node) => IDENTIFIER.test(node.name)).map(nodeEntry);
+  const { node, rest } = walkPlaceholderPath(map, segments, start);
   if (rest.length === 0 && node) {
     const children = node.children.filter((child) => IDENTIFIER.test(child.name)).map(nodeEntry);
     if (!node.placeholder) return children;
@@ -328,17 +454,46 @@ function placeholderMembersAt(
  * editor asserting the sandbox holds something it never has.
  */
 function membersAfterDot(
-  code: string, tree: Tree, dotPos: number, options: AnalysisOptions,
+  code: string, tree: Tree, dotPos: number, options: SurfaceAnalysisOptions,
 ): readonly SurfaceEntry[] | null {
   const expression = expressionBeforeDot(code, dotPos);
   if (expression === null) return null;
-  if (expression === 'stats') return options.statNames ? mapNameEntries(options.statNames, 'stat', true) : null;
-  const segments = placeholderPathSegments(expression);
-  if (segments !== null) {
-    return options.placeholders ? placeholderMembersAt(options.placeholders, segments) : null;
+  const rules = statRulesOf(options.surface);
+  if (rules.stats && expression === 'stats') {
+    return options.statNames ? mapNameEntries(options.statNames, 'stat', true) : null;
   }
-  if (expression === 'traits') return options.traits ? mapNameEntries(options.traits, 'trait', true) : null;
-  if (TRAIT_ENTRY_EXPRESSION.test(expression)) return TRAIT_ENTRY_FIELDS;
+  const route = placeholderRouteOf(expression);
+  if (route && rules[ROUTE_GLOBAL[route.kind]]) {
+    const start = options.placeholders && routeStart(route, options.placeholders, options, rules);
+    return options.placeholders && start !== undefined ? placeholderMembersAt(options.placeholders, route.segments, start) : null;
+  }
+  if (rules.dictionaries && expression === 'dictionaries') {
+    return options.placeholders?.dictionaries ? mapNameEntries(options.placeholders.dictionaries.map((book) => book.name), 'dictionary', true) : null;
+  }
+  if (rules.dictionaries && DICTIONARY_ENTRY_EXPRESSION.test(expression)) return DICTIONARY_FIELDS;
+  if (rules.stats && expression === 'clock') return CLOCK_MEMBERS;
+  if (rules.stats && expression === 'clock.previous') return CLOCK_PREVIOUS_FIELDS;
+  if (rules.traits && expression === 'traits') return options.traits ? mapNameEntries(options.traits, 'trait', true) : null;
+  if (rules.traits && TRAIT_ENTRY_EXPRESSION.test(expression)) return TRAIT_ENTRY_FIELDS;
+  if (rules.persona && expression === 'persona') return PERSONA_FIELDS;
+  if (rules.persona && PERSONA_TRAITS_EXPRESSION.test(expression)) {
+    const names = personaTraitsOf(options.entities);
+    return names ? personaTraitEntries(names, true) : null;
+  }
+  if (rules.persona && PERSONA_TRAIT_ENTRY_EXPRESSION.test(expression)) return TRAIT_ENTRY_FIELDS;
+  if (rules.entities && expression === 'entities') {
+    return options.entities ? entityNameEntries(options.entities, true) : null;
+  }
+  if (rules.entities && ENTITY_ENTRY_EXPRESSION.test(expression)) return ENTITY_FIELDS;
+  const entityTraits = rules.entities ? ENTITY_TRAITS_EXPRESSION.exec(expression) : null;
+  if (entityTraits) {
+    const names = options.entities && traitsOfEntity(options.entities, entityNamed(entityTraits));
+    return names ? mapNameEntries(names, 'trait', true) : null;
+  }
+  if (rules.entities && ENTITY_TRAIT_ENTRY_EXPRESSION.test(expression)) return TRAIT_ENTRY_FIELDS;
+  const listed = options.surface.members.get(expression);
+  if (listed) return listed;
+  if (!rules.stats && !rules.self) return null;
   const turnInput = /^(.+)\.(previous|delta)$/.exec(expression);
   if (turnInput) {
     if (!looksLikeStat(code, tree, turnInput[1])) return null;
@@ -348,8 +503,7 @@ function membersAfterDot(
   if (deltaMember && DELTA_MEMBERS.some((member) => member.name === deltaMember[2])) {
     return looksLikeStat(code, tree, deltaMember[1]) ? DELTA_FIELDS : null;
   }
-  return BUILTIN_MEMBERS.get(expression)
-    ?? (looksLikeStat(code, tree, expression) ? STAT_FIELDS : null);
+  return looksLikeStat(code, tree, expression) ? STAT_FIELDS : null;
 }
 
 /** The member expression an assignment, `++` or `--` writes to, or null when it writes something else. */
@@ -412,15 +566,15 @@ function memberRoot(member: SyntaxNode, code: string): string | null {
   return root?.name === 'VariableName' ? code.slice(root.from, root.to) : null;
 }
 
-/** Whether `node` is a `placeholders.<name>.pin(text)` or `.unpin()` call — a write, exactly as an assignment
- *  to `.value` is. */
-function isPlaceholderWriteCall(node: SyntaxNode, code: string): boolean {
+/** Whether `node` is a `.pin(text)` or `.unpin()` call off `placeholders` or an owner entry — a write, exactly
+ *  as an assignment to `.value` is. */
+function isPlaceholderWriteCall(node: SyntaxNode, code: string, inScope: (root: string | null) => boolean): boolean {
   const callee = node.firstChild;
   if (callee?.name !== 'MemberExpression') return false;
   const property = callee.getChild('PropertyName');
   if (!property) return false;
   const name = code.slice(property.from, property.to);
-  return (name === 'pin' || name === 'unpin') && memberRoot(callee, code) === 'placeholders';
+  return (name === 'pin' || name === 'unpin') && inScope(memberRoot(callee, code));
 }
 
 /** A map entry's name as the code spells it, and where. */
@@ -443,32 +597,83 @@ function memberKey(node: SyntaxNode, code: string): EntryRef | null {
 
 /** The name a `root.Name` or `root["Name"]` member names, or null for any other member and for a key only a
  *  run could know. */
-function entryRef(node: SyntaxNode, code: string, root: 'placeholders' | 'traits' | 'stats'): EntryRef | null {
+function entryRef(
+  node: SyntaxNode, code: string, root: 'placeholders' | 'traits' | 'stats' | 'persona' | 'entities' | 'dictionaries',
+): EntryRef | null {
   const object = node.firstChild;
   if (object?.name !== 'VariableName' || code.slice(object.from, object.to) !== root) return null;
   return memberKey(node, code);
 }
 
-/**
- * The segments a `placeholders` member chain names, each with where it is written. Null for a chain rooted
- * anywhere else; a step whose key only a run could know ends the chain, as the text parser does.
- */
-function placeholderChain(node: SyntaxNode, code: string): EntryRef[] | null {
+/** Whether `node` is `persona.traits`, the persona's trait map. */
+function isPersonaTraits(node: SyntaxNode | null, code: string): boolean {
+  if (node?.name !== 'MemberExpression') return false;
+  const property = node.getChild('PropertyName');
+  return !!property && code.slice(property.from, property.to) === 'traits' && !!entryRef(node, code, 'persona');
+}
+
+/** The name a `persona.traits.Name` or `persona.traits["Name"]` member names, as `entryRef` reads `traits`. */
+const personaTraitRef = (node: SyntaxNode, code: string): EntryRef | null =>
+  (isPersonaTraits(node.firstChild, code) ? memberKey(node, code) : null);
+
+/** An `entities.Name.traits.Trait` member: the entity and the trait it names. */
+function entityTraitParts(node: SyntaxNode, code: string): { entity: EntryRef; trait: EntryRef } | null {
+  const traits = node.firstChild;
+  if (traits?.name !== 'MemberExpression') return null;
+  const property = traits.getChild('PropertyName');
+  const entry = traits.firstChild;
+  if (!property || code.slice(property.from, property.to) !== 'traits' || entry?.name !== 'MemberExpression') return null;
+  const entity = entryRef(entry, code, 'entities');
+  const trait = entity && memberKey(node, code);
+  return entity && trait ? { entity, trait } : null;
+}
+
+/** The trait an `entities.Name.traits.Trait` member names. */
+const entityTraitRef = (node: SyntaxNode, code: string): EntryRef | null => entityTraitParts(node, code)?.trait ?? null;
+
+/** A trait map's entry reader: `traits`, `persona.traits` or an entity's `traits`. */
+type TraitEntryOf = (node: SyntaxNode, code: string) => EntryRef | null;
+const worldTraitRef: TraitEntryOf = (node, code) => entryRef(node, code, 'traits');
+
+/** A placeholder chain off the tree: its route, the owner's key where an entry names one, and its keys, each
+ *  with where it is written. A step whose key only a run could know ends the chain, as the text parser does. */
+interface PlaceholderChain {
+  kind: PlaceholderRouteKind;
+  owner?: EntryRef;
+  refs: EntryRef[];
+}
+
+/** The chain `node` is, through `placeholders` or an owner entry's `placeholders`, or null for any other. */
+function placeholderChainRoute(node: SyntaxNode, code: string): PlaceholderChain | null {
   const members: SyntaxNode[] = [];
   let at: SyntaxNode | null = node;
   while (at?.name === 'MemberExpression') {
     members.unshift(at);
     at = at.firstChild;
   }
-  if (at?.name !== 'VariableName' || code.slice(at.from, at.to) !== 'placeholders') return null;
-  const refs: EntryRef[] = [];
-  for (const member of members) {
-    const ref = memberKey(member, code);
-    if (!ref) break;
-    refs.push(ref);
+  if (at?.name !== 'VariableName') return null;
+  const root = code.slice(at.from, at.to);
+  const keys = members.map((member) => memberKey(member, code));
+  const take = (from: number): EntryRef[] => {
+    const refs: EntryRef[] = [];
+    for (const key of keys.slice(from)) {
+      if (!key) break;
+      refs.push(key);
+    }
+    return refs;
+  };
+  if (root === 'placeholders') return { kind: 'world', refs: take(0) };
+  if (root === 'persona' && keys[0]?.name === 'placeholders') return { kind: 'persona', refs: take(1) };
+  const owner = keys[0];
+  if ((root === 'entities' || root === 'dictionaries') && owner && keys[1]?.name === 'placeholders') {
+    return { kind: root === 'entities' ? 'entity' : 'dictionary', owner, refs: take(2) };
   }
-  return refs;
+  return null;
 }
+
+/** The route a chain off the tree walks, as the text reader would name it. */
+const routeOfChain = (chain: PlaceholderChain): PlaceholderRoute =>
+  ({ kind: chain.kind, owner: chain.owner?.name, segments: chain.refs.map((ref) => ref.name) });
 
 /** What is wrong with a reference to the `noun` called `name`: none has it, or several share it. `winner`
  *  is how the last-authored one displays, where that differs from the name as written. */
@@ -483,7 +688,10 @@ function checkEntryName(
   if (count > 1) {
     const display = winner(names.lastIndexOf(name));
     const reads = display === name ? 'the last one authored' : `“${display}”, the last one authored`;
-    return { from, to, severity: 'warning', message: `${count} ${noun}s are named “${name}”. This reads ${reads}.` };
+    const rule = noun === 'stat'
+      ? `A stat that is on wins the name over a switched-off one. Otherwise this reads ${reads}.`
+      : `This reads ${reads}.`;
+    return { from, to, severity: 'warning', message: `${count} ${PLURAL[noun]} are named “${name}”. ${rule}` };
   }
   const suggestion = nearestName(name, [...new Set(names)]);
   const message = suggestion ? `No ${noun} is named “${name}”. Did you mean “${suggestion}”?` : `No ${noun} is named “${name}”.`;
@@ -492,36 +700,15 @@ function checkEntryName(
 
 const checkTraitName = (ref: EntryRef, names: readonly string[]) => checkEntryName(ref, names, 'trait');
 
-/**
- * What is wrong with a bare name several things claim. Which one reads depends on what claims it: a row the
- * world itself holds beats a scoped one, and an owner node beats a placeholder of the same name, so the
- * message names the winner rather than restating one rule.
- */
+/** What is wrong with a name several of the world's own rows share: the last one authored reads. */
 function checkSharedKey(map: PlaceholderPathMap, { name, from, to }: EntryRef): CodeDiagnostic | null {
-  const claims = map.claims.filter((claim) => claim.key === name);
-  const node = map.keys.get(name);
-  if (claims.length < 2 || !node) return null;
-  const warn = (message: string): CodeDiagnostic => ({ from, to, severity: 'warning', message });
-  const count = claims.filter((claim) => claim.node.placeholder).length;
-  // An owner of placeholders takes a top-level key of its own, so one name can mean both kinds of thing.
-  if (count === 0) return warn(`“${name}” names more than one owner of placeholders. This reads the last one authored.`);
-  if (count === 1) {
-    const reads = node.placeholder ? 'the placeholder' : 'the owner';
-    return warn(`“${name}” names both a placeholder and an owner of placeholders. This reads ${reads}.`);
-  }
-  const lead = `${count} placeholders are named “${name}”.`;
-  const exact = 'Write the path to reach another.';
-  if (node.path.length > 1) {
-    return warn(`${lead} This reads “${placeholderPathLabel(node.path)}”, the last one authored. ${exact}`);
-  }
-  // A row the world itself holds beats a scoped or owned one, whatever the authoring order.
-  const elsewhere = claims.some((claim) => claim.node !== node && claim.node.path.length > 1);
-  return warn(elsewhere ? `${lead} This reads the one the world itself holds. ${exact}`
-    : `${lead} This reads the last one authored.`);
+  const { count } = placeholderKeyWinner(map, name);
+  if (count < 2) return null;
+  return { from, to, severity: 'warning', message: `${count} placeholders are named “${name}”. This reads the last one authored.` };
 }
 
 /**
- * What is wrong with a path: a bare name several things claim, a segment no entry answers, or a child whose
+ * What is wrong with a path: a name several world rows share, a segment no entry answers, or a child whose
  * name loses to a member every entry has. Each complaint lands on the segment that carries it.
  */
 function checkPlaceholderPath(refs: readonly EntryRef[], placeholders: CodePlaceholders): CodeDiagnostic[] {
@@ -535,11 +722,7 @@ function checkPlaceholderPath(refs: readonly EntryRef[], placeholders: CodePlace
   if (rest.length === 0) return out;
   const ref = refs[refs.length - rest.length];
   if (shadowed && node) {
-    out.push({
-      from: ref.from, to: ref.to, severity: 'warning',
-      message: `Every placeholder has a ${ref.name} member, so this reads the member. `
-        + `The placeholder named “${ref.name}” under “${placeholderPathLabel(node.path)}” is not reachable from code.`,
-    });
+    out.push(shadowedChild(ref, node));
     return out;
   }
   // A member read off an entry is the path ending, not a miss.
@@ -555,6 +738,63 @@ function checkPlaceholderPath(refs: readonly EntryRef[], placeholders: CodePlace
   return out;
 }
 
+/** The warning for a child whose name loses to a member every placeholder entry has. */
+const shadowedChild = (ref: EntryRef, holder: PlaceholderPathNode): CodeDiagnostic => ({
+  from: ref.from, to: ref.to, severity: 'warning',
+  message: `Every placeholder has a ${ref.name} member, so this reads the member. `
+    + `The placeholder named “${ref.name}” under “${placeholderPathLabel(holder.path)}” is not reachable from code.`,
+});
+
+/** What is wrong with a path through an owner's `placeholders`: a key no placeholder answers, or a child that
+ *  loses to a member. A warning, since a library owner can carry it. */
+function checkOwnedPlaceholderPath(
+  chain: PlaceholderChain, placeholders: CodePlaceholders, options: AnalysisOptions, rules: StatRules,
+): CodeDiagnostic | null {
+  const route = routeOfChain(chain);
+  const start = routeStart(route, placeholders, options, rules);
+  if (!start || !chain.refs.length) return null;
+  const { node, rest, shadowed } = walkPlaceholderPath(pathMapOf(placeholders), route.segments, start);
+  if (rest.length === 0 || !node) return null;
+  const ref = chain.refs[chain.refs.length - rest.length];
+  if (shadowed) return shadowedChild(ref, node);
+  if (node.placeholder && isPlaceholderEntryMember(ref.name)) return null;
+  const lead = node !== start ? `Unknown placeholder name “${ref.name}” under “${placeholderPathLabel(node.path)}”.`
+    : chain.kind === 'persona' ? `Unknown persona placeholder name “${ref.name}”. A library persona can have it.`
+      : `“${route.owner}” has no placeholder named “${ref.name}”.`;
+  const suggestion = nearestName(ref.name, node.children.map((child) => child.name));
+  return {
+    from: ref.from, to: ref.to, severity: 'warning',
+    message: suggestion ? `${lead} Did you mean “${suggestion}”?` : lead,
+  };
+}
+
+/** What is wrong with an assignment to a whole owned placeholder rather than to its `value`. */
+function checkOwnedEntryWrite(
+  target: SyntaxNode, code: string, options: AnalysisOptions, rules: StatRules,
+): CodeDiagnostic | null {
+  const chain = placeholderChainRoute(target, code);
+  if (!chain || chain.kind === 'world' || !chain.refs.length) return null;
+  const { from, to } = target;
+  const written = code.slice(from, to);
+  // An owner's own keys are always placeholders, so one key needs no world to name the fix.
+  const fix: CodeDiagnostic = { from, to, severity: 'warning', message: `Write to ${written}.value instead.` };
+  const { placeholders } = options;
+  const start = placeholders && routeStart(routeOfChain(chain), placeholders, options, rules);
+  if (!placeholders || !start) return chain.refs.length === 1 ? fix : null;
+  const { node, rest } = walkPlaceholderPath(pathMapOf(placeholders), chain.refs.map((ref) => ref.name), start);
+  return rest.length === 0 && node?.placeholder ? fix : null;
+}
+
+/** What is wrong with a write into `dictionaries`: to an entry, or to one of its members. */
+function checkDictionaryWrite(target: SyntaxNode, code: string): CodeDiagnostic | null {
+  const readOnly = (from: number, to: number): CodeDiagnostic =>
+    ({ from, to, severity: 'error', message: `${code.slice(target.from, target.to)} is read-only.` });
+  const entry = entryRef(target, code, 'dictionaries');
+  if (entry) return readOnly(entry.from, entry.to);
+  const own = target.firstChild && entryRef(target.firstChild, code, 'dictionaries') ? memberKey(target, code) : null;
+  return own ? readOnly(own.from, own.to) : null;
+}
+
 /**
  * What is wrong with an assignment to a whole `placeholders` node rather than to its `value`. Without the
  * world's placeholders the path can't be walked, so only the one-segment case is named.
@@ -566,23 +806,24 @@ function checkPlaceholderEntryWrite(
   const written = code.slice(from, to);
   const warn = (message: string): CodeDiagnostic => ({ from, to, severity: 'warning', message });
   if (!placeholders) return entryRef(target, code, 'placeholders') ? warn(`Write to ${written}.value instead.`) : null;
-  const refs = placeholderChain(target, code);
-  if (!refs?.length) return null;
+  const chain = placeholderChainRoute(target, code);
+  const refs = chain?.kind === 'world' ? chain.refs : [];
+  if (!refs.length) return null;
   const { node, rest } = walkPlaceholderPath(pathMapOf(placeholders), refs.map((ref) => ref.name));
-  if (rest.length > 0 || !node) return null;
-  if (!node.placeholder) return warn(`“${node.name}” owns placeholders. Write to one of them instead.`);
-  return warn(`Write to ${written}.value instead.`);
+  return rest.length === 0 && node ? warn(`Write to ${written}.value instead.`) : null;
 }
 
-/** What is wrong with a write into `traits`: to the entry itself, or to a field other than `enabled`. */
-function checkTraitWrite(target: SyntaxNode, code: string, assignment: boolean): CodeDiagnostic | null {
+/** What is wrong with a write into a trait map: to the entry itself, or to a field other than `enabled`. */
+function checkTraitWrite(
+  target: SyntaxNode, code: string, assignment: boolean, entryOf: TraitEntryOf = worldTraitRef,
+): CodeDiagnostic | null {
   const { from, to } = target;
-  if (entryRef(target, code, 'traits')) {
+  if (entryOf(target, code)) {
     return assignment ? { from, to, severity: 'warning', message: `Write to ${code.slice(from, to)}.${TRAIT_WRITABLE_FIELD} instead.` } : null;
   }
   const entry = target.firstChild;
   const field = target.getChild('PropertyName');
-  if (!entry || !field || !entryRef(entry, code, 'traits')) return null;
+  if (!entry || !field || !entryOf(entry, code)) return null;
   const name = code.slice(field.from, field.to);
   if (name === TRAIT_WRITABLE_FIELD) return null;
   const path = code.slice(entry.from, entry.to);
@@ -591,6 +832,61 @@ function checkTraitWrite(target: SyntaxNode, code: string, assignment: boolean):
   const message = known ? `${path}.${name} can’t be written. Only ${path}.${TRAIT_WRITABLE_FIELD} can.`
     : suggestion ? `A trait has no field “${name}”. Did you mean “${suggestion}”?` : `A trait has no field “${name}”.`;
   return { from: field.from, to: field.to, severity: 'error', message };
+}
+
+/** What is wrong with a write into `persona`: to one of its own members, or into its traits as `traits`. */
+function checkPersonaWrite(target: SyntaxNode, code: string, assignment: boolean): CodeDiagnostic | null {
+  const own = entryRef(target, code, 'persona');
+  if (own) {
+    const message = `persona.${own.name} is read-only.`;
+    return { from: own.from, to: own.to, severity: 'error', message };
+  }
+  return checkTraitWrite(target, code, assignment, personaTraitRef);
+}
+
+/** What is wrong with a write into `entities`: to the map, to an entry or one of its members, or into an
+ *  entry's traits as `traits`. */
+function checkEntityWrite(target: SyntaxNode, code: string, assignment: boolean): CodeDiagnostic | null {
+  const readOnly = (from: number, to: number): CodeDiagnostic =>
+    ({ from, to, severity: 'error', message: `${code.slice(target.from, target.to)} is read-only.` });
+  const entry = entryRef(target, code, 'entities');
+  if (entry) return readOnly(entry.from, entry.to);
+  const own = target.firstChild && entryRef(target.firstChild, code, 'entities') ? memberKey(target, code) : null;
+  if (own) return readOnly(own.from, own.to);
+  return checkTraitWrite(target, code, assignment, entityTraitRef);
+}
+
+/** What is wrong with an entity or dictionary name: several share it, or nothing authored has it. A library
+ *  item can still have it, so the miss is only a warning. */
+function checkOwnerName(ref: EntryRef, names: readonly string[], noun: 'entity' | 'dictionary'): CodeDiagnostic | null {
+  if (names.includes(ref.name)) return checkEntryName(ref, names, noun);
+  const lead = `Unknown ${noun} name “${ref.name}”. A library ${noun} can have it.`;
+  const suggestion = nearestName(ref.name, [...new Set(names)]);
+  return { from: ref.from, to: ref.to, severity: 'warning', message: suggestion ? `${lead} Did you mean “${suggestion}”?` : lead };
+}
+
+const checkEntityName = (ref: EntryRef, entities: readonly CodeEntityNames[]) =>
+  checkOwnerName(ref, keyedEntityNames(entities), 'entity');
+
+/** What is wrong with a trait name on a known entity: its set has no trait called that. A later library
+ *  entity can take the name with another set, so this is only a warning. */
+function checkEntityTraitName(
+  { entity, trait }: { entity: EntryRef; trait: EntryRef }, entities: readonly CodeEntityNames[],
+): CodeDiagnostic | null {
+  const names = traitsOfEntity(entities, entity.name);
+  if (!names || names.includes(trait.name)) return null;
+  const suggestion = nearestName(trait.name, [...new Set(names)]);
+  const lead = `“${entity.name}” has no trait named “${trait.name}”.`;
+  return { from: trait.from, to: trait.to, severity: 'warning', message: suggestion ? `${lead} Did you mean “${suggestion}”?` : lead };
+}
+
+/** What is wrong with a persona trait name: no persona in the world holds it. A library persona may still
+ *  hold it, so this is only a warning. */
+function checkPersonaTraitName({ name, from, to }: EntryRef, names: readonly string[]): CodeDiagnostic | null {
+  if (names.includes(name)) return null;
+  const lead = `Unknown persona trait name “${name}”. A library persona can have it.`;
+  const suggestion = nearestName(name, [...new Set(names)]);
+  return { from, to, severity: 'warning', message: suggestion ? `${lead} Did you mean “${suggestion}”?` : lead };
 }
 
 
@@ -605,15 +901,18 @@ const KEYWORDS = ['return', 'const', 'let', 'if', 'else', 'for', 'of', 'function
  * What the caret at `pos` can be completed with, or null where nothing sensible applies. Synchronous and
  * pure: doc and cursor in, options out, with no editor and no network involved.
  */
-export function statCodeCompletions(
+export function codeCompletions(
   code: string,
   pos: number,
-  options: AnalysisOptions = {},
+  options: SurfaceAnalysisOptions,
 ): CompletionResult | null {
+  const { surface } = options;
+  const known = surfaceKnownNames(surface);
   const tree = parse(code);
   const node = tree.resolveInner(pos, -1);
   const from = wordStart(code, pos);
   const ranges = slotRanges(code, options);
+  const rules = statRulesOf(surface);
 
   // Inside a string literal the useful list is the world's own stat names — the one place a typo fails
   // silently rather than throwing.
@@ -622,18 +921,38 @@ export function statCodeCompletions(
     const innerFrom = node.from + 1;
     const innerTo = code[node.to - 1] === quote && node.to - 1 > node.from ? node.to - 1 : node.to;
     if (pos < innerFrom) return null;
-    // Inside `placeholders[…]` at any depth: the keys that bracket can reach, quoted names included.
+    // Inside `placeholders[…]` or an owner's `placeholders[…]` at any depth: the keys that bracket can reach,
+    // quoted names included.
     const bracket = options.placeholders && /\[\s*$/.test(code.slice(0, node.from))
-      ? placeholderKeysInBrackets(code, node.from, options.placeholders) : null;
+      ? placeholderKeysInBrackets(code, node.from, options.placeholders, options, rules) : null;
     if (bracket) {
       return { from: innerFrom, to: innerTo, options: bracket.map((entry) => asCompletion(entry, 'text')) };
     }
-    if (/\btraits\s*(\?\.)?\[\s*$/.test(code.slice(0, node.from))) {
+    // Before `traits[`, whose pattern every entity's map also matches.
+    const entityBracket = rules.entities ? ENTITY_TRAITS_BRACKET.exec(code.slice(0, node.from)) : null;
+    if (entityBracket) {
+      const names = traitsOfEntity(options.entities ?? [], entityNamed(entityBracket)) ?? [];
+      return { from: innerFrom, to: innerTo, options: mapNameEntries(names, 'trait', false).map((entry) => asCompletion(entry, 'text')) };
+    }
+    if (rules.entities && ENTITIES_BRACKET.test(code.slice(0, node.from))) {
+      const names = entityNameEntries(options.entities ?? [], false);
+      return { from: innerFrom, to: innerTo, options: names.map((entry) => asCompletion(entry, 'text')) };
+    }
+    if (rules.dictionaries && DICTIONARIES_BRACKET.test(code.slice(0, node.from))) {
+      const names = mapNameEntries((options.placeholders?.dictionaries ?? []).map((book) => book.name), 'dictionary', false);
+      return { from: innerFrom, to: innerTo, options: names.map((entry) => asCompletion(entry, 'text')) };
+    }
+    if (rules.persona && /\bpersona\s*\??\.\s*traits\s*(\?\.)?\[\s*$/.test(code.slice(0, node.from))) {
+      const names = personaTraitEntries(personaTraitsOf(options.entities) ?? [], false);
+      return { from: innerFrom, to: innerTo, options: names.map((entry) => asCompletion(entry, 'text')) };
+    }
+    if (rules.traits && /\btraits\s*(\?\.)?\[\s*$/.test(code.slice(0, node.from))) {
       const names = mapNameEntries(options.traits ?? [], 'trait', false);
       return { from: innerFrom, to: innerTo, options: names.map((entry) => asCompletion(entry, 'text')) };
     }
     // Inside `stats["…"]` and any other string alike. The whole literal is replaced, not the part before
     // the caret — a name half-typed in the middle of an old one would otherwise leave its tail behind.
+    if (!rules.stats) return null;
     const names = mapNameEntries(options.statNames ?? [], 'stat', false);
     return { from: innerFrom, to: innerTo, options: names.map((entry) => asCompletion(entry, 'text')) };
   }
@@ -670,7 +989,7 @@ export function statCodeCompletions(
   // The word being typed is itself a definition while it's being typed; offering it back is noise.
   const typed = code.slice(from, pos);
   // Right after `stats[` a quoted name leads the list; `self.name` or a variable of the author's can go there too.
-  const quotedStats = /\bstats\s*(\?\.)?\[\s*$/.test(beforeWord)
+  const quotedStats = rules.stats && /\bstats\s*(\?\.)?\[\s*$/.test(beforeWord)
     ? mapNameEntries(options.statNames ?? [], 'stat', false).map((entry) => ({ ...asCompletion(entry, 'text', 2), label: JSON.stringify(entry.name) }))
     : [];
   return {
@@ -678,15 +997,19 @@ export function statCodeCompletions(
     to: pos,
     options: [
       ...quotedStats,
-      ...SANDBOX_GLOBALS.map((entry) => asCompletion(entry, 'variable', 1)),
+      ...surface.globals.map((entry) => asCompletion(entry, 'variable', 1)),
       ...[...declared]
-        .filter((name) => name !== typed && !SANDBOX_KNOWN_NAMES.has(name))
+        .filter((name) => name !== typed && !known.has(name))
         .map((name) => ({ label: name, type: 'variable' as const, detail: 'yours', info: 'Declared in this code.' })),
-      ...SANDBOX_BUILTINS.map((entry) => asCompletion(entry, 'variable')),
+      ...surface.builtins.map((entry) => asCompletion(entry, 'variable')),
       ...KEYWORDS.map((keyword) => ({ label: keyword, type: 'keyword' as const })),
     ],
   };
 }
+
+/** `codeCompletions` against the stat-code surface. */
+export const statCodeCompletions = (code: string, pos: number, options: AnalysisOptions = {}) =>
+  codeCompletions(code, pos, { ...options, surface: STAT_CODE_SURFACE });
 
 /**
  * What the reader found, as one line. Running the code reports what it returned, which says nothing
@@ -704,13 +1027,16 @@ export function summarizeProblems(diagnostics: readonly CodeDiagnostic[]): strin
 }
 
 /**
- * What looks wrong with a piece of stat code: syntax the grammar can't read, references to names the
- * sandbox never provides, and code that can never hand a number back. Advisory — the Test button remains
- * the ground truth, and nothing here blocks saving.
+ * What looks wrong with a piece of code: syntax the grammar can't read, references to names the surface
+ * never provides, and code that can never hand a result back. Advisory — the Test button remains the
+ * ground truth, and nothing here blocks saving.
  */
-export function statCodeDiagnostics(code: string, options: AnalysisOptions = {}): CodeDiagnostic[] {
+export function codeDiagnostics(code: string, options: SurfaceAnalysisOptions): CodeDiagnostic[] {
   if (!code.trim()) return [];
 
+  const { surface } = options;
+  const known = surfaceKnownNames(surface);
+  const rules = statRulesOf(surface);
   const tree = parse(code);
   const ranges = slotRanges(code, options);
   const diagnostics: CodeDiagnostic[] = [];
@@ -720,9 +1046,19 @@ export function statCodeDiagnostics(code: string, options: AnalysisOptions = {})
   let sawOwnWrite = false;
   let sawPlaceholderWrite = false;
   let sawTraitWrite = false;
-  const placeholdersInScope = !declared.has('placeholders');
-  const traitsInScope = !declared.has('traits');
-  const statsInScope = !declared.has('stats');
+  const placeholdersInScope = rules.placeholders && !declared.has('placeholders');
+  const traitsInScope = rules.traits && !declared.has('traits');
+  const personaInScope = rules.persona && !declared.has('persona');
+  const personaTraits = personaTraitsOf(options.entities);
+  const entitiesInScope = rules.entities && !declared.has('entities');
+  const dictionariesInScope = rules.dictionaries && !declared.has('dictionaries');
+  const statsInScope = rules.stats && !declared.has('stats');
+  /** Whether a chain's root is an owner global the code has not shadowed. */
+  const ownerRootInScope = (root: string | null) =>
+    (root === 'entities' && entitiesInScope) || (root === 'persona' && personaInScope) || (root === 'dictionaries' && dictionariesInScope);
+  /** Whether a placeholder chain's root is in scope: the world's map, or an owner global. */
+  const chainRootInScope = (root: string | null) => (root === 'placeholders' ? placeholdersInScope : ownerRootInScope(root));
+  const statWrites = rules.stats || rules.self;
 
   const cursor = tree.cursor();
   do {
@@ -743,9 +1079,11 @@ export function statCodeDiagnostics(code: string, options: AnalysisOptions = {})
     if (cursor.type.name === 'ReturnStatement') { sawReturn = true; continue; }
     const target = writeTarget(cursor.node, code);
     if (target && !overlapsAny(target.from, target.to, ranges)) {
-      const { own, problem } = checkWrite(target, code, tree, declared, options.selfName);
-      if (own) sawOwnWrite = true;
-      if (problem) diagnostics.push(problem);
+      if (statWrites) {
+        const { own, problem } = checkWrite(target, code, tree, declared, options.selfName);
+        if (own) sawOwnWrite = true;
+        if (problem) diagnostics.push(problem);
+      }
       if (placeholdersInScope && memberRoot(target, code) === 'placeholders') {
         sawPlaceholderWrite = true;
         const problem = cursor.type.name === 'AssignmentExpression'
@@ -757,19 +1095,58 @@ export function statCodeDiagnostics(code: string, options: AnalysisOptions = {})
         const traitProblem = checkTraitWrite(target, code, cursor.type.name === 'AssignmentExpression');
         if (traitProblem) diagnostics.push(traitProblem);
       }
+      if (personaInScope && memberRoot(target, code) === 'persona') {
+        sawTraitWrite = true;
+        const personaProblem = checkPersonaWrite(target, code, cursor.type.name === 'AssignmentExpression');
+        if (personaProblem) diagnostics.push(personaProblem);
+      }
+      if (entitiesInScope && memberRoot(target, code) === 'entities') {
+        sawTraitWrite = true;
+        const entityProblem = checkEntityWrite(target, code, cursor.type.name === 'AssignmentExpression');
+        if (entityProblem) diagnostics.push(entityProblem);
+      }
+      if (dictionariesInScope && memberRoot(target, code) === 'dictionaries') {
+        sawPlaceholderWrite = true;
+        const dictionaryProblem = checkDictionaryWrite(target, code);
+        if (dictionaryProblem) diagnostics.push(dictionaryProblem);
+      }
+      const ownedProblem = cursor.type.name === 'AssignmentExpression' && ownerRootInScope(memberRoot(target, code))
+        ? checkOwnedEntryWrite(target, code, options, rules) : null;
+      if (ownedProblem) diagnostics.push(ownedProblem);
     }
-    if (cursor.type.name === 'CallExpression' && placeholdersInScope && isPlaceholderWriteCall(cursor.node, code)) {
+    if (cursor.type.name === 'CallExpression' && isPlaceholderWriteCall(cursor.node, code, chainRootInScope)) {
       sawPlaceholderWrite = true;
     }
-    if (cursor.type.name === 'MemberExpression' && options.placeholders && placeholdersInScope) {
+    const chain = cursor.type.name === 'MemberExpression' && options.placeholders ? placeholderChainRoute(cursor.node, code) : null;
+    if (chain && options.placeholders && chainRootInScope(ROUTE_GLOBAL[chain.kind])) {
       // Every nesting of one chain is visited, and each reports the same complaint at the same span, so the
       // duplicate filter below leaves one of each rather than one per nesting.
-      const refs = placeholderChain(cursor.node, code)?.filter((ref) => !overlapsAny(ref.from, ref.to, ranges));
-      if (refs?.length) diagnostics.push(...checkPlaceholderPath(refs, options.placeholders));
+      const refs = chain.refs.filter((ref) => !overlapsAny(ref.from, ref.to, ranges));
+      const owned = chain.kind === 'world' ? null : checkOwnedPlaceholderPath({ ...chain, refs }, options.placeholders, options, rules);
+      if (chain.kind === 'world' && refs.length) diagnostics.push(...checkPlaceholderPath(refs, options.placeholders));
+      if (owned) diagnostics.push(owned);
+    }
+    if (cursor.type.name === 'MemberExpression' && options.placeholders?.dictionaries && dictionariesInScope) {
+      const ref = entryRef(cursor.node, code, 'dictionaries');
+      const names = options.placeholders.dictionaries.map((book) => book.name);
+      const problem = ref && !overlapsAny(ref.from, ref.to, ranges) ? checkOwnerName(ref, names, 'dictionary') : null;
+      if (problem) diagnostics.push(problem);
     }
     if (cursor.type.name === 'MemberExpression' && options.traits && traitsInScope) {
       const ref = entryRef(cursor.node, code, 'traits');
       const problem = ref && !overlapsAny(ref.from, ref.to, ranges) ? checkTraitName(ref, options.traits) : null;
+      if (problem) diagnostics.push(problem);
+    }
+    if (cursor.type.name === 'MemberExpression' && personaTraits && personaInScope) {
+      const ref = personaTraitRef(cursor.node, code);
+      const problem = ref && !overlapsAny(ref.from, ref.to, ranges) ? checkPersonaTraitName(ref, personaTraits) : null;
+      if (problem) diagnostics.push(problem);
+    }
+    if (cursor.type.name === 'MemberExpression' && options.entities && entitiesInScope) {
+      const entity = entryRef(cursor.node, code, 'entities');
+      const parts = entityTraitParts(cursor.node, code);
+      const problem = entity && !overlapsAny(entity.from, entity.to, ranges) ? checkEntityName(entity, options.entities)
+        : parts && !overlapsAny(parts.trait.from, parts.trait.to, ranges) ? checkEntityTraitName(parts, options.entities) : null;
       if (problem) diagnostics.push(problem);
     }
     if (cursor.type.name === 'MemberExpression' && options.statNames && statsInScope) {
@@ -781,28 +1158,28 @@ export function statCodeDiagnostics(code: string, options: AnalysisOptions = {})
     if (cursor.type.name !== 'VariableName') continue;
 
     const name = code.slice(from, to);
-    if (declared.has(name) || SANDBOX_KNOWN_NAMES.has(name)) continue;
+    if (declared.has(name) || known.has(name)) continue;
     if (overlapsAny(from, to, ranges)) continue;
-    const suggestion = nearestSurfaceName(name, [...declared]);
+    const suggestion = nearestName(name, [...known, ...declared]);
     diagnostics.push({
       from,
       to,
       severity: 'error',
       message: suggestion
-        ? `“${name}” isn’t available in stat code. Did you mean “${suggestion}”?`
-        : `“${name}” isn’t available in stat code.`,
+        ? `“${name}” isn’t available in ${surface.label}. Did you mean “${suggestion}”?`
+        : `“${name}” isn’t available in ${surface.label}.`,
     });
   } while (cursor.next());
 
   // Code with no return can still set the value through self, pin a placeholder, or switch a trait. Code that
   // does none of these changes nothing. A missing return on code the parser couldn't finish reading is a
   // guess about half-typed code.
-  if (!sawReturn && !sawOwnWrite && !sawPlaceholderWrite && !sawTraitWrite && !sawSyntaxError) {
+  if (surface.missingReturn && !sawReturn && !sawOwnWrite && !sawPlaceholderWrite && !sawTraitWrite && !sawSyntaxError) {
     diagnostics.push({
       from: 0,
       to: Math.min(code.length, code.indexOf('\n') === -1 ? code.length : code.indexOf('\n')),
       severity: 'warning',
-      message: 'This code never returns a number or writes self.value, so the stat keeps its value.',
+      message: surface.missingReturn,
     });
   }
 
@@ -817,3 +1194,7 @@ export function statCodeDiagnostics(code: string, options: AnalysisOptions = {})
     })
     .sort((a, b) => a.from - b.from);
 }
+
+/** `codeDiagnostics` against the stat-code surface. */
+export const statCodeDiagnostics = (code: string, options: AnalysisOptions = {}) =>
+  codeDiagnostics(code, { ...options, surface: STAT_CODE_SURFACE });

@@ -1,7 +1,12 @@
-import { PROMPT_TEXT_KEYS, type PromptValues, type SectionStyle, type VerbatimMap, type ReasoningMap, type ReasoningBudgetMap } from './promptPresets';
+import { PROMPT_TEXT_KEYS, hasOverviewContent, normalizeOverview, type PresetOverview, type PromptValues, type SectionStyle, type VerbatimMap, type ReasoningMap, type ReasoningBudgetMap } from './promptPresets';
 import type { PromptSamplerMap, PromptSampler, PromptSamplerSetting } from './promptSamplers';
-import type { AIRequestType } from '@/types';
-import { parsePromptReasoningSetting } from './reasoningEffort';
+import type { AIRequestType, Tool, ToolEnabledMap } from '@/types';
+import { MAX_REASONING_BUDGET_PCT, parsePromptReasoningSetting } from './reasoningEffort';
+import { sanitizeMaxOutput, type PromptMaxOutputMap } from './promptMaxOutput';
+import { sanitizePromptAttachments, type PromptAttachmentsMap } from './promptAttachments';
+import { isCatalogToolId } from './tools/toolCatalog';
+import { catalogToolNamed, isRecord, parseToolEnabledMap } from './tools/toolValidation';
+import { parseToolList } from './tools/toolPack';
 
 /** Wire identity + schema version for a shared prompt preset. `FORMAT_VERSION` bumps only on a breaking change
  *  to the shared shape; the source app version is stamped separately for the older/newer import warning. */
@@ -21,7 +26,14 @@ export interface SharedPreset {
   samplers?: PromptSamplerMap;
   reasoning?: ReasoningMap;
   reasoningBudget?: ReasoningBudgetMap;
+  maxOutput?: PromptMaxOutputMap;
+  attachments?: PromptAttachmentsMap;
   verbatim?: VerbatimMap;
+  overview?: PresetOverview;
+  /** Catalog Tool switches only. */
+  enabledTools?: ToolEnabledMap;
+  /** Copies of the user Tools the preset switches on. */
+  tools?: Tool[];
 }
 
 /** The preset payload an import yields (id is minted when added to the store). */
@@ -32,7 +44,13 @@ export interface ImportedPreset {
   samplers?: PromptSamplerMap;
   reasoning?: ReasoningMap;
   reasoningBudget?: ReasoningBudgetMap;
+  maxOutput?: PromptMaxOutputMap;
+  attachments?: PromptAttachmentsMap;
   verbatim?: VerbatimMap;
+  overview?: PresetOverview;
+  enabledTools?: ToolEnabledMap;
+  /** Embedded user Tools, each still under its sender's id. */
+  tools?: Tool[];
 }
 
 export interface ParseResult {
@@ -45,11 +63,14 @@ export interface ParseResult {
 }
 
 /** Build the shareable artifact from a (resolved) preset. Built-ins should be materialized to concrete
- *  values/tuning by the caller before export. */
+ *  values/tuning by the caller before export. `tools` is the player's user Tool list; the switched-on ones
+ *  travel as copies, since their ids are local. */
 export function buildSharedPreset(
-  input: { name: string; style: SectionStyle; values: PromptValues; samplers?: PromptSamplerMap; reasoning?: ReasoningMap; reasoningBudget?: ReasoningBudgetMap; verbatim?: VerbatimMap },
+  input: { name: string; style: SectionStyle; values: PromptValues; samplers?: PromptSamplerMap; reasoning?: ReasoningMap; reasoningBudget?: ReasoningBudgetMap; maxOutput?: PromptMaxOutputMap; attachments?: PromptAttachmentsMap; verbatim?: VerbatimMap; overview?: PresetOverview; enabledTools?: ToolEnabledMap; tools?: readonly Tool[] },
   appVersion: string,
 ): SharedPreset {
+  const enabledTools = parseToolEnabledMap(input.enabledTools, isCatalogToolId);
+  const tools = (input.tools ?? []).filter((t) => input.enabledTools?.[t.id] === true);
   return {
     kind: SHARE_KIND,
     formatVersion: FORMAT_VERSION,
@@ -60,7 +81,12 @@ export function buildSharedPreset(
     ...(input.samplers && Object.keys(input.samplers).length ? { samplers: input.samplers } : {}),
     ...(input.reasoning && Object.keys(input.reasoning).length ? { reasoning: input.reasoning } : {}),
     ...(input.reasoningBudget && Object.keys(input.reasoningBudget).length ? { reasoningBudget: input.reasoningBudget } : {}),
+    ...(input.maxOutput && Object.keys(input.maxOutput).length ? { maxOutput: input.maxOutput } : {}),
+    ...(input.attachments && Object.keys(input.attachments).length ? { attachments: input.attachments } : {}),
     ...(input.verbatim && Object.keys(input.verbatim).length ? { verbatim: input.verbatim } : {}),
+    ...(input.overview && hasOverviewContent(input.overview) ? { overview: input.overview } : {}),
+    ...(enabledTools ? { enabledTools } : {}),
+    ...(tools.length ? { tools: structuredClone(tools) } : {}),
   };
 }
 
@@ -78,6 +104,11 @@ export function serializeSharedCode(shared: SharedPreset): string {
 export function parseSharedJson(raw: string, currentAppVersion: string): ParseResult {
   let obj: unknown;
   try { obj = JSON.parse(raw); } catch { return { ok: false, warnings: [], error: "That file isn't valid JSON." }; }
+  return sanitize(obj, currentAppVersion);
+}
+
+/** Validate an artifact that is already decoded, such as a community listing's content. */
+export function parseSharedContent(obj: unknown, currentAppVersion: string): ParseResult {
   return sanitize(obj, currentAppVersion);
 }
 
@@ -130,8 +161,26 @@ function sanitize(obj: unknown, currentAppVersion: string): ParseResult {
   if (reasoning) preset.reasoning = reasoning;
   const reasoningBudget = sanitizeReasoningBudget(o.reasoningBudget);
   if (reasoningBudget) preset.reasoningBudget = reasoningBudget;
+  const maxOutput = sanitizeMaxOutput(o.maxOutput);
+  if (maxOutput) preset.maxOutput = maxOutput;
+  const attachments = sanitizePromptAttachments(o.attachments);
+  if (attachments) preset.attachments = attachments;
   const verbatim = sanitizeVerbatim(o.verbatim);
   if (verbatim) preset.verbatim = verbatim;
+  const overview = sanitizeOverview(o.overview);
+  if (overview) preset.overview = overview;
+  const enabledTools = parseToolEnabledMap(o.enabledTools, isCatalogToolId) ?? {};
+  // An embedded Tool that shares a built-in Tool's name resolves to the built-in one.
+  const embeddedRaw = Array.isArray(o.tools) ? o.tools : [];
+  const userRaw = embeddedRaw.filter((raw) => {
+    const catalog = isRecord(raw) && typeof raw.name === 'string' ? catalogToolNamed(raw.name) : undefined;
+    if (catalog) enabledTools[catalog.id] = true;
+    return !catalog;
+  });
+  if (Object.keys(enabledTools).length) preset.enabledTools = enabledTools;
+  const embedded = parseToolList(userRaw);
+  if (embedded.tools.length) preset.tools = embedded.tools;
+  warnings.push(...embedded.warnings);
 
   return { ok: true, preset, sourceAppVersion, warnings };
 }
@@ -180,12 +229,23 @@ function sanitizeVerbatim(raw: unknown): VerbatimMap | undefined {
   return Object.keys(out).length ? (out as VerbatimMap) : undefined;
 }
 
-/** Keep only finite-number reasoning-budget entries, clamped to 0–100 percent. */
+/** Keep only finite-number reasoning-budget entries, clamped to the highest budget percent. */
 function sanitizeReasoningBudget(raw: unknown): ReasoningBudgetMap | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = Math.max(0, Math.min(100, v));
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = Math.max(0, Math.min(MAX_REASONING_BUDGET_PCT, v));
   return Object.keys(out).length ? (out as ReasoningBudgetMap) : undefined;
+}
+
+/** Type-check each Overview field on its own: a string stays, a list keeps its string members, the rest drops.
+ *  An Overview left with no content reads as none. */
+function sanitizeOverview(raw: unknown): PresetOverview | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  const overview = normalizeOverview({ author: str(r.author), description: str(r.description), tags: list(r.tags), models: list(r.models) });
+  return hasOverviewContent(overview) ? overview : undefined;
 }
 
 // --- UTF-8-safe base64 (prompt text carries em-dashes, curly quotes, etc.; btoa alone is Latin1-only) ---

@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { planTurn } from './planTurn';
 import { runTurn, type TurnAdvance, type TurnRequestAdapter } from './turnRunner';
-import { fixture, recordedPasses, inputFor, narrationOf } from './parityTestInputs';
+import { fixture, recordedPasses, inputFor, narrationOf, expectedCap, PARITY_DESTINATIONS } from './parityTestInputs';
 import type { TurnMaterial, TurnPassId, TurnPassSubject } from './turnPlan';
-import type { ChatMessage } from '@/types';
+import type { ChatMessage, RequestMessage } from '@/types';
 import { parseDirectorCast } from '@/lib/stagedPlanning';
 import { planDirective } from '@/components/game/GamePrompts';
 
@@ -41,7 +41,7 @@ const materialFor = (index: number): TurnMaterial => {
     ctx: {},
     baseCtx: {},
     sceneEntityTokens: {},
-    destinations: [],
+    destinations: PARITY_DESTINATIONS,
     narrationSystemPrompt: narration.systemPrompt,
     narrationSystemPromptRuns: [],
     historyRuns: [],
@@ -87,7 +87,7 @@ const replayAdvance = (index: number): TurnAdvance => {
 /** One turn replayed: the requests the pipeline emitted, in dispatch order. */
 const replay = async (index: number) => {
   const recorded = recordedPasses(fixture.turns[index]);
-  const emitted: { type: string; messages: ChatMessage[]; maxTokens: number | null; silent: boolean; attachTurnId: string | null }[] = [];
+  const emitted: { type: string; messages: RequestMessage[]; maxTokens: number | null; silent: boolean; attachTurnId: string | null }[] = [];
   const adapter: TurnRequestAdapter = async (request) => {
     emitted.push({
       type: request.type,
@@ -119,7 +119,7 @@ describe('turn pipeline parity with the recorded run', () => {
       const { recorded, emitted, result } = await replay(index as number);
       expect(result.status, JSON.stringify(result.status === 'failed' ? result.kind : '')).toBe('ok');
       expect(emitted.map((r) => [r.type, r.maxTokens, r.silent, r.attachTurnId])).toEqual(
-        recorded.map((r) => [r.request.type, r.request.maxTokens, r.request.silent, r.request.attachTurnId]),
+        recorded.map((r) => [r.request.type, expectedCap(r.request), r.request.silent, r.request.attachTurnId]),
       );
     },
   );

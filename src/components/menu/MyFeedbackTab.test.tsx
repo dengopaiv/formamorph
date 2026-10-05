@@ -48,6 +48,9 @@ const stubList = (over: Partial<FeedbackThread> = {}) =>
 /** What the list was asked for on its first fetch. */
 const firstQuery = () => vi.mocked(FeedbackService.list).mock.calls[0][0];
 
+/** Status, Category and Sort sit behind the Filters button on this tab. */
+const openFilters = async () => fireEvent.click(await screen.findByRole('button', { name: /^More Filters/ }));
+
 beforeEach(() => {
   threadProps.last = null;
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -118,11 +121,13 @@ describe('the category filter', () => {
     stubList();
 
     render(<MyFeedbackTab active type="bug" />);
+    await openFilters();
     expect(await screen.findByLabelText('Filter by category')).toBeTruthy();
 
     cleanup();
     stubList();
     render(<MyFeedbackTab active type="suggestion" />);
+    await openFilters();
     expect(await screen.findByLabelText('Filter by category')).toBeTruthy();
   });
 
@@ -144,25 +149,6 @@ describe('what the tab does not say', () => {
     await screen.findByRole('button', { name: /Report a Bug/ });
 
     expect(screen.queryByText(/Bugs you.ve reported/)).toBeNull();
-  });
-});
-
-describe('the sort control', () => {
-  it('is offered on a board of everyone’s suggestions', async () => {
-    stubList();
-
-    render(<MyFeedbackTab active type="suggestion" />);
-
-    expect(await screen.findByLabelText('Sort by')).toBeTruthy();
-  });
-
-  it('is absent on bugs, which have nothing to rank by', async () => {
-    stubList();
-
-    render(<MyFeedbackTab active type="bug" />);
-    await screen.findByText('Save button does nothing');
-
-    expect(screen.queryByLabelText('Sort by')).toBeNull();
   });
 });
 
@@ -197,5 +183,71 @@ describe('opening a thread from the profile', () => {
 
   it('treats an ordinary account as one', async () => {
     expect(await openFirst()).toMatchObject({ isAdmin: false });
+  });
+});
+
+describe('the status filter', () => {
+  it('opens a bug tab on what is unresolved, before any filter is picked', async () => {
+    stubList();
+    render(<MyFeedbackTab active type="bug" />);
+    await waitFor(() => expect(firstQuery()).toMatchObject({ status: ['open', 'need_info', 'confirmed'] }));
+  });
+
+  it('opens a suggestion tab on what is still open, before any filter is picked', async () => {
+    stubList();
+    render(<MyFeedbackTab active type="suggestion" />);
+    await waitFor(() => expect(firstQuery()).toMatchObject({ status: ['open', 'considering', 'planned'] }));
+  });
+
+  it('offers the staff options and sends the pick with the request', async () => {
+    // Radix's Select opens by keyboard in jsdom; the shared test setup polyfills the rest.
+    stubList();
+    render(<MyFeedbackTab active type="bug" />);
+    await waitFor(() => expect(FeedbackService.list).toHaveBeenCalled());
+    await openFilters();
+
+    fireEvent.keyDown(screen.getByLabelText('Filter by status'), { key: 'Enter' });
+    const labels = (await screen.findAllByRole('option')).map((o) => o.textContent);
+    expect(labels).toEqual(['All statuses', 'Unresolved', 'Open', 'Need Info', 'Confirmed', 'Resolved', "Won't Fix"]);
+
+    const all = screen.getByRole('option', { name: 'All statuses' });
+    fireEvent.pointerDown(all, { pointerType: 'mouse' });
+    fireEvent.pointerUp(all, { pointerType: 'mouse' });
+    fireEvent.click(all);
+    await waitFor(() => expect(vi.mocked(FeedbackService.list).mock.calls.at(-1)?.[0]).toMatchObject({ status: undefined }));
+    expect(vi.mocked(FeedbackService.list).mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe('what the tab says when nothing shows', () => {
+  const empty = () => vi.spyOn(FeedbackService, 'list').mockResolvedValue({ threads: [], total: 0 });
+
+  it('blames the status filter while it narrows the list', async () => {
+    // The default hides closed threads, so "You haven't reported anything yet." would be false.
+    empty();
+    render(<MyFeedbackTab active type="bug" />);
+    expect(await screen.findByText('No reports match this filter.')).toBeTruthy();
+    expect(screen.queryByText('You haven’t reported anything yet.')).toBeNull();
+  });
+
+  it('words it for suggestions', async () => {
+    empty();
+    render(<MyFeedbackTab active type="suggestion" />);
+    expect(await screen.findByText('No suggestions match this filter.')).toBeTruthy();
+  });
+
+  it('keeps the scope label once the status filter is All', async () => {
+    empty();
+    render(<MyFeedbackTab active type="bug" />);
+    await screen.findByText('No reports match this filter.');
+    await openFilters();
+
+    fireEvent.keyDown(screen.getByLabelText('Filter by status'), { key: 'Enter' });
+    const all = await screen.findByRole('option', { name: 'All statuses' });
+    fireEvent.pointerDown(all, { pointerType: 'mouse' });
+    fireEvent.pointerUp(all, { pointerType: 'mouse' });
+    fireEvent.click(all);
+
+    expect(await screen.findByText('You haven’t reported anything yet.')).toBeTruthy();
   });
 });

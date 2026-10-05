@@ -12,6 +12,13 @@ import { Tip } from '@/components/ui/tooltip';
  *  announcement rather than five. */
 const ANNOUNCE_DELAY_MS = 600;
 
+/** True while `key` is one that first rendered under `snap`, so it stays still on the renders after. */
+function useSnapped(key: string, snap: boolean): boolean {
+  const snapped = React.useRef<string | null>(null);
+  if (snap) snapped.current = key;
+  return snapped.current === key;
+}
+
 /**
  * A stat bar with an animated +/- change band. One shared mechanism covers every case (an AI-computed
  * change, paging between turns, and a band draining on submit): the accent fill slides from the turn's
@@ -19,18 +26,21 @@ const ANNOUNCE_DELAY_MS = 600;
  * painted over the [prev, cur] region on top. `delta` is the signed change the band represents (`cur − prev`);
  * `draining` collapses last turn's band back toward the current value on submit (accent unmoved), leaving a
  * clean bar before the next turn grows. Geometry is the pure `statBarFrame`; under reduced-motion everything
- * snaps to its final state (no slide/grow, no drain band). `animKey` re-triggers the animation when the
- * value+delta coincide between turns (e.g. scrolling between two past turns) — pass the page number.
+ * snaps to its final state (no slide/grow, no drain band), and so does a state first shown under `snap`.
+ * `animKey` re-triggers the animation when the value+delta coincide between turns (e.g. scrolling between two
+ * past turns) — pass the page number.
  */
-const StatBar = ({ value, min, max, delta, draining, animKey }: {
+const StatBar = ({ value, min, max, delta, draining, animKey, snap }: {
   value: number; min: number; max: number; delta: number; draining: boolean;
   animKey?: string | number;
+  snap: boolean;
 }) => {
-  const reduce = usePrefersReducedMotion();
   // The band always spans the turn's previous value (`value − delta`) to its current value, whether it's
   // growing in or draining away; only the animation and the accent's motion differ.
   const frame = statBarFrame(value - delta, value, min, max);
   const key = `${value}-${delta}-${animKey ?? ''}`;
+  const snapped = useSnapped(`${key}-${draining}`, snap);
+  const reduce = usePrefersReducedMotion() || snapped;
   return (
     <div className="relative h-4 w-full overflow-hidden rounded-full bg-secondary">
       <div
@@ -116,6 +126,8 @@ export interface StatRowProps {
   page: number;
   /** History mode: the chip animates in, and nothing on the row can be edited. */
   isViewingPast: boolean;
+  /** The viewed turn moved by a scroll: what shows now stays at its final state, with no motion. */
+  snap: boolean;
   /** The live delta chip is on its way out. */
   fading: boolean;
   /** Edit mode is on and the turn is live, so the readout is typeable and the bar becomes a slider. */
@@ -137,10 +149,11 @@ export interface StatRowProps {
  * already looking at the value they are setting; reduced motion drops the flash entirely.
  */
 export const StatRow = ({
-  stat, change, barDelta, draining, page, isViewingPast, fading, editable,
+  stat, change, barDelta, draining, page, isViewingPast, snap, fading, editable,
   reserveDescriptorLine, onCommitValue,
 }: StatRowProps) => {
   const reduce = usePrefersReducedMotion();
+  const chipStill = useSnapped(`${page}-${change}`, snap);
   // Regen and stat code scale by the turn's measured hours, so values and deltas are often fractional. The
   // value reads whole; a change keeps a tenth when it has one, so a sub-point gain isn't printed as `+0`.
   // The underlying value keeps its full precision either way.
@@ -157,11 +170,11 @@ export const StatRow = ({
   const bandId = band?.id ?? null;
   React.useEffect(() => {
     // `undefined` is the mount pass: a row has no band change to flash on its first render.
-    if (previousBand.current !== undefined && previousBand.current !== bandId && !typed.current && !reduce) {
+    if (previousBand.current !== undefined && previousBand.current !== bandId && !typed.current && !reduce && !snap) {
       setFlashKey((key) => key + 1);
     }
     previousBand.current = bandId;
-  }, [bandId, reduce]);
+  }, [bandId, reduce, snap]);
   React.useEffect(() => { typed.current = false; });
 
   // Screen readers get the band on its own, debounced: a scrub crosses several bands and should announce
@@ -183,7 +196,7 @@ export const StatRow = ({
           {shownChange && (
             <span
               key={`${page}-${change}`}
-              className={`${isViewingPast ? 'stat-delta-text-in' : (fading ? 'stat-delta-text-out' : 'stat-delta-text')} text-label ${change > 0 ? 'text-success' : 'text-destructive'}`}
+              className={`${chipStill ? '' : isViewingPast ? 'stat-delta-text-in' : (fading ? 'stat-delta-text-out' : 'stat-delta-text')} text-label ${change > 0 ? 'text-success' : 'text-destructive'}`}
             >
               {shownChange}
             </span>
@@ -223,6 +236,7 @@ export const StatRow = ({
           delta={barDelta}
           draining={draining}
           animKey={isViewingPast ? page : undefined}
+          snap={snap}
         />
       )}
       {(band || reserveDescriptorLine) && (

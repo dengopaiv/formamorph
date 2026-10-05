@@ -1,38 +1,36 @@
 import { useEffect, useState, type ComponentType } from 'react';
+import { PromptNavigationReference } from '@/components/design-system/PromptNavigationReference';
+import { BearerFlyoutReference } from '@/components/design-system/BearerFlyoutReference';
+import { BreadcrumbPickerReference } from '@/components/design-system/BreadcrumbPickerReference';
+import { TravelHintPairReference } from '@/components/design-system/TravelHintPairReference';
+import { FormaquestionReference } from '@/components/design-system/FormaquestionReference';
+import { FeedbackFilterRowReference } from '@/components/design-system/FeedbackFilterRowReference';
+import { SupporterFlairReference } from '@/components/design-system/SupporterFlairReference';
+import { PresetHeaderReference } from '@/components/design-system/PresetHeaderReference';
+import { LandingPulseReference } from '@/components/design-system/LandingPulseReference';
 import { useDevRoute } from '@/lib/devRouter';
 import { BookOpen, MonitorCog } from 'lucide-react';
-import {
-  CheckRow,
-  CheckboxOptionGroup,
-  OptionSwitcher,
-  Row,
-  Section,
-  ValueSlider,
-} from '@/components/SettingsRows';
+import { OptionSwitcher, Row, Section } from '@/components/SettingsRows';
 import { Button } from '@/components/ui/button';
-import { useTheme } from '@/components/theme-provider';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ColorPicker } from '@/components/ui/color-picker';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FieldError, Hint, Meta } from '@/components/ui/typography';
-import {
-  CONTINUE_CHOICE_MODES,
-  DEFAULT_FONT,
-  DEFAULT_THEME_COLOR,
-  FONT_OPTIONS,
-  SYSTEM_FONT_STACK,
-  THEME_COLORS,
-  fontSizeAdjust,
-  type FontChoice,
-  type ThemeColor,
-  type ContinueChoiceMode,
-} from '@/contexts/settingsDefaults';
-import type { ThinkingMode } from '@/contexts/SettingsContext';
+import { FONT_OPTIONS, SYSTEM_FONT_STACK, fontSizeAdjust } from '@/contexts/settingsDefaults';
 import type { ParagraphLimit } from '@/lib/outputLength';
 import { SETTINGS_OPTIONS } from '@/components/modals/settingsCopy';
 import { optionRowCopy, rowCopy } from '@/components/modals/settingsRowCopy';
+import { DisplaySettingsSection } from '@/components/modals/DisplaySettingsSection';
+import { OutputSettingsSection } from '@/components/modals/OutputSettingsSection';
+import { SettingsModeSwitch } from '@/components/modals/SettingsModeSwitch';
+import type { SettingsSource } from '@/components/modals/settingsSource';
+import { useLocalSettingsSource } from '@/components/design-system/useLocalSettingsSource';
+import { settingsUseAdvancedValues, sectionHiddenFields } from '@/lib/settingsAdvancedData';
+import { reasoningRuledOut } from '@/lib/reasoningEffort';
+import type { SettingsMode } from '@/lib/settingsMode';
 import PromptField from '@/components/prompt/PromptField';
 import { plainVocabulary } from '@/lib/chipVocabulary';
 import { CommunityCardReference } from '@/components/design-system/CommunityCardReference';
@@ -41,8 +39,10 @@ import { CodeTemplatesReference } from '@/components/design-system/CodeTemplates
 import { LocationsCanvasReference } from '@/components/design-system/LocationsCanvasReference';
 import { MainMenuContextMenuReference } from '@/components/design-system/MainMenuContextMenuReference';
 import { FooterActionOrderReference } from '@/components/design-system/FooterActionOrderReference';
+import { NarrationTurnReference } from '@/components/design-system/NarrationTurnReference';
 import { PanelTabStripReference } from '@/components/design-system/PanelTabStripReference';
 import { RichListReferences } from '@/components/design-system/RichListReferences';
+import { PromptChipsReference } from '@/components/design-system/PromptChipsReference';
 
 type ReferenceDefinition = {
   id: string;
@@ -51,9 +51,8 @@ type ReferenceDefinition = {
   Component: ComponentType;
 };
 
-type ThemeMode = (typeof SETTINGS_OPTIONS.theme)[number]['value'];
-
 const LONG_ENDPOINT = 'Silver Siren local endpoint — 131,072-token creative-writing profile';
+const REFERENCE_COLOR = '#d4a24c';
 const MARKDOWN_VOCABULARY = plainVocabulary();
 const MARKDOWN_EXAMPLE = `# The Night Glass
 
@@ -83,166 +82,26 @@ Read the [old observatory](https://example.com/observatory) ledger before you cr
 
 Use \`/listen\` at the sealed door, then note any reply in the margin.`;
 
-function DisplayReference() {
-  const { resolvedTheme } = useTheme();
-  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
-  const [palette, setPalette] = useState<ThemeColor>(DEFAULT_THEME_COLOR);
-  const [font, setFont] = useState<FontChoice>(DEFAULT_FONT);
-  const [music, setMusic] = useState(true);
-  const [locationBackdrop, setLocationBackdrop] = useState(true);
-  const [fade, setFade] = useState(40);
-  const [narrationScale, setNarrationScale] = useState(100);
-  const previewMode = themeMode === 'system' ? resolvedTheme : themeMode;
-  const selectedFont = FONT_OPTIONS.find((option) => option.value === font)?.stack;
+function LiveSample({ source }: { source: SettingsSource }) {
+  const selectedFont = FONT_OPTIONS.find((option) => option.value === source.fontFamily)?.stack;
   const previewFont = selectedFont ? `${selectedFont}, ${SYSTEM_FONT_STACK}` : SYSTEM_FONT_STACK;
 
   return (
-    <Card role="region" aria-labelledby="display-reference-title">
+    <Card role="region" aria-labelledby="live-sample-title">
       <CardHeader>
-        <CardTitle id="display-reference-title" className="text-heading">Display Reference</CardTitle>
-        <CardDescription>This reference shows display controls.</CardDescription>
+        <CardTitle id="live-sample-title" className="text-heading">Live Sample</CardTitle>
+        <CardDescription>This sample shows the reference theme, palette, and font.</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-6">
-        <Section title="Appearance">
-          <Row
-            top
-            {...optionRowCopy('theme', SETTINGS_OPTIONS.theme.find((option) => option.value === themeMode))}
-          >
-            <OptionSwitcher
-              ariaLabel="Theme"
-              value={themeMode}
-              onChange={setThemeMode}
-              options={SETTINGS_OPTIONS.theme}
-            />
-          </Row>
-          <Row htmlFor="reference-palette" {...rowCopy('themeColor')}>
-            <Select value={palette} onValueChange={(value) => setPalette(value as ThemeColor)}>
-              <SelectTrigger id="reference-palette" aria-label="Palette" className="max-w-64">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {THEME_COLORS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Row>
-          <Row htmlFor="reference-font" {...rowCopy('font')}>
-            <Select value={font} onValueChange={(value) => setFont(value as FontChoice)}>
-              <SelectTrigger id="reference-font" aria-label="Font" className="max-w-64">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {FONT_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value} style={{ fontFamily: option.stack || undefined }}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Row>
-          <Row label="Live Sample">
-            <div
-              data-theme={palette}
-              data-reference-theme={previewMode}
-              className={`${previewMode} rounded-md border border-border bg-background p-4 text-foreground`}
-              style={{ fontFamily: previewFont, fontSizeAdjust: String(fontSizeAdjust(font)) }}
-            >
-              <p className="text-label font-semibold">The lanterns wake along the harbor.</p>
-              <p className="text-helper text-muted-foreground">This sample shows the selected theme and font.</p>
-            </div>
-          </Row>
-        </Section>
-
-        <Section title="Scene">
-          <CheckRow
-            htmlFor="reference-music"
-            checked={music}
-            onChange={setMusic}
-            {...rowCopy('backgroundMusic')}
-          />
-          <CheckRow
-            htmlFor="reference-backdrop"
-            checked={locationBackdrop}
-            onChange={setLocationBackdrop}
-            {...rowCopy('locationBackground')}
-          />
-          <Row {...rowCopy('backgroundFade')}>
-            <ValueSlider
-              ariaLabel="Background Fade"
-              value={fade}
-              min={0}
-              max={100}
-              step={5}
-              onChange={setFade}
-              format={(value) => `${value}%`}
-            />
-          </Row>
-        </Section>
-
-        <Section title="Narration">
-          <Row {...rowCopy('narrationTextSize')}>
-            <ValueSlider
-              ariaLabel="Narration Size"
-              value={narrationScale}
-              min={85}
-              max={160}
-              step={5}
-              onChange={setNarrationScale}
-              format={(value) => `${value}%`}
-            />
-          </Row>
-        </Section>
-      </CardContent>
-    </Card>
-  );
-}
-
-function OutputReference() {
-  const [choices, setChoices] = useState(true);
-  const [statUpdates, setStatUpdates] = useState(true);
-  const [locationChange, setLocationChange] = useState(false);
-  const [thinking, setThinking] = useState<ThinkingMode>('off');
-  const [continueMode, setContinueMode] = useState<ContinueChoiceMode>('on');
-
-  return (
-    <Card role="region" aria-labelledby="output-reference-title">
-      <CardHeader>
-        <CardTitle id="output-reference-title" className="text-heading">Output Reference</CardTitle>
-        <CardDescription>These controls show the output settings.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        <Section title="Turn Extras" hint="These options control additional tasks for each turn.">
-          <Row {...rowCopy('systemPrompts')}>
-            <CheckboxOptionGroup options={[
-              { id: 'reference-choices', label: 'Choices', checked: choices, onChange: setChoices },
-              { id: 'reference-stat-updates', label: 'Stat Updates', checked: statUpdates, onChange: setStatUpdates },
-              { id: 'reference-location-change', label: 'Location Change', checked: locationChange, onChange: setLocationChange },
-            ]} />
-          </Row>
-        </Section>
-
-        <Section title="Reasoning">
-          <Row top {...optionRowCopy('thinking', SETTINGS_OPTIONS.thinking.find((option) => option.value === thinking))}>
-            <OptionSwitcher
-              ariaLabel="Thinking"
-              value={thinking}
-              onChange={setThinking}
-              options={SETTINGS_OPTIONS.thinking}
-            />
-          </Row>
-        </Section>
-
-        <Section title="Choices">
-          <Row {...rowCopy('continueTheStory')}>
-            <OptionSwitcher
-              ariaLabel="Continue the Story"
-              value={continueMode}
-              onChange={setContinueMode}
-              options={CONTINUE_CHOICE_MODES}
-            />
-          </Row>
-        </Section>
+      <CardContent>
+        <div
+          data-theme={source.themeColor}
+          data-reference-theme={source.resolvedTheme}
+          className={`${source.resolvedTheme} rounded-md border border-border bg-background p-4 text-foreground`}
+          style={{ fontFamily: previewFont, fontSizeAdjust: String(fontSizeAdjust(source.fontFamily)) }}
+        >
+          <p className="text-label font-semibold">The lanterns wake along the harbor.</p>
+          <p className="text-helper text-muted-foreground">This sample shows the selected theme and font.</p>
+        </div>
       </CardContent>
     </Card>
   );
@@ -253,6 +112,7 @@ function StateReference() {
   const invalidContext = Number(contextWindow) > 65536;
   const [modelName, setModelName] = useState('Silver Siren 12B');
   const [paragraphLimit, setParagraphLimit] = useState<ParagraphLimit>('auto');
+  const [dialogueColor, setDialogueColor] = useState(REFERENCE_COLOR);
 
   return (
     <Card role="region" aria-labelledby="control-states-title">
@@ -271,6 +131,15 @@ function StateReference() {
               value={paragraphLimit}
               onChange={setParagraphLimit}
               options={SETTINGS_OPTIONS.paragraphLimit}
+            />
+          </Row>
+          <Row label="Color" htmlFor="reference-color" hint="Accepts 6-digit hex values only">
+            <ColorPicker
+              id="reference-color"
+              value={dialogueColor}
+              onChange={setDialogueColor}
+              onReset={() => setDialogueColor(REFERENCE_COLOR)}
+              resetLabel="Reset to Theme"
             />
           </Row>
           <Row label="Keyboard Focus" hint="The selected theme controls the focus ring color.">
@@ -314,12 +183,39 @@ function StateReference() {
 }
 
 function SettingsReference() {
+  const [status, setStatus] = useState('This line shows the effects that the reference skips.');
+  const source = useLocalSettingsSource(setStatus);
+  const [mode, setMode] = useState<SettingsMode>('advanced');
+  const nativeReasoningRuledOut = reasoningRuledOut(source.reasoningCapability);
+  const hasHiddenValues = mode === 'simple' && settingsUseAdvancedValues(sectionHiddenFields(source));
+
   return (
     <div className="grid gap-6">
-      <div className="grid gap-6 xl:grid-cols-2">
-        <DisplayReference />
-        <OutputReference />
+      <div className="flex flex-wrap items-center gap-3">
+        <Meta role="status" aria-live="polite" className="min-w-0 flex-1">{status}</Meta>
+        <SettingsModeSwitch mode={mode} onModeChange={setMode} hasHiddenValues={hasHiddenValues} />
       </div>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card role="region" aria-labelledby="display-reference-title">
+          <CardHeader>
+            <CardTitle id="display-reference-title" className="text-heading">Display Reference</CardTitle>
+            <CardDescription>This reference shows the production Display section with local values.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DisplaySettingsSection source={source} mode={mode} />
+          </CardContent>
+        </Card>
+        <Card role="region" aria-labelledby="output-reference-title">
+          <CardHeader>
+            <CardTitle id="output-reference-title" className="text-heading">Output Reference</CardTitle>
+            <CardDescription>This reference shows the production Output section with local values.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OutputSettingsSection source={source} mode={mode} nativeReasoningRuledOut={nativeReasoningRuledOut} />
+          </CardContent>
+        </Card>
+      </div>
+      <LiveSample source={source} />
       <StateReference />
     </div>
   );
@@ -364,6 +260,12 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     label: 'Markdown',
     description: 'Compact long-form editing',
     Component: MarkdownReference,
+  },
+  {
+    id: 'prompt-chips',
+    label: 'Prompt Chips',
+    description: 'Inline conditional text and chip editing',
+    Component: PromptChipsReference,
   },
   {
     id: 'community-cards',
@@ -412,6 +314,66 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     label: 'Panel Tabs',
     description: 'Editor detail panel tab strips',
     Component: PanelTabStripReference,
+  },
+  {
+    id: 'prompt-navigation',
+    label: 'Prompt Navigation',
+    description: 'Nested prompt selection and independent scrolling',
+    Component: PromptNavigationReference,
+  },
+  {
+    id: 'narration-turn',
+    label: 'Narration Turn',
+    description: 'Turn Card, Scene Plate, and choice rows',
+    Component: NarrationTurnReference,
+  },
+  {
+    id: 'bearer-flyouts',
+    label: 'Bearer Flyouts',
+    description: 'Drill-down entity pickers in a menu and on a button',
+    Component: BearerFlyoutReference,
+  },
+  {
+    id: 'breadcrumb-picker',
+    label: 'Breadcrumb Picker',
+    description: 'Searchable single-select popover over world content',
+    Component: BreadcrumbPickerReference,
+  },
+  {
+    id: 'travel-hints',
+    label: 'Travel Hints',
+    description: 'Two Travel Hint boxes joined by a link toggle',
+    Component: TravelHintPairReference,
+  },
+  {
+    id: 'formaquestion',
+    label: 'Formaquestion',
+    description: 'Help tab, floating window, search results, and reader',
+    Component: FormaquestionReference,
+  },
+  {
+    id: 'filter-row',
+    label: 'Filter Row',
+    description: 'Search, the main filters, and a Filters popover',
+    Component: FeedbackFilterRowReference,
+  },
+  {
+    id: 'supporter-flair',
+    label: 'Supporter Flair',
+    description: 'Tier colors, badges, names, and Profile Image rings',
+    Component: SupporterFlairReference,
+  },
+  {
+    id: 'preset-header',
+    label: 'Preset Header',
+    description: 'Preset select, actions, reachability, and Reset and Compare',
+    Component: PresetHeaderReference,
+  },
+  {
+    id: 'landing-pulse',
+    label: 'Landing Pulse',
+    description: 'One ring pulse on the row a Take Me There landing points at',
+    Component: LandingPulseReference,
   },
 ];
 

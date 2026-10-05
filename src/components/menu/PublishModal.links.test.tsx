@@ -39,6 +39,7 @@ beforeEach(() => {
   vi.spyOn(WorldStorageService, 'publishItem').mockResolvedValue({ _id: 'new-listing' });
   vi.spyOn(librarySources, 'libraryItems').mockResolvedValue([]);
   vi.spyOn(librarySources, 'libraryItemData').mockResolvedValue(null);
+  vi.spyOn(librarySources, 'libraryItemDetails').mockResolvedValue({ author: 'River Quill' });
   vi.spyOn(librarySources, 'linkLibraryItemToListing').mockResolvedValue(undefined);
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -70,7 +71,7 @@ describe('publishing a world with linked content', () => {
 
     await waitFor(() => expect(WorldStorageService.publishItem).toHaveBeenCalledTimes(2));
     const [source, world] = vi.mocked(WorldStorageService.publishItem).mock.calls;
-    expect(sent(source)).toMatchObject({ kind: 'dictionary', visibility: 'unlisted' });
+    expect(sent(source)).toMatchObject({ kind: 'dictionary', visibility: 'unlisted', contentData: { author: 'River Quill' } });
     expect(sent(world).requiredDependencies).toEqual(['listing-d']);
     // The library item now has a listing, so a later publish declares it rather than creating a second.
     expect(librarySources.linkLibraryItemToListing)
@@ -187,7 +188,7 @@ describe('publishing a world with linked content', () => {
     ));
     vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([{ _id: 'w1', name: 'Sedge Landing', downloads: 0 }]);
     vi.mocked(WorldStorageService.fetchListingDetails)
-      .mockResolvedValue({ changelog: null, requiredDependencies: ['listing-e'], compatibleWorlds: [] });
+      .mockResolvedValue({ anonymousLikes: false, changelog: null, requiredDependencies: ['listing-e'], compatibleWorlds: [] });
     view(worldWith({ entity: 'lib-e', dictionary: 'lib-d' }), 'world-1');
 
     await userEvent.click(await screen.findByLabelText('Sedge Landing (w1, 0 downloads)'));
@@ -251,6 +252,7 @@ describe('publishing a component with compatible worlds', () => {
   it('shows the world author answer beside an association that already exists', async () => {
     vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([{ _id: 'd1', name: 'Shared Lore', downloads: 0 }]);
     vi.mocked(WorldStorageService.fetchListingDetails).mockResolvedValue({
+      anonymousLikes: false,
       changelog: null,
       visibility: 'public',
       compatibleWorlds: [{ id: 'listing-w', name: 'Sedge Landing', reviewState: 'unreviewed' }],
@@ -270,7 +272,7 @@ describe('publishing a component with compatible worlds', () => {
     await userEvent.click(screen.getByRole('radio', { name: 'Unlisted' }));
 
     expect(screen.getByLabelText('Offer as add-on for Sedge Landing')).toBeDisabled();
-    expect(screen.getByText(/An unlisted dictionary cannot be an add-on\./)).toBeInTheDocument();
+    expect(screen.getByText(/An unlisted dictionary can't be an add-on/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
 
@@ -284,6 +286,7 @@ describe('publishing a component with compatible worlds', () => {
     vi.mocked(WorldStorageService.worldsLinking).mockResolvedValue([]);
     vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([{ _id: 'd1', name: 'Shared Lore', downloads: 0 }]);
     vi.mocked(WorldStorageService.fetchListingDetails).mockResolvedValue({
+      anonymousLikes: false,
       changelog: null,
       visibility: 'public',
       compatibleWorlds: [{ id: 'listing-w', name: 'Sedge Landing', reviewState: 'approved' }],
@@ -304,11 +307,11 @@ describe('publishing a component with compatible worlds', () => {
     // opened after publishing something public cannot silently list an unlisted listing.
     vi.mocked(WorldStorageService.getUserWorlds).mockResolvedValue([{ _id: 'd1', name: 'Shared Lore', downloads: 0 }]);
     vi.mocked(WorldStorageService.fetchListingDetails)
-      .mockResolvedValue({ changelog: null, visibility: 'unlisted', compatibleWorlds: [] });
+      .mockResolvedValue({ anonymousLikes: false, changelog: null, visibility: 'unlisted', compatibleWorlds: [] });
     view(bookPayload, 'lib-d');
 
     await userEvent.click(await screen.findByLabelText('Shared Lore (d1, 0 downloads)'));
-    await screen.findByText(/An unlisted dictionary cannot be an add-on\./);
+    await screen.findByText(/An unlisted dictionary can't be an add-on/);
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
 
     await waitFor(() => expect(WorldStorageService.publishItem).toHaveBeenCalled());

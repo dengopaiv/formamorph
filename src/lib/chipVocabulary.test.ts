@@ -1,17 +1,44 @@
 import { describe, it, expect } from 'vitest';
 import type { Placeholder } from '@/types';
-import { promptVocabulary, placeholderVocabulary, chipRowMatches, chipSectionOpens } from './chipVocabulary';
+import { promptVocabulary, placeholderVocabulary, worldPromptVocabulary, chipRowMatches, chipSectionOpens } from './chipVocabulary';
+import { serializeSegments } from './promptTemplate';
 import { encodePlaceholderToken, decodePlaceholderToken } from './placeholders';
 import type { PlaceholderSegment } from './placeholders';
 import { placementLetters } from './placementLetters';
 import type { PlaceholderOwnerRef } from './placeholderHomes';
+import { CHARACTER_NAME, PLAYER_NAME } from './builtinPlaceholders';
 
 import { phValues } from '@/test/placeholderValues';
+import { PROMPT_KIND_VARIABLES } from './promptVariables';
 const P = (id: string, values: string[]): Placeholder => ({ id, name: `name-${id}`, values: phValues(values) });
 const tok = (id: string, mode: 'world' | 'unique', pid = 'p1') => encodePlaceholderToken({ id, mode, placementId: pid });
 
 describe('promptVocabulary (regression — the existing prompt family still works)', () => {
   const v = promptVocabulary([]);
+  it.each(['PERSONA|xml', 'LOCATION|parent.xml', 'ENTITIES|inscene.xml'])(
+    'disables Name formatting and preserves the format when content changes for %s', (variant) => {
+    const original = `<${variant}|pre="Playing "|post=".">`;
+    const name = v.setAxis(original, 'content', 'name');
+    expect(v.axes(name).find(axis => axis.id === 'format')).toMatchObject({
+      readOnly: true, readOnlyHelp: variant.startsWith('PERSONA')
+        ? 'Sends the name and pronouns as plain text' : 'Sends names as plain text',
+    });
+    expect(v.selection(name)).toMatchObject({ content: 'name', format: 'xml' });
+    expect(v.setAxis(name, 'content', null)).toBe(original);
+    const summary = v.setAxis(name, 'content', 'summary');
+    expect(v.selection(summary)).toMatchObject({ content: 'summary', format: 'xml' });
+    for (const token of [original, summary, '<STATS DESCRIPTION|xml>', '<TRAITS DESCRIPTION|xml>']) {
+      expect(v.axes(token).find(axis => axis.id === 'format')?.readOnly).not.toBe(true);
+    }
+  });
+  it('accepts only the prompt variables offered by this field', () => {
+    const vocab = promptVocabulary(PROMPT_KIND_VARIABLES.narration.filter((item) => item.token === '<PERSONA>'));
+    expect(vocab.acceptsPaletteToken?.('<PERSONA>')).toBe(true);
+    expect(vocab.acceptsPaletteToken?.('<LOCATION>')).toBe(false);
+    expect(vocab.acceptsPaletteToken?.(tok('eye', 'world'))).toBe(false);
+    expect(vocab.acceptsPaletteToken?.('plain text')).toBe(false);
+    expect(v.acceptsPaletteToken?.('<PERSONA>')).toBe(false);
+  });
   it('recognizes a registry token and reports its label/color', () => {
     expect(v.isKnown('<WORLD DESCRIPTION>')).toBe(true);
     expect(v.label('<WORLD DESCRIPTION>')).toBe('World');
@@ -59,10 +86,16 @@ describe('placeholderVocabulary', () => {
     expect(placeholderVocabulary([P('blank', [])]).hint?.(tok('blank', 'world'))).toBe('World · no values');
   });
 
-  it('shows the World/Unique axis only where resolving the chip can draw', () => {
-    expect(v.axes(tok('eye', 'world'))).toHaveLength(1); // 3 values → Wildcard
-    expect(v.axes(tok('king', 'world'))).toHaveLength(0); // 1 plain value → Variable, no axis
+  it('opens the World/Unique axis only where resolving the chip can draw', () => {
+    // Every known chip gets the axis; only a chip that can draw takes input through it.
+    const shut = (t: string) => v.axes(t).map((a) => !!a.readOnly);
+    expect(shut(tok('eye', 'world'))).toEqual([false]); // 3 values → Wildcard
+    expect(shut(tok('king', 'world'))).toEqual([true]); // 1 plain value → Variable, shown but shut
     expect(v.axes(tok('ghost', 'world'))).toHaveLength(0); // missing → none
+
+    const readOnlyAxis = v.axes(tok('king', 'world'))[0];
+    expect(readOnlyAxis.options.map((o) => o.label)).toEqual(['World', 'Unique']);
+    expect(readOnlyAxis.readOnlyHelp).toMatch(/Unlocks/);
 
     // A one-value Variable whose value is a template of wildcards rolls them, so it picks World or Unique.
     // An Object never draws on its own; only a wildcard somewhere under it earns the picker.
@@ -74,10 +107,15 @@ describe('placeholderVocabulary', () => {
       { ...P('board', [tok('menu', 'world'), 'Bread']), roll: false },
       { ...P('sign', [`Tonight: ${tok('board', 'world')}`, `Today: ${tok('tavern', 'world')}`]), roll: false },
     ]);
-    expect(nested.axes(tok('tavern', 'world'))).toHaveLength(1); // template of two wildcards
-    expect(nested.axes(tok('menu', 'world'))).toHaveLength(0); // two plain values, Object
-    expect(nested.axes(tok('board', 'world'))).toHaveLength(0); // nests only an Object
-    expect(nested.axes(tok('sign', 'world'))).toHaveLength(1); // reaches a wildcard two levels down
+    // The axis follows the placeholder: a second value makes the roll differ per placement, so it opens.
+    const grown = placeholderVocabulary([P('king', ['Aldric', 'Bram'])]);
+    expect(grown.axes(tok('king', 'world')).map((a) => !!a.readOnly)).toEqual([false]);
+
+    const nestedShut = (t: string) => nested.axes(t).map((a) => !!a.readOnly);
+    expect(nestedShut(tok('tavern', 'world'))).toEqual([false]); // template of two wildcards
+    expect(nestedShut(tok('menu', 'world'))).toEqual([true]); // two plain values, Object
+    expect(nestedShut(tok('board', 'world'))).toEqual([true]); // nests only an Object
+    expect(nestedShut(tok('sign', 'world'))).toEqual([false]); // reaches a wildcard two levels down
   });
 
   it('reflects and flips the mode', () => {
@@ -104,6 +142,132 @@ describe('placeholderVocabulary', () => {
     expect(a.placementId).not.toBe('palette');
     expect(a.placementId).not.toBe(b.placementId);
     expect(a.id).toBe('eye');
+  });
+});
+
+describe('placeholderVocabulary — the Player Name chip', () => {
+  const placeholders = [P('eye', ['Red', 'Blue'])];
+  const v = placeholderVocabulary(placeholders, { builtins: true });
+
+  it('parses the marker as a known chip that keeps its spelling', () => {
+    expect(v.parse('Hi {{ User }}.')).toEqual([
+      { type: 'text', value: 'Hi ' },
+      { type: 'variable', token: '{{ User }}' },
+      { type: 'text', value: '.' },
+    ]);
+    expect(v.isKnown('{{ User }}')).toBe(true);
+    expect(placeholderVocabulary(placeholders).isKnown('{{user}}')).toBe(true);
+  });
+
+  it('reads as its label and offers no mode, affixes, drill, or rename', () => {
+    expect(v.label('{{user}}')).toBe('Player Name');
+    expect(v.display?.('{{user}}')).toBe('Player Name');
+    expect(v.variantLabel('{{user}}')).toBeNull();
+    expect(v.axes('{{user}}')).toEqual([]);
+    expect(v.affixes('{{user}}')).toBeNull();
+    expect(v.drill?.('{{user}}')).toEqual([]);
+    expect(v.structure?.('{{user}}')).toBeNull();
+    expect(v.freshInsertToken('{{user}}')).toBe('{{user}}');
+    expect(v.fixed?.('{{user}}')).toBe(true);
+    expect(v.fixed?.(tok('eye', 'world'))).toBe(false);
+  });
+
+  it('heads the palette where the field offers it, and only there', () => {
+    expect(v.palette().map((r) => r.label)).toEqual(['Player Name', 'name-eye']);
+    expect(v.palette()[0].token).toBe('{{user}}');
+    expect(placeholderVocabulary(placeholders).palette().map((r) => r.label)).toEqual(['name-eye']);
+  });
+
+  it('sits under the Built-in heading, and the loose placeholders open their own section after it', () => {
+    const rows = v.palette();
+    expect(rows[0]).toMatchObject({ heading: 'Built-in', headingKind: 'builtin' });
+    expect(rows[1].heading).toBeUndefined();
+    expect(rows.map((_r, i) => chipSectionOpens(rows, i))).toEqual([true, true]);
+  });
+
+  it('keeps a folder that shares the heading’s name in a section of its own', () => {
+    const folded = placeholderVocabulary([{ ...P('eye', ['Red']), groupId: 'g' }], {
+      builtins: true, groups: [{ id: 'g', name: 'Built-in', parentId: null }],
+    }).palette();
+    expect(folded.map((r) => r.heading)).toEqual(['Built-in', 'Built-in']);
+    expect(chipSectionOpens(folded, 1)).toBe(true);
+  });
+
+  it('marks a Built-in chip and no other', () => {
+    expect(v.builtin?.('{{ User }}')).toBe(true);
+    expect(v.builtin?.('{{char}}')).toBe(true);
+    expect(v.builtin?.(tok('eye', 'world'))).toBe(false);
+  });
+
+  it('stays out of the rows a picker looks a placeholder up in', () => {
+    expect(v.allRows?.().map((r) => r.label)).toEqual(['name-eye']);
+  });
+
+  it('answers the typeahead by its label and by its SillyTavern spelling', () => {
+    const [player] = v.palette();
+    for (const query of ['Player', 'player name', 'user', 'USE']) expect(chipRowMatches(player, query)).toBe(true);
+    expect(chipRowMatches(player, 'char')).toBe(false);
+    expect(chipRowMatches(v.palette()[1], 'user')).toBe(false);
+  });
+
+  it('accepts a palette drop only where the field offers it', () => {
+    expect(v.acceptsPaletteToken?.('{{user}}')).toBe(true);
+    expect(placeholderVocabulary(placeholders).acceptsPaletteToken?.('{{user}}')).toBe(false);
+  });
+
+  it('takes its hint and color from the Built-in registry', () => {
+    expect(v.hint?.('{{ User }}')).toBe(PLAYER_NAME.hint);
+    expect(v.color('{{ User }}')).toBe(PLAYER_NAME.accent);
+    expect(v.palette()[0].color).toBe(PLAYER_NAME.accent);
+  });
+});
+
+describe('placeholderVocabulary — the Character Name chip', () => {
+  const eyes: Placeholder = P('eye', ['Red', 'Blue']);
+  const keeper: PlaceholderOwnerRef = { kind: 'entity', id: 'keeper', name: 'Keeper' };
+  const book: PlaceholderOwnerRef = { kind: 'dictionary', id: 'lore', name: 'Lore' };
+  const labels = (vocab: ReturnType<typeof placeholderVocabulary>) =>
+    vocab.palette().filter((r) => r.headingKind === 'builtin').map((r) => r.label);
+
+  it('joins Player Name in an entity’s own fields', () => {
+    const v = placeholderVocabulary([eyes], { builtins: true, ownerId: 'keeper', scope: keeper });
+    expect(labels(v)).toEqual(['Player Name', 'Character Name']);
+    expect(v.acceptsPaletteToken?.('{{char}}')).toBe(true);
+  });
+
+  it('stays out of a book’s fields and fields with no owner', () => {
+    expect(labels(placeholderVocabulary([eyes], { builtins: true, ownerId: 'lore', scope: book }))).toEqual(['Player Name']);
+    const loose = placeholderVocabulary([eyes], { builtins: true });
+    expect(labels(loose)).toEqual(['Player Name']);
+    expect(loose.acceptsPaletteToken?.('{{char}}')).toBe(false);
+  });
+
+  it('stays out of the values of a placeholder the entity owns', () => {
+    const owners = new Map([['eye', keeper]]);
+    expect(labels(placeholderVocabulary([eyes], { builtins: true, ownerId: 'eye', owners }))).toEqual(['Player Name']);
+  });
+
+  it('stays out of an entity’s fields that offer no Built-ins', () => {
+    expect(labels(placeholderVocabulary([eyes], { ownerId: 'keeper', scope: keeper }))).toEqual([]);
+  });
+
+  it('joins where the fields name their owner’s kind outright', () => {
+    expect(labels(placeholderVocabulary([eyes], { builtins: true, ownerKind: 'entity' }))).toEqual(['Player Name', 'Character Name']);
+  });
+
+  it('takes its label, hint and color from the Built-in registry', () => {
+    const v = placeholderVocabulary([eyes], { builtins: true, ownerId: 'keeper', scope: keeper });
+    expect(v.label('{{ Char }}')).toBe(CHARACTER_NAME.label);
+    expect(v.hint?.('{{ Char }}')).toBe(CHARACTER_NAME.hint);
+    expect(v.color('{{ Char }}')).toBe(CHARACTER_NAME.accent);
+    expect(v.axes('{{char}}')).toEqual([]);
+    expect(v.fixed?.('{{char}}')).toBe(true);
+  });
+
+  it('answers the typeahead by its label and by its SillyTavern spelling', () => {
+    const row = placeholderVocabulary([eyes], { builtins: true, ownerKind: 'entity' }).palette()[1];
+    for (const query of ['Character', 'char', 'CHAR']) expect(chipRowMatches(row, query)).toBe(true);
+    expect(chipRowMatches(row, 'user')).toBe(false);
   });
 });
 
@@ -197,13 +361,16 @@ describe('placeholderVocabulary — drill and inline create', () => {
 describe('chip affixes in the editor vocabulary (gate 8)', () => {
   const vocab = promptVocabulary([]);
 
-  it('offers affixes only on chips that render an inline value', () => {
+  it('offers affixes on inline and format-capable chips', () => {
     expect(vocab.affixes('<LOCATION|name>')).toEqual({ pre: '', post: '' });
     expect(vocab.affixes('<ENTITIES>')).toEqual({ pre: '', post: '' });
     expect(vocab.affixes('<NOTES>')).toEqual({ pre: '', post: '' });
-    // Block-rendering chips get no fields at all.
-    expect(vocab.affixes('<WORLD DESCRIPTION>')).toBeNull();
-    expect(vocab.affixes('<STATS DESCRIPTION>')).toBeNull();
+    expect(vocab.affixes('<WORLD DESCRIPTION>')).toEqual({ pre: '', post: '' });
+    expect(vocab.affixes('<DICTIONARY>')).toEqual({ pre: '', post: '' });
+    expect(vocab.affixes('<DICTIONARY|before>')).toEqual({ pre: '', post: '' });
+    expect(vocab.affixes('<PLAYER ACTION>')).toBeNull();
+    expect(vocab.affixes('<STATS DESCRIPTION>')).toEqual({ pre: '', post: '' });
+    expect(vocab.affixes('<TRAITS DESCRIPTION>')).toEqual({ pre: '', post: '' });
   });
 
   it('writes affixes into the token and reads them back', () => {
@@ -230,7 +397,7 @@ describe('chip affixes in the editor vocabulary (gate 8)', () => {
   });
 
   it('refuses affixes on a chip that does not take them', () => {
-    expect(vocab.setAffixes('<WORLD DESCRIPTION>', ' x ', '')).toBe('<WORLD DESCRIPTION>');
+    expect(vocab.setAffixes('<LANGUAGE>', ' x ', '')).toBe('<LANGUAGE>');
   });
 });
 
@@ -350,6 +517,13 @@ describe('placeholderVocabulary — ownership', () => {
 
   it('leaves an owned placeholder out of the palette', () => {
     expect(v.palette().map((r) => r.label)).toEqual(['Molly', 'Hair', 'Town']);
+  });
+
+  it('refuses palette drops that would make the destination placeholder recursive', () => {
+    const inMolly = placeholderVocabulary(WORLD, { ownerId: 'molly' });
+    expect(inMolly.acceptsPaletteToken?.(tok('molly', 'world'))).toBe(false);
+    expect(inMolly.acceptsPaletteToken?.(tok('hair', 'world'))).toBe(true);
+    expect(inMolly.acceptsPaletteToken?.(tok('northern', 'world'))).toBe(false);
   });
 
   it('still offers it one level down, under its owner', () => {
@@ -607,5 +781,61 @@ describe('placeholderVocabulary — scoped placeholders', () => {
     v.create?.('Scar');
     expect(made[0][1]).toEqual({ kind: 'entity', ownerId: 'tam' });
     expect(v.palette().map((r) => r.label)).toEqual(['Town', 'Eyes', 'Iris', 'Mane']);
+  });
+});
+
+describe('worldPromptVocabulary (a world custom prompt holds both chip families)', () => {
+  const variables = PROMPT_KIND_VARIABLES.narration.filter((item) => item.token === '<NOTES>');
+  const hair = P('hair', ['red', 'black']);
+  const v = worldPromptVocabulary(promptVocabulary(variables), placeholderVocabulary([hair]));
+  const chip = tok('hair', 'unique', 'place-1');
+
+  it('splits a prompt at both families and gives the stored text back byte for byte', () => {
+    const text = `Narrate. <NOTES|pre="Remember: ">\n${chip} <not a token> {{user}} end`;
+    const segments = v.parse(text);
+    expect(segments.filter((s) => s.type === 'variable').map((s) => (s.type === 'variable' ? s.token : '')))
+      .toEqual(['<NOTES|pre="Remember: ">', chip, '{{user}}']);
+    expect(serializeSegments(segments)).toBe(text);
+  });
+
+  it('reads each chip through the family that owns it', () => {
+    expect(v.isKnown('<NOTES>')).toBe(true);
+    expect(v.isKnown(chip)).toBe(true);
+    expect(v.isKnown('<not a token>')).toBe(false);
+    expect(v.label(chip)).toBe('name-hair');
+    expect(v.label('<NOTES>')).toBe(promptVocabulary(variables).label('<NOTES>'));
+    expect(v.color(chip)).toBe(placeholderVocabulary([hair]).color(chip));
+    expect(v.display?.('<NOTES>')).toBeUndefined();
+  });
+
+  it('keeps a chip’s own controls: World or Unique on a placeholder, affixes on a prompt variable', () => {
+    expect(v.axes(chip).map((axis) => axis.id)).toEqual(['mode']);
+    expect(v.selection(chip)).toEqual({ mode: 'unique' });
+    expect(decodePlaceholderToken(v.setAxis(chip, 'mode', null))?.mode).toBe('world');
+    expect(v.affixes('<NOTES|pre="x">')).toEqual({ pre: 'x', post: '' });
+    expect(v.affixes(chip)).toBeNull();
+    expect(v.header?.(chip)).toBeNull();
+    expect(v.header?.('<NOTES>')).toBe('');
+  });
+
+  it('offers placeholders from the trigger and prompt variables from the toolbar', () => {
+    expect(v.palette().map((row) => row.label)).toEqual(['name-hair']);
+    expect(v.toolbar?.().map((row) => row.token)).toEqual(['<NOTES>']);
+  });
+
+  it('takes a drop from either palette, and nothing this field does not offer', () => {
+    const paletteChip = v.palette()[0].token;
+    expect(v.acceptsPaletteToken?.(paletteChip)).toBe(true);
+    expect(v.acceptsPaletteToken?.('<NOTES>')).toBe(true);
+    expect(v.acceptsPaletteToken?.('<LOCATION>')).toBe(false);
+    // A placeholder chip gets its own placement; a prompt variable goes in as it is.
+    expect(decodePlaceholderToken(v.freshInsertToken(paletteChip))?.placementId)
+      .not.toBe(decodePlaceholderToken(paletteChip)?.placementId);
+    expect(v.freshInsertToken('<NOTES>')).toBe('<NOTES>');
+  });
+
+  it('holds a prompt variable fixed, so only a placeholder chip can be renamed or re-aimed', () => {
+    expect(v.fixed?.('<NOTES>')).toBe(true);
+    expect(v.fixed?.(chip)).toBe(false);
   });
 });

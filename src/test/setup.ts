@@ -65,10 +65,12 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView ==
 if (typeof window !== 'undefined' && typeof window.PointerEvent === 'undefined') {
   class PointerEventStub extends MouseEvent {
     pointerId: number;
+    pointerType: string;
 
     constructor(type: string, init: PointerEventInit = {}) {
       super(type, init);
       this.pointerId = init.pointerId ?? 0;
+      this.pointerType = init.pointerType ?? '';
     }
   }
 
@@ -102,4 +104,6 @@ afterEach(async () => {
   // `AuthService`, which needs `localStorage` — absent in the suites that run outside jsdom.
   if (typeof window === 'undefined') return;
   (await import('@/lib/eventsCache')).resetEventsCache();
+  // Listing details persist on disk, so one test's opened listing would show in the next one's window.
+  if (typeof indexedDB !== 'undefined') await (await import('@/lib/listingDetailsCache')).clearListingDetails();
 });

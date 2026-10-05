@@ -8,6 +8,7 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { SettingsModal } from './SettingsModal';
 import { SURFACE_LABELS, HUB_LABEL } from '@/lib/promptGroups';
 import { CONTEXT_LABELS } from '@/lib/requestAnatomy';
+import { LANDING_PULSE_CLASS } from '@/lib/landingPulse';
 import { DEFAULT_TEXT_ENDPOINT_VALUES, textEndpointPresetCodec } from '@/lib/textEndpointPresets';
 
 const anatomy = vi.hoisted(() => ({ build: vi.fn() }));
@@ -60,8 +61,11 @@ const railRow = (name: string) => screen.getAllByRole('button', { name }).at(-1)
 /** The hub draws the whole request, so its two region hints are what says it is on screen. */
 const onHub = () => screen.queryByText('one block, sent first, sets the rules') !== null;
 
-/** The System editor is the only surface that shows the prompt's one-line description. */
-const onSystemEditor = () => screen.queryByText(/Writes the story itself/) !== null;
+/** The open surface is the sub-row marked current; the hub marks none, since it is not an editor. */
+const onSystemEditor = () => railRow(SURFACE_LABELS.system).getAttribute('aria-current') === 'true';
+
+/** The prompt's one-line description, the same text on every surface. */
+const describesPrompt = () => screen.queryByText(/Writes the story itself/) !== null;
 
 function EnableTemperatureOverride() {
   const { setEndpointSamplerEnabled } = useSettings();
@@ -143,6 +147,19 @@ describe('Settings → Prompts landing', () => {
     expect(onHub()).toBe(true);
     expect(onSystemEditor()).toBe(false);
   });
+
+  it('heads the hub, the editors and the options with what the prompt does', () => {
+    openPrompts();
+    expect(onHub()).toBe(true);
+    expect(describesPrompt()).toBe(true);
+
+    fireEvent.click(railRow(SURFACE_LABELS.system));
+    expect(describesPrompt()).toBe(true);
+
+    fireEvent.click(railRow(SURFACE_LABELS.options));
+    expect(onSystemEditor()).toBe(false);
+    expect(describesPrompt()).toBe(true);
+  });
 });
 
 describe('Settings → Prompts endpoint sampler fallback', () => {
@@ -191,7 +208,7 @@ describe('Settings → Endpoints Max Output', () => {
   it('locks the shared endpoint cap', () => {
     openEndpoints();
 
-    expect(screen.getByRole('checkbox', { name: 'Override endpoint limit' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Override Endpoint Limit' })).toBeDisabled();
     expect(document.getElementById('maxTokens')).toBeDisabled();
   });
 
@@ -277,6 +294,21 @@ describe('Settings → Prompts jumps', () => {
     // The Messages view stacks the live conditional lines, each under its own name.
     expect(screen.getByText('Recap Message')).toBeInTheDocument();
     expect(screen.getByText('Now Message')).toBeInTheDocument();
+  });
+
+  it('scrolls the Messages view to the field the jump names, and pulses it', async () => {
+    const scrolled: Element[] = [];
+    const realScroll = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) { scrolled.push(this); };
+    try {
+      openPrompts();
+      fireEvent.click(anatomyRun('Now Message'));
+      await waitFor(() => expect(scrolled.map((el) => el.textContent)).toContainEqual(expect.stringContaining('Now Message')));
+      expect(scrolled.map((el) => el.textContent)).not.toContainEqual(expect.stringContaining('Recap Message'));
+      expect(scrolled.at(-1)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+    } finally {
+      Element.prototype.scrollIntoView = realScroll;
+    }
   });
 });
 

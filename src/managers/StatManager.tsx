@@ -7,8 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Hint } from "@/components/ui/typography";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Code } from "lucide-react";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { PanelTabsList } from "@/components/ui/panel-tabs";
+import { PanelTabContent, PanelTabs } from "@/components/ui/panel-tabs";
 import {
   Select,
   SelectContent,
@@ -19,6 +18,9 @@ import {
 import { HelpButton } from "@/components/HelpButton";
 import { HintInfo } from "@/components/SettingsRows";
 import { statCodeName, statCodeNamed } from "@/lib/statCodeNames";
+import { entityTraitNames, worldTraitPlaces } from "@/lib/statCodeTraits";
+import { codeDictionaries } from "@/lib/statCodePlaceholders";
+import { worldPlaceholderPlaces } from "@/lib/statCodePlaceholderPlaces";
 import { useRenameField } from "@/lib/useCodeRename";
 import { StatCodeBox, type StatCodeBoxContext } from "./StatCodeBox";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -31,9 +33,9 @@ import { StatDescriptorsSection, type DescriptorFieldValue } from './StatDescrip
 import { statPanelTabsFor, statTabForField, type StatPanelTab } from '@/views/statPanelTabs';
 import type { FocusFieldHint, Stat, StatDescriptor, StatType, ThresholdUnit } from "@/types";
 
-const AVAILABILITY_INFO = `**Enabled** — the stat is active. Off keeps it inactive until a trait enables it. An inactive stat is not shown to the player or sent to the AI, and its Regen and Code do not run.
+export const AVAILABILITY_INFO = `**Enabled** keeps the stat active. Uncheck it and the stat stays inactive until a trait enables it. An inactive stat isn't shown to the player or sent to the AI, and its Regen and Code don't run.
 
-**Hidden** — the stat is not shown to the player. It is still sent to the AI, and its Regen and Code run. Use it for dice rolls, cooldowns, and other bookkeeping.`;
+**Hidden** hides the stat from the player. It's still sent to the AI, and its Regen and Code run. Use it for dice rolls, cooldowns, and other bookkeeping.`;
 
 /** The stat being edited — a loose, partial Stat while fields are filled in. */
 type EditingStat = Partial<Stat>;
@@ -60,7 +62,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
   onTabChange: (tab: StatPanelTab) => void;
   focusField?: FocusFieldHint | null;
 }) => {
-  const { updateStat, stats, placeholders, placeholderOwners, traits } = useGameData();
+  const { updateStat, stats, placeholders, placeholderGroups, placeholderOwners, traits, traitGroups, entities, entityGroups, dictionaries } = useGameData();
   const [newDescriptor, setNewDescriptor] = useState<{ threshold: number | string; description: string }>({
     threshold: "",
     description: "",
@@ -93,20 +95,31 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
     codeNameOf: (name) => statCodeName(name, placeholders),
   });
   const codePlaceholders = useMemo(
-    () => ({ list: placeholders, owners: placeholderOwners }),
-    [placeholders, placeholderOwners],
+    () => ({ list: placeholders, owners: placeholderOwners, dictionaries: codeDictionaries(dictionaries, placeholders) }),
+    [placeholders, placeholderOwners, dictionaries],
   );
   // Code reaches a trait by its code name too, so the completions and Test Code both offer that spelling.
   const traitNames = useMemo(
     () => statCodeNamed(traits, placeholders).map((trait) => trait.name),
     [traits, placeholders],
   );
-  const placeholderNames = useMemo(() => placeholders.map((entry) => entry.name), [placeholders]);
+  const entityNames = useMemo(
+    () => entityTraitNames({ traits, traitGroups, entities, entityGroups }, placeholders),
+    [traits, traitGroups, entities, entityGroups, placeholders],
+  );
+  const traitPlaces = useMemo(
+    () => worldTraitPlaces({ traits, traitGroups }, placeholders),
+    [traits, traitGroups, placeholders],
+  );
+  const placeholderPlaces = useMemo(
+    () => worldPlaceholderPlaces({ list: placeholders, owners: placeholderOwners, groups: placeholderGroups }),
+    [placeholders, placeholderOwners, placeholderGroups],
+  );
   // One surface for both boxes: what completes in either is what runs in either.
   const codeContext = useMemo<StatCodeBoxContext>(() => ({
     codeNamedStats, statNames, selfName: selfCodeName,
-    placeholders: codePlaceholders, placeholderNames, traitNames, traits,
-  }), [codeNamedStats, statNames, selfCodeName, codePlaceholders, placeholderNames, traitNames, traits]);
+    placeholders: codePlaceholders, placeholderPlaces, traitNames, traitPlaces, traits, entities: entityNames,
+  }), [codeNamedStats, statNames, selfCodeName, codePlaceholders, placeholderPlaces, traitNames, traitPlaces, traits, entityNames]);
 
   const handleChange = (field: string, value: unknown) => {
     apply({ [field]: value } as EditingStat);
@@ -189,7 +202,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
       {/* The identity line: the name takes the room it needs and the type select keeps a fixed width, so
           the two read as one row until the pane is too narrow to hold them side by side. */}
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_11rem]">
-        <div className="space-y-2">
+        <div data-tour-anchor="stat-name" className="space-y-2">
           <Label>Name</Label>
           <PlaceholderNameField
             value={editingStat.name || ""}
@@ -217,7 +230,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
           </Select>
         </div>
       </div>
-      <div className="space-y-2">
+      <div data-tour-anchor="stat-description" className="space-y-2">
         <Label>Description</Label>
         <PlaceholderNameField
           value={editingStat.description || ""}
@@ -298,7 +311,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
           </div>
           <div className="space-y-2">
             <Label>Body Sliders</Label>
-            <Hint>Body sliders bound to this stat. Its value between Min and Max sets each slider&apos;s position.</Hint>
+            <Hint>Binds body sliders to this stat. Its value between Min and Max sets each slider&apos;s position.</Hint>
             <MultiSelect
               key={stat.id}
               options={morphGroups}
@@ -307,7 +320,6 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
               onOpenChange={(open) => { if (open) loadMorphs(); }}
               placeholder="Select body sliders"
               emptyIndicator={morphsLoading ? "Loading sliders…" : undefined}
-              hideSelectAll
               maxCount={6}
             />
           </div>
@@ -320,7 +332,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
             <HintInfo>{AVAILABILITY_INFO}</HintInfo>
           </div>
           {/* The line decides; the ⓘ defines. Two paragraphs here cost the panel a screen. */}
-          <Hint>Enabled makes the stat active. Hidden hides it from the player only.</Hint>
+          <Hint>Enabled keeps the stat active. Hidden hides it from the player only.</Hint>
           <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center space-x-2 cursor-pointer">
               <Checkbox
@@ -342,7 +354,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
       {advanced && (
         <div className="space-y-2">
           <Label>Prevent AI Changes</Label>
-          <Hint>Stop the AI from changing this stat in a given direction.</Hint>
+          <Hint>Stops the AI from changing this stat in one direction</Hint>
           <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center space-x-2 cursor-pointer">
               <Checkbox
@@ -406,7 +418,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
         <HelpButton topicId="worldEditor.statCode" className="h-6 w-6" />
       </div>
 
-      <Hint>Code can set this stat&apos;s value, Min, Max, or Regen, pin a placeholder, or switch a trait.</Hint>
+      <Hint>Code can set this stat&apos;s value, Min, Max, or Regen, pin a placeholder, or switch a trait</Hint>
       <Hint>Turn order: Before the AI, AI stat changes, Regen, After the AI. An empty box is skipped.</Hint>
 
       <StatCodeBox
@@ -428,16 +440,13 @@ const StatManager = ({ stat, tab, onTabChange, focusField }: {
 
   const panels: Record<StatPanelTab, ReactNode> = { details, descriptors, code };
 
-  // One tab left is no choice to offer, so Simple renders the Details body bare with no strip above it.
-  if (tabs.length === 1) return <div className="space-y-4">{panels[tabs[0].value]}</div>;
 
   return (
-    <Tabs value={tab} onValueChange={(v) => onTabChange(v as StatPanelTab)} className="space-y-4">
-      <PanelTabsList tabs={tabs} stripLabel="Stat Fields" />
+    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Stat Fields" surfaceTabs="worldEditorStat">
       {tabs.map((t) => (
-        <TabsContent key={t.value} value={t.value} className="space-y-4">{panels[t.value]}</TabsContent>
+        <PanelTabContent key={t.value} value={t.value}>{panels[t.value]}</PanelTabContent>
       ))}
-    </Tabs>
+    </PanelTabs>
   );
 };
 

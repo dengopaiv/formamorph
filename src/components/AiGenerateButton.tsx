@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { toast } from 'react-toastify';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { useSettings } from '@/contexts/SettingsContext';
 import { summarizeDescription } from '@/lib/summarize';
+import { useAiSettingsSnapshot } from '@/lib/aiRequest/useAiSettingsSnapshot';
 import { bridgeDescription, type BridgeKind } from '@/lib/bridgeDescription';
 import { buildImagePrompt, type ImageSubjectKind } from '@/lib/imagePrompt';
 import { TOOLBAR_BTN } from '@/components/prompt/toolbarStyles';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { overwriteWarning } from '@/lib/descriptionOverwrite';
 import { Tip } from '@/components/ui/tooltip';
-import { authoringFailureMessage } from '@/lib/authoringRequest';
+import { toastError } from '@/lib/linkToast';
+import { authoringServerNote } from '@/lib/authoringRequest';
 
 type GenerateMode = 'summary' | 'tags' | 'playerDesc' | 'aiDesc';
 
@@ -55,9 +56,9 @@ const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
   target?: string;
 }) => {
   const {
-    activeEndpointUrl, activeApiToken, activeModelName, imageTagPrompt,
-    playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens, reasoningCapability, localModelActive,
+    imageTagPrompt, playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens,
   } = useSettings();
+  const snapshot = useAiSettingsSnapshot();
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -74,25 +75,23 @@ const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
     abortRef.current = controller;
     setLoading(true);
     try {
-      const opts = { endpointUrl: activeEndpointUrl, apiToken: activeApiToken, modelName: activeModelName, signal: controller.signal };
-      const reasoning = { capability: reasoningCapability, localEngine: localModelActive };
+      const opts = { snapshot, signal: controller.signal };
       const bridgeKind: BridgeKind = kind === 'location' ? 'location' : 'character';
       const result = mode === 'tags'
         // The subject's name is deliberately not sent: models answer with it as a tag, and no image model
         // knows a person's name. An author who wants one in the tags can type it.
         ? await buildImagePrompt({ description: text, kind: kind ?? 'character' }, { ...opts, tagPrompt: imageTagPrompt })
         : mode === 'summary'
-          ? await summarizeDescription(text, { ...opts, reasoning, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
+          ? await summarizeDescription(text, { ...opts, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
           : await bridgeDescription(text, mode, bridgeKind, {
             ...opts,
-            reasoning,
             template: mode === 'playerDesc' ? playerDescPrompt : aiDescPrompt,
             maxTokens: mode === 'playerDesc' ? descMaxTokens.playerdesc : descMaxTokens.aidesc,
           });
       onChange(result);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
-      toast.error(authoringFailureMessage(`Failed to generate ${noun}.`, error));
+      toastError(error, { headline: `Failed to generate ${noun}.` }, authoringServerNote(error));
     } finally {
       setLoading(false);
     }

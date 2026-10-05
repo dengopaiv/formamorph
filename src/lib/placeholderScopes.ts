@@ -95,17 +95,24 @@ export function placeholderTreeNodes(world: PlaceholderHomesWorld): PlaceholderT
   };
   folders(null, 0);
   out.push(...rowsOf(shared.filter((p) => placeholderGroupOf(groups, p) === null)));
-  const section = (owner: PlaceholderOwnerRef, list: Placeholder[] | undefined) => {
-    if (!list?.length) return;
+  // The Custom Persona entity lists while empty, so the author can reach it.
+  const section = (owner: PlaceholderOwnerRef, list: Placeholder[] | undefined, always = false) => {
+    if (!list?.length && !always) return;
     const home: PlaceholderHome = { kind: owner.kind, ownerId: owner.id };
     const node: PlaceholderOwnerNode = { kind: 'owner', id: ownerNodeId(owner.id), parentId: null, depth: 0, owner, home };
-    out.push(node, ...rowsOf(list, node));
+    out.push(node, ...rowsOf(list ?? [], node));
   };
   for (const e of entitiesInTreeOrder(world.entityGroups ?? [], world.entities ?? [])) {
-    section({ kind: 'entity', id: e.id, name: e.name }, e.placeholders);
+    section({ kind: 'entity', id: e.id, name: e.name }, e.placeholders, !!e.customPersona);
   }
   for (const b of world.dictionaries ?? []) section({ kind: 'dictionary', id: b.id, name: b.name }, b.placeholders);
   return out;
+}
+
+/** One owner's list as its own tree, at the top level: what an entity or book panel draws. Rows still look
+ *  chip targets and holders up across the whole world. */
+export function ownerPlaceholderNodes(world: PlaceholderHomesWorld, home: PlaceholderHome): PlaceholderRowNode[] {
+  return placeholderRows(placeholderList(world, home), allPlaceholders(world)).map((row) => ({ ...row, kind: 'placeholder', home }));
 }
 
 /**
@@ -123,7 +130,13 @@ export function placeholderDropAllowed(
   if (parentId !== null && !parent) return false;
   if (active.kind === 'group') {
     if (parent && parent.kind !== 'group') return false;
+    if (active.group.system === 'blueprints') return parentId === null;
     return parentId === null || !isDescendantPlaceholderGroup(world.placeholderGroups ?? [], activeId, parentId);
+  }
+  // A copy is its owner's, once per blueprint, so it only reorders under that owner.
+  if (active.placeholder.blueprintId) {
+    return parent?.kind === 'owner' && active.home.kind !== 'world' && parent.home.kind === active.home.kind
+      && parent.home.ownerId === active.home.ownerId;
   }
   if (parent?.kind === 'group' && active.home.kind !== 'world') return false;
   return !(parent?.kind === 'placeholder' && parent.id.split(SHARED_PATH_SEP).includes(active.placeholder.id));

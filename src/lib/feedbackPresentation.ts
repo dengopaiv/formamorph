@@ -78,8 +78,26 @@ export const UNRESOLVED_LABELS: Record<FeedbackType, string> = {
   suggestion: 'Still Open',
 };
 
+/** Everything the status filter can hold: one state, every state, or every state still needing work. */
+export type StatusFilter = FeedbackStatus | typeof ANY_STATUS | typeof UNRESOLVED_STATUS;
+
+/** What a list says when its filters leave nothing to show. */
+export const FILTERED_EMPTY_LABELS: Record<FeedbackType, string> = {
+  bug: 'No reports match this filter.',
+  suggestion: 'No suggestions match this filter.',
+};
+
+/** What every feedback list opens on: the threads that still need work. */
+export const DEFAULT_STATUS_FILTER: Record<FeedbackType, StatusFilter> = {
+  bug: UNRESOLVED_STATUS,
+  suggestion: UNRESOLVED_STATUS,
+};
+
 /** The category filter's "no filter" value, for the same reason. */
 export const ANY_CATEGORY = 'any';
+
+/** Everything the category filter can hold: one category, or every category. */
+export type CategoryFilter = FeedbackCategory | typeof ANY_CATEGORY;
 
 /**
  * The status filter as the list wants it: one real status, the set that is still open, or nothing at all.
@@ -89,7 +107,7 @@ export const ANY_CATEGORY = 'any';
  * @returns The status or statuses to filter by, or undefined for every status
  */
 export const statusFilterValue = (
-  value: FeedbackStatus | typeof ANY_STATUS | typeof UNRESOLVED_STATUS,
+  value: StatusFilter,
   type: FeedbackType,
 ): FeedbackStatus | FeedbackStatus[] | undefined => {
   if (value === ANY_STATUS) return undefined;
@@ -103,7 +121,7 @@ export const statusFilterValue = (
  * @param value - The dropdown's current value
  * @returns The category to filter by, or undefined for every category
  */
-export const categoryFilterValue = (value: FeedbackCategory | typeof ANY_CATEGORY): FeedbackCategory | undefined =>
+export const categoryFilterValue = (value: CategoryFilter): FeedbackCategory | undefined =>
   (value === ANY_CATEGORY ? undefined : value);
 
 /** Which threads a profile tab is showing. */
@@ -125,15 +143,75 @@ export const SCOPE_LABELS: Record<FeedbackType, Record<FeedbackScope, string>> =
  */
 export const scopeFilterValue = (value: FeedbackScope): 'all' | undefined => (value === 'all' ? 'all' : undefined);
 
-/** How a suggestion board may be ordered. */
-export const FEEDBACK_SORTS = ['newest', 'votes'] as const;
+/** The search bar's name and placeholder, per branch. */
+export const SEARCH_LABELS: Record<FeedbackType, string> = {
+  bug: 'Search Reports',
+  suggestion: 'Search Suggestions',
+};
+
+/** Every way a feedback list may be ordered. */
+export const FEEDBACK_SORTS = ['newest', 'oldest', 'active', 'votes'] as const;
 export type FeedbackSort = (typeof FEEDBACK_SORTS)[number];
 
 /** The sort dropdown's labels. */
 export const SORT_LABELS: Record<FeedbackSort, string> = {
   newest: 'Newest',
-  votes: 'Most voted',
+  oldest: 'Oldest',
+  active: 'Recently Active',
+  votes: 'Most Voted',
 };
+
+/**
+ * The sorts a branch offers, in dropdown order. Only suggestions carry votes, so only they rank by them.
+ *
+ * @param type - Which branch the list shows
+ * @returns The offered sorts
+ */
+export const sortsFor = (type: FeedbackType): FeedbackSort[] =>
+  (type === 'suggestion' ? [...FEEDBACK_SORTS] : FEEDBACK_SORTS.filter((value) => value !== 'votes'));
+
+/** Which scope each profile tab opens on. */
+export const DEFAULT_SCOPE: Record<FeedbackType, FeedbackScope> = {
+  // Their own: this is where their replies are, and the badge counts their threads.
+  bug: 'mine',
+  // Everyone's: a board is for browsing and voting, and mine-first buries the point.
+  suggestion: 'all',
+};
+
+/** The staff queue's filters. */
+export type StaffFilterValues = { status: StatusFilter; category: CategoryFilter; sort: FeedbackSort };
+/** A profile tab's filters: the staff set plus whose threads to show. */
+export type UserFilterValues = StaffFilterValues & { scope: FeedbackScope };
+
+/** The staff queue's filters behind the Filters button. */
+export const STAFF_HIDDEN_FILTERS = ['category'] as const satisfies readonly (keyof StaffFilterValues)[];
+/** A profile tab's filters behind the Filters button. */
+export const USER_HIDDEN_FILTERS = ['status', 'category', 'sort'] as const satisfies readonly (keyof UserFilterValues)[];
+
+/**
+ * What the staff queue opens on and resets to. Staff triage suggestions by demand, so they open on votes.
+ *
+ * @param type - Which branch the queue shows
+ * @returns The queue's default filters
+ */
+export const staffFilterDefaults = (type: FeedbackType): StaffFilterValues => ({
+  status: DEFAULT_STATUS_FILTER[type],
+  category: ANY_CATEGORY,
+  sort: type === 'suggestion' ? 'votes' : 'newest',
+});
+
+/**
+ * What a profile tab opens on and resets to. Users see the newest first, to find what is new to vote on.
+ *
+ * @param type - Which branch the tab shows
+ * @returns The tab's default filters
+ */
+export const userFilterDefaults = (type: FeedbackType): UserFilterValues => ({
+  status: DEFAULT_STATUS_FILTER[type],
+  category: ANY_CATEGORY,
+  sort: 'newest',
+  scope: DEFAULT_SCOPE[type],
+});
 
 // A thread timestamp is a server timestamp like any other — see `lib/serverDate`.
 export { formatServerDateTime as formatFeedbackDate } from './serverDate';

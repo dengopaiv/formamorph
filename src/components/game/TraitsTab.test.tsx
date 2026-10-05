@@ -284,14 +284,325 @@ describe('the traits tab keeps how the player left it', () => {
   });
 });
 
-describe('an exclusive trait group reads as a set of alternatives', () => {
-  const GROUPS = [G('g-past', 'Background', { exclusive: true })];
+describe('a gated trait in play', () => {
+  const TRAITS = [
+    T('t-paladin', 'Paladin'),
+    T('t-plate', 'Plate Armor', { requires: [{ kind: 'trait', id: 't-paladin' }] }),
+    T('t-crown', 'Royal Crown', { requires: [{ kind: 'playingAs', id: 'e-aldric' }] }),
+  ];
+  const aldric = { id: 'e-aldric', name: 'Sir Aldric', persona: true };
+
+  it('stays in place, locked, saying what it requires', () => {
+    renderTraits(TRAITS, [], []);
+    openDisabled('Traits');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Plate Armor' })).toBeDisabled();
+    expect(screen.getByText('Requires Paladin')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Switch on Paladin' })).toBeEnabled();
+  });
+
+  it('opens once its requirement is held, saying what unlocked it', () => {
+    renderTraits(TRAITS, [], ['t-paladin']);
+    openDisabled('Traits');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Plate Armor' })).toBeEnabled();
+    expect(screen.getByText('Unlocked by Paladin')).toBeTruthy();
+  });
+
+  it('opens a playing-as trait while the player plays that world persona', () => {
+    renderTraits(TRAITS, [], [], {
+      world: { entities: [aldric] },
+      seed: (gameplay) => gameplay.setPersonaRef({ source: 'world', entityId: 'e-aldric' }),
+    });
+    openDisabled('Traits');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Royal Crown' })).toBeEnabled();
+    expect(screen.getByText('Unlocked by playing as Sir Aldric')).toBeTruthy();
+  });
+
+  it('shows the cascade banner until the player dismisses it', async () => {
+    const onDismissTraitCascade = vi.fn();
+    renderRightPanel({ traitCascade: { off: ['Plate Armor'], because: 'Paladin' }, onDismissTraitCascade }, {
+      turns: TURNS, stats: STATS, world: { traits: TRAITS, traitGroups: [] },
+      seed: (gameplay) => gameplay.setActiveTab('traits'),
+    });
+    expect(screen.getByRole('status').textContent).toBe('Turned off Plate Armor, because of Paladin.Dismiss');
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(onDismissTraitCascade).toHaveBeenCalledOnce();
+  });
+});
+
+describe('entity nodes in the traits tab', () => {
+  // Ash owns Tamed (held), Wild (toggleable, not held), Gruff (not toggleable, not held), and Loyal, which
+  // needs the player's Paladin.
+  const ash = {
+    id: 'e-ash', name: 'Ash', persona: true,
+    traits: [
+      T('t-tamed', 'Tamed'), T('t-wild', 'Wild'), T('t-gruff', 'Gruff', { playerToggle: false }),
+      T('t-loyal', 'Loyal', { requires: [{ kind: 'trait' as const, id: 't-paladin' }] }),
+    ],
+  };
+  const PALADIN = T('t-paladin', 'Paladin');
+  const withAsh = (options: PanelHarnessOptions = {}) => renderTraits([PALADIN], [], [], {
+    ...options,
+    world: { entities: [ash] },
+    seed: (gameplay) => {
+      gameplay.setOwnedTraits({ 'e-ash': { chosen: ['t-tamed'] } });
+      options.seed?.(gameplay);
+    },
+  });
+
+  it('gives an entity that owns traits its own section, listing what it holds and what the player can switch', () => {
+    withAsh();
+    const ashSection = section('Ash');
+    expect(within(ashSection).getByRole('checkbox', { name: 'Switch off Tamed' })).toBeEnabled();
+    fireEvent.click(within(ashSection).getByRole('button', { name: /^Disabled/ }));
+    expect(within(ashSection).getByRole('checkbox', { name: 'Switch on Wild' })).toBeEnabled();
+    expect(within(ashSection).queryByText('Gruff')).toBeNull();
+  });
+
+  it('hands an owned trait’s switch to the runtime by id and bearer', () => {
+    const view = withAsh();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Switch off Tamed' }));
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-tamed', false, 'e-ash');
+  });
+
+  it('locks an owned trait whose requirement the player lacks', () => {
+    withAsh();
+    fireEvent.click(within(section('Ash')).getByRole('button', { name: /^Disabled/ }));
+    expect(screen.getByRole('checkbox', { name: 'Switch on Loyal' })).toBeDisabled();
+    expect(screen.getByText('Requires Paladin')).toBeTruthy();
+  });
+
+  it('marks the entity the player plays as You', () => {
+    withAsh({ seed: (gameplay) => gameplay.setPersonaRef({ source: 'world', entityId: 'e-ash' }) });
+    expect(screen.getByRole('button', { name: 'Ash, You, 1 enabled' })).toBeTruthy();
+  });
+
+  it("reads an owned trait's Character Name as its owner", () => {
+    renderTraits([PALADIN], [], [], {
+      world: { entities: [{ ...ash, traits: [T('t-tamed', 'Tamed', { playerDescription: '{{char}} heels at a word.' })] }] },
+      seed: (gameplay) => gameplay.setOwnedTraits({ 'e-ash': { chosen: ['t-tamed'] } }),
+    });
+    expect(within(section('Ash')).getByText('Ash heels at a word.')).toBeTruthy();
+  });
+});
+
+describe('linked traits in the traits tab', () => {
+  // Blueprints › Classes holds Paladin and Wizard. Ash links Classes, Bo links Paladin, and the Custom Persona
+  // entity links Wizard for a player with no persona.
+  const GROUPS = [
+    G('g-blueprints', 'Blueprints', { system: 'blueprints', order: 0 }),
+    G('g-classes', 'Classes', { parentId: 'g-blueprints', maxPicks: 1 }),
+  ];
+  const PALADIN = T('t-paladin', 'Paladin', { groupId: 'g-classes', order: 0, isDefault: true });
+  const WIZARD = T('t-wizard', 'Wizard', { groupId: 'g-classes', order: 1, playerDescription: '{{char}} studies.' });
+  const link = (id: string, originalId: string, kind: 'trait' | 'group') =>
+    ({ id, originalId, kind, originalName: originalId, groupId: null, order: 0 });
+  const ash = { id: 'e-ash', name: 'Ash', persona: true, traitLinks: [link('l-ash', 'g-classes', 'group')] };
+  const bo = { id: 'e-bo', name: 'Bo', traitLinks: [link('l-bo', 't-paladin', 'trait')] };
+  const you = { id: 'e-you', name: 'Wanderer', customPersona: true, traitLinks: [link('l-you', 't-wizard', 'trait')] };
+  const withLinks = (options: PanelHarnessOptions = {}) => renderTraits([PALADIN, WIZARD], GROUPS, [], {
+    ...options,
+    world: { entities: [ash, bo, you], ...options.world },
+    seed: (gameplay) => {
+      gameplay.setOwnedTraits({ 'e-ash': { chosen: ['t-paladin'] } });
+      options.seed?.(gameplay);
+    },
+  });
+
+  // A section with nothing switched on starts folded, so its rows need the header and the Disabled fold opened.
+  const unfold = (name: string) => {
+    fireEvent.click(within(section(name)).getByRole('button', { name: new RegExp(`^${name},`) }));
+    openDisabled(name);
+  };
+
+  it('lists a linked original once per bearer, under each bearer’s node, and never at the top level', () => {
+    withLinks();
+    expect(within(section('Ash')).getByRole('radio', { name: 'Switch off Paladin' })).toBeEnabled();
+    unfold('Bo');
+    expect(within(section('Bo')).getByRole('checkbox', { name: 'Switch on Paladin' })).toBeEnabled();
+    expect(screen.getAllByText('Paladin')).toHaveLength(2);
+    expect(screen.queryByRole('group', { name: 'Blueprints' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Classes' })).toBeNull();
+  });
+
+  it('hands a linked trait’s switch to the runtime with the bearer whose row it is', () => {
+    const view = withLinks();
+    fireEvent.click(within(section('Ash')).getByRole('radio', { name: 'Switch off Paladin' }));
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-paladin', false, 'e-ash');
+  });
+
+  it("lists the Custom Persona entity's links under its own node as the player under None, marked You", () => {
+    withLinks();
+    expect(screen.queryByRole('group', { name: 'General' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Wanderer, You, 0 enabled' })).toBeTruthy();
+    unfold('Wanderer');
+    expect(within(section('Wanderer')).getByRole('checkbox', { name: 'Switch on Wizard' })).toBeEnabled();
+    // The Character Name chip resolves to the marked entity, never to another bearer.
+    expect(within(section('Wanderer')).getByText(/studies\.$/).textContent).toBe('Wanderer studies.');
+    expect(screen.getByText("Ash's Paladin")).toBeTruthy();
+  });
+
+  it("names the Custom Persona entity's node and its Character Name after the player's entered name", () => {
+    withLinks({ seed: (gameplay) => {
+      gameplay.setPersonaRef({ source: 'none', name: 'Ash Vale' });
+      gameplay.setOwnedTraits({ 'e-ash': { chosen: ['t-paladin'] }, 'e-you': { chosen: ['t-wizard'] } });
+    } });
+    expect(screen.queryByRole('group', { name: 'Wanderer' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Ash Vale, You, 1 enabled' })).toBeTruthy();
+    expect(within(section('Ash Vale')).getByText(/studies\.$/).textContent).toBe('Ash Vale studies.');
+    // The player's own trait reads bare in the active list; a cast entity's carries its name.
+    expect(screen.getByText(/2 active:/).parentElement).toHaveTextContent("Ash's Paladin");
+    expect(screen.getByText(/2 active:/).parentElement).not.toHaveTextContent("Ash Vale's Wizard");
+  });
+
+  it('drops the Custom Persona entity under a world persona, and marks that persona You on its node of links', () => {
+    withLinks({ seed: (gameplay) => gameplay.setPersonaRef({ source: 'world', entityId: 'e-ash' }) });
+    expect(screen.queryByRole('group', { name: 'General' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Wanderer' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Ash, You, 1 enabled' })).toBeTruthy();
+    expect(screen.getByText(/1 active:/).parentElement).toHaveTextContent('Paladin');
+    expect(screen.queryByText("Ash's Paladin")).toBeNull();
+    // Ash's section stands where the marked entity's stood: after Bo's, once.
+    expect(screen.getAllByRole('group').map((g) => g.getAttribute('aria-label'))).toEqual(['Bo', 'Ash']);
+  });
+
+  it("reads a linked trait's Character Name as its bearer", () => {
+    withLinks({ seed: (gameplay) => gameplay.setOwnedTraits({ 'e-ash': { chosen: ['t-wizard'] } }) });
+    expect(within(section('Ash')).getByText('Ash studies.')).toBeTruthy();
+  });
+});
+
+describe('a full group with a max above one', () => {
+  const GROUPS = [G('g-skill', 'Skills', { maxPicks: 2 })];
+  const TRAITS = [
+    T('t-bow', 'Archery', { groupId: 'g-skill' }),
+    T('t-hide', 'Stealth', { groupId: 'g-skill' }),
+    T('t-lore', 'Lore', { groupId: 'g-skill' }),
+  ];
+
+  it('disables its switched-off rows and keeps the switched-on ones switchable', () => {
+    renderTraits(TRAITS, GROUPS, ['t-bow', 't-hide']);
+    expect(screen.getByRole('checkbox', { name: 'Switch off Archery' })).toBeEnabled();
+    openDisabled('Skills');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Lore' })).toBeDisabled();
+  });
+
+  it('keeps every row open below the max', () => {
+    renderTraits(TRAITS, GROUPS, ['t-bow']);
+    openDisabled('Skills');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Lore' })).toBeEnabled();
+  });
+});
+
+describe('a group at its minimum', () => {
+  const GROUPS = [G('g-skill', 'Skills', { minPicks: 2 }), G('g-class', 'Class', { minPicks: 1, maxPicks: 1 })];
+  const TRAITS = [
+    T('t-bow', 'Archery', { groupId: 'g-skill' }),
+    T('t-hide', 'Stealth', { groupId: 'g-skill' }),
+    T('t-lore', 'Lore', { groupId: 'g-skill' }),
+    T('t-pal', 'Paladin', { groupId: 'g-class' }),
+    T('t-rog', 'Rogue', { groupId: 'g-class' }),
+  ];
+
+  it('disables the switch-off of a pick the minimum needs, and keeps switch-ons open', () => {
+    renderTraits(TRAITS, GROUPS, ['t-bow', 't-hide', 't-pal']);
+    expect(screen.getByRole('checkbox', { name: 'Switch off Archery' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Switch off Paladin' })).toBeDisabled();
+    openDisabled('Skills');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Lore' })).toBeEnabled();
+    openDisabled('Class');
+    expect(screen.getByRole('radio', { name: 'Switch on Rogue' })).toBeEnabled();
+  });
+
+  it('keeps the switch-off open above the minimum', () => {
+    renderTraits(TRAITS, GROUPS, ['t-bow', 't-hide', 't-lore']);
+    expect(screen.getByRole('checkbox', { name: 'Switch off Archery' })).toBeEnabled();
+  });
+});
+
+describe('an Always On trait', () => {
+  const GROUPS = [G('g-oath', 'Oath', { maxPicks: 1 })];
+  const TRAITS = [
+    T('t-ring', 'Cursed Ring'),
+    T('t-curse', 'Curse', { mode: 'alwaysOn', requires: [{ kind: 'trait', id: 't-ring' }] }),
+    T('t-sworn', 'Sworn', { mode: 'alwaysOn', groupId: 'g-oath' }),
+    T('t-free', 'Free', { groupId: 'g-oath' }),
+  ];
+
+  it('does not show while dormant and never taken', () => {
+    renderTraits(TRAITS, GROUPS, ['t-sworn']);
+    fireEvent.click(screen.getByRole('button', { name: 'General, 0 enabled' }));
+    openDisabled('General');
+    expect(within(section('General')).getByText('Cursed Ring')).toBeInTheDocument();
+    expect(screen.queryByText('Curse')).toBeNull();
+  });
+
+  it('does not show once lifted, though the player still holds it', () => {
+    renderTraits(TRAITS, GROUPS, ['t-sworn', 't-curse'], {
+      seed: (gameplay) => gameplay.setDisabledTraitIds(['t-curse']),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'General, 0 enabled' }));
+    openDisabled('General');
+    expect(within(section('General')).getByText('Cursed Ring')).toBeInTheDocument();
+    expect(screen.queryByText('Curse')).toBeNull();
+  });
+
+  it('shows checked with no control while active, and blocks the max-one group’s other picks', () => {
+    renderTraits(TRAITS, GROUPS, ['t-ring', 't-curse', 't-sworn']);
+    expect(screen.getByText('Curse')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Curse$/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Sworn$/ })).toBeNull();
+    openDisabled('Oath');
+    expect(screen.getByRole('radio', { name: 'Switch on Free' })).toBeDisabled();
+  });
+});
+
+describe('a Hidden trait', () => {
+  const GROUPS = [G('g-oath', 'Oath', { maxPicks: 1 }), G('g-secret', 'Secrets')];
+  const TRAITS = [
+    T('t-paladin', 'Paladin'),
+    T('t-bond', 'Blood Bond', { mode: 'hidden', groupId: 'g-oath' }),
+    T('t-free', 'Free', { groupId: 'g-oath' }),
+    T('t-omen', 'Omen', { mode: 'hidden', groupId: 'g-secret' }),
+    T('t-rite', 'Rite', { requires: [{ kind: 'trait', id: 't-lost' }, { kind: 'trait', id: 't-paladin' }] }),
+    T('t-lost', 'Lost Name', { mode: 'hidden', requires: [{ kind: 'trait', id: 't-paladin' }] }),
+    T('t-veil', 'Veil', { requires: [{ kind: 'trait', id: 't-lost' }] }),
+  ];
+
+  it('never shows while active, in its row, its section or the active summary', () => {
+    renderTraits(TRAITS, GROUPS, ['t-bond', 't-omen']);
+    expect(screen.queryByText(/Blood Bond|Omen/)).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Secrets' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Oath, 0 enabled' }));
+    openDisabled('Oath');
+    expect(screen.getByRole('radio', { name: 'Switch on Free' })).toBeDisabled();
+  });
+
+  it('leaves its name out of a gate line, and reads "Locked" when nothing else is listed', () => {
+    renderTraits(TRAITS, GROUPS, ['t-bond', 't-omen']);
+    fireEvent.click(screen.getByRole('button', { name: 'General, 0 enabled' }));
+    openDisabled('General');
+    expect(screen.getByText('Requires Paladin')).toBeInTheDocument();
+    expect(screen.getByText('Locked')).toBeInTheDocument();
+    expect(screen.queryByText(/Lost Name/)).toBeNull();
+  });
+
+  it('opens a trait with no line when only a Hidden requirement holds', () => {
+    renderTraits(TRAITS, GROUPS, ['t-paladin', 't-lost', 't-bond', 't-omen']);
+    openDisabled('General');
+    expect(screen.getByRole('checkbox', { name: 'Switch on Veil' })).toBeEnabled();
+    expect(screen.getByText('Unlocked by Paladin')).toBeInTheDocument();
+    expect(screen.queryByText(/Lost Name/)).toBeNull();
+  });
+});
+
+describe('a max-one trait group reads as a set of alternatives', () => {
+  const GROUPS = [G('g-past', 'Background', { maxPicks: 1 })];
   const TRAITS = [
     T('t-farm', 'Farmhand', { groupId: 'g-past' }),
     T('t-book', 'Scholar', { groupId: 'g-past' }),
   ];
 
-  it('gives an exclusive group radios and a plain group checkboxes', () => {
+  it('gives a max-one group radios and a plain group checkboxes', () => {
     renderTraits([...TRAITS, T('t-loose', 'Wanderer')], GROUPS, ['t-farm', 't-loose']);
     expect(screen.getByRole('radio', { name: 'Switch off Farmhand' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Switch off Wanderer' })).toBeInTheDocument();
@@ -301,13 +612,13 @@ describe('an exclusive trait group reads as a set of alternatives', () => {
     const view = renderTraits(TRAITS, GROUPS, ['t-farm']);
     openDisabled('Background');
     fireEvent.click(screen.getByRole('radio', { name: 'Switch on Scholar' }));
-    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-book', true);
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-book', true, 'world');
   });
 
   it('clears the selected alternative when it is clicked again, so none is a legal answer', () => {
     const view = renderTraits(TRAITS, GROUPS, ['t-farm']);
     fireEvent.click(screen.getByRole('radio', { name: 'Switch off Farmhand' }));
-    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-farm', false);
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-farm', false, 'world');
   });
 
   it('marks the radios by what is actually held', () => {

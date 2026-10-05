@@ -4,8 +4,8 @@
  * in the test files — `vi.mock` is hoisted per file — but the fixture, the mount, and its lint exception
  * live here once.
  */
-import { useEffect, type ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { useEffect, type ComponentProps, type ReactNode } from 'react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { GameDataProvider, useGameData } from '@/contexts/GameDataContext';
 import { writeEditorMode, type EditorMode } from '@/lib/editorMode';
@@ -22,6 +22,30 @@ if (typeof window.matchMedia !== 'function') {
     addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
 }
+
+/** Report mobile to `useIsMobile`, which reads the width once and then the media query. Returns the undo. */
+export const asMobile = () => {
+  const realMatchMedia = window.matchMedia;
+  const realWidth = window.innerWidth;
+  window.innerWidth = 400;
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width: 767px'),
+    media: query, onchange: null,
+    addEventListener: () => {}, removeEventListener: () => {},
+    addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+  return () => {
+    window.matchMedia = realMatchMedia;
+    window.innerWidth = realWidth;
+  };
+};
+
+/** Ends a closed sheet's exit animation, which jsdom never runs, so vaul unmounts the sheet. */
+export const finishSheetExit = (sheet: HTMLElement) => {
+  const end = new Event('animationend', { bubbles: true });
+  Object.defineProperty(end, 'animationName', { value: getComputedStyle(sheet).animationName });
+  act(() => { sheet.dispatchEvent(end); });
+};
 
 /** A loadable world with the base a suite doesn't care about filled in — a named overview with a prompt and
  *  readme, a flagged starting location, and one described resident keeping it occupied — clean under the full
@@ -65,22 +89,48 @@ const Harness = ({ world, children, onReady }: {
  * so a suite about alias repairs or stat code is a suite about the Advanced editor, and one about the fold
  * itself is about the Simple one.
  */
-export const renderWorldEditorBench = (world: World, mode: EditorMode) => {
+export const renderWorldEditorBench = (
+  world: World,
+  mode: EditorMode,
+  props: Partial<Omit<ComponentProps<typeof WorldEditor>, 'onClose'>> = {},
+) => {
   let ctx!: GameDataHandle;
   writeEditorMode(mode);
-  render(
+  const onClose = vi.fn();
+  const tree = (editorProps: typeof props) => (
     <SettingsProvider>
       <TooltipProvider>
         <GameDataProvider>
           <Harness world={world} onReady={(c) => { ctx = c; }}>
-            <WorldEditor onClose={vi.fn()} embedded backButton />
+            <WorldEditor onClose={onClose} embedded backButton {...editorProps} />
           </Harness>
         </GameDataProvider>
       </TooltipProvider>
-    </SettingsProvider>,
+    </SettingsProvider>
   );
-  return { ctx: () => ctx };
+  const view = render(tree(props));
+  return {
+    ctx: () => ctx,
+    unmount: view.unmount,
+    /** Renders the editor again with new props, as a host does for a later request. */
+    rerender: (next: typeof props) => view.rerender(tree(next)),
+  };
 };
+
+/** Open one of the editor's own tabs. The entity panel's Traits tab shares a name with the editor's, so the
+ *  strip is told apart by its label. These tabs switch on mouseDown, not click. */
+export const openEditorTab = (name: RegExp) => fireEvent.mouseDown(
+  screen.getAllByRole('tab', { name }).find((t) => t.closest('[role="tablist"]')?.getAttribute('aria-label') !== 'Entity Fields')!,
+);
+
+/** The entity panel's own tab, apart from the editor's tab of the same name. */
+export const entityFieldsTab = (name: string) =>
+  within(screen.getByRole('tablist', { name: 'Entity Fields' })).getByRole('tab', { name });
+
+/** Open one tab of the trait panel's own strip. These tabs switch on mouseDown, not click. */
+export const openTraitFieldsTab = (name: string) => fireEvent.mouseDown(
+  within(screen.getByRole('tablist', { name: 'Trait Fields' })).getByRole('tab', { name }),
+);
 
 /** Click the editor header's flask — whose first stop is the quick-triage popover, not the full panel. */
 export const clickFlask = async () => {
@@ -91,4 +141,14 @@ export const clickFlask = async () => {
 export const clickOpenBench = async () => {
   await clickFlask();
   fireEvent.click(await screen.findByRole('button', { name: 'Open Test Bench' }));
+};
+
+/** Where a detail panel's parts sit: its strip fixed above any scroll, and the open tab's body scrolling on
+ *  its own or filling the pane for a body that scrolls inside itself. */
+export const panelTabLayout = (stripLabel: string) => {
+  const strip = screen.getByRole('tablist', { name: stripLabel });
+  const open = within(strip).getByRole('tab', { selected: true });
+  const body = document.getElementById(open.getAttribute('aria-controls') ?? '');
+  const fixed = !strip.closest('[data-radix-scroll-area-viewport]') && !!strip.closest('[data-detail-fill]');
+  return { strip: fixed ? 'fixed' : 'scrolls', body: body?.querySelector('[data-panel-tab-body]') ? 'scroll' : 'fill' };
 };

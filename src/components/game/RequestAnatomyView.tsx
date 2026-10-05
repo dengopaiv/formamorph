@@ -325,7 +325,8 @@ function BlockBody({
     } else if (mode === 'chips' && (run.chip || run.contextLabel)) {
       // The joins either side are the request's shape, so they survive the collapse — only the value the
       // run stands for is replaced by the chip that asked for it.
-      const [lead, , tail] = peelBreaks(text);
+      // An empty headed chip still draws its frame, so the layout reads the same whatever the values.
+      const [lead, , tail] = text || !run.section ? peelBreaks(text) : ['\n', '', '\n'];
       parts.push(
         <span key={i} {...{ [ANATOMY_RUN_ATTR]: '' }}>
           {lead || null}
@@ -380,7 +381,7 @@ export function RequestAnatomyView({ blocks, mode, type, onJump, renderText, pla
             if (!target) return undefined;
             return {
               go: () => onJump(target),
-              destination: `${CONTEXT_HINTS[run.contextLabel]} — open the ${PROMPT_LABELS[target.tab]} prompt`,
+              destination: `${CONTEXT_HINTS[run.contextLabel]}. Click to open the ${PROMPT_LABELS[target.tab]} prompt.`,
             };
           }
           return undefined;
@@ -404,7 +405,7 @@ export function RequestAnatomyView({ blocks, mode, type, onJump, renderText, pla
     <div className={cn('flex flex-col gap-3', className)}>
       <Region title="System Prompt" hint="one block, sent first, sets the rules">
         {system.length === 0 ? (
-          <p className="text-helper text-muted-foreground">This request sent no system prompt.</p>
+          <p className="text-helper text-muted-foreground">This request sent no system prompt</p>
         ) : (
           system.map(([block, i]) => <div key={i}>{body(block, i)}</div>)
         )}

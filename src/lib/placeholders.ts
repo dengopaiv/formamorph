@@ -1,6 +1,11 @@
 import { randomUUID } from "@/lib/uuid";
 import type { Placeholder, PlaceholderPin, PlaceholderRolls, PlaceholderValue } from '@/types';
 import type { PromptSegment } from './promptTemplate';
+import {
+  BUILTIN_TOKEN_SOURCE, CHARACTER_NAME, builtinForToken, characterAsPlayer, hasBuiltin, labelBuiltins, renderBuiltins,
+  type BuiltinPlaceholder, type BuiltinRender,
+} from './builtinPlaceholders';
+import { withEffectiveCopies, type CopyLookup } from './blueprints';
 
 /**
  * Placeholders — resolve author-defined named values embedded in world text as inline chips. A placeholder
@@ -50,9 +55,13 @@ export interface PlaceholderToken {
 // parses unchanged. A path segment starts with its kind letter, never `=`, which is what tells the two
 // trailing groups apart when only one is present.
 const TOKEN_RE = /\{\{ph:([^:{}]+):(world|unique):([^:{}]+)(?::([^:{}=][^:{}]*))?(?::=([^:{}]*))?\}\}/g;
+/** One placeholder token's grammar, for a reader that has to keep tokens whole without decoding them. */
+export const PLACEHOLDER_TOKEN_SOURCE = TOKEN_RE.source;
 // The same token with nothing around it: "is this string one whole chip?". Built once — both readers of it
 // run per value on render paths. Ungreedy of state: no `g`, so `exec` never carries a `lastIndex`.
 const WHOLE_TOKEN_RE = new RegExp(`^${TOKEN_RE.source}$`);
+// Every chip the editor shows: a placeholder token or a Built-in, which needs no definition.
+const CHIP_RE = new RegExp(`${TOKEN_RE.source}|${BUILTIN_TOKEN_SOURCE}`, 'g');
 
 // Path grammar: segments joined by `>`, each `v<targetId>` (explicit pick) or `s<name>` (slot). Slot names
 // and placement labels are author text, so the four characters the grammar owns are percent-escaped.
@@ -100,10 +109,10 @@ export function decodePlaceholderToken(token: string): PlaceholderToken | null {
   return path ? { ...base, path } : null;
 }
 
-/** True if `text` contains at least one placeholder chip (cheap pre-check to skip resolution work). */
+/** True if `text` contains at least one chip, Built-ins included (cheap pre-check to skip resolution work). */
 export function hasPlaceholders(text: string): boolean {
   TOKEN_RE.lastIndex = 0;
-  return TOKEN_RE.test(text);
+  return TOKEN_RE.test(text) || hasBuiltin(text);
 }
 
 /** Reads a chain of placeholder names as one name — a drill path, a breadcrumb, or a name qualified by its
@@ -222,13 +231,12 @@ export function newPlaceholder(name: string, values: string[] = []): Placeholder
   return { id: randomUUID(), name, values: values.map(newPlaceholderValue), roll: true };
 }
 
-/** Split text into literal runs and placeholder-chip tokens (mirrors parsePromptTemplate for the `{{ph}}`
- *  token, so the same Lexical chip editor can render placeholder fields). Non-token text stays literal. */
+/** Split text into literal runs and chip tokens: placeholder chips and the Player Name marker, as written
+ *  (mirrors parsePromptTemplate, so the same Lexical chip editor can render placeholder fields). */
 export function parsePlaceholderText(text: string): PromptSegment[] {
   const segments: PromptSegment[] = [];
   let last = 0;
-  TOKEN_RE.lastIndex = 0;
-  for (const match of text.matchAll(TOKEN_RE)) {
+  for (const match of text.matchAll(CHIP_RE)) {
     const idx = match.index;
     if (idx > last) segments.push({ type: 'text', value: text.slice(last, idx) });
     segments.push({ type: 'variable', token: match[0] });
@@ -275,8 +283,10 @@ export function primeRolls(
   existing: PlaceholderRolls = {},
   pick: PlaceholderPick = weightedPick,
   pinTexts?: Record<string, readonly string[]>,
+  /** The copy lookup of the bearer whose texts these are, so its copies get their own rolls. */
+  copies?: CopyLookup,
 ): PlaceholderRolls {
-  const ctx = createResolveCtx({ placeholders, rolls: existing, pick, pinTexts });
+  const ctx = createResolveCtx({ placeholders, rolls: existing, pick, pinTexts, copies });
   for (const text of texts) if (text) resolveText(text, ctx);
   return {
     world: { ...(existing.world ?? {}), ...ctx.minted.world },
@@ -605,17 +615,90 @@ export function buildPlaceholderPreview(
   pick: PlaceholderPick = weightedPick,
   /** Rolls to read and report into, for a preview shared across fields. Absent, the draws are thrown away
    *  with the pass — a preview never writes a save. */
-  store?: Pick<ResolveOptions, 'rolls' | 'setRoll'>,
+  store?: AuthorDrawStore,
+  /** The owning entity's authored name, which Character Name previews as. Absent or blank, it shows its label. */
+  ownerName?: string,
+  /** The bearer whose trait text this is: its copies stand in for blueprints, and its pins hold. */
+  bearer?: Pick<ResolveOptions, 'copies' | 'pins'>,
 ): Record<string, string> {
   if (!text || !hasPlaceholders(text)) return {};
   // One context across every token, so a structured chip resolves the way play resolves it and the sharing
   // rules still hold: World chips of one placeholder agree, Unique placements stay apart.
-  return drawWithValuePins({ placeholders, rolls: store?.rolls ?? {}, setRoll: store?.setRoll, pick }, (ctx) => {
+  return drawWithValuePins({ ...authorDraw(placeholders, pick, store), ...bearer }, (ctx) => {
+    // Drawn once, in the same context, so a chip the name shares with the text reads one value.
+    let character: string | undefined;
+    const previewBuiltin = (builtin: BuiltinPlaceholder): string => {
+      if (builtin !== CHARACTER_NAME || !ownerName) return builtin.label;
+      character ??= labelBuiltins(resolveText(ownerName, ctx)).trim();
+      return character || builtin.label;
+    };
     const out: Record<string, string> = {};
+    for (const [chip] of text.matchAll(CHIP_RE)) {
+      if (chip in out) continue;
+      const builtin = builtinForToken(chip);
+      out[chip] = builtin ? previewBuiltin(builtin) : labelBuiltins(resolveText(chip, ctx));
+    }
+    return out;
+  });
+}
+
+/** The value a chip opens on: its leaf placeholder and the raw text drawn there. No `valueId` when the text is
+ *  not one of the leaf's values (a pin typed off the list, or a placeholder with none). */
+export interface OpenPlaceholderValue {
+  placeholderId: string;
+  valueId?: string;
+  text: string;
+  /** A pin forced this value, so no roll decides it. */
+  pinned?: true;
+  /** The placeholder value that laid the pin — where an edit to the pin's own text is written. Author draws
+   *  only: play settles its pins before resolution, from traits and locations this never reads. */
+  pinSource?: DrawPinSource;
+}
+
+/** The placeholder value a draw-time pin was laid by. */
+export interface DrawPinSource {
+  placeholderId: string;
+  valueId: string;
+}
+
+/** A pin an author draw read off a value it drew: the text it forces, and the value that forced it. */
+interface DrawnPin extends DrawPinSource {
+  text: string;
+}
+
+/** Roll key → the text an author stepped it to, per scope — keyed exactly as `PlaceholderRolls` is. */
+export type ChosenTexts = Partial<Record<PlaceholderMode, Record<string, string>>>;
+
+/** What an author draw reads from the editor's shared store: its rolls, where it reports fresh ones, and
+ *  the texts an author stepped to. */
+export interface AuthorDrawStore extends Pick<ResolveOptions, 'rolls' | 'setRoll'> {
+  chosen?: ChosenTexts;
+}
+
+const authorDraw = (placeholders: Placeholder[], pick: PlaceholderPick, store: AuthorDrawStore | undefined) =>
+  ({ placeholders, rolls: store?.rolls ?? {}, setRoll: store?.setRoll, chosen: store?.chosen, pick });
+
+/**
+ * {@link buildPlaceholderPreview}'s draw, reported as the value each chip opens on rather than what it
+ * resolves to. A choice opens on its draw, a record on its first value. A chip that names nothing is absent.
+ */
+export function drawOpenPlaceholderValues(
+  text: string,
+  placeholders: Placeholder[],
+  pick: PlaceholderPick = weightedPick,
+  store?: AuthorDrawStore,
+): Record<string, OpenPlaceholderValue> {
+  if (!text || !hasPlaceholders(text)) return {};
+  return drawWithValuePins(authorDraw(placeholders, pick, store), (ctx) => {
+    const out: Record<string, OpenPlaceholderValue> = {};
+    const opened: OpenedRef = { current: null };
+    const walk = { ...ctx, opened };
     TOKEN_RE.lastIndex = 0;
     for (const m of text.matchAll(TOKEN_RE)) {
       if (m[0] in out) continue;
-      out[m[0]] = resolveText(m[0], ctx);
+      opened.current = null;
+      resolveText(m[0], walk);
+      if (opened.current) out[m[0]] = opened.current;
     }
     return out;
   });
@@ -631,14 +714,15 @@ const DRAW_PIN_WALKS = 4;
  * reads pinned as well — the way play reads it once the collection has settled — instead of depending on
  * which chip the text happened to put first.
  */
-function drawWithValuePins<T>(opts: ResolveOptions, walk: (ctx: ResolveCtx) => T): T {
-  const drawPins: Record<string, string> = {};
+function drawWithValuePins<T>(opts: ResolveOptions & Pick<ResolveCtx, 'chosen'>, walk: (ctx: ResolveCtx) => T): T {
+  const drawPins: Record<string, DrawnPin> = {};
+  const texts = () => Object.fromEntries(Object.entries(drawPins).map(([id, pin]) => [id, pin.text]));
   let rolls = opts.rolls;
   for (let pass = 1; ; pass++) {
-    const before = { ...drawPins };
+    const before = texts();
     const ctx = createResolveCtx({ ...opts, rolls, drawPins });
     const out = walk(ctx);
-    if (pass >= DRAW_PIN_WALKS || sameMap(before, drawPins)) return out;
+    if (pass >= DRAW_PIN_WALKS || sameMap(before, texts())) return out;
     // The next walk reads what this one drew, so the draw is the same draw with more of it pinned.
     rolls = {
       world: { ...(rolls.world ?? {}), ...ctx.minted.world },
@@ -691,7 +775,8 @@ export function drawPlaceholderSpans(
     : [...placeholders, ph];
   const rootPick: PlaceholderPick = (values, w) => pick(values, values === ph.values && weights ? weights : w);
   // Starts at the placeholder itself: a root World chip of it would resolve to the same thing.
-  return drawWithValuePins({ placeholders: list, rolls: {}, pick: rootPick }, (ctx) => phSpans(ph, ctx));
+  return drawWithValuePins({ placeholders: list, rolls: {}, pick: rootPick }, (ctx) => phSpans(ph, ctx))
+    .map((span) => ({ ...span, text: labelBuiltins(span.text) }));
 }
 
 /**
@@ -711,9 +796,13 @@ export function describePlaceholders(
   text: string,
   placeholders: readonly Placeholder[] = [],
   pins?: Record<string, string>,
+  /** The copy lookup of the bearer whose text this is, as {@link ResolveOptions.copies}. */
+  copies?: CopyLookup,
 ): string {
   if (!text || !hasPlaceholders(text)) return text;
-  return describeText(text, { byId: new Map(placeholders.map((p) => [p.id, p])), pins, depth: 0, seen: new Set() });
+  const byId = new Map(withEffectiveCopies(placeholders).map((p) => [p.id, p]));
+  const described = describeText(text, { byId, copies, pins, depth: 0, seen: new Set() });
+  return labelBuiltins(described);
 }
 
 /** How many levels of nested chips a describe pass walks. Deep enough to show a character's parts, shallow
@@ -724,6 +813,7 @@ const DESCRIBE_DEPTH_CAP = 2;
  *  change what it reads. */
 interface DescribeCtx {
   byId: Map<string, Placeholder>;
+  copies?: CopyLookup;
   pins?: Record<string, string>;
   /** The shared row this pass is inside — what decides which values read as benched here. */
   share?: ShareCtx;
@@ -756,7 +846,7 @@ function describeChoice(candidates: string[]): string {
 function describeChip(
   token: PlaceholderToken, ctx: DescribeCtx, tail: PlaceholderSegment[], crossing?: Crossing,
 ): string {
-  const ph = ctx.byId.get(token.id);
+  const ph = ctx.copies?.(token.id) ?? ctx.byId.get(token.id);
   if (!ph) return '';
   const share = nextShare(ctx.share, crossing, ph);
   return describePh(ph, [...(token.path ?? []), ...tail], share === ctx.share ? ctx : { ...ctx, share });
@@ -808,6 +898,11 @@ export function placeholderValueLine(value: string): string {
   if (nl === -1) return value;
   const head = value.slice(0, nl).trimEnd();
   return head ? `${head} …` : '…';
+}
+
+/** {@link placeholderValueLine} of text whose chips read as the names `label` gives them, not as their tokens. */
+export function placeholderChipLine(value: string, label: (token: string) => string): string {
+  return placeholderValueLine(parsePlaceholderText(value).map((s) => (s.type === 'text' ? s.value : label(s.token))).join(''));
 }
 
 /**
@@ -866,6 +961,14 @@ export interface ResolveOptions {
   pins?: Record<string, string>;
   /** Called once per structural problem met while resolving. */
   onFinding?: (finding: PlaceholderFinding) => void;
+  /** Who the Player Name chip names and what kind of text this is. Absent, it is reference text with no
+   *  persona. */
+  player?: Omit<BuiltinRender, 'character'>;
+  /** The resolved name of the entity that owns the text, which the Character Name chip renders. */
+  character?: string | null;
+  /** The copy lookup of the bearer whose text this is: a blueprint chip reads that bearer's copy. Absent, it
+   *  reads the blueprint itself. */
+  copies?: CopyLookup;
 }
 
 /**
@@ -974,6 +1077,7 @@ type WalkSegment = PlaceholderSegment & { authored?: boolean };
  *  placeholder id; Unique keys the whole subtree under the placement chain that led into it. */
 interface ResolveCtx {
   byId: Map<string, Placeholder>;
+  copies?: CopyLookup;
   rolls: PlaceholderRolls;
   /** Rolls minted during THIS pass — so two chips sharing a key agree even before `setRoll`'s (async) state
    *  update lands back in `rolls`. Shared by reference across the whole walk. */
@@ -986,7 +1090,10 @@ interface ResolveCtx {
   pinTexts?: Record<string, readonly string[]>;
   /** Author draws only: the pins the values drawn so far in this pass lay, under `pins`. Shared by reference
    *  across the whole walk, so a chip resolved after the pinning value reads the pinned text. */
-  drawPins?: Record<string, string>;
+  drawPins?: Record<string, DrawnPin>;
+  /** Author draws only: the text an author stepped each roll key to, under `pins` and over `drawPins`, so
+   *  a step off a pin the draw lays itself is what every field shows. */
+  chosen?: ChosenTexts;
   report: (finding: PlaceholderFinding) => void;
   scope: PlaceholderMode;
   /** Placement chain keying Unique rolls; `''` under World. */
@@ -997,6 +1104,25 @@ interface ResolveCtx {
   share?: ShareCtx;
   seen: ReadonlySet<string>;
   depth: number;
+  /** Open-value draws only: the placeholder the current chip opens on, its own or its drill target. */
+  opened?: OpenedRef;
+}
+
+type OpenedRef = { current: OpenPlaceholderValue | null };
+
+/** Record `text` as the value the current chip opens on, unless an outer level already did. */
+function noteOpened(ctx: ResolveCtx, ph: Placeholder, text: string, pinned = false): void {
+  if (!ctx.opened || ctx.opened.current) return;
+  const valueId = valueCrossing(ph, text)?.value.id;
+  // A caller's pin comes from a trait or a location, which no editor draw reads, so only a draw pin has a source.
+  const source = pinned ? ctx.drawPins?.[ph.id] : undefined;
+  ctx.opened.current = {
+    placeholderId: ph.id,
+    ...(valueId ? { valueId } : {}),
+    text,
+    ...(pinned && { pinned }),
+    ...(source?.text === text && { pinSource: { placeholderId: source.placeholderId, valueId: source.valueId } }),
+  };
 }
 
 /** Every structural child in a value list: its lone-chip values, paired with the placeholder each one roots
@@ -1192,7 +1318,13 @@ function rollKey(ph: Placeholder, ctx: ResolveCtx): string {
 
 /** The pin on a placeholder in this walk: the caller's, else one a value drawn earlier in the pass laid. */
 function pinOn(id: string, ctx: ResolveCtx): string | undefined {
-  return ctx.pins?.[id] ?? ctx.drawPins?.[id];
+  return ctx.pins?.[id] ?? ctx.drawPins?.[id]?.text;
+}
+
+/** The text an author stepped this placement to, unless a caller's pin masks it. Author draws only. */
+function chosenOn(ph: Placeholder, ctx: ResolveCtx): string | undefined {
+  if (ctx.pins?.[ph.id] != null) return undefined;
+  return ctx.chosen?.[ctx.scope]?.[rollKey(ph, ctx)];
 }
 
 /** In an author draw, lay the pins of a value this placeholder holds at world scope. Play never gets here:
@@ -1200,9 +1332,10 @@ function pinOn(id: string, ctx: ResolveCtx): string | undefined {
 function layDrawPins(ph: Placeholder, text: string, ctx: ResolveCtx): void {
   if (!ctx.drawPins || ctx.scope !== 'world') return;
   const value = (ph.values ?? []).find((v) => v.text === text);
-  for (const pin of value?.pins ?? []) {
+  if (!value) return;
+  for (const pin of value.pins ?? []) {
     const pinned = pinText(pin, ctx.byId);
-    if (pinned) ctx.drawPins[pin.placeholderId] = pinned;
+    if (pinned) ctx.drawPins[pin.placeholderId] = { text: pinned, placeholderId: ph.id, valueId: value.id };
   }
 }
 
@@ -1214,6 +1347,8 @@ function selectValue(ph: Placeholder, ctx: ResolveCtx): string {
 }
 
 function chooseValue(ph: Placeholder, ctx: ResolveCtx): string {
+  const chosen = chosenOn(ph, ctx);
+  if (chosen != null) return chosen;
   const pinned = pinOn(ph.id, ctx);
   if (pinned != null) return pinned;
   const key = rollKey(ph, ctx);
@@ -1280,16 +1415,31 @@ function phSpans(ph: Placeholder, ctx: ResolveCtx): PlaceholderSpan[] {
   // An active trait's pin masks every chip of this placeholder, Unique ones included — the intent is a fact
   // about the character, not about one sentence. A broken pin still applies, so it is checked before the
   // values are: a pin on an emptied placeholder is still the author's word.
-  const pinned = pinOn(ph.id, ctx);
+  // An author's step masks a pin the draw lays itself, so the chevrons are never trapped on one.
+  const chosen = chosenOn(ph, ctx);
+  const pinned = chosen == null ? pinOn(ph.id, ctx) : undefined;
   // A pin is text the author typed, not one of these values, so it crosses into nothing this row could
   // weight.
-  if (pinned != null) return valueSpans(pinned, inner);
+  if (pinned != null) {
+    noteOpened(ctx, ph, pinned, true);
+    return valueSpans(pinned, inner);
+  }
+  const values = ph.values ?? [];
+  // A choice reads its step through its own draw, which lays the stepped value's pins. Anything else takes
+  // the text whole: an Object is stepped only onto a pin, which masks its join as it does in play.
+  if (chosen != null && !placeholderIsChoice(ph)) {
+    noteOpened(ctx, ph, chosen);
+    layDrawPins(ph, chosen, inner);
+    return valueSpans(chosen, inner, valueCrossing(ph, chosen));
+  }
+  if (!values.length) noteOpened(ctx, ph, '');
+  else if (!placeholderIsChoice(ph)) noteOpened(ctx, ph, values[0].text);
   // Every pin a trait could lay over this placeholder reads under this same context once the trait is on.
   for (const text of pinTextsFor(ph, ctx)) valueSpans(text, inner);
-  const values = ph.values ?? [];
   if (!values.length) return [];
   if (placeholderIsChoice(ph)) {
     const drawn = selectValue(ph, inner);
+    noteOpened(ctx, ph, drawn);
     return valueSpans(drawn, inner, valueCrossing(ph, drawn));
   }
   const out: PlaceholderSpan[] = [];
@@ -1325,8 +1475,8 @@ function valueSpans(value: string, ctx: ResolveCtx, crossing?: Crossing): Placeh
   const lone = crossing ? lonePlaceholderToken(value) : null;
   const out: PlaceholderSpan[] = [];
   for (const seg of parsePlaceholderText(value)) {
-    if (seg.type === 'text') {
-      out.push({ text: seg.value });
+    if (seg.type === 'text' || builtinForToken(seg.token)) {
+      out.push({ text: seg.type === 'text' ? seg.value : seg.token });
       continue;
     }
     const token = decodePlaceholderToken(seg.token);
@@ -1357,7 +1507,7 @@ function chipCtx(token: PlaceholderToken, ctx: ResolveCtx): ResolveCtx {
 function resolveChip(
   token: PlaceholderToken, ctx: ResolveCtx, tail: WalkSegment[], authored: boolean, crossing?: Crossing,
 ): string {
-  const ph = ctx.byId.get(token.id);
+  const ph = ctx.copies?.(token.id) ?? ctx.byId.get(token.id);
   if (!ph) {
     ctx.report({ kind: 'dangling', asked: token.id });
     return '';
@@ -1430,7 +1580,25 @@ function walkSegs(ph: Placeholder, segs: WalkSegment[], ctx: ResolveCtx): string
  */
 export function resolvePlaceholders(text: string, opts: ResolveOptions): string {
   if (!text || !hasPlaceholders(text)) return text;
-  return resolveText(text, createResolveCtx(opts));
+  return renderBuiltins(
+    resolveText(text, createResolveCtx(opts)), { kind: 'reference', ...opts.player, character: opts.character },
+  );
+}
+
+/**
+ * Resolve an entity's own text with that entity as the Character Name; with no entity, nothing fills it. The
+ * name resolves first, with no owner, so a Character Name chip inside the name itself reads as nothing.
+ */
+export function resolveEntityText(entity: { name: string } | null, text: string, opts: ResolveOptions): string {
+  if (!text || !hasPlaceholders(text)) return text;
+  const noOwner = { ...opts, character: null };
+  return resolvePlaceholders(text, { ...opts, character: entity && resolvePlaceholders(entity.name, noOwner) });
+}
+
+/** Resolve a trait's own text with its bearer as the Character Name. With no entity bearer the player bears
+ *  it, so the Character Name reads as the Player Name. */
+export function resolveBearerText(bearer: { name: string } | null, text: string, opts: ResolveOptions): string {
+  return resolveEntityText(bearer, bearer ? text : characterAsPlayer(text), opts);
 }
 
 /** One placeholder as play reads it right now: what it resolves to, and each authored value resolved. */
@@ -1464,10 +1632,11 @@ export function readPlaceholders(opts: ResolveOptions): PlaceholderReading[] {
  *  accumulate and every text after the first reads what the ones before it drew. */
 // `pinTexts` and `drawPins` stay off `ResolveOptions`: a render pass never walks pins it is not showing,
 // and never lays pins the collection did not hand it.
-function createResolveCtx(opts: ResolveOptions & Pick<ResolveCtx, 'pinTexts' | 'drawPins'>): ResolveCtx {
-  const { placeholders, rolls, setRoll, pick = weightedPick, pins, pinTexts, drawPins, onFinding } = opts;
+function createResolveCtx(opts: ResolveOptions & Pick<ResolveCtx, 'pinTexts' | 'drawPins' | 'chosen'>): ResolveCtx {
+  const { placeholders, rolls, setRoll, pick = weightedPick, pins, pinTexts, drawPins, chosen, onFinding, copies } = opts;
   return {
-    byId: new Map(placeholders.map((p) => [p.id, p])),
+    byId: new Map(withEffectiveCopies(placeholders).map((p) => [p.id, p])),
+    copies,
     rolls,
     minted: { world: {}, unique: {} },
     setRoll,
@@ -1475,6 +1644,7 @@ function createResolveCtx(opts: ResolveOptions & Pick<ResolveCtx, 'pinTexts' | '
     pins,
     pinTexts,
     drawPins,
+    chosen,
     report: onFinding ?? (() => {}),
     scope: 'world',
     chain: '',

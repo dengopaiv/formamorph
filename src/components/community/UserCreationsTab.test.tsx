@@ -1,13 +1,14 @@
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { UserCreationsTab } from './UserCreationsTab';
+import { HIDDEN_LIKES_TIP } from './LikeButton';
 import UserService from '@/services/UserService';
 import type { ProfileCreation } from '@/types';
 
 vi.mock('@/lib/apiBase', () => ({ API_BASE_URL: 'https://server.test/api' }));
 // The thumbnail cache is IndexedDB-backed; the rows here are about what the list says, not what it draws.
 vi.mock('@/lib/useCachedThumbnail', () => ({
-  CachedThumbnail: ({ alt }: { alt: string }) => <img alt={alt} src="thumb" />,
+  CachedThumbnail: ({ alt, className }: { alt: string; className?: string }) => <img alt={alt} src="thumb" className={className} />,
 }));
 
 const creation = (over: Partial<ProfileCreation> = {}): ProfileCreation => ({
@@ -15,9 +16,10 @@ const creation = (over: Partial<ProfileCreation> = {}): ProfileCreation => ({
   name: 'Sedge Landing',
   kind: 'world',
   thumbnailFile: null,
+  placeholder: false,
   downloads: 0,
   commentCount: 0,
-  likes: 0,
+  likes: { visibility: 'public', likes: 0 },
   updatedAt: '2026-03-14T00:00:00.000Z',
   createdAt: '2026-03-14T00:00:00.000Z',
   quarantined: false,
@@ -38,7 +40,7 @@ afterEach(() => {
 
 describe('what somebody has published', () => {
   it('lists their work with its likes, downloads and comments', async () => {
-    listing([creation({ likes: 12, downloads: 42, commentCount: 7 })]);
+    listing([creation({ likes: { visibility: 'public', likes: 12 }, downloads: 42, commentCount: 7 })]);
 
     render(<UserCreationsTab userId="u1" username="wren_hallow" />);
 
@@ -50,12 +52,21 @@ describe('what somebody has published', () => {
 
   it('never offers the heart as a control here', async () => {
     // The profile lists somebody's work; rating it belongs where you can see what you are rating.
-    listing([creation({ likes: 12 })]);
+    listing([creation({ likes: { visibility: 'public', likes: 12 } })]);
 
     render(<UserCreationsTab userId="u1" username="wren_hallow" />);
     await screen.findByText('Sedge Landing');
 
     expect(screen.queryByRole('button', { name: /Like —|Unlike/ })).toBeNull();
+  });
+
+  it('shows a dash for a contest count hidden from this reader', async () => {
+    listing([creation({ likes: { visibility: 'hidden' }, downloads: 42 })]);
+
+    render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    await screen.findByText('Sedge Landing');
+
+    expect(screen.getByLabelText(HIDDEN_LIKES_TIP).textContent).toContain('—');
   });
 
   it('fetches nothing until it is pointed at somebody', () => {
@@ -90,6 +101,54 @@ describe('what somebody has published', () => {
     render(<UserCreationsTab userId="u1" username="wren_hallow" />);
 
     expect(await screen.findByText('User not found')).toBeTruthy();
+  });
+});
+
+describe('a creation’s picture', () => {
+  it('draws Morph art for a flagged entity and requests no thumbnail', async () => {
+    listing([creation({ kind: 'entity', name: 'Wren', thumbnailFile: 'stand-in.png', placeholder: true })]);
+
+    const { container } = render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    await screen.findByText('Wren');
+
+    expect(container.querySelector('[data-morph-art]')).not.toBeNull();
+    expect(screen.queryByRole('img', { name: 'Wren' })).toBeNull();
+  });
+
+  it('draws Morph art for a flagged avatar and requests no thumbnail', async () => {
+    listing([creation({ kind: 'model', name: 'Wren', thumbnailFile: 'stand-in.png', placeholder: true })]);
+
+    const { container } = render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    await screen.findByText('Wren');
+
+    expect(container.querySelector('[data-morph-art]')).not.toBeNull();
+    expect(screen.queryByRole('img', { name: 'Wren' })).toBeNull();
+  });
+
+  it('shows the stored image of an entity that is not flagged', async () => {
+    listing([creation({ kind: 'entity', name: 'Wren', thumbnailFile: 'wren.png' })]);
+
+    const { container } = render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    await screen.findByText('Wren');
+
+    expect(screen.getByRole('img', { name: 'Wren' })).toBeTruthy();
+    expect(container.querySelector('[data-morph-art]')).toBeNull();
+  });
+});
+
+describe('the row thumbnail crop', () => {
+  const cropOf = async (kind: 'model' | 'entity' | 'world') => {
+    listing([creation({ kind, name: 'Wren', thumbnailFile: 'wren.png' })]);
+    render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    return (await screen.findByRole('img', { name: 'Wren' })).className;
+  };
+
+  it('anchors an Avatar’s image to the top, as a portrait', async () => {
+    expect(await cropOf('model')).toContain('object-top');
+  });
+
+  it('centers a world’s image', async () => {
+    expect(await cropOf('world')).not.toContain('object-top');
   });
 });
 
@@ -132,6 +191,50 @@ describe('the kind filter', () => {
     render(<UserCreationsTab userId="u1" username="wren_hallow" />);
 
     expect(await screen.findByText('Wren')).toBeTruthy();
+  });
+
+  it('sets Prompts apart from the content kinds with a separator', async () => {
+    listing([creation()]);
+
+    render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    await screen.findByText('Sedge Landing');
+
+    const separator = screen.getByRole('separator');
+    const items = screen.getAllByRole('radio');
+    const prompts = items[items.length - 1];
+    const beforePrompts = items[items.length - 2];
+    expect(prompts.getAttribute('aria-label')).toMatch(/^Prompts/);
+    expect(beforePrompts.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(separator.compareDocumentPosition(prompts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('opens on the kind they updated most recently', async () => {
+    listing([
+      creation({ id: 'w1', kind: 'world', name: 'Sedge Landing', updatedAt: '2026-03-14 00:00:00' }),
+      creation({ id: 'e1', kind: 'entity', name: 'Wren', updatedAt: '2026-08-01 00:00:00' }),
+    ]);
+
+    render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+
+    expect(await screen.findByText('Wren')).toBeTruthy();
+    expect(screen.queryByText('Sedge Landing')).toBeNull();
+  });
+});
+
+describe('the order of the list', () => {
+  it('puts the most recently updated first, whatever order the server sends', async () => {
+    listing([
+      creation({ id: 'a', name: 'Oldest', createdAt: '2026-03-01 00:00:00', updatedAt: '2026-03-01 00:00:00' }),
+      creation({ id: 'b', name: 'Freshly Updated', createdAt: '2026-01-01 00:00:00', updatedAt: '2026-09-01 00:00:00' }),
+      creation({ id: 'c', name: 'Middle', createdAt: '2026-05-01 00:00:00', updatedAt: '2026-05-01T00:00:00.000Z' }),
+    ]);
+
+    render(<UserCreationsTab userId="u1" username="wren_hallow" />);
+    await screen.findByText('Oldest');
+
+    const names = screen.getAllByRole('listitem').map((row) => row.textContent ?? '');
+    expect(names.map((text) => text.match(/Oldest|Freshly Updated|Middle/)?.[0]))
+      .toEqual(['Freshly Updated', 'Middle', 'Oldest']);
   });
 });
 

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { ChevronDown, ChevronsDownUp, ChevronsUpDown, Dices, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Dices, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
+import { CollapseAllButton } from '@/components/CollapseAllButton';
+import { useCardCollapse } from '@/lib/cardCollapse';
 import { useEditingDraft } from '@/lib/useEditingDraft';
 import { randomUUID } from '@/lib/uuid';
 import { Input } from '@/components/ui/input';
@@ -13,7 +15,7 @@ import PlaceholderField from '@/components/prompt/PlaceholderField';
 import { usePlaceholderStore } from '@/contexts/PlaceholderStoreContext';
 import { Chip } from '@/components/Chip';
 import {
-  placeholderWeight, placeholderChances, placeholderValueLine, parsePlaceholderText,
+  placeholderWeight, placeholderChances, placeholderChipLine,
   reconcilePlaceholderValues, prunePlaceholderWeights, pruneSharedWeights, mergePlaceholderWeights,
   lonePlaceholderToken, drawPlaceholderSpans, placeholderIsChoice, placeholderRandomizes, type PlaceholderSpan,
 } from '@/lib/placeholders';
@@ -21,7 +23,8 @@ import { holderOf, placeholderRowChance } from '@/lib/placeholderTree';
 import { isPlaceholderEntryMember } from '@/lib/statCodePaths';
 import { placeholderDisplayName } from '@/lib/placementLetters';
 import { accentAtChance, chanceChipStyle, relativeChance } from '@/lib/chanceColor';
-import { placeholderAccent, usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
+import { usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
+import { placeholderAccent } from '@/lib/highlightUtils';
 import { TINT_MARK_CLASS, tintMarkStyle } from '@/lib/previewTint';
 import { cn } from '@/lib/utils';
 import type { Placeholder, PlaceholderPin, PlaceholderValue } from '@/types';
@@ -31,6 +34,7 @@ import { PlaceholderPinsSection } from '@/components/editor/PlaceholderPinsSecti
 import { useGameDataOptional } from '@/contexts/GameDataContext';
 import { useRenameField } from '@/lib/useCodeRename';
 import { useEditorMode } from '@/lib/editorMode';
+import { ListDetailFirstRow } from '@/components/ui/list-detail';
 
 /** Which of the two value-editing styles a placeholder is being edited in. Session-only — nothing about it
  *  is stored, so a placeholder is re-read on every open rather than remembered. */
@@ -41,14 +45,14 @@ type PlaceholderKind = 'wildcard' | 'object';
 
 // The brief line under the selector decides; this defines. Kept out of the state line so a Wildcard's own
 // row reads as one short sentence.
-const KIND_INFO = `**Wildcard** randomizes — one of its values is picked, and every chip of it shows that pick.
+export const KIND_INFO = `**Wildcard** randomizes. One of its values is picked, and every chip of it shows that pick.
 
-**Object** holds — all of its values apply, joined together wherever it is placed.
+**Object** holds. All of its values apply, joined together wherever it's placed.
 
-- With one value the two coincide: it is a **Variable**, and always resolves to that value.
-- A Variable whose one value holds Wildcard chips is a template: it rolls those chips, and picks World or Unique like a Wildcard.
-- A chip that can roll chooses **World** (one pick shared everywhere) or **Unique** (its own).
-- A value that is exactly one chip nests that placeholder under this one, addressable as \`Owner › Name\`.`;
+- With one value the two coincide. It's a **Variable**, and always resolves to that value.
+- A Variable whose one value holds Wildcard chips is a template. It rolls those chips, and picks World or Unique like a Wildcard.
+- A chip that can roll chooses **World** (one pick shared everywhere) or **Unique** (its own)
+- A value that is exactly one chip nests that placeholder under this one, addressable as \`Owner › Name\``;
 
 /** One multiline box: its text as typed, under an id of its own so a box survives being emptied, renamed,
  *  or collapsed — none of which the value string it holds could key. */
@@ -108,7 +112,7 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
     () => (placeholder.values.some((v) => v.text.includes('\n')) ? 'multiline' : 'chips'),
   );
   const [boxes, setBoxes] = useState<ValueBox[]>(() => toBoxes(placeholder.values));
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const collapse = useCardCollapse(boxes.map((b) => b.id));
   // The boxes are the editing truth only for the edits they made themselves. Someone else writing this
   // placeholder — the find bar replaces inside values, an import absorbs into them — leaves a list the boxes
   // no longer stand for, and the next keystroke in any box would paste the stale one back over it.
@@ -121,10 +125,7 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
   const vocab = usePlaceholderChipVocabulary(placeholders, placeholder.id);
   /** One value as a line a plain-text surface can show: a chip in it is named rather than spelled out as
    *  the token behind it, which is what a value list holding chips would otherwise print. */
-  const valueLine = (value: string) =>
-    placeholderValueLine(
-      parsePlaceholderText(value).map((s) => (s.type === 'text' ? s.value : vocab.label(s.token))).join(''),
-    );
+  const valueLine = (value: string) => placeholderChipLine(value, vocab.label);
   // The weight pop-out hangs off whichever chip was clicked, tracked by element rather than by wrapping the
   // open one: a wrapper that appears on click replaces the chip's DOM node mid-gesture, and the second
   // click of a double-click then lands on a different element, so double-click-to-rename never fired.
@@ -178,14 +179,14 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
   );
   const state =
     count === 0
-      ? 'No values yet — this resolves to nothing.'
+      ? 'No values yet, so this resolves to nothing'
       : rollingVariable
-        ? 'A Variable: its one value is a template. It rolls its chips, and picks World or Unique like a Wildcard.'
+        ? 'A Variable whose one value is a template. It rolls its chips, and picks World or Unique like a Wildcard.'
         : count === 1
-          ? 'A Variable: always resolves to its one value.'
+          ? 'A Variable, so it always resolves to its one value'
           : kind === 'wildcard'
-          ? `Picks one of ${count} values.`
-          : `Shows all ${count} values.`;
+          ? `Picks one of ${count} values`
+          : `Shows all ${count} values`;
 
   // The world behind the editor, when there is one: what a value's pin rows read rivals from. The library's
   // editors mount this with no world, and there the pins still write but no note can name a rival.
@@ -292,20 +293,12 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
   const pickStyle = (next: ValueStyle) => {
     // Reseeded rather than kept: the chip row may have added, renamed or reordered values since.
     if (next === 'multiline') {
-      setBoxes(toBoxes(editing.values));
-      setCollapsed(new Set<string>());
+      const fresh = toBoxes(editing.values);
+      setBoxes(fresh);
+      collapse.reset(fresh.map((b) => b.id));
     }
     setStyle(next);
   };
-
-  const toggleCollapsed = (id: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
-
-  const anyOpen = boxes.some((b) => !collapsed.has(b.id));
 
   /** The draw-weight pop-out, shared by the chip row and a shared row's read-only list — one anchor, one
    *  set of copy, whichever list is drawn. */
@@ -334,7 +327,7 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
           />
           <p className="text-meta text-muted-foreground">
             {(chances[byText.get(openValue)?.id ?? ''] ?? 0) === 0
-              ? 'Benched — never rolled, but kept in the list.'
+              ? 'Benched, so it never rolls but stays in the list'
               : `Rolls ${pct(openValue)} of the time. Weights are relative: 2 is twice as likely as 1.`}
           </p>
         </>
@@ -342,27 +335,35 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
     </PopoverContent>
   );
 
+  const nameInput = (
+    <div className="space-y-2">
+      <Label>Name</Label>
+      <Input
+        value={editing.name}
+        onChange={(e) => apply({ name: e.target.value })}
+        disabled={locked}
+        placeholder="e.g. Eye Color"
+        onFocus={rename.onFocus}
+        onBlur={rename.onBlur}
+        onKeyDown={(e) => { if (e.key === 'Enter') rename.onSubmit(); }}
+      />
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {locked && (
-        <p className="rounded-md border border-dashed px-2 py-1.5 text-helper text-muted-foreground">
-          Shared row. The name, the kind and the values come from the original.{' '}
-          {kind === 'object'
-            ? 'An Object applies every value and never draws, so there is nothing to weigh here.'
-            : 'The draw weights are this row’s own — benching a value here changes nothing anywhere else.'}
-        </p>
+        <ListDetailFirstRow align="center">
+          <p className="rounded-md border border-dashed px-2 py-1.5 text-helper text-muted-foreground">
+            Shared row. The name, the kind and the values come from the original.{' '}
+            {kind === 'object'
+              ? "An Object applies every value and never draws, so there's nothing to weigh here."
+              : 'The draw weights are this row’s own. Benching a value here changes nothing anywhere else.'}
+          </p>
+        </ListDetailFirstRow>
       )}
       <div className="space-y-2">
-        <Label>Name</Label>
-        <Input
-          value={editing.name}
-          onChange={(e) => apply({ name: e.target.value })}
-          disabled={locked}
-          placeholder="e.g. Eye Color"
-          onFocus={rename.onFocus}
-          onBlur={rename.onBlur}
-          onKeyDown={(e) => { if (e.key === 'Enter') rename.onSubmit(); }}
-        />
+        {locked ? nameInput : <ListDetailFirstRow>{nameInput}</ListDetailFirstRow>}
         {shadowsMember && (
           <p role="status" className="text-meta text-warning">
             Every placeholder has a <code>{editing.name}</code> of its own, so stat code can’t reach this part
@@ -458,17 +459,7 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
           )}
           <div className="ml-auto flex items-center gap-1">
             {!locked && style === 'multiline' && boxes.length > 1 && (
-              <Tip tip={anyOpen ? 'Collapse all values' : 'Expand all values'}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => setCollapsed(anyOpen ? new Set(boxes.map((b) => b.id)) : new Set<string>())}
-                >
-                  {anyOpen ? <ChevronsDownUp className="h-3.5 w-3.5" /> : <ChevronsUpDown className="h-3.5 w-3.5" />}
-                </Button>
-              </Tip>
+              <CollapseAllButton anyOpen={collapse.anyOpen} noun="values" onClick={collapse.toggleAll} />
             )}
             {/* A shared row edits no text, so the two text editors have nothing to choose between. */}
             {!locked && (
@@ -506,14 +497,14 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
         ) : style === 'multiline' ? (
           <MultilineValues
             boxes={boxes}
-            collapsed={collapsed}
+            isOpen={collapse.isOpen}
             placeholders={placeholders}
             ownerId={placeholder.id}
             line={valueLine}
             weight={weighable ? weightOf : undefined}
             chance={pct}
             aside={advanced ? valuePins : undefined}
-            onToggleCollapsed={toggleCollapsed}
+            onToggleCollapsed={collapse.toggle}
             onText={(id, text) => writeBoxes(boxes.map((b) => (b.id === id ? { ...b, text } : b)))}
             onWeight={setWeight}
             onRemove={(id) => writeBoxes(boxes.filter((b) => b.id !== id))}
@@ -530,7 +521,7 @@ const PlaceholderManager = ({ placeholder, rowId, share }: {
             // A value that is only a chip is a part of this placeholder, so it reads as the part it names
             // rather than as what that part will become.
             lonePlaceholderAsPath
-            placeholder="e.g. Red — press Enter for each"
+            placeholder="e.g. Red, then Enter for each"
             // Toggles, like the placeholder chips' own pop-out: without this, clicking the open chip
             // re-opened it and the only way out was clicking somewhere else entirely.
             onChipClick={weighable ? (v) => {
@@ -613,10 +604,10 @@ const SharedValues = ({ values, line, style, suffix, register, onOpen }: {
  *  scannable. `weight` is omitted when nothing is drawn — one value, or an Object — and the chance goes
  *  with it. */
 const MultilineValues = ({
-  boxes, collapsed, placeholders, ownerId, line, weight, chance, aside, onToggleCollapsed, onText, onWeight, onRemove, onAdd,
+  boxes, isOpen, placeholders, ownerId, line, weight, chance, aside, onToggleCollapsed, onText, onWeight, onRemove, onAdd,
 }: {
   boxes: ValueBox[];
-  collapsed: ReadonlySet<string>;
+  isOpen: (id: string) => boolean;
   placeholders: Placeholder[];
   /** The placeholder these boxes are the values of — see `ownerId` on `PlaceholderField`. */
   ownerId: string;
@@ -635,7 +626,7 @@ const MultilineValues = ({
 }) => (
   <div className="space-y-3">
     {boxes.map((box, i) => {
-      const open = !collapsed.has(box.id);
+      const open = isOpen(box.id);
       // What this box currently stands for in the value list — the key its weight and chance are read by.
       // A box the author has emptied stands for nothing, so it carries no odds either.
       const value = box.text.trim();
@@ -697,7 +688,7 @@ const MultilineValues = ({
                 ownerId={ownerId}
                 markdown
                 ariaLabel={`Value ${i + 1}`}
-                placeholder="Value text — markdown supported"
+                placeholder="Value text, markdown supported"
               />
             </div>
           )}

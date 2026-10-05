@@ -48,9 +48,14 @@ export async function openApp(
   const seed = { ...BASE_SEED } as Record<string, string>;
   for (const [k, v] of Object.entries(extra)) seed[k] = typeof v === 'string' ? v : JSON.stringify(v);
   // A live event's poster is modal over the Main Menu and its id isn't known statically, so it can't be
-  // pre-dismissed through the seed like the intro and tutorials — answer the fetch with no events instead.
+  // pre-dismissed through the seed like the intro and tutorials — answer the fetches with no events
+  // instead. Both feeds, because the menu's poster reads two: `/events/active` for what is running and
+  // `/events?slim=1` for the contests waiting on results. Leaving the second live lets a real judging
+  // contest raise a modal over every spec that only wanted the Main Menu.
   // Contest specs, which are about events, opt back in with `liveEvents`.
-  if (!opts.liveEvents) await page.route('**/events/active*', (route) => route.fulfill({ json: [] }));
+  if (!opts.liveEvents) {
+    await page.route(/\/events(\/active)?(\?|$)/, (route) => route.fulfill({ json: { data: [] } }));
+  }
   await page.addInitScript((s: Record<string, string>) => {
     for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v);
   }, seed);
@@ -136,6 +141,11 @@ export async function openWorldEditor(page: Page): Promise<void> {
  *
  * The token could be seeded into `localStorage` instead, but a session made that way never proves the
  * login round-trip works — and every flow that needs an account needs the server to have answered.
+ *
+ * The age attestation is answered here rather than in the seed. `openApp` pre-answers the device store,
+ * but each account keeps its own answer under its own id, and that id does not exist until the account
+ * does — so a fresh account raises the gate over the menu and every `getByRole` behind a modal goes
+ * unreachable. Answered the way a player answers it, which is also the only thing that records it.
  */
 export async function signIn(page: Page, username: string, password: string): Promise<void> {
   await page.getByRole('button', { name: 'Login' }).click();
@@ -143,5 +153,11 @@ export async function signIn(page: Page, username: string, password: string): Pr
   await dialog.getByLabel('Username').fill(username);
   await dialog.getByLabel('Password', { exact: true }).fill(password);
   await dialog.getByRole('button', { name: 'Login', exact: true }).click();
-  await page.getByRole('button', { name: /^User Profile/ }).waitFor();
+
+  const profile = page.getByRole('button', { name: /^User Profile/ });
+  const gate = page.getByRole('dialog', { name: /Adult Content Ahead/ });
+  // Whichever lands first: an account that has already attested never sees the gate at all.
+  await profile.or(gate).first().waitFor();
+  if (await gate.isVisible()) await gate.getByRole('button', { name: 'Accept', exact: true }).click();
+  await profile.waitFor();
 }

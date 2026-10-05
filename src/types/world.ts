@@ -84,12 +84,37 @@ export interface TraitStatToggle {
 /** A placeholder its source forces to a fixed value while the source is active, masking that playthrough's
  *  roll. The one shape every source carries: a trait, a location, a stat descriptor, a placeholder value. */
 export interface PlaceholderPin {
+  /** The target's id. A trait pin may name a blueprint placeholder: on each bearer it then traces to that
+   *  bearer's copy (see lib/blueprints). */
   placeholderId: string;
   value: string;
   /** The pinned value's id, when the pin names one the placeholder carries. Preferred over `value`, so a
    *  pin picked off the list follows the author re-spelling it. Absent for a value typed off the list. */
   valueId?: string;
 }
+
+/** One overridden field on a blueprint-origin record: the value set here and the blueprint's value it was
+ *  made against. The blueprint changing that field since marks the override stale. */
+export interface BlueprintOverride<V> {
+  value: V;
+  blueprint: V;
+}
+
+/** A sparse override map over a blueprint's fields. An absent key reads the blueprint live. */
+export type BlueprintOverrides<T> = { [K in keyof T]?: BlueprintOverride<T[K]> };
+
+/** Whose active set a requirement reads: the played persona's, or a named entity's. `name` is the entity's
+ *  name when it was stored, so an unresolved one still reads. Absent on a requirement = the same bearer. */
+export type RequirementBearer =
+  | { kind: 'you' }
+  | { kind: 'entity'; id: string; name?: string };
+
+/** One way to unlock a gated trait: a trait is active, any trait below a group is active, or the player plays
+ *  as a world entity. `name` is the target's name when it was stored, so an unresolved one still reads. */
+export type TraitRequirement =
+  | { kind: 'trait'; id: string; name?: string; bearer?: RequirementBearer }
+  | { kind: 'group'; id: string; name?: string; bearer?: RequirementBearer }
+  | { kind: 'playingAs'; id: string; name?: string };
 
 /** A folder grouping traits in the editor and the selection screen; nestable via `parentId`. */
 export interface TraitGroup {
@@ -108,9 +133,57 @@ export interface TraitGroup {
   parentId: string | null;
   /** Sibling order among items sharing the same parent. */
   order?: number;
-  /** At most one trait in this group may be active — rendered as radio buttons rather than checkboxes. */
-  exclusive?: boolean;
+  /** The fewest traits placed directly in this group that must be active; absent = 0. */
+  minPicks?: number;
+  /** The most traits placed directly in this group that may be active; absent = no limit. A max of 1 renders
+   *  radio buttons. */
+  maxPicks?: number;
+  /** `blueprints` marks the world's Blueprints group: it holds originals that reach play only through links.
+   *  At most one world group carries it. Never set on an entity's own group. */
+  system?: 'blueprints';
 }
+
+/** An entity node's place in the world's Traits tree. The parent is a world group, never an entity's own and
+ *  never Blueprints: a placement that names Blueprints or a group below it reads as the top level. */
+export interface TraitPlacement {
+  /** null = top level. */
+  groupId: string | null;
+  order: number;
+}
+
+/** A node under a bearer that points at a world trait or group, the original, and reads it live. It stores
+ *  only its own place and per-link data; the original's text, gates and pins reach every link. */
+export interface TraitLink {
+  id: string;
+  /** The original's id: a world trait or group at the root or under Blueprints. */
+  originalId: string;
+  kind: 'trait' | 'group';
+  /** The original's name when the link was stored, so it travels off-world and rebinds by name. */
+  originalName: string;
+  /** null = the bearer's root; otherwise one of the bearer's own groups. */
+  groupId: string | null;
+  /** Sibling order among the bearer's items sharing the same parent. */
+  order?: number;
+  /** Original trait id → this link's overrides on that trait. A trait absent here, or a field absent in its
+   *  map, reads the original live. A linked group keys its children here. */
+  overrides?: Record<string, TraitLinkOverrides>;
+  /** Off-world only: trait id → name for each trait below the original that `overrides` keys, so the keys
+   *  rebind by name when the original does. Dropped when the link binds to a world. */
+  keyNames?: Record<string, string>;
+}
+
+/** The fields a link may override on a trait its original brings. Name and descriptions stay the original's. */
+export interface TraitLinkFields {
+  isDefault: boolean;
+  requires: TraitRequirement[];
+  placeholderPins: PlaceholderPin[];
+  playerToggle: boolean;
+  statChanges: StatChange[];
+  /** 'optional' stands for an absent `Trait.mode`, so an override to Optional survives the JSON export. */
+  mode: 'optional' | TraitMode;
+}
+
+export type TraitLinkOverrides = BlueprintOverrides<TraitLinkFields>;
 
 /** A selectable character trait that applies `statChanges` and adds AI context when chosen at game start. */
 export interface Trait {
@@ -138,7 +211,15 @@ export interface Trait {
   statToggles?: TraitStatToggle[];
   /** Placeholders held at a fixed value while this trait is active. */
   placeholderPins?: PlaceholderPin[];
+  /** Any one of these unlocks the trait. Absent or empty = always available. */
+  requires?: TraitRequirement[];
+  /** Absent = Optional. Always On is active exactly while its gate holds, and the player never switches it.
+   *  Hidden acts as Always On. Both ignore `isDefault` and `playerToggle`. */
+  mode?: TraitMode;
 }
+
+/** A trait's non-Optional mode. */
+export type TraitMode = 'alwaysOn' | 'hidden';
 
 /** A character or object in the world, with separate player-facing and AI-facing descriptions plus optional media. */
 export interface Entity {
@@ -147,6 +228,21 @@ export interface Entity {
   /** Author-defined nicknames/other names (e.g. "Matron", "Em"). Detected in narration like the name
    *  (case-sensitive, word-bounded, plural-tolerant) and surfaced to the AI as "also known as". */
   aliases?: string[];
+  /** Free text, such as "she/her". The AI's entity context shows it for any entity that has it. */
+  pronouns?: string;
+  /** Marks the entity as a Persona. In the library it is one of the player's personas; in a world the
+   *  player can play as it. */
+  persona?: boolean;
+  /** The entity exists only while it is the picked persona: unpicked, it leaves the cast and never joins a
+   *  scene. Read only with the Persona mark. */
+  personaOnly?: boolean;
+  /** Marks the entity as the Custom Persona: the player's own entity under None and under a library persona,
+   *  never in the cast (see lib/bearers). At most one per world, at the root. Excludes the Persona marks and
+   *  implies persona-only. */
+  customPersona?: boolean;
+  /** Where a world persona begins, flagged as a starting location or not. Absent = Automatic: the first of
+   *  its locations that is a starting location. Read only for a world entity with the Persona mark. */
+  startingLocationId?: string;
   type?: string;
   /** The author's own source notes, in whatever shape suits them — bullets are expected. Both
    *  descriptions are drafted from it when it holds anything. **Nothing generates into it**; see
@@ -187,9 +283,28 @@ export interface Entity {
    *  entity when it is deleted or duplicated. Off-world (export bundle / library) they stay the entity's
    *  own, and an import keeps them so under fresh ids. */
   placeholders?: Placeholder[];
+  /** This entity's own openings, in authored order. They join the world's pool when the entity stands at the
+   *  player's starting location (see lib/openings). Entities have no switch of their own. */
+  openings?: Opening[];
+  /** Relative draw weight per opening id; an opening absent from the map weighs 1, and 0 benches it. */
+  openingWeights?: Record<string, number>;
+  /** Traits this entity owns. They describe it to the AI, and join the player's traits when the player plays
+   *  as it. They carry no stat changes and no stat toggles. Ids are unique across the world and every entity. */
+  traits?: Trait[];
+  /** Groups for this entity's own traits, nestable via `parentId` like the world's. */
+  traitGroups?: TraitGroup[];
+  /** Links to world traits and groups, placed among the entity's own items (see lib/bearers). Each original
+   *  appears at most once in the entity's tree, directly or through a linked group. */
+  traitLinks?: TraitLink[];
+  /** Where this entity's node sits in the world's Traits tree: a world group and a sibling order. Absent,
+   *  or a group that no longer exists, = the end of the top level. */
+  traitPlacement?: TraitPlacement;
   /** Off-world only: the shared placeholders this entity's chips use, so they resolve after import. An import
    *  merges them into the world's shared list by name and values and clears the field. */
   sharedPlaceholders?: Placeholder[];
+  /** Off-world only: the blueprints this entity's copies read, so a receiving world can bind each copy to its
+   *  own blueprint by id, then by name (see lib/blueprintTravel). Binding clears the field. */
+  blueprints?: Placeholder[];
   /** Off-world only: the locations this entity stood in, named so a receiving world can connect each one
    *  to a location of its own. The entity keeps ownership of the references; `locations` holds them once
    *  the world resolves them, and an import clears this field. */
@@ -249,6 +364,11 @@ export interface GameLocation {
   /** Placeholders held at a fixed value while the player is here. Released on leaving; a child location
    *  inherits nothing through `parentId`. */
   placeholderPins?: PlaceholderPin[];
+  /** This location's own openings, in authored order. They join the world's pool when a new game starts at
+   *  this exact location (see lib/openings); a child location draws none of its parent's. */
+  openings?: Opening[];
+  /** Relative draw weight per opening id; an opening absent from the map weighs 1, and 0 benches it. */
+  openingWeights?: Record<string, number>;
 }
 
 /**
@@ -259,14 +379,23 @@ export interface GameLocation {
  */
 export interface Connection {
   id: string;
-  /** The location travel departs from — the only direction offered unless `twoWay`. */
-  from: string;
-  to: string;
-  /** Travelable in both directions. A newly authored Connection defaults to true. */
-  twoWay: boolean;
-  /** Optional note on *how* the trip is made ("through the shimmering portal"), rendered as a `— via …`
-   *  suffix on the destination line. Direction-neutral: one hint serves both directions. */
-  aiHint?: string;
+  /** One end. `a` and `b` are neutral: travel may run only `b → a`. */
+  a: string;
+  b: string;
+  /** Present when travel runs `a → b`. At least one leg is present. */
+  aToB?: ConnectionLeg;
+  /** Present when travel runs `b → a`. */
+  bToA?: ConnectionLeg;
+}
+
+/** Which direction of a Connection a leg is. */
+export type LegKey = 'aToB' | 'bToA';
+
+/** One direction of a Connection. */
+export interface ConnectionLeg {
+  /** How this trip is made ("through the shimmering portal"), rendered as a `— via …` suffix on the
+   *  destination line. Blank is stored as absent. */
+  hint?: string;
 }
 
 /** A world-defined rule that periodically asks the AI to adjust a set of stats via its own prompt. */
@@ -398,12 +527,36 @@ export interface WorldOverview {
   introReadme?: string;
   /** Prompt text this world supplies in place of the player's preset. Absent = the player's preset alone. */
   promptOverrides?: WorldPromptOverrides;
-  /** The text the input box opens pre-filled with at Start Game, in place of the shipped cue. Placeholder
-   *  chips resolve at pre-fill time; the player edits the result before submitting (see lib/openingCue). */
-  openingCue?: string;
-  /** `false` keeps `openingCue` on the world without applying it. Absent = stored text is applied, so a
-   *  world hand-authored without the flag still opens with its cue. */
-  openingCueEnabled?: boolean;
+  /** The world's own openings, in authored order. One is drawn by weight at Start Game (see lib/openings). */
+  openings?: Opening[];
+  /** Relative draw weight per opening id; an opening absent from the map weighs 1, and 0 benches it. */
+  openingWeights?: Record<string, number>;
+  /** `false` keeps `openings` on the world without drawing them. Absent = on. */
+  openingsEnabled?: boolean;
+  /** Which personas the player can pick. Absent = any. */
+  allowedPersonas?: AllowedPersonas;
+  /** The persona a new player starts on. Absent = the player's default persona. */
+  startPersona?: StartPersona;
+}
+
+/** `world` limits the pickers to this world's personas and its Custom Persona. Applied by lib/personaPick. */
+export type AllowedPersonas = 'any' | 'world';
+
+/** None (or the Custom Persona, which stands in its place), or one of this world's personas. */
+export type StartPersona = { source: 'none' } | { source: 'world'; entityId: string };
+
+/** Where an opening's text lands: `action` pre-fills the player's input box, `narration` is page one. */
+export type OpeningKind = 'action' | 'narration';
+
+/** One authored way to start a playthrough. The id is minted once, so a draw weight keyed by it survives
+ *  the author rewriting the text. Placeholder chips in `text` resolve against the opening pins. */
+export interface Opening {
+  id: string;
+  text: string;
+  kind: OpeningKind;
+  /** A Self opening: a start written for playing as its owner, drawn only while the player plays it. Absent =
+   *  Others, the owner greeting the player. Read only on an owner with the Persona mark. */
+  self?: true;
 }
 
 /** A complete authored world: overview plus all stats, locations, entities, traits, and updates. */
@@ -470,11 +623,28 @@ export interface Placeholder {
    *  below it, joined with `/`; the inner map keys by value id like `weights`. Deny-list: a value in
    *  neither map weighs 1, so a value added to the original later rolls here too. */
   sharedWeights?: Record<string, Record<string, number>>;
+  /** The blueprint this placeholder copies (see lib/blueprints). A copy reads the blueprint's values live,
+   *  under the blueprint's ids, and `values` holds only the copy's own. It is always named after its
+   *  blueprint, and an owner holds one copy per blueprint. */
+  blueprintId?: string;
+  /** Blueprint value id → what this copy changes on that value. A value absent here reads live. */
+  valueOverrides?: Record<string, CopyValueOverrides>;
   /** The editor folder this placeholder sits in on the Placeholders tab; null/absent = ungrouped. Only a
    *  shared placeholder is grouped: a scoped one sits under its entity or book, an owned one under its
    *  holder. Editor-only, never sent to the AI, and dropped from card and dictionary exports. */
   groupId?: string | null;
 }
+
+/** The fields a copy may override on one of its blueprint's values. */
+export interface CopyValueFields {
+  text: string;
+  /** The draw weight: the blueprint's `weights` entry, 1 when absent. */
+  weight: number;
+}
+
+/** What a copy changes on one blueprint value: its fields, or the value left out of this copy. A removed
+ *  value never rolls here, and a pin naming it lays nothing. */
+export type CopyValueOverrides = BlueprintOverrides<CopyValueFields> & { removed?: true };
 
 /**
  * What one world's copy of an entity or dictionary follows. The record lives on the copy inside the world,
@@ -519,6 +689,9 @@ export interface PlaceholderGroup {
   parentId: string | null;
   /** Sibling order among groups sharing the same parent. */
   order?: number;
+  /** `blueprints` marks the world's Blueprints group: its shared placeholders are blueprints, read per
+   *  bearer through copies and never as World placeholders. At most one, at the top level. */
+  system?: 'blueprints';
 }
 
 /** Lightweight preview record used by the main-menu world grid. */
@@ -561,6 +734,8 @@ export interface WorldMetadata extends CommunityLink {
 export interface DictionaryMetadata extends CommunityLink {
   id: string;
   name: string;
+  author?: string;
+  libraryDetails?: LibraryDetails;
   /** The book's note, shown on the detailed library card. */
   description?: string;
   /** Cover art for the library card. Absent for a book that has none, which draws the empty tile. */
@@ -572,10 +747,17 @@ export interface DictionaryMetadata extends CommunityLink {
   tags?: string[];
 }
 
+/** Creator credit and imported tags stored only on the library record. */
+export interface LibraryDetails {
+  author?: string;
+  tags?: string[];
+}
+
 /** Lightweight preview record used by the main-menu character-library grid; `image` is the card portrait. */
 export interface EntityMetadata extends CommunityLink {
   id: string;
   name: string;
+  author?: string;
   /** The player-facing blurb, shown on the detailed library card — the same one a listing publishes. */
   description?: string;
   image?: Base64Data;
@@ -583,6 +765,10 @@ export interface EntityMetadata extends CommunityLink {
   lastAccessed?: string;
   /** Listing tags, shown on the library card the way a world's are. */
   tags?: string[];
+  /** The entity carries the Persona mark, so the tab's Personas filter shows it. */
+  persona?: boolean;
+  /** Imported attribution and tags kept outside world content. */
+  libraryDetails?: LibraryDetails;
 }
 
 /** A find-bar hit handed to a detail panel, so the panel can open the tab that holds the field. `itemId`

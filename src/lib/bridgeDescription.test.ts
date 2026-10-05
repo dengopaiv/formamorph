@@ -3,14 +3,13 @@ import {
   bridgeDescription, bridgePrompt, composeBridgePrompt,
   DEFAULT_PLAYER_DESC_PROMPT, DEFAULT_AI_DESC_PROMPT,
 } from './bridgeDescription';
+import { sentBody, sseReply, stubStream, textSnapshot } from '@/test/aiTextFixtures';
 
-const opts = { endpointUrl: 'http://x/v1/chat/completions', apiToken: 't', modelName: 'm' };
-
-function mockFetch(impl: () => Response | Promise<Response>) {
-  vi.stubGlobal('fetch', vi.fn(impl));
-}
+const opts = { snapshot: textSnapshot() };
 
 afterEach(() => vi.unstubAllGlobals());
+
+const systemOf = (spy: ReturnType<typeof stubStream>) => (sentBody(spy).messages as { content: string }[])[0].content;
 
 describe('bridgePrompt', () => {
   it('tells the player-facing direction to hold private material back', () => {
@@ -30,38 +29,32 @@ describe('bridgePrompt', () => {
 });
 
 describe('bridgeDescription', () => {
-  it('returns the trimmed message content on success', async () => {
-    mockFetch(() =>
-      new Response(JSON.stringify({ choices: [{ message: { content: '  Rewritten.  ' } }] })),
-    );
+  it('returns the trimmed answer on success', async () => {
+    stubStream(sseReply('  Rewritten.  '));
     await expect(bridgeDescription('note', 'playerDesc', 'character', opts)).resolves.toBe('Rewritten.');
   });
 
-  it('sends the direction-specific prompt, the source text, sampler pins, and a bearer token', async () => {
-    const fetchSpy = vi.fn((_url: string, _init: RequestInit) =>
-      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })),
-    );
-    vi.stubGlobal('fetch', fetchSpy);
+  it('sends the direction-specific prompt, the source text, its cap and its sampler pin', async () => {
+    const spy = stubStream(sseReply('ok'));
     await bridgeDescription('blurb', 'aiDesc', 'location', opts);
-    const [, init] = fetchSpy.mock.calls[0];
-    const body = JSON.parse(init.body as string);
+    const body = sentBody(spy);
     expect(body.model).toBe('m');
-    expect(body.stream).toBe(false);
     expect(body.temperature).toBe(0.6);
     expect(body.max_tokens).toBe(400);
-    expect(body.messages[0]).toEqual({ role: 'system', content: bridgePrompt('aiDesc', 'location') });
-    expect(body.messages.at(-1)).toEqual({ role: 'user', content: 'blurb' });
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer t');
+    expect(body.messages).toEqual([
+      { role: 'system', content: bridgePrompt('aiDesc', 'location') },
+      { role: 'user', content: 'blurb' },
+    ]);
   });
 
   it('throws on a non-OK response', async () => {
-    mockFetch(() => new Response('nope', { status: 500 }));
+    stubStream(() => new Response('nope', { status: 500 }));
     await expect(bridgeDescription('x', 'playerDesc', 'character', opts)).rejects.toThrow('HTTP 500');
   });
 
-  it('throws on an empty content response', async () => {
-    mockFetch(() => new Response(JSON.stringify({ choices: [{ message: { content: '   ' } }] })));
-    await expect(bridgeDescription('x', 'playerDesc', 'character', opts)).rejects.toThrow('Empty description response');
+  it('throws on an empty answer', async () => {
+    stubStream(sseReply('   '));
+    await expect(bridgeDescription('x', 'playerDesc', 'character', opts)).rejects.toThrow('empty answer');
   });
 });
 
@@ -89,34 +82,22 @@ describe('composeBridgePrompt', () => {
 });
 
 describe('bridgeDescription — author overrides', () => {
-  const sendAndRead = async (fn: () => Promise<unknown>) => {
-    const fetchSpy = vi.fn((_url: string, _init: RequestInit) =>
-      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })),
-    );
-    vi.stubGlobal('fetch', fetchSpy);
-    await fn();
-    return JSON.parse(fetchSpy.mock.calls[0][1].body as string);
-  };
-
   it("sends the author's template, expanded for the kind", async () => {
-    const body = await sendAndRead(() =>
-      bridgeDescription('note', 'playerDesc', 'location', { ...opts, template: 'Describe <SUBJECT>: <FACETS>.' }),
-    );
-    expect(body.messages[0].content).toBe('Describe this place: layout, atmosphere, and what stands out on arrival.');
+    const spy = stubStream(sseReply('ok'));
+    await bridgeDescription('note', 'playerDesc', 'location', { ...opts, template: 'Describe <SUBJECT>: <FACETS>.' });
+    expect(systemOf(spy)).toBe('Describe this place: layout, atmosphere, and what stands out on arrival.');
   });
 
   it("honors the author's output cap", async () => {
-    const body = await sendAndRead(() =>
-      bridgeDescription('note', 'aiDesc', 'character', { ...opts, maxTokens: 1500 }),
-    );
-    expect(body.max_tokens).toBe(1500);
+    const spy = stubStream(sseReply('ok'));
+    await bridgeDescription('note', 'aiDesc', 'character', { ...opts, maxTokens: 1500 });
+    expect(sentBody(spy).max_tokens).toBe(1500);
   });
 
   it('falls back to the shipped default when the template is blank', async () => {
     // A cleared field must not send an empty system prompt — the generation would be unguided.
-    const body = await sendAndRead(() =>
-      bridgeDescription('note', 'aiDesc', 'character', { ...opts, template: '   ' }),
-    );
-    expect(body.messages[0].content).toBe(bridgePrompt('aiDesc', 'character'));
+    const spy = stubStream(sseReply('ok'));
+    await bridgeDescription('note', 'aiDesc', 'character', { ...opts, template: '   ' });
+    expect(systemOf(spy)).toBe(bridgePrompt('aiDesc', 'character'));
   });
 });

@@ -8,6 +8,7 @@ import type {
   TurnStage,
 } from './turnPlan';
 import { classifyTurnError, type TurnErrorKind } from './turnErrors';
+import { withImageParts } from '@/lib/aiRequest/imageParts';
 
 /**
  * The Turn Pipeline's runner: it executes one {@link TurnPlan} — the up-front router, the planning stages,
@@ -65,6 +66,8 @@ export type TurnRequestAdapter = (request: TurnPassRequest, context: TurnRequest
 export type TurnAdvanceEvent =
   /** Before a stage's passes are built, so the caller can scope what they render against. */
   | { at: 'stage'; stage: TurnStage }
+  /** A written page one is in the material, where a narration pass would have answered. */
+  | { at: 'written'; narration: string }
   /** After a pass has answered — all of its subjects, for a fan-out pass. */
   | { at: 'pass'; outcomes: TurnPassOutcome[] };
 
@@ -133,14 +136,20 @@ export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
   const requestsFor = (pass: TurnPassRecord): PlannedRequest[] => {
     if (pass.isReady && !pass.isReady(material)) return [];
     if (!pass.fanOut) {
-      return [{ pass, request: pass.buildRequest(plan.input, material) }];
+      return [{ pass, request: withAttachments(pass, pass.buildRequest(plan.input, material)) }];
     }
     const subjects = material.subjects?.[pass.id] ?? [];
     return subjects.map((subject) => {
       const scoped = { ...material, subject };
-      return { pass, subject, request: pass.buildRequest(plan.input, scoped) };
+      return { pass, subject, request: withAttachments(pass, pass.buildRequest(plan.input, scoped)) };
     });
   };
+
+  /** A built request with the turn's images on its last user message, for a pass the plan gives them to. */
+  const withAttachments = (pass: TurnPassRecord, request: TurnPassRequest): TurnPassRequest =>
+    plan.attachmentPasses.includes(pass.id)
+      ? { ...request, messages: withImageParts(request.messages, plan.attachments) }
+      : request;
 
   const send = (planned: PlannedRequest): Promise<string> => {
     const answer = request(planned.request, {
@@ -194,6 +203,12 @@ export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
     for (const stage of STAGES) {
       if (signal.aborted) return { status: 'aborted', run: run() };
       await applyAdvance({ at: 'stage', stage });
+      if (stage === 'narration' && plan.writtenNarration !== null) {
+        material = { ...material, narration: plan.writtenNarration };
+        await applyAdvance({ at: 'written', narration: plan.writtenNarration });
+        if (signal.aborted) return { status: 'aborted', run: run() };
+        continue;
+      }
       const stagePasses = plan.passes.filter((pass) => pass.stage === stage);
       if (stagePasses.length === 0) continue;
 

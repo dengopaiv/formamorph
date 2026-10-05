@@ -3,8 +3,12 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { readFileSync } from 'fs'
+import { createRequire } from 'module'
+import { releasedMinorChangelog } from './src/lib/docs/changelogSlice'
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
+// The ONNX runtime's dist folder, which its package exports do not expose (src/lib/embeddingWorker.ts).
+const ortDist = path.dirname(createRequire(import.meta.url).resolve('onnxruntime-web'))
 const syncAppOrigin = process.env.E2E_SYNC_APP_ORIGIN
 
 const directSyncAppModules = {
@@ -16,8 +20,62 @@ const directSyncAppModules = {
   },
 }
 
+// VITE_FM_HOLD_UPDATES=1: queue every HMR update and full reload per page until that page sends
+// fm:apply-held (the banner in src/lib/dev/heldUpdatesBanner.ts).
+const holdUpdates = {
+  name: 'hold-updates',
+  apply: 'serve',
+  configureServer(server) {
+    if (!process.env.VITE_FM_HOLD_UPDATES) return
+    const send = server.ws.send.bind(server.ws)
+    /** @type {WeakMap<object, { updates: Map<string, object>, reload: boolean }>} */
+    const queues = new WeakMap()
+    const queueOf = (client) => {
+      if (!queues.has(client)) queues.set(client, { updates: new Map(), reload: false })
+      return queues.get(client)
+    }
+    const announce = (client) => {
+      const q = queueOf(client)
+      const files = [...new Set([...q.updates.values()].map((u) => u.path))]
+      client.send({ type: 'custom', event: 'fm:held', data: { files, reload: q.reload } })
+    }
+    server.ws.send = (payload, ...rest) => {
+      const held = typeof payload === 'object' && (payload.type === 'update' || payload.type === 'full-reload')
+      if (!held) return send(payload, ...rest)
+      server.config.logger.info(`${payload.type} held`, { timestamp: true })
+      for (const client of server.ws.clients) {
+        const q = queueOf(client)
+        if (payload.type === 'full-reload') q.reload = true
+        else for (const u of payload.updates) q.updates.set(`${u.type}:${u.path}:${u.acceptedPath}`, u)
+        announce(client)
+      }
+    }
+    server.ws.on('fm:apply-held', (_data, client) => {
+      const q = queueOf(client)
+      if (!q.reload && q.updates.size > 0) client.send({ type: 'update', updates: [...q.updates.values()] })
+      queues.delete(client)
+      announce(client)
+    })
+  },
+}
+
+// `docs/<Page>.md?docs-index`: the page as a string for the Docs Index, with the changelog cut to its
+// newest released minor series (src/lib/docs/bundledDocsIndex.ts).
+const docsIndexMarkdown = {
+  name: 'docs-index-markdown',
+  enforce: 'pre',
+  load(id) {
+    const [file, query] = id.split('?')
+    if (query === undefined || !new URLSearchParams(query).has('docs-index')) return null
+    this.addWatchFile(file)
+    const markdown = readFileSync(file, 'utf-8')
+    const text = path.basename(file) === 'Changelog.md' ? releasedMinorChangelog(markdown) : markdown
+    return `export default ${JSON.stringify(text)}`
+  },
+}
+
 export default defineConfig({
-  plugins: [react(), directSyncAppModules],
+  plugins: [react(), directSyncAppModules, holdUpdates, docsIndexMarkdown],
   ...(process.env.E2E_SYNC_APP
     ? { cacheDir: path.resolve(__dirname, 'node_modules/.vite-sync-app') }
     : {}),
@@ -36,12 +94,14 @@ export default defineConfig({
     dedupe: ['@radix-ui/react-dismissable-layer'],
     alias: {
       '@': path.resolve(__dirname, './src'),
+      'onnxruntime-web-dist': ortDist,
     },
   },
   optimizeDeps: {
     // Dev-mode pre-bundling rewrites these into .vite/deps, breaking their import.meta.url-relative
     // .wasm lookup (the QuickJS engine file). Serving them unbundled keeps the wasm path resolvable.
-    exclude: ['quickjs-emscripten', '@jitl/quickjs-wasmfile-release-sync', 'wasm-webp'],
+    // Pre-bundling also breaks the ONNX runtime's `?url` imports.
+    exclude: ['quickjs-emscripten', '@jitl/quickjs-wasmfile-release-sync', 'wasm-webp', 'onnxruntime-web-dist'],
   },
   worker: {
     // The image-encode worker lazily `import()`s wasm-webp; under the default iife worker format that dynamic
@@ -62,15 +122,40 @@ export default defineConfig({
             // rewrites one — `graphify watch` regenerates graphify-out/graph.html on any source change, and the
             // baseline harness writes dumps, profiles and docs of its own. A reload mid-run kills the scripted
             // turn it was driving ("Execution context was destroyed" / "__baseline is undefined").
-            ignored: ['**/graphify-out/**', '**/testing/**', '**/graph.json', '**/GRAPH_REPORT.md'],
+            // Worktrees and build output too: a ticket's `npm run build` holds files in its dist/, and a watch
+            // on a held file throws EBUSY, which kills the main checkout's dev server.
+            ignored: [
+              '**/graphify-out/**',
+              '**/testing/**',
+              '**/graph.json',
+              '**/GRAPH_REPORT.md',
+              '**/.claude/worktrees/**',
+              '**/.scratch/**',
+              '**/dist/**',
+            ],
           },
         }),
   },
   test: {
     // e2e/ belongs to Playwright; .scratch/ contains untracked working copies and experiments.
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '.scratch/**', '.claude/worktrees/**'],
-    environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // A change to one of these makes `--changed` and `related` run the full suite. They replace vitest's `**/`
+    // defaults, which can't match inside a ticket worktree: picomatch's `**` skips the `.claude` folder.
+    forceRerunTriggers: [
+      'package.json',
+      'package-lock.json',
+      'vite.config.js',
+      'src/lib/docs/changelogSlice.ts',
+      'tsconfig*.json',
+      '.env*',
+    ].map((file) => path.resolve(__dirname, file).replace(/\\/g, '/')),
     css: false,
+    // A new jsdom per file is a large share of the suite's CPU, so plain .ts tests run in node. A .ts test
+    // that needs the DOM opts in with `// @vitest-environment jsdom`.
+    projects: [
+      { extends: true, test: { name: 'dom', include: ['**/*.test.{tsx,mjs}'], environment: 'jsdom' } },
+      { extends: true, test: { name: 'node', include: ['**/*.test.ts'], environment: 'node' } },
+    ],
   },
 })

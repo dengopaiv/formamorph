@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSettings } from '@/contexts/SettingsContext';
+import type { AiEndpointTarget } from '@/lib/aiRequest/aiRequestSpec';
 import { useLocalLlmStatus } from '@/lib/useLocalLlmStatus';
 import { deriveModelsUrls } from '@/lib/contextLength';
 import { probeKnownAbsent, recordProbeStatus } from '@/lib/probeMemo';
@@ -87,55 +88,63 @@ export async function probeEndpoint(
   return 'unreachable';
 }
 
+/** One resolved endpoint to check in place of the active one. */
+export type ReachableTarget = Pick<AiEndpointTarget, 'localEngine' | 'url' | 'apiToken' | 'model'>;
+
 /**
  * Whether the configured AI can actually serve a turn, plus why not. The bundled desktop engine reports
  * its own state over IPC (free, already live, and proves the model loaded); any custom endpoint — on
  * desktop or web — is probed instead. Stays `null` until the answer is known, so callers never flash a
- * gate during boot.
+ * gate during boot. With `enabled` false it starts no check, so a custom endpoint that was never checked
+ * stays `null`. A `target` is checked in place of the active endpoint.
  */
-export function useAiReachable(): AiReachable {
-  const { localModelActive, activeEndpointUrl, activeApiToken, activeModelName } = useSettings();
+export function useAiReachable({ enabled = true, target }: { enabled?: boolean; target?: ReachableTarget } = {}): AiReachable {
+  const settings = useSettings();
+  const localEngine = target ? target.localEngine : settings.localModelActive;
+  const url = target ? target.url : settings.activeEndpointUrl;
+  const apiToken = target ? target.apiToken : settings.activeApiToken;
+  const model = target ? target.model : settings.activeModelName;
   const engine = useLocalLlmStatus();
-  const mode: AiMode = localModelActive ? 'local' : 'custom';
+  const mode: AiMode = localEngine ? 'local' : 'custom';
   const [nonce, setNonce] = useState(0);
   const recheck = useCallback(() => setNonce((n) => n + 1), []);
 
   // Custom endpoint: probe, re-running whenever the endpoint identity changes or a recheck is asked for.
   const [probe, setProbe] = useState<EndpointProbe | null>(null);
   useEffect(() => {
-    if (mode !== 'custom') return;
+    if (mode !== 'custom' || !enabled) return;
     let active = true;
     setProbe(null);
-    probeEndpoint(activeEndpointUrl, activeApiToken, activeModelName)
+    probeEndpoint(url, apiToken, model)
       .then((result) => { if (active) setProbe(result); });
     return () => { active = false; };
-  }, [mode, activeEndpointUrl, activeApiToken, activeModelName, nonce]);
+  }, [mode, enabled, url, apiToken, model, nonce]);
 
   // Local engine: whether any GGUF is on disk at all. Distinguishes "nothing downloaded" (offer a download)
   // from "downloaded but won't load" (send them to the panel) — and keeps us at `null` until it's known,
   // since the engine reports 'stopped' both before boot completes and when it's genuinely idle.
   const [hasModel, setHasModel] = useState<boolean | null>(null);
   useEffect(() => {
-    if (mode !== 'local' || !isDesktop()) return;
+    if (mode !== 'local' || !enabled || !isDesktop()) return;
     let active = true;
     listLocalModels()
       .then((m) => { if (active) setHasModel(m.length > 0); })
       .catch(() => { if (active) setHasModel(false); });
     return () => { active = false; };
-  }, [mode, nonce, engine.status]);
+  }, [mode, enabled, nonce, engine.status]);
 
   // Fresh point-in-time check that bypasses the cached probe/engine state — the launch guard calls this so a
   // stale answer can't gate a working setup. Also seeds the cached state so the UI catches up. Never throws.
   const revalidate = useCallback(async (): Promise<boolean> => {
     if (mode === 'custom') {
-      const result = await probeEndpoint(activeEndpointUrl, activeApiToken, activeModelName);
+      const result = await probeEndpoint(url, apiToken, model);
       setProbe(result);
       return result === 'ok';
     }
     if (!isDesktop()) return false;
     const st = await localLlmStatus().catch(() => null);
     return st?.status === 'ready';
-  }, [mode, activeEndpointUrl, activeApiToken, activeModelName]);
+  }, [mode, url, apiToken, model]);
 
   if (mode === 'custom') {
     return {

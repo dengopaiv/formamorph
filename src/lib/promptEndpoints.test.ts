@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  resolvePromptEndpoint, routedPresetId, isRoutableId, setPromptEndpoint,
+  resolvePromptEndpoint, routedPresetId, isRoutableId, setPromptEndpoint, routeMap,
   endpointSignature, toDebugEndpoint,
   type PromptEndpointMap, type ActiveEndpointState,
 } from './promptEndpoints';
@@ -10,6 +11,7 @@ import {
   type TextEndpointPresetStore,
 } from './textEndpointPresets';
 import { defaultEndpointSamplerOverrides } from './endpointSamplers';
+import { HOSTED_ENDPOINT } from '../contexts/settingsDefaults';
 
 const userPreset = {
   id: 'p1',
@@ -42,6 +44,17 @@ describe('routing lookup', () => {
   it('routes to the built-in Default even though it is never stored in presets', () => {
     expect(isRoutableId(store, DEFAULT_TEXT_PRESET_ID)).toBe(true);
     expect(routedPresetId('summary', { summary: DEFAULT_TEXT_PRESET_ID }, store)).toBe(DEFAULT_TEXT_PRESET_ID);
+  });
+});
+
+describe('a route list', () => {
+  it('pins the kind to the first id that names a preset', () => {
+    expect(routeMap('help', ['deleted-id', 'p1', DEFAULT_TEXT_PRESET_ID], store)).toEqual({ help: 'p1' });
+  });
+
+  it('follows the active endpoint when it is empty or every id is deleted', () => {
+    expect(routeMap('help', [], store)).toEqual({});
+    expect(routeMap('help', ['deleted-id'], store)).toEqual({});
   });
 });
 
@@ -170,38 +183,63 @@ describe('toDebugEndpoint', () => {
   };
 
   it('never carries the API token into the exported debug shape', () => {
-    const debug = toDebugEndpoint(target, { thinking_budget_tokens: 400, reasoning_effort: 'high' });
+    const debug = toDebugEndpoint(target, { thinking_budget_tokens: 400, reasoning_effort: 'high' }, 'lmstudio');
     expect(JSON.stringify(debug)).not.toContain('sk-super-secret-value');
     expect(Object.keys(debug).sort())
-      .toEqual(['budgetTokens', 'model', 'preset', 'reasoningEffort', 'routed', 'url']);
+      .toEqual(['model', 'preset', 'reasoningFields', 'routed', 'url']);
   });
 
   it('records the reasoning fields the request carried, so the viewer can show what was sent', () => {
-    const debug = toDebugEndpoint(target, { thinking_budget_tokens: 400, reasoning_effort: 'high' });
-    expect(debug.budgetTokens).toBe(400);
-    expect(debug.reasoningEffort).toBe('high');
+    const debug = toDebugEndpoint(target, { thinking_budget_tokens: 400, reasoning_effort: 'high' }, 'lmstudio');
+    expect(debug.reasoningFields).toEqual([
+      { label: 'Effort', name: 'reasoning_effort', value: 'high' },
+      { label: 'Budget', name: 'thinking_budget_tokens', value: 400 },
+    ]);
   });
 
   it('keeps a zero budget, which is how a switched-off prompt reads', () => {
-    expect(toDebugEndpoint(target, { thinking_budget_tokens: 0, reasoning_effort: 'none' }).budgetTokens).toBe(0);
+    const debug = toDebugEndpoint(target, { thinking_budget_tokens: 0, reasoning_effort: 'none' }, 'lmstudio');
+    expect(debug.reasoningFields).toContainEqual({ label: 'Budget', name: 'thinking_budget_tokens', value: 0 });
   });
 
   it('leaves out a field the request did not carry', () => {
-    const effortOnly = toDebugEndpoint(target, { reasoning_effort: 'low' });
-    expect(effortOnly.reasoningEffort).toBe('low');
-    expect('budgetTokens' in effortOnly).toBe(false);
-    const neither = toDebugEndpoint(target, {});
-    expect('reasoningEffort' in neither).toBe(false);
-    expect('budgetTokens' in neither).toBe(false);
+    const effortOnly = toDebugEndpoint(target, { reasoning_effort: 'low' }, 'lmstudio');
+    expect(effortOnly.reasoningFields).toEqual([{ label: 'Effort', name: 'reasoning_effort', value: 'low' }]);
+    expect(toDebugEndpoint(target, {}, 'lmstudio').reasoningFields).toEqual([]);
+  });
+
+  // One case per dialect: the viewer names the key the endpoint received, whichever key that is.
+  it.each([
+    ['unknown', { thinking_budget_tokens: 400, reasoning_effort: 'high' as const }, ['reasoning_effort', 'thinking_budget_tokens']],
+    ['engine', { thinking_budget_tokens: 400 }, ['thinking_budget_tokens']],
+    ['openai', { reasoning_effort: 'high' as const }, ['reasoning_effort']],
+    ['lmstudio', { thinking_budget_tokens: 400, reasoning_effort: 'high' as const }, ['reasoning_effort', 'thinking_budget_tokens']],
+    ['vllm', { thinking_token_budget: 400, reasoning_effort: 'high' as const }, ['reasoning_effort', 'thinking_token_budget']],
+    ['openrouter', { reasoning: { effort: 'high' as const, max_tokens: 400 } }, ['reasoning.effort', 'reasoning.max_tokens']],
+    ['anthropic-budget', { thinking: { type: 'enabled' as const, budget_tokens: 400 } }, ['thinking.budget_tokens', 'thinking.type']],
+    ['anthropic-adaptive', { thinking: { type: 'adaptive' as const } }, ['thinking.type']],
+    ['google-2.5', { google: { thinking_config: { thinking_budget: 8192 } } }, ['google.thinking_config.thinking_budget']],
+    ['google-3', { google: { thinking_config: { thinking_level: 'high' } } }, ['google.thinking_config.thinking_level']],
+    ['moonshot-k3', { reasoning_effort: 'max' as const }, ['reasoning_effort']],
+    ['moonshot-k2', { thinking: { type: 'disabled' as const } }, ['thinking.type']],
+    ['novita', { enable_thinking: false }, ['enable_thinking']],
+  ] as const)('names the keys the %s dialect writes', (dialect, body, names) => {
+    const debug = toDebugEndpoint(target, body, dialect);
+    expect(debug.reasoningFields.map((f) => f.name)).toEqual(names);
+  });
+
+  it('records the max_tokens the request sent, and none where it sent none', () => {
+    expect(toDebugEndpoint(target, { max_tokens: 2400, reasoning_effort: 'high' }, 'openai').maxTokens).toBe(2400);
+    expect(toDebugEndpoint(target, {}, 'openai')).not.toHaveProperty('maxTokens');
   });
 
   it('marks a pinned prompt as routed and an unpinned one as not', () => {
-    expect(toDebugEndpoint(target, {}).routed).toBe(true);
-    expect(toDebugEndpoint({ ...target, presetId: null }, {}).routed).toBe(false);
+    expect(toDebugEndpoint(target, {}, 'unknown').routed).toBe(true);
+    expect(toDebugEndpoint({ ...target, presetId: null }, {}, 'unknown').routed).toBe(false);
   });
 
   it('records the preset name and model the request actually used', () => {
-    const debug = toDebugEndpoint(target, {});
+    const debug = toDebugEndpoint(target, {}, 'unknown');
     expect(debug.preset).toBe('Cydonia 24B');
     expect(debug.model).toBe('cydonia');
     expect(debug.url).toBe(target.url);
@@ -211,5 +249,93 @@ describe('toDebugEndpoint', () => {
 describe('endpointSignature', () => {
   it('matches the endpoint|model shape the capability caches key on', () => {
     expect(endpointSignature('http://x/v1', 'm')).toBe('http://x/v1|m');
+  });
+});
+
+// Each case rebuilds the modules under its own VITE_DEFAULT_ENDPOINT, because the Demo AI is a build fact.
+describe('isDemoAI', () => {
+  const load = async (defaultEndpoint: string) => {
+    vi.resetModules();
+    vi.stubEnv('VITE_DEFAULT_ENDPOINT', defaultEndpoint);
+    return { ...(await import('./promptEndpoints')), ...(await import('./textEndpointPresets')) };
+  };
+  type Modules = Awaited<ReturnType<typeof load>>;
+  const setDesktop = (on: boolean) => {
+    const w = window as unknown as { formamorphDesktop?: unknown };
+    if (on) w.formamorphDesktop = {};
+    else delete w.formamorphDesktop;
+  };
+  afterEach(() => { vi.unstubAllEnvs(); setDesktop(false); });
+
+  /** The active state the settings context builds for the store's selection. */
+  const activeFor = (m: Modules, s: TextEndpointPresetStore): ActiveEndpointState => ({
+    activeId: s.activeId,
+    values: m.activeValues(s),
+    isBuiltIn: m.isBuiltInActive(s),
+    localEngine: m.isEngineActive(s),
+    maxTokens: 512, engineMaxTokens: 512, engineModelId: '',
+  });
+  const narrationIsDemo = (m: Modules, s: TextEndpointPresetStore, map: PromptEndpointMap = {}) =>
+    m.isDemoAI(m.resolvePromptEndpoint('narration', map, s, activeFor(m, s)));
+
+  it('is true for the default preset on the hosted URL', async () => {
+    const m = await load('');
+    expect(narrationIsDemo(m, m.emptyStore)).toBe(true);
+  });
+
+  it('is false for the default preset when the build overrides the default endpoint', async () => {
+    const m = await load('http://localhost:1234/v1');
+    expect(narrationIsDemo(m, m.emptyStore)).toBe(false);
+  });
+
+  it('is false for a user preset, the hosted URL included', async () => {
+    const m = await load('');
+    const hostedCopy = { ...userPreset, id: 'hosted-copy', values: { ...userPreset.values, endpoint: HOSTED_ENDPOINT } };
+    for (const preset of [userPreset, hostedCopy]) {
+      expect(narrationIsDemo(m, { activeId: preset.id, presets: [userPreset, hostedCopy] })).toBe(false);
+      // Pinned rather than active reads the same.
+      expect(narrationIsDemo(m, { ...m.emptyStore, presets: [userPreset, hostedCopy] }, { narration: preset.id })).toBe(false);
+    }
+  });
+
+  it('is false for the desktop engine', async () => {
+    setDesktop(true);
+    const m = await load('');
+    expect(narrationIsDemo(m, { activeId: m.BUILTIN_ENGINE_PRESET_ID, presets: [] })).toBe(false);
+    expect(narrationIsDemo(m, m.emptyStore, { narration: m.BUILTIN_ENGINE_PRESET_ID })).toBe(false);
+  });
+
+  // A ghost resolves to the default preset's values, so it sends to the hosted service.
+  it('is true for a ghost active id on the hosted URL, and reports the default id', async () => {
+    const m = await load('');
+    const ghost: TextEndpointPresetStore = { activeId: 'deleted-id', presets: [userPreset] };
+    expect(narrationIsDemo(m, ghost)).toBe(true);
+    // A pin to a deleted preset falls back to the ghost active id as well.
+    expect(narrationIsDemo(m, ghost, { narration: 'also-deleted' })).toBe(true);
+    expect(m.resolvePromptEndpoint('narration', {}, ghost, activeFor(m, ghost)).endpointId).toBe(m.DEFAULT_TEXT_PRESET_ID);
+  });
+
+  it('is false for a ghost active id when the build overrides the default endpoint', async () => {
+    const m = await load('http://localhost:1234/v1');
+    expect(narrationIsDemo(m, { activeId: 'deleted-id', presets: [] })).toBe(false);
+  });
+
+  it('follows the routing of the kind it is asked about', async () => {
+    const m = await load('');
+    // A user preset is active and narration is pinned to the default.
+    const userActive: TextEndpointPresetStore = { activeId: userPreset.id, presets: [userPreset] };
+    const toDefault: PromptEndpointMap = { narration: m.DEFAULT_TEXT_PRESET_ID };
+    expect(narrationIsDemo(m, userActive, toDefault)).toBe(true);
+    expect(m.isDemoAI(m.resolvePromptEndpoint('summary', toDefault, userActive, activeFor(m, userActive)))).toBe(false);
+    // The default is active and narration is pinned to the user preset.
+    const defaultActive: TextEndpointPresetStore = { ...m.emptyStore, presets: [userPreset] };
+    const toUser: PromptEndpointMap = { narration: userPreset.id };
+    expect(narrationIsDemo(m, defaultActive, toUser)).toBe(false);
+    expect(m.isDemoAI(m.resolvePromptEndpoint('summary', toUser, defaultActive, activeFor(m, defaultActive)))).toBe(true);
+  });
+
+  it('keeps stored routing to the default preset id', async () => {
+    const m = await load('');
+    expect(m.routedPresetId('narration', { narration: 'default' }, m.emptyStore)).toBe('default');
   });
 });

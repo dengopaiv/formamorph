@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Must load before importing the service: its singleton constructor opens IndexedDB.
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -6,6 +7,7 @@ import { LibraryRecordNotFoundError } from './LibraryStore';
 import { promisifyRequest } from '@/lib/idb';
 import { makeVrm1, THUMB_DATA_URL } from '@/test/glbFixture';
 import { readVrmMeta } from '@/lib/vrmMeta';
+import { renderVrmThumbnail } from '@/lib/vrmThumbnail';
 import type { VrmLicense } from '@/types';
 
 // Wraps the real reader so every existing test still exercises real GLB parsing; only the stale-license test
@@ -14,6 +16,12 @@ import type { VrmLicense } from '@/types';
 vi.mock('@/lib/vrmMeta', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/vrmMeta')>();
   return { ...actual, readVrmMeta: vi.fn(actual.readVrmMeta) };
+});
+
+// jsdom has no WebGL, so the real renderer yields nothing; tests that need a portrait override it once.
+vi.mock('@/lib/vrmThumbnail', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/vrmThumbnail')>();
+  return { ...actual, renderVrmThumbnail: vi.fn(actual.renderVrmThumbnail) };
 });
 
 const DB = 'FORMAMORPH_MODELS_DB';
@@ -351,6 +359,115 @@ describe('ensureThumbnail', () => {
   });
 });
 
+describe('thumbnail source', () => {
+  const GENERATED = 'data:image/webp;base64,GENERATED';
+  const FRESH_LICENSE: VrmLicense = { metaVersion: '1', avatarPermission: 'everyone' };
+  const addThumbed = async (name = 'Thumbed') =>
+    ModelStorageService.addModel(new File([await makeVrm1({ name }, true).arrayBuffer()], `${name}.vrm`, { type: 'model/vrm' }));
+  const metaOf = async (id: string) => (await ModelStorageService.getModelMetadata()).find((m) => m.id === id);
+
+  beforeEach(() => vi.mocked(renderVrmThumbnail).mockClear());
+
+  it('shows the embedded image by default and offers the choice', async () => {
+    const record = await addThumbed();
+    await expect(ModelStorageService.ensureThumbnail(record.id)).resolves.toBe(THUMB_DATA_URL);
+    expect(await metaOf(record.id)).toMatchObject({ thumbnail: THUMB_DATA_URL, hasFileThumbnail: true });
+    expect(renderVrmThumbnail).not.toHaveBeenCalled();
+  });
+
+  it('reports no choice for a file with no embedded image', async () => {
+    const record = await ModelStorageService.addModel(new File([blob()], 'plain.vrm', { type: 'model/vrm' }));
+    expect(await metaOf(record.id)).toMatchObject({ hasFileThumbnail: false });
+  });
+
+  it('renders on the first switch to generated only, and keeps the choice across a reload', async () => {
+    const record = await addThumbed();
+    vi.mocked(renderVrmThumbnail).mockResolvedValueOnce(GENERATED);
+
+    await expect(ModelStorageService.setThumbnailSource(record.id, 'generated'))
+      .resolves.toMatchObject({ thumbnail: GENERATED, thumbnailSource: 'generated' });
+    await expect(ModelStorageService.setThumbnailSource(record.id, 'file'))
+      .resolves.toMatchObject({ thumbnail: THUMB_DATA_URL, thumbnailSource: 'file' });
+    await expect(ModelStorageService.setThumbnailSource(record.id, 'generated'))
+      .resolves.toMatchObject({ thumbnail: GENERATED });
+    expect(renderVrmThumbnail).toHaveBeenCalledTimes(1);
+
+    // The stored record, read fresh, still shows the choice, and the backfill honors it.
+    expect(await metaOf(record.id)).toMatchObject({ thumbnail: GENERATED, thumbnailSource: 'generated' });
+    await expect(ModelStorageService.ensureThumbnail(record.id)).resolves.toBe(GENERATED);
+  });
+
+  it('leaves the source on file and the image unchanged when the render fails', async () => {
+    const record = await addThumbed();
+    vi.mocked(renderVrmThumbnail).mockResolvedValueOnce(undefined);
+
+    await expect(ModelStorageService.setThumbnailSource(record.id, 'generated')).rejects.toThrow();
+    const meta = await metaOf(record.id);
+    expect(meta?.thumbnail).toBe(THUMB_DATA_URL);
+    expect(meta?.thumbnailSource ?? 'file').toBe('file');
+  });
+
+  it('ends on the last pick when the player switches back during the first render', async () => {
+    const record = await addThumbed();
+    let finishRender!: (image: string) => void;
+    vi.mocked(renderVrmThumbnail).mockImplementationOnce(() => new Promise((resolve) => { finishRender = resolve; }));
+
+    const toGenerated = ModelStorageService.setThumbnailSource(record.id, 'generated');
+    const toFile = ModelStorageService.setThumbnailSource(record.id, 'file');
+    await vi.waitFor(() => expect(renderVrmThumbnail).toHaveBeenCalled());
+    finishRender(GENERATED);
+    await Promise.all([toGenerated, toFile]);
+
+    expect(await metaOf(record.id)).toMatchObject({ thumbnail: THUMB_DATA_URL, thumbnailSource: 'file' });
+  });
+
+  it('does not bring back an Avatar deleted during the render', async () => {
+    const record = await addThumbed('Gone');
+    await addThumbed('Kept');
+    vi.mocked(renderVrmThumbnail).mockImplementationOnce(async () => {
+      await ModelStorageService.deleteModel(record.id);
+      return GENERATED;
+    });
+
+    await expect(ModelStorageService.setThumbnailSource(record.id, 'generated')).resolves.toBeNull();
+    expect(await getRaw(record.id)).toBeUndefined();
+  });
+
+  it('rebuilds the file variant from an older record whose file has an embedded image, dropping its stored render', async () => {
+    // An older download stored a render even when its file had an embedded image.
+    const stored = 'data:image/webp;base64,STORED-RENDER';
+    await putRaw({
+      id: 'legacy', name: 'Legacy',
+      data: { type: 'model/vrm', blob: blob(), size: 9, hash: 'h', license: FRESH_LICENSE, thumbnail: stored },
+    } satisfies StoredModelRecord);
+    // The stored blob can't be re-parsed under fake-indexeddb (see the "survives a legacy record" test).
+    vi.mocked(readVrmMeta).mockResolvedValueOnce({ license: FRESH_LICENSE, thumbnail: THUMB_DATA_URL });
+
+    await expect(ModelStorageService.ensureThumbnail('legacy')).resolves.toBe(THUMB_DATA_URL);
+    expect(await metaOf('legacy')).toMatchObject({ thumbnail: THUMB_DATA_URL, hasFileThumbnail: true });
+
+    vi.mocked(renderVrmThumbnail).mockResolvedValueOnce(GENERATED);
+    await expect(ModelStorageService.setThumbnailSource('legacy', 'generated'))
+      .resolves.toMatchObject({ thumbnail: GENERATED });
+    expect(renderVrmThumbnail).toHaveBeenCalledTimes(1);
+    await expect(ModelStorageService.setThumbnailSource('legacy', 'file'))
+      .resolves.toMatchObject({ thumbnail: THUMB_DATA_URL });
+  });
+
+  it('treats an older stored thumbnail as the rendered portrait when the file has no embedded image', async () => {
+    const stored = 'data:image/webp;base64,RENDERED';
+    await putRaw({
+      id: 'legacy', name: 'Legacy',
+      data: { type: 'model/vrm', blob: blob(), size: 9, hash: 'h', license: FRESH_LICENSE, thumbnail: stored },
+    } satisfies StoredModelRecord);
+    vi.mocked(readVrmMeta).mockResolvedValueOnce({ license: FRESH_LICENSE });
+
+    await expect(ModelStorageService.ensureThumbnail('legacy')).resolves.toBe(stored);
+    expect(await metaOf('legacy')).toMatchObject({ thumbnail: stored, hasFileThumbnail: false });
+    expect(renderVrmThumbnail).not.toHaveBeenCalled();
+  });
+});
+
 // The atomic write the thumbnail backfill uses: if a delete lands while a thumbnail is being computed, the
 // backfill must NOT write the row back (resurrecting a deleted model). Tested directly because the timing of
 // the delete-vs-persist race isn't reproducible through the public API in a unit test.
@@ -392,5 +509,59 @@ describe('validation', () => {
         data: { type: 'model/vrm', size: 0 } as unknown as StoredModelRecord['data'],
       }),
     ).rejects.toThrow('Invalid model: missing required fields');
+  });
+});
+
+describe('defaultAvatarHashes', () => {
+  const serve = (body: Blob) => vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => body }));
+
+  beforeEach(() => {
+    // The bundled file's hash memoizes per instance; reset it so each test's served file is actually read.
+    (ModelStorageService as unknown as { bundledDefaultHash: unknown }).bundledDefaultHash = null;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('holds the seeded record’s hash', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    await putRaw({ id: 'default-avatar', name: 'Default Avatar', data: { type: 'model/vrm', blob: blob(), size: 9, hash: 'seeded-hash' } });
+
+    await expect(ModelStorageService.defaultAvatarHashes()).resolves.toEqual(['seeded-hash']);
+  });
+
+  it('holds the bundled file’s hash after the seeded copy is gone', async () => {
+    serve(new Blob(['bundled-bytes']));
+    const imported = await ModelStorageService.addModel(new File([blob('bundled-bytes')], 'Renamed.vrm', { type: 'model/vrm' }));
+
+    await expect(ModelStorageService.defaultAvatarHashes()).resolves.toEqual([imported.data.hash]);
+  });
+
+  it('holds both when an older build seeded a different file', async () => {
+    serve(new Blob(['bundled-bytes']));
+    await putRaw({ id: 'default-avatar', name: 'Default Avatar', data: { type: 'model/vrm', blob: blob(), size: 9, hash: 'old-build-hash' } });
+
+    const hashes = await ModelStorageService.defaultAvatarHashes();
+
+    expect(hashes).toHaveLength(2);
+    expect(hashes[0]).toBe('old-build-hash');
+  });
+
+  it('reads the bundled file once per session', async () => {
+    serve(new Blob(['bundled-bytes']));
+    await ModelStorageService.defaultAvatarHashes();
+    await ModelStorageService.defaultAvatarHashes();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the bundled file again after a failed read', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('offline')));
+    await expect(ModelStorageService.defaultAvatarHashes()).resolves.toEqual([]);
+
+    serve(new Blob(['bundled-bytes']));
+    await expect(ModelStorageService.defaultAvatarHashes()).resolves.toHaveLength(1);
+  });
+
+  it('ignores a response that is not the file', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, blob: async () => new Blob(['<html>']) }));
+    await expect(ModelStorageService.defaultAvatarHashes()).resolves.toEqual([]);
   });
 });

@@ -22,6 +22,161 @@ const world = (id: string, overview: Record<string, unknown>): World => ({
 
 const wrapper = ({ children }: { children: ReactNode }) => <GameDataProvider>{children}</GameDataProvider>;
 
+describe('the Custom Persona entity in the world store', () => {
+  const links = [
+    { id: 'l1', originalId: 'paladin', kind: 'trait', originalName: 'Paladin', groupId: null },
+    { id: 'l2', originalId: 'brave', kind: 'trait', originalName: 'Brave', groupId: null },
+  ];
+  const you = { id: 'you', name: 'Wanderer', customPersona: true, traitLinks: links, traitPlacement: { groupId: null, order: 3 } };
+  const withPersona = {
+    ...world('w', {}),
+    traits: [{ id: 'paladin', name: 'Paladin', statChanges: [], groupId: 'blueprints' }, { id: 'brave', name: 'Brave', statChanges: [], groupId: 'blueprints' }],
+    traitGroups: [{ id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+    entities: [you],
+  } as unknown as World;
+  const marked = (result: { current: ReturnType<typeof useGameData> }) => result.current.entities.find((e) => e.customPersona);
+
+  it('loads, saves and discards the mark with the world, clean on load', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(withPersona); });
+    expect(marked(result)).toMatchObject({ id: 'you', customPersona: true, traitLinks: links });
+    expect(result.current.getWorldData().entities[0].customPersona).toBe(true);
+    expect(result.current.isWorldDirty).toBe(false);
+
+    const { customPersona: _mark, ...unmarked } = result.current.entities[0];
+    act(() => { result.current.updateEntity(unmarked); });
+    expect(result.current.isWorldDirty).toBe(true);
+    expect(result.current.getWorldData().entities[0]).not.toHaveProperty('customPersona');
+    act(() => { result.current.discardChanges(); });
+    expect(marked(result)).toMatchObject({ id: 'you', traitLinks: links });
+  });
+
+  it('reads no Custom Persona node off a world that still carries one', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData({ ...withPersona, customPersona: { traitLinks: links } } as unknown as World); });
+    expect(result.current.getWorldData()).not.toHaveProperty('customPersona');
+    expect(marked(result)?.traitLinks).toEqual(links);
+  });
+
+  it("deleting an original deletes the Custom Persona entity's links to it", () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(withPersona); });
+    act(() => { result.current.removeTrait('paladin'); });
+    expect(marked(result)?.traitLinks?.map((l) => l.id)).toEqual(['l2']);
+  });
+
+  it("removing Blueprints detaches the Custom Persona entity's links into its own traits and moves the unlinked rest up (Q11)", () => {
+    const withLoner = {
+      ...withPersona,
+      traits: [...(withPersona.traits as unknown[]), { id: 'loner', name: 'Loner', statChanges: [], groupId: 'blueprints' }],
+    } as unknown as World;
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(withLoner); });
+    expect(marked(result)?.traitLinks).toEqual(links);
+    act(() => { result.current.removeTraitGroup('blueprints'); });
+    expect(result.current.traitGroups).toEqual([]);
+    expect(result.current.traits.map((t) => [t.id, t.groupId])).toEqual([['loner', null]]);
+    expect(marked(result)).not.toHaveProperty('traitLinks');
+    expect(marked(result)?.traits?.map((t) => t.name).sort()).toEqual(['Brave', 'Paladin']);
+  });
+
+  it('removing Blueprints inside another group still moves its unlinked traits to the top level', () => {
+    const nested = {
+      ...withPersona,
+      entities: [],
+      traitGroups: [{ id: 'lore', name: 'Lore', parentId: null }, { id: 'blueprints', name: 'Blueprints', parentId: 'lore', system: 'blueprints' }],
+    } as unknown as World;
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(nested); });
+    act(() => { result.current.removeTraitGroup('blueprints'); });
+    expect(result.current.traits.find((t) => t.id === 'paladin')?.groupId).toBeNull();
+  });
+});
+
+describe('placeholder copies in the world store', () => {
+  const garb = { id: 'garb', name: 'Class Garb', values: [{ id: 'tabard', text: 'a tabard' }], groupId: 'bp' };
+  const pinned = {
+    ...world('w', {}),
+    traits: [{ id: 'paladin', name: 'Paladin', statChanges: [], groupId: 'blueprints', placeholderPins: [{ placeholderId: 'garb', value: 'a tabard', valueId: 'tabard' }] }],
+    traitGroups: [{ id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+    entities: [{ id: 'ash', name: 'Ash', traitLinks: [{ id: 'l1', originalId: 'paladin', kind: 'trait', originalName: 'Paladin', groupId: null }] }, { id: 'bob', name: 'Bob' }],
+    placeholders: [garb],
+    placeholderGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+  } as unknown as World;
+  const copies = (result: { current: ReturnType<typeof useGameData> }, id: string) =>
+    (result.current.entities.find((e) => e.id === id)?.placeholders ?? []).map((p) => p.blueprintId);
+
+  it('gives a bearer its copies on load, clean, and writes them into the payload', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(pinned); });
+    expect(copies(result, 'ash')).toEqual(['garb']);
+    expect(copies(result, 'bob')).toEqual([]);
+    expect(result.current.getWorldData().entities[0].placeholders?.[0]).toMatchObject({ name: 'Class Garb', blueprintId: 'garb' });
+    expect(result.current.isWorldDirty).toBe(false);
+  });
+
+  it('creates a copy when a link joins an entity and takes it back when the link goes', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(pinned); });
+    const bob = result.current.entities.find((e) => e.id === 'bob')!;
+    act(() => { result.current.updateEntity({ ...bob, traitLinks: [{ id: 'l2', originalId: 'paladin', kind: 'trait', originalName: 'Paladin', groupId: null }] }); });
+    expect(copies(result, 'bob')).toEqual(['garb']);
+    const { traitLinks: _l, ...unlinked } = result.current.entities.find((e) => e.id === 'bob')!;
+    act(() => { result.current.updateEntity(unlinked); });
+    expect(copies(result, 'bob')).toEqual([]);
+  });
+
+  it('creates a copy when a pin joins an original that already has a bearer', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    const { placeholderPins: _p, ...bare } = pinned.traits[0];
+    act(() => { result.current.loadWorldData({ ...pinned, traits: [bare] }); });
+    expect(copies(result, 'ash')).toEqual([]);
+    act(() => { result.current.updateTrait(pinned.traits[0]); });
+    expect(copies(result, 'ash')).toEqual(['garb']);
+  });
+});
+
+describe('trait links when an original goes', () => {
+  const linked = {
+    ...world('w', {}),
+    traits: [{ id: 'paladin', name: 'Paladin', statChanges: [], groupId: 'classes' }, { id: 'brave', name: 'Brave', statChanges: [], groupId: 'blueprints' }],
+    traitGroups: [
+      { id: 'blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' },
+      { id: 'classes', name: 'Classes', parentId: 'blueprints' },
+    ],
+    entities: [
+      { id: 'ash', name: 'Ash', traitLinks: [
+        { id: 'l1', originalId: 'paladin', kind: 'trait', originalName: 'Paladin', groupId: null },
+        { id: 'l2', originalId: 'classes', kind: 'group', originalName: 'Classes', groupId: null },
+      ] },
+      { id: 'bob', name: 'Bob', traitLinks: [{ id: 'l3', originalId: 'brave', kind: 'trait', originalName: 'Brave', groupId: null }] },
+    ],
+  } as unknown as World;
+
+  it('deleting a trait deletes its links and nothing else', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(linked); });
+    act(() => { result.current.removeTrait('paladin'); });
+    expect(result.current.entities.map((e) => e.traitLinks?.map((l) => l.id))).toEqual([['l2'], ['l3']]);
+  });
+
+  it('deleting a group deletes the links to it; its children and their links stay', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(linked); });
+    act(() => { result.current.removeTraitGroup('classes'); });
+    expect(result.current.entities.map((e) => e.traitLinks?.map((l) => l.id))).toEqual([['l1'], ['l3']]);
+    expect(result.current.traits.find((t) => t.id === 'paladin')?.groupId).toBe('blueprints');
+  });
+
+  it('leaves the entities untouched when nothing linked the deleted trait', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData({ ...linked, traits: [...linked.traits, { id: 'lone', name: 'Lone', statChanges: [] }] } as World); });
+    const before = result.current.entities;
+    act(() => { result.current.removeTrait('lone'); });
+    expect(result.current.entities).toBe(before);
+  });
+});
+
 describe('entity ↔ location membership', () => {
   // Membership is entity-owned (ADR-0003), so these worlds are stated the way the editor writes them.
   const worldWith = (entityIds: string[]) => ({
@@ -51,6 +206,22 @@ describe('entity ↔ location membership', () => {
 
     // A stale id is invisible in every roster but rides into the exported world forever.
     expect(result.current.entities[0].locations).toEqual(['l2']);
+  });
+
+  it('moves the sub-locations of a deleted location up to its parent', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData({
+      ...world('w', {}),
+      locations: [
+        { id: 'l1', name: 'Harbor' },
+        { id: 'l2', name: 'Dock', parentId: 'l1' },
+        { id: 'l3', name: 'Shed', parentId: 'l2' },
+      ],
+    } as unknown as World); });
+
+    act(() => { result.current.removeLocation('l2'); });
+
+    expect(result.current.locations.map((l) => [l.id, l.parentId ?? null])).toEqual([['l1', null], ['l3', 'l1']]);
   });
 
   it('leaves the entities untouched when nobody belonged to the deleted location', () => {
@@ -129,9 +300,9 @@ describe('connections', () => {
       { id: 'l3', name: 'Landing' },
     ],
     connections: [
-      { id: 'c1', from: 'l1', to: 'l2', twoWay: true },
-      { id: 'c2', from: 'l3', to: 'l1', twoWay: false },
-      { id: 'c3', from: 'l2', to: 'l3', twoWay: true },
+      { id: 'c1', a: 'l1', b: 'l2', aToB: {}, bToA: {} },
+      { id: 'c2', a: 'l3', b: 'l1', aToB: {} },
+      { id: 'c3', a: 'l2', b: 'l3', aToB: {}, bToA: {} },
     ],
   } as unknown as World);
 
@@ -367,30 +538,46 @@ describe('loadWorldData', () => {
     expect(result.current.worldOverview.promptOverrides).toBeUndefined();
   });
 
-  it("carries the world's opening cue and its switch through the load", () => {
-    // Same allowlist trap as the prompt override above: a dropped cue is written back by the next
-    // saveWorld, so the author's opening would vanish from their own world on reopening it.
+  const OPENINGS = [{ id: 'o1', text: 'You wake in the reed-beds.', kind: 'action' as const }];
+
+  it("carries the world's openings, weights and switch through the load", () => {
+    // Same allowlist trap as the prompt override above: a dropped list is written back by the next
+    // saveWorld, so the author's openings would vanish from their own world on reopening it.
     const { result } = renderHook(() => useGameData(), { wrapper });
     const exported = JSON.parse(JSON.stringify(
-      world('a', { openingCue: 'You wake in the reed-beds.', openingCueEnabled: false }),
+      world('a', { openings: OPENINGS, openingWeights: { o1: 3 }, openingsEnabled: false }),
     ));
     act(() => { result.current.loadWorldData(exported); });
-    expect(result.current.worldOverview.openingCue).toBe('You wake in the reed-beds.');
-    expect(result.current.worldOverview.openingCueEnabled).toBe(false);
+    expect(result.current.worldOverview.openings).toEqual(OPENINGS);
+    expect(result.current.worldOverview.openingWeights).toEqual({ o1: 3 });
+    expect(result.current.worldOverview.openingsEnabled).toBe(false);
   });
 
-  it('leaves the switch absent for a world that only carries cue text, so the text still applies', () => {
+  it('loads an old single cue as the first row of the list', () => {
     const { result } = renderHook(() => useGameData(), { wrapper });
-    act(() => { result.current.loadWorldData(world('a', { openingCue: 'You wake in the reed-beds.' })); });
-    expect(result.current.worldOverview.openingCueEnabled).toBeUndefined();
+    const legacy = world('a', { openingCue: 'You wake in the reed-beds.' });
+    act(() => { result.current.loadWorldData(legacy); });
+    expect(result.current.worldOverview.openings?.map((o) => o.text)).toEqual(['You wake in the reed-beds.']);
+    expect(result.current.worldOverview.openingsEnabled).toBeUndefined();
   });
 
-  it("does not leak one world's opening cue into the next", () => {
+  it("does not leak one world's openings into the next", () => {
     const { result } = renderHook(() => useGameData(), { wrapper });
-    act(() => { result.current.loadWorldData(world('a', { openingCue: 'A cue', openingCueEnabled: true })); });
+    act(() => { result.current.loadWorldData(world('a', { openings: OPENINGS, openingsEnabled: false })); });
     act(() => { result.current.loadWorldData(world('b', {})); });
-    expect(result.current.worldOverview.openingCue).toBeUndefined();
-    expect(result.current.worldOverview.openingCueEnabled).toBeUndefined();
+    expect(result.current.worldOverview.openings).toBeUndefined();
+    expect(result.current.worldOverview.openingsEnabled).toBeUndefined();
+  });
+
+  it("carries the world's persona rules through the load, and does not leak them into the next world", () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    const rules = { allowedPersonas: 'world', startPersona: { source: 'world', entityId: 'w' } } as const;
+    act(() => { result.current.loadWorldData(JSON.parse(JSON.stringify(world('a', rules)))); });
+    expect(result.current.worldOverview.allowedPersonas).toBe('world');
+    expect(result.current.worldOverview.startPersona).toEqual({ source: 'world', entityId: 'w' });
+    act(() => { result.current.loadWorldData(world('b', {})); });
+    expect(result.current.worldOverview.allowedPersonas).toBeUndefined();
+    expect(result.current.worldOverview.startPersona).toBeUndefined();
   });
 });
 

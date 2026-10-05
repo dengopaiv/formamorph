@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { worldPublishPayload, entityPublishPayload, dictionaryPublishPayload, modelPublishPayload, publishTags } from './publishPayload';
+import { worldPublishPayload, entityPublishPayload, dictionaryPublishPayload, modelPublishPayload, promptPublishPayload, promptPublishBlock, publishTags } from './publishPayload';
+import { buildSharedPreset } from './promptPresetShare';
+import type { PromptPreset, PromptValues } from './promptPresets';
 import type { World, Entity, Dictionary, Placeholder, VrmLicense } from '@/types';
 import { encodePlaceholderToken } from './placeholders';
 
@@ -10,6 +12,15 @@ const def = (id: string, values: string[]): Placeholder => ({ id, name: id, valu
 const world = (over = {}, rest = {}) => ({ worldOverview: { name: 'Sedge Landing', description: 'A marsh', thumbnail: 'data:1', ...over }, ...rest } as unknown as World);
 const entity = (over = {}) => ({ id: 'e1', name: 'Mara', ...over } as Entity);
 const book = (over = {}) => ({ id: 'd1', name: 'Lore', entries: [], ...over } as Dictionary);
+
+it('publishes library creator credits without mutating world content', () => {
+  const e = entity();
+  const d = book();
+  expect(entityPublishPayload(e, { author: 'River Quill' }).contentData).toMatchObject({ author: 'River Quill' });
+  expect(dictionaryPublishPayload(d, { author: 'River Quill' }).contentData).toMatchObject({ author: 'River Quill' });
+  expect(e).not.toHaveProperty('author');
+  expect(d).not.toHaveProperty('author');
+});
 
 describe('worldPublishPayload', () => {
   it('publishes the overview fields', () => {
@@ -56,6 +67,11 @@ describe('entityPublishPayload', () => {
 
   it('falls back to the short AI summary when there is no player description', () => {
     expect(entityPublishPayload(entity({ aiSummary: 'knight, weary' })).description).toBe('knight, weary');
+  });
+
+  it('publishes the Persona mark and pronouns in the listing content', () => {
+    const payload = entityPublishPayload(entity({ persona: true, pronouns: 'they/them' }));
+    expect(payload.contentData).toMatchObject({ persona: true, pronouns: 'they/them' });
   });
 
   it('never publishes aiDescription — it is long and full of prompt scaffolding', () => {
@@ -295,5 +311,68 @@ describe('modelPublishPayload', () => {
     const payload = modelPublishPayload(model());
     expect(payload.tags).toEqual([]);
     expect(publishTags(payload)).toEqual([]);
+  });
+});
+
+describe('promptPublishPayload', () => {
+  const OVERVIEW = { author: 'Ann', description: 'For **small** models', tags: ['noir', 'slow burn'], models: ['Cydonia-24B'] };
+  /** A stored user preset the way the store holds it: tuning, local routing, and a community link. */
+  const stored: PromptPreset = {
+    id: 'p1',
+    name: 'Terse Narrator',
+    style: 'markdown',
+    values: { systemPrompt: 'Be terse.' } as PromptValues,
+    samplers: { narration: { temperature: { custom: true, value: 0.7 } } },
+    reasoning: { narration: { enabled: false, level: 'global' } },
+    maxOutput: { summary: { custom: true, value: 300 } },
+    verbatim: { narration: 5 },
+    promptEndpoints: { narration: 'zzz-endpoint-canary' },
+    overview: OVERVIEW,
+    sourceId: 'zzz-listing-canary',
+    sourceUpdatedAt: '2026-09-01T00:00:00.000Z',
+    dirty: true,
+  };
+  const shared = (over: Partial<PromptPreset> = {}) => buildSharedPreset({ ...stored, style: 'markdown', ...over }, '2.0.3');
+
+  it('maps the Overview to the listing description, tags, and models', () => {
+    expect(promptPublishPayload(shared())).toMatchObject({
+      kind: 'prompt',
+      name: 'Terse Narrator',
+      description: 'For **small** models',
+      tags: ['noir', 'slow burn'],
+      models: ['Cydonia-24B'],
+    });
+  });
+
+  it('publishes the share artifact as the content, tuning included', () => {
+    const payload = promptPublishPayload(shared());
+    expect(payload.contentData).toMatchObject({
+      kind: 'formamorph-prompt-preset',
+      appVersion: '2.0.3',
+      values: { systemPrompt: 'Be terse.' },
+      samplers: stored.samplers,
+      reasoning: stored.reasoning,
+      maxOutput: stored.maxOutput,
+      verbatim: stored.verbatim,
+      overview: OVERVIEW,
+    });
+    expect(payload.thumbnail).toBeUndefined();
+  });
+
+  it('carries neither the endpoint routing nor the community link', () => {
+    const text = JSON.stringify(promptPublishPayload(shared()));
+    expect(text).not.toContain('zzz-endpoint-canary');
+    expect(text).not.toContain('zzz-listing-canary');
+    for (const key of ['promptEndpoints', 'sourceId', 'sourceUpdatedAt', 'dirty']) expect(text).not.toContain(`"${key}"`);
+  });
+
+  it('publishes a preset with no Overview with empty listing fields', () => {
+    expect(promptPublishPayload(shared({ overview: undefined }))).toMatchObject({ description: '', tags: [], models: [] });
+  });
+
+  it('blocks publish until Models names one model', () => {
+    expect(promptPublishBlock(OVERVIEW)).toBeNull();
+    expect(promptPublishBlock({ ...OVERVIEW, models: [] })).toBe('models');
+    expect(promptPublishBlock(undefined)).toBe('models');
   });
 });

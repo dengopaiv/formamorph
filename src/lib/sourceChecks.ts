@@ -5,9 +5,11 @@
  * Pure. The check itself is network work the caller does; its answers arrive here as data, so the editor's
  * issue list and the main menu's gate read one module and cannot disagree about what is missing.
  */
+import { listNames } from '@/lib/utils';
 import { applyLibraryUpdate, unlink, type LibrarySource, type LinkableContent } from '@/lib/linkedContent';
 import type { LibraryKind } from '@/lib/librarySources';
-import type { Dictionary, Entity, Placeholder } from '@/types';
+import { traitWorldOf } from '@/lib/portableTraits';
+import type { Dictionary, Entity, Placeholder, Trait, TraitGroup } from '@/types';
 
 /**
  * What a check said about one source.
@@ -26,6 +28,8 @@ export interface SourceCheckWorld {
   entities?: Entity[];
   dictionaries?: Dictionary[];
   placeholders?: Placeholder[];
+  traits?: Trait[];
+  traitGroups?: TraitGroup[];
 }
 
 /** One copy in a world that follows a published source. */
@@ -103,10 +107,6 @@ export function blockingSources(
 ): MissingSource[] {
   return missingSources(copies, results).filter((row) => row.required && row.status === 'not_found');
 }
-
-/** "a, b and c" — how one line names the handful of sources it covers. */
-const listNames = (names: string[]): string =>
-  names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 /**
  * Why this world cannot start a new game or publish, or null when nothing blocks it.
@@ -199,7 +199,7 @@ export function applyRepair<T extends SourceCheckWorld>(
   const shared = world.placeholders ?? [];
   const added: Placeholder[] = [];
   const relink = <I extends LinkableContent>(item: I): I => {
-    const applied = applyLibraryUpdate(item, replacement.data as I, replacement.source, shared);
+    const applied = applyLibraryUpdate(item, replacement.data as I, replacement.source, shared, traitWorldOf(world));
     added.push(...applied.toAdd);
     return applied.item;
   };

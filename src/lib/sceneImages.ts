@@ -10,7 +10,7 @@
 // The turn's `sceneTags` line stays in the message: it is a few dozen bytes, it makes a scene reproducible
 // without its pixels, and riding the message means it rolls back with the turn for free.
 
-import { parseTurnContent, serializeTurnContent, survivingTurnIds } from './turnDigest';
+import { parseTurnContent, pruneTurnMap, serializeTurnContent } from './turnDigest';
 import type { ChatMessage } from '@/types';
 
 /** Scene images by turn id, oldest first within a turn. */
@@ -38,10 +38,7 @@ export function removeSceneImage(map: SceneImageMap, turnId: string, index: numb
  * holding pixels for scenes that no longer exist.
  */
 export function pruneSceneImages(map: SceneImageMap, history: ChatMessage[]): SceneImageMap {
-  const live = survivingTurnIds(history);
-  const kept = Object.keys(map).filter((id) => live.has(id));
-  if (kept.length === Object.keys(map).length) return map; // nothing to drop — keep the identity
-  return Object.fromEntries(kept.map((id) => [id, map[id]]));
+  return pruneTurnMap(map, history);
 }
 
 /** How many images are held and roughly what they weigh, for the save dialog's warning. The save stores
@@ -70,4 +67,10 @@ export function setSceneTags(history: ChatMessage[], turnId: string, tags: strin
     return { ...message, content: serializeTurnContent({ ...parsed, sceneTags: tags }) };
   });
   return found ? next : null;
+}
+
+/** The line a manual draw renders: an explicit line, else the turn's stored one, so a redraw keeps the
+ *  player's edits. Undefined runs the tag pass, which a re-roll always does. */
+export function sceneDrawTags(opts: { tags?: string; tagsOnly?: boolean }, stored?: string): string | undefined {
+  return opts.tagsOnly ? undefined : opts.tags ?? stored;
 }

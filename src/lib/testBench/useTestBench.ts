@@ -19,7 +19,7 @@ import {
 } from './rules';
 import { convertWorldImagesToWebp, describeWebpFixRun } from './imageWebpFix';
 import { buildAiContext, EMPTY_AI_CONTEXT } from './aiContext';
-import { buildOpening, EMPTY_OPENING } from './opening';
+import { buildOpening, EMPTY_OPENING, type OpeningChoice } from './opening';
 import { useOpeningRolls } from './useOpeningRolls';
 import { loadLastTurn, type LastTurn } from './lastTurn';
 import { checkStatCode } from './statCodeCheck';
@@ -49,8 +49,14 @@ export interface TestBenchWiring {
   advanced: boolean;
   /** The dev-router's `bench=` slot: an Instrument to open on (DEV builds only). */
   routedTab?: string;
+  /** An Instrument an outside request opens the Bench on. */
+  requestedTab?: string;
+  /** Changes with each outside request, so a repeat request opens the Bench again. */
+  requestKey?: string;
   /** Land the editor on a finding's item: its tab active, its row selected and revealed. */
   navigateToItem: (section: FindingSection, itemId: string) => void;
+  /** Another pane holds the Bench's slot. The full panel stays hidden and the popover offers no way to it. */
+  panelSuspended?: boolean;
 }
 
 /** The Bench as the view wires it: where each surface goes, the header button's numbers, and one prop
@@ -82,7 +88,7 @@ export interface TestBenchHandle {
 }
 
 export function useTestBench({
-  selectedLocationId, isMobile, advanced, routedTab, navigateToItem,
+  selectedLocationId, isMobile, advanced, routedTab, requestedTab, requestKey, navigateToItem, panelSuspended = false,
 }: TestBenchWiring): TestBenchHandle {
   const {
     worldId, worldOverview, getWorldData, worldMetadata, updateWorldOverview,
@@ -91,6 +97,8 @@ export function useTestBench({
   } = useGameData();
 
   const [benchOpen, setBenchOpen] = useState(false);
+  // A suspension hides the panel without closing it, so the panel is back where it was once it lifts.
+  const panelShown = benchOpen && !panelSuspended;
   // The open Instrument, remembered per world for the session — the sheet closing doesn't reset the setup.
   const { tab: benchTab, setTab: setBenchTab, routeTab: routeBenchTab } = useBenchTab(worldId, { open: benchOpen });
   // Above the tab strip, so switching instruments (which unmounts the panel below it) doesn't discard the
@@ -148,12 +156,12 @@ export function useTestBench({
   // let an author read a semantic firing as proof their keywords work.
   const [semanticOn, setSemanticOn] = useState(false);
   const semantics = useTriggerSemantics(
-    benchOpen && benchTab === 'triggers', semanticOn, benchWorld, triggerText,
+    panelShown && benchTab === 'triggers', semanticOn, benchWorld, triggerText,
   );
   // The lens every instrument reads. It seeds from whatever location the author has open in the editor, so
   // opening the Bench mid-edit lands on the place they were already looking at.
   const benchLens = useBenchLens(worldId, benchWorld, {
-    open: benchOpen,
+    open: panelShown,
     selectedLocationId,
   });
   const statOverrides = useMemo(
@@ -166,32 +174,46 @@ export function useTestBench({
   });
   // Assembled only while the author is looking at it: every enabled lore entry is concatenated and
   // placeholder-scanned in there, which is not work to redo on each keystroke of an edit nobody is watching.
-  const aiContextLive = benchOpen && benchTab === 'aiContext';
+  const aiContextLive = panelShown && benchTab === 'aiContext';
   const aiContext = useMemo(
     () => (aiContextLive ? buildAiContext(benchWorld, benchLens.lens) : EMPTY_AI_CONTEXT),
     [aiContextLive, benchWorld, benchLens.lens],
   );
   // The Opening instrument's frozen rolls live above the assembly so a tab switch never rerolls them; the
   // assembly itself — stat settling, the roll table, the whole first prompt — runs only while watched.
-  const openingLive = benchOpen && benchTab === 'opening';
+  const openingLive = panelShown && benchTab === 'opening';
   const openingRolls = useOpeningRolls(benchWorld, openingLive);
+  // Which start and which opening the author is looking at: view state, never stored.
+  const [openingChoice, setOpeningChoice] = useState<OpeningChoice>({});
   const opening = useMemo(
-    () => (openingLive ? buildOpening(benchWorld, benchLens.lens, openingRolls.rolls) : EMPTY_OPENING),
-    [openingLive, benchWorld, benchLens.lens, openingRolls.rolls],
+    () => (openingLive ? buildOpening(benchWorld, benchLens.lens, openingRolls.rolls, openingChoice) : EMPTY_OPENING),
+    [openingLive, benchWorld, benchLens.lens, openingRolls.rolls, openingChoice],
   );
   const rerollOpening = useCallback(
-    () => openingRolls.reroll(benchLens.lens),
-    [openingRolls, benchLens.lens],
+    () => openingRolls.reroll(benchLens.lens, openingChoice.startLocationId),
+    [openingRolls, benchLens.lens, openingChoice.startLocationId],
+  );
+  const chooseOpeningStart = useCallback(
+    (startLocationId: string) => setOpeningChoice((prev) => ({ ...prev, startLocationId })),
+    [],
+  );
+  const chooseOpeningPersona = useCallback(
+    (personaId: string | null) => setOpeningChoice((prev) => ({ ...prev, personaId })),
+    [],
+  );
+  const chooseOpening = useCallback(
+    (openingKey: string) => setOpeningChoice((prev) => ({ ...prev, openingKey })),
+    [],
   );
   // The world's most recent save, read while the Bench is open so a turn played since it was last opened is
   // the one offered. Absent when the world has never been played — then there is no button at all.
   const [lastTurn, setLastTurn] = useState<LastTurn | null>(null);
   useEffect(() => {
-    if (!benchOpen) return;
+    if (!panelShown) return;
     let live = true;
     loadLastTurn(worldId, worldOverview.name).then((turn) => { if (live) setLastTurn(turn); });
     return () => { live = false; };
-  }, [benchOpen, worldId, worldOverview.name]);
+  }, [panelShown, worldId, worldOverview.name]);
   const pasteLastTurn = useCallback(() => {
     if (!lastTurn) return;
     setTriggerText(lastTurn.scene);
@@ -227,10 +249,10 @@ export function useTestBench({
   // One button for the whole feature: the flask opens the cheapest surface first, and closes whichever one
   // is showing.
   const toggleFlask = useCallback(() => {
-    if (benchOpen) closeBench();
+    if (panelShown) closeBench();
     else if (popoverOpen) closePopover();
     else setPopoverOpen(true);
-  }, [benchOpen, popoverOpen, closeBench, closePopover]);
+  }, [panelShown, popoverOpen, closeBench, closePopover]);
   // Chrome, not authoring: remembered globally, so "Open Test Bench" opens the Bench the way this author
   // works rather than the way the last world left it.
   const [placement, setPlacement] = useState<BenchPlacement>(readBenchPlacement);
@@ -247,8 +269,8 @@ export function useTestBench({
   // open, since closing marks the list seen — from the popover that would quiet a list still on screen.
   const openFindingItem = useCallback((section: FindingSection, itemId: string) => {
     navigateToItem(section, itemId);
-    if (isMobile && benchOpen) closeBench();
-  }, [navigateToItem, isMobile, benchOpen, closeBench]);
+    if (isMobile && panelShown) closeBench();
+  }, [navigateToItem, isMobile, panelShown, closeBench]);
   // A downloaded copy nobody has edited yet: the first quick fix is what diverges it from its source, and
   // that is worth saying once. After the note (or after any save) the copy is already edited and it'd be noise.
   const noteFirstDownloadEdit = useCallback(() => {
@@ -339,6 +361,12 @@ export function useTestBench({
     routeBenchTab(tab);
     setBenchOpen(true);
   }, [routedTab, routeBenchTab]);
+  useEffect(() => {
+    const tab = asBenchTab(requestedTab);
+    if (!tab) return;
+    routeBenchTab(tab);
+    setBenchOpen(true);
+  }, [requestedTab, requestKey, routeBenchTab]);
 
   const issues = {
     groups: bench.groups,
@@ -366,12 +394,12 @@ export function useTestBench({
   };
 
   return {
-    open: benchOpen,
+    open: panelShown,
     closeBench,
-    embedded: !isMobile && benchOpen && placement === 'embedded',
-    docked: !isMobile && benchOpen && placement === 'docked',
+    embedded: !isMobile && panelShown && placement === 'embedded',
+    docked: !isMobile && panelShown && placement === 'docked',
     toggleFlask,
-    active: benchOpen || popoverOpen,
+    active: panelShown || popoverOpen,
     count: bench.groups.length,
     newCount: bench.newCount,
     replaceSource,
@@ -382,7 +410,7 @@ export function useTestBench({
       onClose: closePopover,
       issues,
       onFixRule: applyBenchFix,
-      onOpenPanel: openPanelFromPopover,
+      onOpenPanel: panelSuspended ? undefined : openPanelFromPopover,
     },
     panelProps: {
       tab: benchTab,
@@ -416,6 +444,9 @@ export function useTestBench({
       opening: {
         data: opening,
         onReroll: rerollOpening,
+        onStartChange: chooseOpeningStart,
+        onPersonaChange: chooseOpeningPersona,
+        onOpeningChange: chooseOpening,
       },
     },
   };

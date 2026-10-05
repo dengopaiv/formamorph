@@ -22,6 +22,7 @@ vi.mock('@/services/WorldStorageService', () => ({
 vi.mock('react-toastify', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { toast } from 'react-toastify';
+import { toastTexts } from '@/test/toastText';
 import { useDeviceDownload } from './useDeviceDownload';
 
 const worldListing = {
@@ -55,6 +56,18 @@ function fakeWebp(): Uint8Array {
 }
 
 describe('useDeviceDownload', () => {
+  it.each([undefined, 'River Quill'])('uses publisher fallback only for blank device-download credit (%s)', async (author) => {
+    const { result } = renderHook(() => useDeviceDownload());
+    const publisher = { id: 'publisher', username: 'Wren' };
+    const credit = author ?? 'Wren';
+    mocks.fetchCatalogContent.mockResolvedValueOnce({ id: 'e', name: 'Guide', author });
+    await act(async () => { await result.current.download({ ...entityListing, author: publisher }); });
+    expect(mocks.exportEntityCard).toHaveBeenLastCalledWith(expect.anything(), undefined, expect.anything(), { author: credit });
+    mocks.fetchCatalogContent.mockResolvedValueOnce({ id: 'd', name: 'Lore', entries: [], author });
+    await act(async () => { await result.current.download({ ...dictionaryListing, author: publisher }); });
+    expect(mocks.serializeJsonBlob).toHaveBeenLastCalledWith(expect.objectContaining({ author: credit }), 2);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -99,6 +112,7 @@ describe('useDeviceDownload', () => {
       expect.objectContaining({ name: 'River Warden' }),
       undefined,
       { source: { sourceId: 'entity-listing', sourceName: 'River Warden' } },
+      undefined,
     );
     expect(mocks.downloadBlob).toHaveBeenLastCalledWith(expect.any(Blob), 'River Warden.webp');
     const entityBytes = new Uint8Array(await vi.mocked(mocks.downloadBlob).mock.calls[0][0].arrayBuffer());
@@ -165,7 +179,7 @@ describe('useDeviceDownload', () => {
 
     await act(async () => { await result.current.download(entityListing); });
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Portrait fetch failed'));
+    await waitFor(() => expect(toastTexts(vi.mocked(toast.error))).toContain('Portrait fetch failedView Details →'));
     expect(mocks.downloadBlob).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
 
@@ -181,14 +195,14 @@ describe('useDeviceDownload', () => {
 
     await act(async () => { await result.current.download(worldListing); });
 
-    expect(toast.error).toHaveBeenCalledWith('Content fetch failed');
+    expect(toastTexts(vi.mocked(toast.error))).toContain('Content fetch failedView Details →');
     expect(mocks.downloadBlob).not.toHaveBeenCalled();
 
     mocks.fetchCatalogContent.mockResolvedValueOnce({ id: 'published-world-id', worldOverview: { name: 'Sedge Landing' } });
     mocks.serializeJsonBlob.mockRejectedValueOnce(new Error('Serialization failed'));
     await act(async () => { await result.current.download(worldListing); });
 
-    expect(toast.error).toHaveBeenCalledWith('Serialization failed');
+    expect(toastTexts(vi.mocked(toast.error))).toContain('Serialization failedView Details →');
     expect(mocks.downloadBlob).not.toHaveBeenCalled();
   });
 

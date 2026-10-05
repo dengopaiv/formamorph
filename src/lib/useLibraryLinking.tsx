@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { HelpTopicModal } from '@/components/HelpButton';
 import ConnectReferencesModal from '@/components/modals/ConnectReferencesModal';
 import DictionaryEditorModal from '@/components/modals/DictionaryEditorModal';
@@ -8,6 +9,7 @@ import ImportContentModal from '@/components/modals/ImportContentModal';
 import LinkToLibraryModal from '@/components/modals/LinkToLibraryModal';
 import type { LibraryPick } from '@/components/modals/AddFromLibraryModal';
 import { parseDictionaryImport } from '@/lib/dictionaryFile';
+import { readLibraryDetails } from '@/lib/contentAuthor';
 import { contentLinkStatusLine } from '@/lib/contentLink';
 import { isHelpSeen } from '@/lib/helpSeenStore';
 import { withEntityLocations } from '@/lib/entityPresence';
@@ -22,6 +24,7 @@ import {
 import {
   kindOf, libraryItemData, loadLinkedSources, saveCopyToLibrary, type LibraryKind,
 } from '@/lib/librarySources';
+import { describePlaceholders } from '@/lib/placeholders';
 import {
   adoptBookPlaceholders, adoptEntityPlaceholders, remapBookChips, remapEntityChips,
 } from '@/lib/placeholderHomes';
@@ -29,7 +32,11 @@ import {
   planConnections, suggestedChoices, unresolvedReferences,
   type ConnectionPlan, type ReferenceChoices, type ReferenceRow,
 } from '@/lib/worldReferences';
-import type { Dictionary, Entity, GameLocation, Placeholder } from '@/types';
+import { adoptOwnedTraits } from '@/lib/portableTraits';
+import { blueprintChipsRemovedNotice, dropBookBlueprintChips, dropEntityBlueprintChips } from '@/lib/blueprintChips';
+import { blueprintIds } from '@/lib/placeholderBlueprints';
+import { bindCarriedBlueprints, blueprintBindWorld } from '@/lib/blueprintTravel';
+import type { Dictionary, Entity, GameLocation, Placeholder, PlaceholderGroup, Trait, TraitGroup } from '@/types';
 
 const HELP_TOPIC = 'library.linkedContent';
 
@@ -58,7 +65,12 @@ interface LibraryLinkingOptions {
   placeholders: Placeholder[];
   /** The world's shared list on its own — what an arriving copy's world-owned references resolve against. */
   worldPlaceholders: Placeholder[];
+  /** The world's placeholder folders, which say which shared placeholders are blueprints. */
+  placeholderGroups: PlaceholderGroup[];
   locations: GameLocation[];
+  /** The world's own traits and groups, which an entity's owned trait requirements name or bind to. */
+  traits: Trait[];
+  traitGroups: TraitGroup[];
   updateEntity: (entity: Entity) => void;
   updateDictionary: (book: Dictionary) => void;
   setEntities: (entities: Entity[]) => void;
@@ -108,7 +120,10 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
   const [pendingIds, setPendingIds] = useState<string[]>([]);
   const [linkPickerFor, setLinkPickerFor] = useState<LinkableContent | null>(null);
   const [libraryEditor, setLibraryEditor] = useState<{ kind: LibraryKind; id: string } | null>(null);
-  const [importReview, setImportReview] = useState<{ kind: LibraryKind; item: LinkableContent } | null>(null);
+  const [importReview, setImportReview] = useState<{
+    kind: LibraryKind; item: LinkableContent;
+    libraryDetails?: Awaited<ReturnType<typeof importCharacterFile>>['libraryDetails'];
+  } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [connect, setConnect] = useState<ConnectFlow | null>(null);
   const [choices, setChoices] = useState<ReferenceChoices>({});
@@ -126,6 +141,9 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
     entities: options.entities,
     dictionaries: options.dictionaries,
     placeholders: options.worldPlaceholders,
+    placeholderGroups: options.placeholderGroups,
+    traits: options.traits,
+    traitGroups: options.traitGroups,
     writeItem: (item) => (kindOf(item) === 'dictionary'
       ? updateDictionary(item as Dictionary)
       : updateEntity(item as Entity)),
@@ -135,9 +153,9 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
 
   /**
    * Bring the world's linked copies up to date with the library items their author owns, and let go of
-   * the items that are gone. Letting go is silent: the player deleted the item, and the copy's own row is
-   * where the state change reads.
+   * the items that are gone. Each outcome is announced once per pass.
    */
+  const announcedUnlinks = useRef(new Set<string>());
   const syncFromLibrary = useCallback(async () => {
     const current = latest.current;
     const linkedIds = [...current.entities, ...current.dictionaries]
@@ -158,6 +176,7 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
     current.setOwnedLibraryIds(sources.filter((source) => source.owned).map((source) => source.id));
     const next = syncWorldContent({
       entities: current.entities, dictionaries: current.dictionaries, placeholders: current.worldPlaceholders,
+      placeholderGroups: current.placeholderGroups, traits: current.traits, traitGroups: current.traitGroups,
     }, sources);
     if (!next.updated && !next.unlinked) return;
     if (next.entities !== current.entities) current.setEntities(next.entities);
@@ -165,10 +184,21 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
     // A reference the source has newly introduced arrives as a placeholder of its own; Save Connections is
     // where the author points it at one they already have.
     next.toAdd.forEach(current.addPlaceholder);
-    if (!next.updated) return;
-    toast.info(next.updated === 1
-      ? 'Formamorph updated one linked copy from your library.'
-      : `Formamorph updated ${next.updated} linked copies from your library.`);
+    if (next.updated) {
+      toast.info(next.updated === 1
+        ? 'Formamorph updated one linked copy from your library.'
+        : `Formamorph updated ${next.updated} linked copies from your library.`);
+    }
+    // The world now differs from its saved copy, so the author is told what changed it. Once per copy:
+    // Exit Without Saving restores the link, and the pass lets go of it again on the way out.
+    const fresh = next.unlinkedCopies.filter((copy) => !announcedUnlinks.current.has(copy.id));
+    fresh.forEach((copy) => announcedUnlinks.current.add(copy.id));
+    if (fresh.length) {
+      const name = describePlaceholders(fresh[0].name, current.placeholders) || 'Untitled';
+      toast.info(fresh.length === 1
+        ? `Formamorph unlinked “${name}” because its library item is gone.`
+        : `Formamorph unlinked ${fresh.length} copies whose library items are gone.`);
+    }
   }, []);
 
   // Which library items this world follows, as a value an effect can watch. Keyed on the set rather than
@@ -203,11 +233,12 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
 
   const saveToLibrary = useCallback(async (item: LinkableContent) => {
     try {
-      const source = await saveCopyToLibrary(item, placeholders, locations);
+      const { traits, traitGroups, entities } = latest.current;
+      const source = await saveCopyToLibrary(item, placeholders, locations, undefined, { traits, traitGroups, entities });
       applyLink(item, source, false);
       toast.success(`“${source.name}” saved to your library.`);
     } catch (error) {
-      toast.error((error as Error).message || 'Could not save to your library.');
+      toastError(error, 'Could not save to your library.');
     }
   }, [applyLink, locations, placeholders]);
 
@@ -230,26 +261,41 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
     // Each copy resolves against the world plus what the copies before it brought in, so two copies
     // expecting the same new reference land on one placeholder rather than two.
     const gained: Placeholder[] = [];
+    // Two copies added together must not share owned trait ids, so each sees the ones before it.
+    const added: Entity[] = [];
+    const blueprintWorld = { placeholders: current.worldPlaceholders, placeholderGroups: current.placeholderGroups };
+    const blueprints = blueprintIds(blueprintWorld);
+    const bindWorld = blueprintBindWorld(blueprintWorld);
+    let dropped = 0;
     for (const entry of pending) {
       const shared = [...current.worldPlaceholders, ...gained];
       if (entry.kind === 'dictionary') {
         const adopted = adoptBookPlaceholders(entry.item as Dictionary, shared, plan.placeholders);
         gained.push(...adopted.toAdd);
-        current.addBookToWorld(withConnections(adopted.book, adopted.connections));
+        const kept = dropBookBlueprintChips(adopted.book, blueprints);
+        dropped += kept.dropped;
+        current.addBookToWorld(withConnections(kept.book, adopted.connections));
       } else {
-        const adopted = adoptEntityPlaceholders(entry.item as Entity, shared, plan.placeholders);
+        const bound = bindCarriedBlueprints(entry.item as Entity, bindWorld);
+        const adopted = adoptEntityPlaceholders(bound.entity, shared, plan.placeholders);
         gained.push(...adopted.toAdd);
-        const { locationRefs = [], ...rest } = adopted.entity;
+        const kept = dropEntityBlueprintChips(adopted.entity, blueprints);
+        dropped += bound.dropped + kept.dropped;
+        const { locationRefs = [], ...rest } = kept.entity;
         const used = Object.fromEntries(locationRefs.flatMap((ref) => {
           const id = plan.locations[ref.id] ?? ref.id;
           return placeIds.has(id) ? [[ref.id, id]] : [];
         }));
-        const placed = withEntityLocations(rest as Entity, Object.values(used));
+        const placed = adoptOwnedTraits(withEntityLocations(rest as Entity, Object.values(used)), {
+          traits: current.traits, traitGroups: current.traitGroups, entities: [...current.entities, ...added],
+        });
+        added.push(placed);
         current.addEntityToWorld(withConnections(placed, { ...adopted.connections, ...used }));
       }
       if (entry.source) notePendingLink(entry.source.id);
     }
     gained.forEach(current.addPlaceholder);
+    if (dropped) toast.info(blueprintChipsRemovedNotice(dropped, 'import'));
   }, [notePendingLink]);
 
   /**
@@ -408,12 +454,16 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
     if (!file) return;
     const kind = importKindRef.current;
     try {
-      const item: LinkableContent = kind === 'dictionary'
-        ? parseDictionaryImport(await parseJsonText(await file.text()), file.name.replace(/\.[^.]+$/, ''))
-        : (await importCharacterFile(file)).entity;
-      setImportReview({ kind, item });
+      if (kind === 'dictionary') {
+        const raw = await parseJsonText(await file.text());
+        const item = parseDictionaryImport(raw, file.name.replace(/\.[^.]+$/, ''));
+        setImportReview({ kind, item, libraryDetails: readLibraryDetails(raw) });
+      } else {
+        const { entity: item, libraryDetails } = await importCharacterFile(file);
+        setImportReview({ kind, item, libraryDetails });
+      }
     } catch (error) {
-      toast.error((error as Error).message || 'Could not read this file.');
+      toastError(error, 'Could not read this file.');
     }
   }, []);
 
@@ -422,14 +472,14 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
     const review = importReview;
     setImportReview(null);
     if (!review) return;
-    const { kind, item } = review;
+    const { kind, item, libraryDetails } = review;
     let entry: PendingAdd = { kind, item };
     if (link) {
       try {
-        const source = await saveCopyToLibrary(item, placeholders, locations);
+        const source = await saveCopyToLibrary(item, placeholders, locations, libraryDetails, latest.current);
         entry = { kind, item: { ...item, link: linkToSource(source) }, source };
       } catch (error) {
-        toast.error((error as Error).message || 'Could not save to your library.');
+        toastError(error, 'Could not save to your library.');
         return;
       }
     }
@@ -438,6 +488,11 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
 
   /** The world was saved or rolled back, so nothing is waiting on it any more. */
   const clearPendingLinks = useCallback(() => setPendingIds([]), []);
+
+  const { traits, traitGroups, entities, worldPlaceholders } = options;
+  const traitWorld = useMemo(
+    () => ({ traits, traitGroups, entities, placeholders: worldPlaceholders }), [traits, traitGroups, entities, worldPlaceholders],
+  );
 
   const dialogs: ReactNode = (
     <>
@@ -466,6 +521,7 @@ export function useLibraryLinking(options: LibraryLinkingOptions) {
       <HelpTopicModal topicId={HELP_TOPIC} open={helpOpen} onOpenChange={setHelpOpen} />
       <EntityEditorModal
         entityId={libraryEditor?.kind === 'entity' ? libraryEditor.id : null}
+        traitWorld={traitWorld}
         onClose={() => { setLibraryEditor(null); void syncFromLibrary(); }}
       />
       <DictionaryEditorModal

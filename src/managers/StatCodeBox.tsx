@@ -1,16 +1,18 @@
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { LayoutTemplate } from "lucide-react";
-import { CODE_BOUND_FIELDS, executeStatCode, type CodeBoundField } from "@/lib/statCodeExecutor";
+import { CODE_BOUND_FIELDS, entityTraitsPath, executeStatCode, type CodeBoundField } from "@/lib/statCodeExecutor";
 import { codePinText } from "@/lib/placeholderPins";
-import { sandboxPlaceholders } from "@/lib/statCodePlaceholders";
+import { sandboxDictionaries, sandboxPlaceholders } from "@/lib/statCodePlaceholders";
 import { placeholderPathLabel } from "@/lib/statCodePaths";
-import { sandboxTraits } from "@/lib/statCodeTraits";
+import { migrateStatCodeRoutes } from "@/lib/statCodeRoutes";
+import { sandboxTraits, unplayedEntities } from "@/lib/statCodeTraits";
+import type { CodeEntityNames, CodePlaceholders, CodeTraitPlace } from "@/lib/statCodeAnalysis";
 import { StatCodeTemplateDialog } from "@/components/modals/StatCodeTemplateDialog";
 import { CodeArea } from "@/components/prompt/CodeArea";
+import { STAT_CODE_SURFACE } from "@/lib/statCodeSurface";
 import { TIMING_LABEL, type StatCodeTiming } from "@/lib/statCodeTiming";
-import type { PlaceholderOwners } from "@/lib/placeholderHomes";
-import type { Placeholder, Stat, Trait } from "@/types";
+import type { Stat, Trait } from "@/types";
 
 /** Test Code names each bound a run wrote with its Details field label. */
 const BOUND_LABELS: Record<CodeBoundField, string> = { min: "Min", max: "Max", regen: "Regen" };
@@ -30,14 +32,19 @@ export interface StatCodeBoxContext {
   statNames: string[];
   /** The edited stat's own code name. */
   selfName: string;
-  /** The placeholder tree the editor completes over and a run reads. */
-  placeholders: { list: readonly Placeholder[]; owners?: PlaceholderOwners };
+  /** The placeholder tree and the books the editor completes over and a run reads. */
+  placeholders: CodePlaceholders;
   /** What a template's placeholder slot picks from. */
-  placeholderNames: string[];
-  /** Trait code names: completions, template slots, and the run's entries. */
+  placeholderPlaces: CodeTraitPlace[];
+  /** Trait code names: completions and the run's entries. */
   traitNames: string[];
+  /** The world's traits in Traits-tab order with their group paths: what a template's trait slot picks from. */
+  traitPlaces: CodeTraitPlace[];
   /** The world's traits, for the run's sandbox entries. */
   traits: readonly Trait[];
+  /** Every authored entity's code name and trait code names: completions, name checks, and the run's entries.
+   *  The persona-capable ones' traits are what `persona.traits` completes. */
+  entities: CodeEntityNames[];
 }
 
 /**
@@ -67,7 +74,9 @@ export function StatCodeBox({ timing, stat, value, onChange, context }: {
   const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const label = TIMING_LABEL[timing];
-  const { codeNamedStats, statNames, selfName, placeholders, placeholderNames, traitNames, traits } = context;
+  const {
+    codeNamedStats, statNames, selfName, placeholders, placeholderPlaces, traitNames, traitPlaces, traits, entities,
+  } = context;
 
   /** Drop what the last test said. Editing the code makes every part of that report stale together. */
   const clearReport = useCallback(() => {
@@ -91,18 +100,19 @@ export function StatCodeBox({ timing, stat, value, onChange, context }: {
       // stays off the world editor's own bundle.
       const { statCodeDiagnostics, summarizeProblems } = await import('@/lib/statCodeAnalysis');
       setProblems(summarizeProblems(statCodeDiagnostics(value, {
-        placeholders, traits: traitNames, statNames, selfName,
+        placeholders, traits: traitNames, entities, statNames, selfName,
       })));
     } catch {
       // What the run itself found is the point; the count is what the editor adds to it.
     }
 
     try {
-      // No playthrough behind the editor: an unrolled placeholder reads as a fresh draw, and the player
-      // has no traits. A switch is reported here and never applied.
+      // No playthrough behind the editor: an unrolled placeholder reads as a fresh draw, no one holds a trait,
+      // and no persona plays. A switch is reported here and never applied.
       const placeholderEntries = sandboxPlaceholders({
         placeholders: placeholders.list, owners: placeholders.owners, rolls: {},
       });
+      const owners = placeholderEntries.owners;
       const traitEntries = sandboxTraits(
         { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [...traits], groups: [] } },
         placeholders.list,
@@ -111,7 +121,11 @@ export function StatCodeBox({ timing, stat, value, onChange, context }: {
         // A half-filled stat still runs: the executor defaults every number it marshals, so only the id
         // and the code name have to be real.
         value, codeNamedStats, { ...stat, name: selfName } as Stat,
-        { clock: TEST_CLOCK[timing], placeholders: placeholderEntries, traits: traitEntries },
+        {
+          clock: TEST_CLOCK[timing], placeholders: placeholderEntries.top, traits: traitEntries,
+          entities: unplayedEntities(entities, owners),
+          dictionaries: sandboxDictionaries(placeholders.dictionaries ?? [], owners),
+        },
       );
       if (outcome.error) {
         setError(outcome.error);
@@ -129,12 +143,24 @@ export function StatCodeBox({ timing, stat, value, onChange, context }: {
           return 'unpin' in entry ? `${at} unpinned` : `${at} = ${codePinText(entry.value)}`;
         }),
         ...(outcome.traits ?? []).map((entry) => `${entry.name} switched ${entry.enabled ? 'on' : 'off'}`),
+        ...(outcome.entities ?? []).flatMap(({ entity, traits: switched = [] }) =>
+          switched.map((entry) => `${entityTraitsPath(entity)}.${entry.name} switched ${entry.enabled ? 'on' : 'off'}`)),
       ];
       if (parts.length) setResult(parts.join(' · '));
       setWarnings([
         ...(outcome.unknownPlaceholders ? [`Unknown placeholder paths. Writes ignored: ${outcome.unknownPlaceholders.join(', ')}.`] : []),
+        ...(outcome.unknownOwnerPlaceholders ? [`Placeholders of owners not in play. Writes ignored: ${outcome.unknownOwnerPlaceholders.join(', ')}.`] : []),
         ...(outcome.unknownTraits ? [`Unknown trait names. Writes ignored: ${outcome.unknownTraits.join(', ')}.`] : []),
         ...(outcome.acquiredWrites ? [`acquired is read-only. Writes ignored: ${outcome.acquiredWrites.join(', ')}.`] : []),
+        ...(outcome.unknownEntities ? [`Unknown entity names. Writes ignored: ${outcome.unknownEntities.join(', ')}.`] : []),
+        ...(outcome.readOnlyWrites ? [`Read-only fields. Writes ignored: ${outcome.readOnlyWrites.join(', ')}.`] : []),
+        ...(outcome.entities ?? []).flatMap(({ entity, unknownTraits, acquiredWrites }) => {
+          const at = (names: string[]) => names.map((name) => `${entityTraitsPath(entity)}.${name}`).join(', ');
+          return [
+            ...(unknownTraits ? [`Unknown trait names. Writes ignored: ${at(unknownTraits)}.`] : []),
+            ...(acquiredWrites ? [`acquired is read-only. Writes ignored: ${at(acquiredWrites)}.`] : []),
+          ];
+        }),
       ]);
     } catch (thrown) {
       setError((thrown as Error).message);
@@ -149,10 +175,12 @@ export function StatCodeBox({ timing, stat, value, onChange, context }: {
         value={value}
         onChange={write}
         ariaLabel={`Stat Code ${label}`}
+        surface={STAT_CODE_SURFACE}
         statNames={statNames}
         selfName={selfName}
         placeholders={placeholders}
         traits={traitNames}
+        entities={entities}
         // Its caption is the section heading, which full screen leaves behind — so the field names
         // itself in the toolbar and stays labeled in both states.
         label={label}
@@ -170,9 +198,10 @@ export function StatCodeBox({ timing, stat, value, onChange, context }: {
         stats={codeNamedStats}
         currentStatId={stat.id}
         hasExistingCode={!!value.trim()}
-        onInsert={write}
-        placeholderNames={placeholderNames}
-        traitNames={traitNames}
+        onInsert={(code) => write(migrateStatCodeRoutes(code, placeholders))}
+        placeholderPlaces={placeholderPlaces}
+        traitPlaces={traitPlaces}
+        entities={entities}
       />
 
       <div className="flex flex-wrap justify-between items-center gap-2">

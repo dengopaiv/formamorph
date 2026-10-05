@@ -1,5 +1,5 @@
-import { memo, type ComponentProps } from 'react';
-import { Streamdown, defaultRehypePlugins } from 'streamdown';
+import { memo, useMemo, type ComponentProps } from 'react';
+import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown';
 import { createCodePlugin } from '@streamdown/code';
 import { markdownCodeThemes } from '@/lib/markdownCodeTheme';
 import remarkGfm from 'remark-gfm';
@@ -7,24 +7,28 @@ import remarkBreaks from 'remark-breaks';
 import remarkFlexibleMarkers from 'remark-flexible-markers';
 import { remarkSubSuper } from '@/lib/remarkSubSuper';
 import { rehypePreviewTint } from '@/lib/previewTint';
-import { getRevealTiming } from '@/lib/revealTimingStore';
+import { rehypeQuoteSpans } from '@/lib/rehypeQuoteSpans';
+import { getRevealTiming, type RevealTiming } from '@/lib/revealTimingStore';
 import { cn } from '@/lib/utils';
 import 'streamdown/styles.css';
 
 // `singleTilde: false` hands `~x~` to remarkSubSuper (subscript); GFM keeps `~~strike~~`.
 // The marker plugin is Obsidian's `==highlight==`, plus `=r=…==` for a color key; `remove` drops an empty
 // marker rather than leaving a hollow mark for the stylesheet to paint. Styling lives in index.css against
-// the classes it emits.
+// the classes it emits. `codeMeta` is Streamdown's: it hands a fence's info string after the language to the
+// block renderer.
 const REMARK_PLUGINS: ComponentProps<typeof Streamdown>['remarkPlugins'] = [
   [remarkGfm, { singleTilde: false }],
   remarkBreaks,
   remarkSubSuper,
   [remarkFlexibleMarkers, { actionForEmptyContent: 'remove' }],
+  defaultRemarkPlugins.codeMeta,
 ];
 
 // Streamdown boxes every table in a bordered card inside a second bordered scroller. Our markdown
 // surfaces are already panels, so that reads as a box in a box. Keep the scroller and the solid fill
-// that sets rows off against a translucent panel; drop the borders.
+// that sets rows off against a translucent panel; drop the borders. Cells opt out of the root's
+// `overflow-wrap: anywhere`, which drops a column's min-content to one letter and splits short words.
 // Streamdown ships no highlighter of its own; the code plugin supplies Shiki, themed off the app's
 // palette so a fence matches the stat-code editor.
 const PLUGINS: ComponentProps<typeof Streamdown>['plugins'] = {
@@ -58,10 +62,26 @@ const REHYPE_PLUGINS = [raw, [sanitizePlugin, MARK_SCHEMA], harden] as
 const TINT_REHYPE_PLUGINS: ComponentProps<typeof Streamdown>['rehypePlugins'] =
   [...(REHYPE_PLUGINS ?? []), rehypePreviewTint];
 
-const COMPONENTS: ComponentProps<typeof Streamdown>['components'] = {
+// Same placement, same reason: the quote spans are ours, added after the sanitizer rather than allowed
+// through it, so author markdown gains nothing from them.
+const QUOTE_REHYPE_PLUGINS: ComponentProps<typeof Streamdown>['rehypePlugins'] =
+  [...(REHYPE_PLUGINS ?? []), rehypeQuoteSpans];
+
+/** Pick one of the three module constants. Streamdown memoizes each block on plugin-array identity, so a
+ *  fresh array per render would repaint every block on every token. The two flags are alternatives — a
+ *  tinted pane is the author's preview of a field, not story text — so `tinted` wins. */
+function rehypePluginsFor(tinted: boolean, dialogue: boolean): ComponentProps<typeof Streamdown>['rehypePlugins'] {
+  if (tinted) return TINT_REHYPE_PLUGINS;
+  return dialogue ? QUOTE_REHYPE_PLUGINS : REHYPE_PLUGINS;
+}
+
+/** Renderers for markdown elements, by tag name. */
+export type MarkdownComponents = NonNullable<ComponentProps<typeof Streamdown>['components']>;
+
+const COMPONENTS: MarkdownComponents = {
   table: ({ node: _node, className, children, ...props }) => (
     <div
-      className="my-4 overflow-x-auto rounded-md bg-background [&_tr]:divide-x [&_tr]:divide-border"
+      className="my-4 overflow-x-auto rounded-md bg-background [&_tr]:divide-x [&_tr]:divide-border [&_td]:[overflow-wrap:break-word] [&_th]:[overflow-wrap:break-word]"
       data-streamdown="table-wrapper"
     >
       <table className={cn('w-full divide-y divide-border', className)} data-streamdown="table" {...props}>
@@ -73,8 +93,8 @@ const COMPONENTS: ComponentProps<typeof Streamdown>['components'] = {
 
 /**
  * Renders text as GitHub-flavored Markdown via Streamdown, which formats incomplete markdown as it
- * streams in. Used for AI narration and for world descriptions. `controls={false}` hides the
- * table/code copy/download buttons we don't need.
+ * streams in. Used for AI narration and for world descriptions. `controls={false}` hides Streamdown's own
+ * table and code buttons; the help window adds its own code toolbar through `components`.
  *
  * `animate` runs the per-word entrance animation on newly-streamed words (used for the live narration
  * reveal; off for committed/static text so it doesn't re-animate on pagination). `animation` is the
@@ -84,25 +104,36 @@ const COMPONENTS: ComponentProps<typeof Streamdown>['components'] = {
  *
  * `tinted` turns on the author-side chip highlighting: the caller marks up resolved placeholder values and
  * they come back as chip-colored marks. Off everywhere the player reads.
+ *
+ * `dialogue` wraps quoted speech in a span the stylesheet colors. On for story text — narration and the
+ * player's own echoed lines — and off for the reasoning aside, the command preview, and every pane outside
+ * the game view.
+ *
+ * `components` replaces the renderer of the tags it names, such as the reader's links. Pass a stable
+ * object: Streamdown memoizes each block on its identity.
+ *
+ * `timing` is the word timing of a reveal with its own pace, such as a help answer. Without it the
+ * renderer reads the narration timing store.
  */
 export const MarkdownRenderer = memo(function MarkdownRenderer(
-  { text, animate = false, animation = 'fadeIn', easing, tinted = false }: { text: string; animate?: boolean; animation?: string; easing?: string; tinted?: boolean },
+  { text, animate = false, animation = 'fadeIn', easing, timing, tinted = false, dialogue = false, components }: { text: string; animate?: boolean; animation?: string; easing?: string; timing?: RevealTiming; tinted?: boolean; dialogue?: boolean; components?: MarkdownComponents },
 ) {
+  const allComponents = useMemo(() => (components ? { ...COMPONENTS, ...components } : COMPONENTS), [components]);
   // Read the current fade timing at render (a new sentence's release re-renders us via the text prop),
   // so the words just added animate at the model's current smoothed rate.
   return (
     <div className="[overflow-wrap:anywhere] [&_ul]:list-outside [&_ul]:pl-6 [&_ol]:list-outside [&_ol]:pl-6">
       <Streamdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={tinted ? TINT_REHYPE_PLUGINS : REHYPE_PLUGINS}
-        components={COMPONENTS}
+        rehypePlugins={rehypePluginsFor(tinted, dialogue)}
+        components={allComponents}
         plugins={PLUGINS}
         controls={false}
         // Committed text renders straight from the parsed blocks. Streamdown's `streaming` mode routes
         // them through state committed in a transition, which leaves finished text a render behind —
         // visible when paging history, where nothing follows to flush it.
         mode={animate ? 'streaming' : 'static'}
-        animated={animate ? { animation, sep: 'word', easing, ...getRevealTiming() } : false}
+        animated={animate ? { animation, sep: 'word', easing, ...(timing ?? getRevealTiming()) } : false}
         isAnimating={animate}
       >
         {text}

@@ -5,15 +5,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import CommunityCreationsBrowser from './CommunityCreationsBrowser';
 import WorldStorageService from '@/services/WorldStorageService';
 import EventService from '@/services/EventService';
+import { replaceCatalog } from '@/lib/worldCatalog';
 import { toast } from 'react-toastify';
 import { daysFrom, serverEvent, stubMatchMedia, withoutProse } from '@/test/serverEvents';
 import type { WorldRecord } from '@/components/WorldDetails';
-import type { ServerEvent } from '@/types';
+import type { ContestPlace, ServerEvent } from '@/types';
 
 vi.mock('react-toastify', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 vi.mock('@/services/AuthService', () => ({
-  default: { token: 'test-token', getCurrentUser: () => ({ username: 'reader' }) },
+  default: { token: 'test-token', isAuthenticated: () => true, getCurrentUser: () => ({ username: 'reader' }) },
 }));
 
 vi.mock('@/services/WorldStorageService', () => ({
@@ -24,14 +25,14 @@ vi.mock('@/services/WorldStorageService', () => ({
     // The details modal fetches these on open; a missing one rejects in an effect and fails the run
     // as an unhandled error even while every assertion passes.
     fetchListingDetails: vi.fn(async () => null),
+    readListingDetails: vi.fn(async () => ({ status: 'unreachable' })),
     fetchDependencies: vi.fn(async () => []),
     fetchAddons: vi.fn(async () => []),
   },
   CONTEST_PLACED: 'CONTEST_PLACED',
 }));
 
-// The catalog's IndexedDB store. What a withdrawal corrects in it is not what this file is about; that
-// the entry leaves the grid is.
+// The catalog's IndexedDB store. What a withdrawal writes to it is read back from this mock.
 vi.mock('@/lib/worldCatalog', () => ({ replaceCatalog: vi.fn(async () => {}) }));
 
 const server = vi.hoisted(() => ({ events: [] as unknown[], detail: {} as Record<string, unknown> }));
@@ -84,6 +85,24 @@ const decided = (
   })),
 });
 
+
+/**
+ * The same contest decided with the places spelled out, for a podium that shares one.
+ *
+ * `decided` derives the place from the position, which is exactly what a tie breaks: two worlds in 1st
+ * are followed by a 3rd, and no position can say that.
+ */
+const decidedWithPlaces = (
+  event: ServerEvent,
+  podium: Array<[place: ContestPlace, worldId: string | null, worldName: string, authorName?: string]>,
+): ServerEvent => ({
+  ...event,
+  resultsAnnouncedAt: at(-1),
+  resultsMessageId: 'm-results',
+  placements: podium.map(([place, worldId, worldName, authorName]) => ({
+    place, worldId, worldName, authorName: authorName ?? 'sedgewright',
+  })),
+});
 
 const listing = (name: string, over: Record<string, unknown> = {}) => ({
   _id: name, id: name, name, kind: 'world', description: `${name} description`,
@@ -200,7 +219,7 @@ describe('what the contest grid shows in each of its three states', () => {
     expect(screen.queryByText(/Place/)).not.toBeInTheDocument();
   });
 
-  it('stands the entries by likes once the window closes for judging', async () => {
+  it('shows every entry while the contest is judged', async () => {
     server.events = [contest({ startsAt: at(-20), endsAt: at(-2) })];
     catalog.items = [
       listing('Saltmarsh', { contest_event_id: 'e1', likes: 2 }),
@@ -210,7 +229,8 @@ describe('what the contest grid shows in each of its three states', () => {
     renderBrowser();
     await openContestTab();
 
-    await waitFor(() => expect(gridNames()).toEqual(['Thawline', 'Coldkeep', 'Saltmarsh']));
+    // The order is a shuffle (covered in contests.test.ts); the grid only has to show all three entries.
+    await waitFor(() => expect(gridNames().sort()).toEqual(['Coldkeep', 'Saltmarsh', 'Thawline']));
     expect(screen.getByText(/being judged/)).toBeInTheDocument();
   });
 
@@ -260,6 +280,77 @@ describe('what the contest grid shows in each of its three states', () => {
     expect(await screen.findByText('Won by Saltmarsh — sedgewright · 1 more placed')).toBeInTheDocument();
   });
 
+  it('counts a shared 1st in the status line, and counts only the worlds below it', async () => {
+    server.events = [decidedWithPlaces(
+      contest({ startsAt: at(-20), endsAt: at(-2) }),
+      [[1, 'Saltmarsh', 'Saltmarsh'], [1, 'Coldkeep', 'Coldkeep'], [3, 'Thawline', 'Thawline']],
+    )];
+    catalog.items = [listing('Saltmarsh', { contest_event_id: 'e1' })];
+    renderBrowser();
+    await openContestTab();
+
+    expect(await screen.findByText('2 worlds tied for 1st · 1 more placed')).toBeInTheDocument();
+  });
+
+  it('says only that the results are out when the archive row kept no podium', async () => {
+    // What a slim archive row from a server that predates the podium looks like: decided, with nobody
+    // named. There is no winner to count, so the bar says the one thing it knows.
+    server.events = [decidedWithPlaces(contest({ startsAt: at(-20), endsAt: at(-2) }), [])];
+    catalog.items = [listing('Saltmarsh', { contest_event_id: 'e1' })];
+    renderBrowser();
+    await openContestTab();
+
+    expect(await screen.findByText('Results announced')).toBeInTheDocument();
+    expect(screen.queryAllByTestId('podium-card')).toHaveLength(0);
+  });
+
+  it('gives every placed world its own card and its own metal, deleted listings included', async () => {
+    // Two golds whose place repeats, and two bronzes whose listings are gone, so neither the place nor a
+    // missing id can serve as the key.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    server.events = [decidedWithPlaces(
+      contest({ startsAt: at(-20), endsAt: at(-2) }),
+      [
+        [1, 'Saltmarsh', 'Saltmarsh'], [1, 'Coldkeep', 'Coldkeep'],
+        [3, null, 'Gone North'], [3, null, 'Gone South'],
+      ],
+    )];
+    catalog.items = [listing('Saltmarsh', { contest_event_id: 'e1' })];
+    renderBrowser();
+    await openContestTab();
+
+    const cards = await screen.findAllByTestId('podium-card');
+    expect(cards).toHaveLength(4);
+    expect(cards.map((card) => within(card).getByText(/^Gone|^Saltmarsh$|^Coldkeep$/).textContent))
+      .toEqual(['Saltmarsh', 'Coldkeep', 'Gone North', 'Gone South']);
+    expect(cards.map((card) => card.className.includes('border-gold/50')))
+      .toEqual([true, true, false, false]);
+    expect(cards.map((card) => card.className.includes('border-bronze/50')))
+      .toEqual([false, false, true, true]);
+    expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    consoleError.mockRestore();
+  });
+
+  it('badges each world that shares 1st place, and orders the grid by the podium', async () => {
+    server.events = [decidedWithPlaces(
+      contest({ startsAt: at(-20), endsAt: at(-2) }),
+      [[1, 'Saltmarsh', 'Saltmarsh'], [1, 'Coldkeep', 'Coldkeep'], [3, 'Thawline', 'Thawline']],
+    )];
+    // Saltmarsh is last by likes and last in the catalog, so only the podium's array order can lead.
+    catalog.items = [
+      listing('Thawline', { contest_event_id: 'e1', likes: 9 }),
+      listing('Coldkeep', { contest_event_id: 'e1', likes: 5 }),
+      listing('Saltmarsh', { contest_event_id: 'e1', likes: 2 }),
+    ];
+    renderBrowser();
+    await openContestTab();
+
+    await waitFor(() => expect(gridNames()).toEqual(['Saltmarsh', 'Coldkeep', 'Thawline']));
+    expect(screen.getAllByText(/1st Place —/)).toHaveLength(2);
+    expect(screen.getAllByText(/3rd Place —/)).toHaveLength(1);
+    expect(screen.queryByText(/2nd Place —/)).not.toBeInTheDocument();
+  });
+
   it('carries the place badge into the ordinary catalog, where the world also lives', async () => {
     server.events = [decided(
       contest({ startsAt: at(-20), endsAt: at(-2) }),
@@ -271,8 +362,9 @@ describe('what the contest grid shows in each of its three states', () => {
     // Still on the ordinary catalog: the badge is on the card, not on the tab it was won in — and it
     // names the step, so a runner-up is not shown as the winner.
     expect(screen.getByRole('button', { name: 'Worlds' })).toHaveAttribute('aria-current', 'true');
-    const badge = (await screen.findByText('Winter World-Building Contest')).closest('p') as HTMLElement;
+    const badge = (await screen.findByText('Winter World-Building Contest')).closest('button') as HTMLElement;
     expect(badge).toHaveTextContent('2nd Place — Winter World-Building Contest');
+    expect(badge).toHaveClass('place-chip-shine');
   });
 
   it('keeps the badge in the details opened from a placed card, worded as on the card', async () => {
@@ -284,7 +376,7 @@ describe('what the contest grid shows in each of its three states', () => {
     await userEvent.click(await screen.findByRole('heading', { level: 3, name: 'Saltmarsh' }));
 
     const details = await screen.findByRole('dialog', { name: /Saltmarsh/ });
-    expect(within(details).getByText('Winter World-Building Contest').closest('p') as HTMLElement).toHaveTextContent(
+    expect(within(details).getByText('Winter World-Building Contest').closest('button') as HTMLElement).toHaveTextContent(
       '1st Place — Winter World-Building Contest',
     );
   });
@@ -314,8 +406,8 @@ describe('what the contest grid shows in each of its three states', () => {
     await userEvent.click(await screen.findByRole('heading', { level: 3, name: 'Saltmarsh' }));
 
     const details = await screen.findByRole('dialog', { name: /Saltmarsh/ });
-    expect(within(details).getByText('Winter World-Building Contest').closest('p') as HTMLElement).toHaveTextContent('1st Place');
-    expect(within(details).getByText('Autumn Ruins Contest').closest('p') as HTMLElement).toHaveTextContent('3rd Place');
+    expect(within(details).getByText('Winter World-Building Contest').closest('button') as HTMLElement).toHaveTextContent('1st Place');
+    expect(within(details).getByText('Autumn Ruins Contest').closest('button') as HTMLElement).toHaveTextContent('3rd Place');
   });
 
   it('says a running contest is still waiting for its first entry', async () => {
@@ -324,6 +416,47 @@ describe('what the contest grid shows in each of its three states', () => {
     await openContestTab();
 
     expect(await screen.findByText(/Publish a world with the contest switch on/)).toBeInTheDocument();
+  });
+});
+
+describe('a place chip opens the contest it names', () => {
+  // An archived win beside a running contest: the chip must reach the archive, not the default.
+  const setup = () => {
+    server.events = [
+      decided(contest({ id: 'old', title: 'Autumn Ruins Contest', startsAt: at(-40), endsAt: at(-30) }), [['Ruinsong', 'Ruinsong']]),
+      contest(),
+    ];
+    catalog.items = [
+      listing('Saltmarsh', { contest_event_id: 'e1' }),
+      listing('Ruinsong', { contest_event_id: 'old' }),
+    ];
+    renderBrowser();
+  };
+
+  const expectOnArchive = async () => {
+    expect(screen.getByRole('button', { name: 'Contest' })).toHaveAttribute('aria-current', 'true');
+    expect(within(await screen.findByRole('combobox', { name: 'Contest' })).getByText('Autumn Ruins Contest')).toBeInTheDocument();
+    await waitFor(() => expect(gridNames()).toEqual(['Ruinsong']));
+  };
+
+  it('from the card, instead of opening the world', async () => {
+    setup();
+
+    await userEvent.click(await screen.findByRole('button', { name: /1st Place — Autumn Ruins Contest/ }));
+
+    await expectOnArchive();
+    expect(screen.queryByRole('dialog', { name: /Ruinsong/ })).not.toBeInTheDocument();
+  });
+
+  it('from the details, closing them', async () => {
+    setup();
+    await userEvent.click(await screen.findByRole('heading', { level: 3, name: 'Ruinsong' }));
+    const details = await screen.findByRole('dialog', { name: /Ruinsong/ });
+
+    await userEvent.click(within(details).getByRole('button', { name: /1st Place — Autumn Ruins Contest/ }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Ruinsong/ })).not.toBeInTheDocument());
+    await expectOnArchive();
   });
 });
 
@@ -576,6 +709,21 @@ describe('withdrawing an entry from the contest tab', () => {
 
     await waitFor(() => expect(WorldStorageService.withdrawFromContest).toHaveBeenCalledWith('Saltmarsh'));
     await waitFor(() => expect(gridNames()).toEqual(['Thawline']));
+  });
+
+  it('drops the private-count mark, because a withdrawn entry’s count is public', async () => {
+    server.events = [contest()];
+    catalog.items = [mine('Saltmarsh', { likes: 7, likesPrivate: true })];
+    renderBrowser();
+    await openContestTab();
+
+    await openWithdraw('Saltmarsh');
+    await userEvent.click(await screen.findByRole('button', { name: 'Withdraw It' }));
+
+    await waitFor(() => expect(replaceCatalog).toHaveBeenCalled());
+    const [saved] = vi.mocked(replaceCatalog).mock.calls.at(-1)![0];
+    expect(saved).toMatchObject({ name: 'Saltmarsh', likes: 7, contest_event_id: null });
+    expect(saved.likesPrivate).toBeUndefined();
   });
 
   it('leaves the entry where it is when the server refuses', async () => {

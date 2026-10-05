@@ -68,7 +68,7 @@ beforeEach(() => {
   vi.spyOn(WorldStorageService, 'fetchComments').mockResolvedValue({
     success: true, data: [], pagination: {}, total: 0,
   });
-  vi.spyOn(WorldStorageService, 'fetchListingDetails').mockResolvedValue(null);
+  vi.spyOn(WorldStorageService, 'readListingDetails').mockResolvedValue({ status: 'unreachable' });
 });
 
 afterEach(() => {
@@ -110,6 +110,24 @@ describe('who is told the likers exist', () => {
 
     await waitFor(() => expect(onGuestLike).toHaveBeenCalledWith(expect.objectContaining({ id: 'w1' })));
     expect(onLike).not.toHaveBeenCalled();
+  });
+
+  it('records a guest\'s like here too, so the window and the tile agree', async () => {
+    const onLike = vi.fn(async () => {});
+    const onGuestLike = vi.fn();
+    show({ currentUser: null, isAuthenticated: false, onLike, onGuestLike, guestLikes: true, serverTakesLikes: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Like — 3 likes/ }));
+
+    await waitFor(() => expect(onLike).toHaveBeenCalledWith(expect.objectContaining({ id: 'w1' }), true));
+    expect(onGuestLike).not.toHaveBeenCalled();
+  });
+
+  it('shows a dash on a contest entry whose count is hidden, and keeps the heart', async () => {
+    show({ world: world({ likes: undefined, likesHidden: true }) });
+
+    const heart = await screen.findByRole('button', { name: 'Like — likes hidden' });
+    expect(heart.textContent?.trim()).toBe('—');
   });
 
   it('offers it to a moderator, naming what it opens', async () => {

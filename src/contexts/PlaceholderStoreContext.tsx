@@ -1,11 +1,13 @@
 import { createContext, useContext, type Dispatch, type SetStateAction, type ReactNode } from 'react';
-import type { PlaceholderHome, PlaceholderHomesWorld, PlaceholderOwners, PlaceholderSlices } from '@/lib/placeholderHomes';
+import type {
+  PlaceholderHome, PlaceholderHomesWorld, PlaceholderOwnerRef, PlaceholderOwners, PlaceholderSlices,
+} from '@/lib/placeholderHomes';
 import { releasePlaceholderOwners, removePlaceholderCascade } from '@/lib/placeholderTree';
 import type { Placeholder } from '@/types';
 
 /**
  * The placeholder CRUD the placeholder-editing widgets need, scoped to whatever list is being edited.
- * Decouples `PlaceholderList`/`PlaceholderManager`/`PlaceholderEditor` from any specific global store: the
+ * Decouples `PlaceholderList`/`PlaceholderManager`/`LibraryPlaceholdersEditor` from any specific global store: the
  * World Editor binds this to the current world's combined view, routing each write to the list that holds
  * the id; a standalone library item binds it to an isolated adapter over the placeholders it carries.
  */
@@ -28,11 +30,16 @@ export interface PlaceholderStore {
   /** The world's lists, for the tab that draws an owner node per entity or book and moves records between
    *  them. Absent on a store bound to one list. */
   lists?: PlaceholderHomesWorld;
+  /** Entity id → the blueprints it needs a copy of. A needed copy can't be deleted: the copy sync would bring
+   *  it straight back, untouched. Absent where no traits reach the list. */
+  copiesInUse?: ReadonlyMap<string, ReadonlySet<string>>;
   /** Write every list at once — what a drop that moves a record between owners needs. */
   setLists?: (next: PlaceholderSlices) => void;
   /** The one list this store edits when it is bound to an owner's own section rather than the whole tab:
    *  the list draws only that owner's rows and a create lands there. Reads still see every placeholder. */
   scope?: PlaceholderHome;
+  /** The entity or book an off-world store edits, so its fields know whose they are with no world lists. */
+  owner?: Pick<PlaceholderOwnerRef, 'kind' | 'id'>;
 }
 
 /** Build a {@link PlaceholderStore} over any `[value, setValue]` pair — the single source of the CRUD, so both
@@ -69,7 +76,7 @@ export const usePlaceholderStore = (): PlaceholderStore => {
 // eslint-disable-next-line react-refresh/only-export-components
 export const usePlaceholderStoreOptional = (): PlaceholderStore | null => useContext(PlaceholderStoreContext);
 
-/** Provides a `PlaceholderStore` to the placeholder-editing widgets below it. */
-export const PlaceholderStoreProvider = ({ value, children }: { value: PlaceholderStore; children: ReactNode }) => (
+/** Provides a `PlaceholderStore` to the placeholder-editing widgets below it; null hides the one above. */
+export const PlaceholderStoreProvider = ({ value, children }: { value: PlaceholderStore | null; children: ReactNode }) => (
   <PlaceholderStoreContext.Provider value={value}>{children}</PlaceholderStoreContext.Provider>
 );

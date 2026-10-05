@@ -1,7 +1,7 @@
 import type { AIRequestType, ChatMessage, Entity } from '@/types';
 import type { ThinkingMode } from '@/contexts/SettingsContext';
 import { buildNarrationPrompt } from './turnPipeline/narrationPrompt';
-import { narrationPass, sceneTagsPass, TURN_PASSES } from './turnPipeline/turnPasses';
+import { milestoneSelectPass, narrationPass, sceneTagsPass, TURN_PASSES } from './turnPipeline/turnPasses';
 import {
   emptyTurnMaterial,
   type TurnMaterial, type TurnPassId, type TurnPassRecord, type TurnPlanInput, type TurnPrompts,
@@ -13,7 +13,7 @@ import { buildStamper, hoursByPosition } from './gameClock';
 import type { SectionStyle } from './promptPresets';
 import { outputReserve, type ParagraphLimit } from './outputLength';
 import { toAnatomyBlocks, type AnatomyBlock } from './requestAnatomy';
-import { SAMPLE_TURN } from './previewValuePool';
+import { SAMPLE_MOMENTS, SAMPLE_TURN } from './previewValuePool';
 
 /**
  * The Anatomy hub shown in Settings → Prompts the moment a prompt is selected: the whole request that
@@ -210,7 +210,7 @@ function previewInput(prompts: AnatomyPreviewPrompts, settings: AnatomyPreviewSe
       choicesEnabled: true, statUpdatesEnabled: true, statCount: 3,
       locationChangeEnabled: true, locationAutoApply: settings.locationAutoApply,
       aiClock: true, memoryDigests: recap, characterDiaries: true, describeCharacters: true,
-      language: settings.language,
+      imageAttachments: false, promptAttachments: {}, language: settings.language,
     },
   };
 }
@@ -238,6 +238,7 @@ function previewMaterial(values: Record<string, string>, action: string, planner
     overflow: FIXTURE_OVERFLOW,
     sceneCast: FIXTURE_SCENE_CAST,
     subject: FIXTURE_SUBJECT,
+    milestone: SAMPLE_MOMENTS,
   };
 }
 
@@ -257,15 +258,16 @@ const passById = (id: TurnPassId): TurnPassRecord => {
   return record;
 };
 
-/** What each fan-out hub says above the one request it draws, so the repetition is understood rather than
- *  scrolled through. */
-const FANOUT_CAPTION = `One request like this is sent per character in the scene. This one is ${FIXTURE_SUBJECT.name}.`;
+/** What a fan-out hub says above the one request it draws: which subject the example is. When the request
+ *  is sent, and how often, is the prompt description's job, shown over every surface. */
+const EXAMPLE_CAPTION = `This example is ${FIXTURE_SUBJECT.name}.`;
 
 /** Which pass each prompt's hub draws, beyond the two that decide for themselves. */
 const HUB_PASS: Record<string, TurnPassId> = {
   thinking: 'thinking',
   director: 'director',
   character: 'character',
+  discover: 'discoverEntity',
   storyboard: 'storyboard',
   choices: 'choices',
   statupdates: 'statUpdates',
@@ -276,16 +278,16 @@ const HUB_PASS: Record<string, TurnPassId> = {
 };
 
 const CAPTIONS: Record<string, string> = {
-  character: FANOUT_CAPTION,
-  diary: FANOUT_CAPTION,
-  timeopening: 'Sent once, on the opening turn only — what it settles dates every memory after it.',
+  character: EXAMPLE_CAPTION,
+  discover: EXAMPLE_CAPTION,
+  diary: EXAMPLE_CAPTION,
 };
 
 /** The location prompt drives two different requests; which one a turn sends is the detection mode's call,
  *  so the hub asks the passes themselves rather than restating the rule. */
 const LOCATION_PASSES: { id: TurnPassId; caption: string }[] = [
-  { id: 'locationAuto', caption: 'Sent before the narration — the move is resolved up front, and the whole turn then runs in the new place.' },
-  { id: 'locationSuggest', caption: 'Sent after the narration — the move is offered, and yours to take.' },
+  { id: 'locationAuto', caption: 'Sent before the narration. The move applies first, so the whole turn runs in the new place.' },
+  { id: 'locationSuggest', caption: 'Sent after the narration. The move is offered, and you choose whether to take it.' },
 ];
 
 /**
@@ -327,6 +329,7 @@ export function buildAnatomyHub(
       .map(({ id, caption }) => draw(passById(id), caption));
   }
   if (tab === 'scenetags') return [draw(sceneTagsPass)];
+  if (tab === 'milestone') return [draw(milestoneSelectPass, CAPTIONS.milestone)];
   const id = HUB_PASS[tab];
   return id ? [draw(passById(id), CAPTIONS[tab])] : [];
 }

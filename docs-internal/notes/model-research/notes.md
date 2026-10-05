@@ -4,7 +4,7 @@
 > baseline instead of re-deriving (and getting different answers each time). When asked for model info,
 > **read this first, refresh only what's stale, then update this doc** with the new numbers + date.
 
-**Last updated:** 2026-08-07 (harness debt: the engine is an endpoint preset now, so the seeded `useCustomEndpoint` flag is dead — see *Harness debt*)
+**Last updated:** 2026-09-17 (September candidate sweep; MeroMero v2 screened B/65 vs v1 re-screened A/72 — see *September 2026 refresh*)
 
 ---
 
@@ -259,6 +259,116 @@ llama.cpp — broken tool template).
 | gemma-4-E4B-heretic (cloud default) | **B/59** cloud / **B/65** local | 0 | `cooperdk/…-GPTQ-4bit` served via Aphrodite (custom-endpoint path) vs the Abiray GGUF on the engine path; local scores a touch higher/tighter — likelier the sampling path than the quant |
 
 The **restraint gradient** now reads: MeroMero-31B 56 ≫ StyleTune-26B 11 ≫ everything else 0 (incl. the 26B MeroMero MoE and the cloud default). Restraint is what separates the top two from the B/65 pack.
+
+## September 2026 refresh — new candidates and the MeroMero v2 screen
+
+### Candidate sweep (2026-09-16, live Hub + UGI CSV)
+
+Everything below is new since the July inventory or an iteration of a model we carry. UGI "none" = not on the
+board yet. Sizes are Q4_K_M; prefer bartowski or mradermacher `-i1-` repos (imatrix) — author-uploaded GGUFs
+are usually static.
+
+| Model | Author | Base | Released | Q4_K_M | UGI Writing (W/10) | Relation to inventory |
+|---|---|---|---|---|---|---|
+| G4-MeroMero-v2-31B | zerofata | Gemma-4 31B | 2026-07-31 | 18.7 GB | none | **Iteration of the No-Limit pick.** Screened below. |
+| Artemis-31B-v1.1 | TheDrummer | Gemma-4 31B | 2026-08-05 | 19.6 GB | none | Same author as Cydonia/Rocinante/Skyfall/Anubis; first Drummer dense Gemma-4 |
+| Orion-26B-A4B-v1.1 | TheDrummer | Gemma-4 26B-A4B | 2026-09-13 | 18.0 GB | none | MoE sibling of Artemis |
+| Glistening-Gem-31B-v2.1 | sophosympatheia | merge: Artemis + MeroMero v2 + Ortenzya | 2026-08-16 | 19.6 GB | none | Contains our MeroMero lineage; card admits rare fused-word artifacts |
+| Goetia-26B-A4B v1.3 (v1.6 out) | Naphula | merge of ~15 Gemma-4 26B tunes | 2026-06-19 | 17.2 GB | **47.9** think / 40.9 (9.5 / 8.2) | Top Writing score under 35B on the board |
+| Pantheon-Reasoning-26B-A4B-1.1-V2 | Gryphe | our StyleTune V2 | 2026-09-08 | 18.75 GB | none | Direct iteration on the catalog entry, adds trained reasoning |
+| Gemma-4-12B-StyleTune | Gryphe | Gemma-4 12B | 2026-06-19 | 7.9 GB | none | lm_head-only tune, 56% fewer clichés; ≤8 GB candidate |
+| Gemma4-12B-QAT-Uncensored Balanced | HauhauCS | Gemma-4 12B QAT | 2026-06-22 | 7.4 GB | none | Iteration of the ≤8 GB pick (QAT base, Balanced abliteration) |
+| Qwen3.8-27B | Qwen | new base | 2026-08-05 | 16.5 GB | none | Dominant new base; Gated DeltaNet hybrid, engine support untested |
+| Qwen3.8-27B Uncensored (HauhauCS) | HauhauCS | Qwen3.8-27B | 2026-08-17 | 17.9 GB (`Q4_K_P`) | none | 2.4M downloads; custom quant names |
+| Qwen3.8-27B-Dominatrix | allura-org | Qwen3.8-27B | 2026-08-17 | 16.8 GB | none | Same org as Anko |
+| Rocinante-XL-16B-v1 | TheDrummer | Nemo upscale | 2026-04-18 | 10.1 GB | 32.7 (2.8) | Iteration of Rocinante-X 12B; W/10 2.8 is a refusal flag |
+| Qwen3.5-9B Uncensored (HauhauCS) | HauhauCS | Qwen3.5-9B | 2026-03-04 | 5.6 GB | base 39.5 think / 33.5 | Only fresh ≤8 GB reasoning option |
+
+No new candidate from: Cydonia (v4.3 still latest), Sao10K (nothing since 2025-03), SicariusSicariiStuff
+(Persona_Maker on old bases), zerofata beyond v2, Painted Fantasy.
+
+### MeroMero v2 vs v1 — paired 3-seed screen on the current app (2026-09-17)
+
+| Model | Obj | Spread | Restraint | StatDir | Format | LocAcc |
+|---|---|---|---|---|---|---|
+| meromero-31b-q4 (v1, **re-screened today**) | A/72 | 62–77 | 33 | 83 | 100 | 100% |
+| meromero-v2-31b-q4 (i1 Q4_K_M) | B/65 | 65–65 | 0 | 100 | 100 | 100% |
+
+**v1 keeps the No-Limit pick.** v2 gives back restraint for nothing: it over-fires on every no-op seed (Vigor −1
+to −10 for tracing a door), v1 over-fires once in nine. v2 wins stat direction 100 vs 83 (one v1 miss) and is
+the steadier of the two, but restraint carries 35% of the objective.
+
+**v1's July A/84 is not reproducible on today's app** — it re-screens at A/72. The app changed under the
+screen: stat updates now ship with native reasoning off (`thinking_budget_tokens: 0`) and a Max Output cap
+sized from the stat count. Under that, **both Gemma-4 31B models spill their reasoning into the answer on
+about half of all stat calls** (5/9 no-op turns each): an empty `<think></think>`, then "The user is asking
+for stat changes…", cut off mid-sentence by the cap, with no `Stat: N` line ever reached. The app applies
+nothing from such a reply, so the *player* sees a silently skipped stat pass; the scorer counts it as a fire.
+In July, v1 reasoned in-band at length and concluded "No stats moved" — that path no longer exists at budget 0.
+This is an app finding, not a model one: **stat updates on the built-in engine with a Gemma-4 reasoning model
+are failing about half the time.** Not fixed here; it needs its own decision (budget > 0 for the stat pass, or
+a `<think>`-aware parser that tolerates the spill).
+
+Harness notes from the run: the enter dialog's **Start game** button and the contest **Got It** popup had
+broken every screen since July (fixed in `run.mjs`); a seed crashed with `__baseline` gone from the page
+(runner now logs page errors); the scorer padded a "3-seed" score with July dumps after that crash (now
+refuses cross-day sets). The engine ran on **Vulkan** (prebuilt CUDA binary incompatible), ~18 min per seed.
+`profiles.json` gained `meromero-v2-31b-q4` at `contextSize: 6144` because 8192 would not fit beside ~3.6 GB
+of desktop apps on the GPU.
+
+### Stat-pass reasoning probe (2026-09-17) — `stat-reasoning-probe.mjs`
+
+Question: does the stat pass need native reasoning, and does a budget stop the spill above? Arms: `off` (shipped,
+budget 0), `low` (shipped Low = 25% of the 112-token cap = 28 tokens), `think` (a real budget on top of the
+cap). 11 gold cases (8 relevance + 3 gate idle turns), temp 0.2, built-in engine on Vulkan.
+
+| Model | Arm | Clean | Spill | No-op clean | Spurious | ms/call |
+|---|---|---|---|---|---|---|
+| MeroMero v1 31B | off | 79% | 3/33 | 100% | 4 | 4,579 |
+| | low (28 tok) | 82% | 1/33 | 100% | 7 | 4,801 |
+| | think 150 tok | **88%** | **0** | 100% | 4 | 12,066 |
+| | think 400 tok | 88% | 0 | 100% | 4 | 22,534 |
+| MeroMero v2 31B | off | 85% | 3/33 | 100% | 2 | 4,340 |
+| | low | 97% | 1/33 | 100% | 0 | 4,222 |
+| | think 400 | **100%** | **0** | 100% | 0 | 19,820 |
+| Cydonia 24B (8 runs) | off | 77% | 0 | 88% | 20 | 437 |
+| | think 400 | 75% | 0 | 81% | 22 | 433 |
+| Cloud E4B (5 runs) | off | 87% | 0 | 100% | 7 | 185 |
+| | low | 84% | 0 | 100% | 10 | 161 |
+
+**Findings.**
+- **The spill is idle-turn-only.** Every spilled reply on both Gemma models was a no-op case: with no room to
+  think, the model explains why nothing changed *in the answer* and the cap cuts it off. Rate here 3/33 per
+  model; in the full-turn screen it was ~5/9 on idle turns, so richer context makes it worse.
+- **A ~150-token budget removes it** and lifts clean rate on both Gemma models (v1 79→88, v2 85→100 at 400).
+  150 and 400 score the same on v1; 150 costs 2.6× stat latency (4.6 s → 12 s per call), 400 costs 5×.
+- **Shipped Low (28 tokens) is not enough** — the model fills it and still spills once in 33.
+- **Non-reasoning models are unaffected.** Cydonia off vs think is inside noise at 8 runs (77 vs 75); the
+  earlier 3-run dip was sampling. Its failures are the known belief-padding (Standing-from-morale,
+  Coin-from-social). Cloud ignores the field.
+- The remaining Gemma failures are model-level padding (Vigor on social-win, Resolve on rest) — the same
+  residual the July stat probe found, budget or not.
+
+**Effort levels — LM Studio, MeroMero v1, 2 runs (2026-09-17).** The `reasoning_effort` literal is an on/off
+switch for Gemma 4 there, not a grade: `none` thinks 0 chars; `low`, `medium` and `high` all think ~900–980
+chars, indistinguishable, and unbounded — 13 of 22 calls ran the thought into `max_tokens` and answered
+nothing (clean 50–64%). `high` with `thinking_budget_tokens: 150` beside it thinks ~600 chars, never
+truncates, 86% clean at 5.3 s/call — the same picture as the engine's 150-token arm. `none` was 91% clean
+with 0 spills in 22 calls, so LM Studio's off path may be cleaner than the engine's (3/33); not separated
+from noise at 2 runs. On the built-in engine the literal does not exist at all: node-llama-cpp 3.20 takes
+only `budgets.thoughtTokens` per request (an effort literal exists only on its gpt-oss Harmony wrapper, at
+construction), so an engine "level" can only be a budget preset. **Either way, the graded control for
+Gemma 4 is the token budget.**
+
+**The blocker is the budget model, not a number.** The app expresses a budget as a percent of the prompt's
+max output, and the thought tokens live *inside* that cap. The stat cap is `16 × stats + 16`, so no percent
+reaches 150 thought tokens on a 2- or 6-stat world. Fixing the spill means one of: a per-prompt token floor
+for the budget with the cap raised to cover it; a cap that excludes thought tokens; or a parser that reads
+stat lines after spilled prose plus a larger cap. That is a product decision — see [[stat-pass-reasoning-spill]].
+
+> **Unblocked (2026-09-27):** the budget is now a percent of the endpoint's Max Output and rides on top of the
+> answer cap, so a stat pass can get a ~150-token thought without a larger answer cap. Stat Updates still ship
+> reasoning-off. Spec: `docs-internal/specs/reasoning-budget-base/spec.md`.
 
 ### Workflow (2026-07-18): engine-only, Ollama dropped
 

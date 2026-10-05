@@ -1,8 +1,11 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { restyle, buildStyledValues } from './sectionStyle';
 import { PROMPT_TEXT_KEYS, type PromptValues } from './promptPresets';
-import { defaultSystemPrompt, defaultDiscoverEntityPrompt } from '@/components/game/GamePrompts';
-import { parsePromptTemplate } from './promptTemplate';
+import { defaultSystemPrompt, defaultDiscoverEntityPrompt, PROMPT_TEXT_DEFAULTS } from '@/components/game/GamePrompts';
+import { SAMPLE_PREVIEW_VALUES } from './previewValuePool';
+import { personaContextValues } from './personaContext';
+import { parsePromptTemplate, renderPromptTemplate } from './promptTemplate';
 import { joinToken, splitToken } from './promptVariables';
 
 describe('restyle', () => {
@@ -72,10 +75,16 @@ describe('buildStyledValues', () => {
     for (const k of PROMPT_TEXT_KEYS) expect(labels[k]).toContain(`${k.toUpperCase()}:`);
   });
 
-  it('preserves every chip token when restyling headers (restyle is headers-only)', () => {
+  it('preserves every chip when restyling headers, and every affix that holds no heading', () => {
     const tokensOf = (s: string) =>
       parsePromptTemplate(s).flatMap((seg) => (seg.type === 'variable' ? [seg.token] : []));
-    expect(tokensOf(restyle(defaultSystemPrompt, 'labels'))).toEqual(tokensOf(defaultSystemPrompt));
+    const before = tokensOf(defaultSystemPrompt);
+    const after = tokensOf(restyle(defaultSystemPrompt, 'labels'));
+    expect(after.map((t) => splitToken(t)?.key)).toEqual(before.map((t) => splitToken(t)?.key));
+    const headed = /^#{1,6}\s/m;
+    before.forEach((token, i) => {
+      if (!headed.test(token)) expect(after[i]).toBe(token);
+    });
   });
 
   it('labels style strips the chip format axis (markdown → plain); markdown keeps it', () => {
@@ -134,10 +143,69 @@ describe('chip affixes survive a style downcast (gate 6)', () => {
     });
   });
 
+  it('restyles a heading that rides in an affix, so the placement keeps its own section', () => {
+    const headed = '## Traits\n<TRAITS DESCRIPTION|markdown>\n<PERSONA|markdown|pre="\n## Player Character\n"|post="\n">\n## Notes\n<NOTES>';
+    const persona = { name: 'Traveler', entity: '- **Traveler**\n' };
+    const render = (text: string, value: string) =>
+      renderPromptTemplate(text, { '<TRAITS DESCRIPTION>': 'T', '<TRAITS DESCRIPTION|xml>': 'T', '<NOTES>': 'N', '<PERSONA>': value, '<PERSONA|xml>': value });
+
+    const labels = buildStyledValues(values(headed), 'labels').systemPrompt;
+    expect(render(labels, persona.entity)).toBe(`TRAITS:\nT\n\nPLAYER CHARACTER:\n${persona.entity}\n\nNOTES:\nN`);
+
+    const xml = buildStyledValues(values(headed), 'xml').systemPrompt;
+    expect(render(xml, persona.entity)).toBe(
+      `<traits>\nT\n</traits>\n\n<player_character>\n${persona.entity}\n</player_character>\n\n<notes>\nN\n</notes>`,
+    );
+  });
+
+  it('renders a headed affix placement as nothing when empty, in every style', () => {
+    const bare = '## Traits\n<TRAITS DESCRIPTION|markdown>\n\n## Notes\n<NOTES>';
+    const headed = '## Traits\n<TRAITS DESCRIPTION|markdown>\n<PERSONA|markdown|pre="\n## Player Character\n"|post="\n">\n## Notes\n<NOTES>';
+    const empty = {
+      '<TRAITS DESCRIPTION>': 'T', '<TRAITS DESCRIPTION|xml>': 'T', '<TRAITS DESCRIPTION|markdown>': 'T', '<NOTES>': 'N',
+      '<PERSONA>': '', '<PERSONA|xml>': '', '<PERSONA|markdown>': '',
+    };
+    for (const style of ['markdown', 'labels', 'xml'] as const) {
+      expect(renderPromptTemplate(buildStyledValues(values(headed), style).systemPrompt, empty))
+        .toBe(style === 'xml' ? '<traits>\nT\n</traits>\n\n<notes>\nN\n</notes>'
+          : renderPromptTemplate(buildStyledValues(values(bare), style).systemPrompt, empty));
+    }
+  });
+
   it('still changes the format axis while preserving the affixes', () => {
     const out = buildStyledValues(values(affixed), 'xml').systemPrompt;
     const parts = splitToken(out)!;
     expect(parts.variantId).toContain('xml');
     expect(parts.pre).toBe(' with ');
   });
+});
+
+describe('default XML section boundaries', () => {
+  it.each([true, false])('keeps traits and the optional player character as siblings (persona: %s)', (present) => {
+    const template = buildStyledValues(PROMPT_TEXT_DEFAULTS, 'xml').systemPrompt;
+    const output = renderPromptTemplate(template, {
+      ...SAMPLE_PREVIEW_VALUES,
+      ...personaContextValues(present ? { source: 'library', entity: { id: 'traveler', name: 'Traveler', pronouns: 'they/them' } } : null),
+    });
+    const sections = output.slice(output.indexOf('<traits>'), output.indexOf('<current_location>'));
+    const document = new DOMParser().parseFromString(`<root>${sections}</root>`, 'application/xml');
+    expect(document.querySelector('parsererror')).toBeNull();
+    expect(Array.from(document.documentElement.children, node => node.tagName)).toEqual(
+      present ? ['traits', 'player_character', 'important_player_notes'] : ['traits', 'important_player_notes'],
+    );
+    expect(document.querySelector('traits > trait')).not.toBeNull();
+    expect(document.querySelector('player_character > entity > name')?.textContent ?? '').toBe(present ? 'Traveler' : '');
+    expect(document.querySelector('player_character > entity > pronouns')?.textContent ?? '').toBe(present ? 'they/them' : '');
+  });
+
+  it.each([[1, 'root'], [2, 'world'], [3, 'traits']] as const)(
+    'respects conditional heading level %s', (level, parent) => {
+      const token = joinToken({ base: '<PERSONA>', pre: `\n${'#'.repeat(level)} Player Character\n` });
+      const output = renderPromptTemplate(restyle(`# World\n## Traits\nT\n${token}`, 'xml'), { '<PERSONA>': 'Traveler' });
+      const document = new DOMParser().parseFromString(`<root>${output}</root>`, 'application/xml');
+      expect(document.querySelector('parsererror')).toBeNull();
+      expect(document.querySelector('player_character')?.parentElement?.tagName).toBe(parent);
+      expect(document.querySelector('player_character')?.textContent?.trim()).toBe('Traveler');
+    },
+  );
 });

@@ -13,10 +13,15 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
-import { placeholderAccent } from '@/lib/chipVocabulary';
+import { placeholderAccent } from '@/lib/highlightUtils';
 import { estimateTokens } from '@/lib/memoryUtils';
 import { activeDescriptor, statValueLabel } from '@/lib/statContext';
-import type { OpeningData, OpeningRollGroup, OpeningStat, OpeningTrait } from '@/lib/testBench/opening';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { OpeningProps } from '@/lib/testBench/benchProps';
+import { targetAttribute } from '@/lib/surface/surfaceTargets';
+import type {
+  OpeningData, OpeningPoolRow, OpeningRollGroup, OpeningStat, OpeningTrait,
+} from '@/lib/testBench/opening';
 
 const tokenLabel = (tokens: number) => `~${tokens.toLocaleString()}`;
 
@@ -72,7 +77,7 @@ const StatRow = ({ stat }: { stat: OpeningStat }) => {
       {stat.uncovered && (
         <p className="mt-0.5 flex items-start gap-1 text-meta text-warning">
           <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
-          Starts above every descriptor band — the AI is told no status until the value drops.
+          Starts above every descriptor band. The AI is told no status until the value drops.
         </p>
       )}
     </div>
@@ -171,13 +176,36 @@ const PromptBlock = ({ label, text, open, onToggle }: {
   </div>
 );
 
-export interface OpeningInstrumentProps {
+/** The picker's value for None: a Select item cannot hold an empty value. */
+const NO_PERSONA = 'none';
+
+const KIND_LABEL: Record<OpeningPoolRow['kind'], string> = { action: 'Player Action', narration: 'Narration' };
+
+/** One drawable opening: its owner, kind, text and chance. Selecting it shows what it sends on turn one. */
+const PoolRow = ({ row, selected, onSelect }: { row: OpeningPoolRow; selected: boolean; onSelect: () => void }) => (
+  <button
+    type="button"
+    onClick={onSelect}
+    aria-pressed={selected}
+    className={cn(
+      'flex w-full items-baseline gap-1.5 rounded-md border p-1.5 text-left',
+      selected ? 'border-primary bg-muted/50' : 'hover:bg-muted/30',
+    )}
+  >
+    <span className="shrink-0 rounded bg-muted px-1 text-meta text-muted-foreground">
+      {row.ownerName ?? row.locationName ?? 'This World'}
+    </span>
+    <span className="shrink-0 text-meta text-muted-foreground">{row.self ? `${KIND_LABEL[row.kind]} (Self)` : KIND_LABEL[row.kind]}</span>
+    <span className="min-w-0 flex-grow truncate text-label">{row.text}</span>
+    <span className="shrink-0 text-meta font-medium">{Math.round(row.chance)}%</span>
+  </button>
+);
+
+export interface OpeningInstrumentProps extends OpeningProps {
   data: OpeningData;
-  /** Draw fresh values for every unpinned placeholder. */
-  onReroll: () => void;
 }
 
-export function OpeningInstrument({ data, onReroll }: OpeningInstrumentProps) {
+export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChange, onOpeningChange }: OpeningInstrumentProps) {
   const [openBlocks, setOpenBlocks] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setOpenBlocks((current) => {
     const next = new Set(current);
@@ -185,10 +213,12 @@ export function OpeningInstrument({ data, onReroll }: OpeningInstrumentProps) {
     return next;
   });
 
+  const narrated = data.opening.kind === 'narration';
+
   if (!data.location) {
     return (
       <p className="text-meta text-muted-foreground">
-        This world has no locations yet, so a fresh game has nowhere to start.
+        This world has no locations yet, so a fresh game has nowhere to start
       </p>
     );
   }
@@ -198,20 +228,72 @@ export function OpeningInstrument({ data, onReroll }: OpeningInstrumentProps) {
       <div className="space-y-2 pr-2">
         <div className="rounded-md border bg-muted/30 p-2">
           <p className="text-label font-medium">
-            Turn one as {data.pcName ?? 'the default character'} ≈ {tokenLabel(data.totalTokens)} tokens
+            Turn one as {data.pcName ?? 'the default character'}
+            {narrated ? ', opening on a written page one' : ` ≈ ${tokenLabel(data.totalTokens)} tokens`}
           </p>
-          <p className="text-meta text-muted-foreground">
-            Starts at {data.locationName}
-            {data.startPool > 1 && ` — one of ${data.startPool} possible starts, picked at random in play`}.
-          </p>
+          {data.personas.length > 0 && (
+            <div className="mt-1 flex items-center gap-2">
+              <Select value={data.personaId ?? NO_PERSONA} onValueChange={(id) => onPersonaChange(id === NO_PERSONA ? null : id)}>
+                <SelectTrigger className="h-6 w-auto min-w-0 max-w-[50%] px-2 text-meta" aria-label="Persona">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_PERSONA}>None</SelectItem>
+                  {data.personas.map((persona) => (
+                    <SelectItem key={persona.id} value={persona.id}>{persona.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="min-w-0 truncate text-meta text-muted-foreground">sets who you play</p>
+            </div>
+          )}
+          {data.starts.length > 1 ? (
+            <div className="mt-1 flex items-center gap-2">
+              <Select value={data.location.id} onValueChange={onStartChange}>
+                <SelectTrigger className="h-6 w-auto min-w-0 max-w-[50%] px-2 text-meta" aria-label="Starting Location">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {data.starts.map((start) => (
+                    <SelectItem key={start.id} value={start.id}>{start.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="min-w-0 truncate text-meta text-muted-foreground">
+                one of {data.startPool} possible starts, picked at random in play
+              </p>
+            </div>
+          ) : (
+            <p className="text-meta text-muted-foreground">Starts at {data.locationName}</p>
+          )}
         </div>
+
+        <SectionHeading label="Opening Pool" note={`what a new game at ${data.locationName} draws from`} />
+        {data.pool.length === 0 ? (
+          <p className="text-meta text-muted-foreground">
+            {data.openingsEnabled
+              ? 'No opening here can be drawn, so play opens on the default opening'
+              : 'The openings list is off, so play opens on the default opening'}
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {data.pool.map((row) => (
+              <PoolRow
+                key={row.key}
+                row={row}
+                selected={row.key === data.selectedKey}
+                onSelect={() => onOpeningChange(row.key)}
+              />
+            ))}
+          </div>
+        )}
 
         <SectionHeading
           label="Stats at Game Start"
-          note="scrub to test the bands — it never edits the world"
+          note="scrub to test the bands without editing the world"
         />
         {data.stats.length === 0 ? (
-          <p className="text-meta text-muted-foreground">No stats are live at game start.</p>
+          <p className="text-meta text-muted-foreground">No stats are live at game start</p>
         ) : (
           <div className="space-y-1">
             {data.stats.map((stat) => (
@@ -227,14 +309,15 @@ export function OpeningInstrument({ data, onReroll }: OpeningInstrumentProps) {
 
         <SectionHeading label="Active Traits" note={data.pcName ? 'defaults plus the lens PC' : 'the defaults'} />
         {data.traits.length === 0 ? (
-          <p className="text-meta text-muted-foreground">No traits are active at game start.</p>
+          <p className="text-meta text-muted-foreground">No traits are active at game start</p>
         ) : (
           <div className="space-y-1">
             {data.traits.map((trait) => <TraitRow key={trait.id} trait={trait} />)}
           </div>
         )}
 
-        <div className="flex items-baseline gap-2 pt-1">
+        {/* The row stays when no roll is open to a reroll, so it is the landing for the Reroll button. */}
+        <div className="flex items-baseline gap-2 pt-1" {...targetAttribute('worldEditorBench.opening', 'placeholder-rolls')}>
           <p className="text-meta font-medium">Placeholder Rolls</p>
           <p className="min-w-0 flex-grow truncate text-meta text-muted-foreground">
             what this fresh game drew
@@ -247,33 +330,47 @@ export function OpeningInstrument({ data, onReroll }: OpeningInstrumentProps) {
           )}
         </div>
         {data.rolls.length === 0 ? (
-          <p className="text-meta text-muted-foreground">Nothing rolls here — no Wildcard chips in this world.</p>
+          <p className="text-meta text-muted-foreground">No Wildcard chips in this world, so nothing rolls</p>
         ) : (
           <div className="space-y-1">
             {data.rolls.map((group) => <RollRow key={group.placeholderId} group={group} />)}
           </div>
         )}
 
-        <SectionHeading label="First Prompt" note="what the model receives on turn one" />
-        <div className="space-y-1">
-          <PromptBlock
-            label="System Prompt"
-            text={data.system}
-            open={openBlocks.has('system')}
-            onToggle={() => toggle('system')}
-          />
-          <PromptBlock
-            label="Opening User Turn"
-            text={data.user}
-            open={openBlocks.has('user')}
-            onToggle={() => toggle('user')}
-          />
-        </div>
-        <p className="flex items-start gap-1 text-meta leading-snug text-muted-foreground">
-          <Sparkles className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-          Assembled with the shipped default prompts and settings — custom prompt presets are a global
-          setting the editor can’t read.
-        </p>
+        {narrated ? (
+          <>
+            <SectionHeading label="Page One" note="shown as written" />
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 text-meta leading-relaxed">
+              {data.opening.text}
+            </pre>
+            <p className="text-meta text-muted-foreground">
+              An Opening Narration is page one, so no narration request goes out on turn one
+            </p>
+          </>
+        ) : (
+          <>
+            <SectionHeading label="First Prompt" note="what the model receives on turn one" />
+            <div className="space-y-1">
+              <PromptBlock
+                label="System Prompt"
+                text={data.system}
+                open={openBlocks.has('system')}
+                onToggle={() => toggle('system')}
+              />
+              <PromptBlock
+                label="Opening User Turn"
+                text={data.user}
+                open={openBlocks.has('user')}
+                onToggle={() => toggle('user')}
+              />
+            </div>
+            <p className="flex items-start gap-1 text-meta leading-snug text-muted-foreground">
+              <Sparkles className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+              Assembled with the shipped default prompts and settings. Custom prompt presets are a global
+              setting and aren’t read here.
+            </p>
+          </>
+        )}
       </div>
     </ScrollArea>
   );

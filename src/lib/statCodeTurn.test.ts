@@ -4,12 +4,13 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { overlayStatCodeResult, runStatCodeTurn, withPinWrites, type StatCodeTurn } from './statCodeTurn';
-import type { StatCodeTraits } from './statCodeTraits';
+import type { StatCodeBearers } from './statCodeTraits';
 import type { CodePins, Placeholder, PlaceholderRolls, PlayerStat, Trait, TraitGroup } from '@/types';
 import { encodePlaceholderToken, resolvePlaceholders, type PlaceholderPick } from './placeholders';
 import { collectPins } from './placeholderPins';
 import type { PlaceholderOwners } from './placeholderHomes';
 import { phValueId, phValues } from '@/test/placeholderValues';
+import { dayAndHour, daypart } from './gameClock';
 
 const stat = (over: Partial<PlayerStat>): PlayerStat => ({
   id: 'x', name: 'Stat', type: 'number', description: '', min: 0, max: 100, value: 50, regen: 0, descriptors: [],
@@ -17,13 +18,13 @@ const stat = (over: Partial<PlayerStat>): PlayerStat => ({
 });
 
 /** `active` acquired and on, as the only traits the world authors. */
-const inForce = (active: Trait[]): StatCodeTraits => ({
+const inForce = (active: Trait[]): StatCodeBearers => ({
   acquired: active, disabledTraitIds: [], appliedValues: {}, world: { traits: active, groups: [] },
 });
 
 /** A turn where nothing happened unless a case says so: no asks, no regen, previous equal to now, no traits. */
 const turn = (over: Partial<StatCodeTurn> & Pick<StatCodeTurn, 'stats'>): StatCodeTurn => ({
-  enabled: {}, previous: over.stats, asks: [], regenApplied: {}, clock: {}, traits: inForce([]),
+  enabled: {}, previous: over.stats, asks: [], regenApplied: {}, clock: {}, bearers: inForce([]),
   statNameOf: (stat) => stat.name, traitNameOf: (trait) => trait.name, ...over,
 });
 
@@ -169,7 +170,7 @@ describe('runStatCodeTurn', () => {
     expect(out.moved).toEqual(['a']);
   });
 
-  it('keeps a disabled stat inert and hides it from every other stat', async () => {
+  it('keeps a disabled stat inert and lists it to every other stat', async () => {
     const out = await runStatCodeTurn(turn({
       stats: [
         stat({ id: 'a', name: 'A', value: 50, code: 'return Object.keys(stats).length * 10 + ("Off" in stats ? 1 : 0);' }),
@@ -177,7 +178,7 @@ describe('runStatCodeTurn', () => {
       ],
       enabled: { off: false },
     }));
-    expect(valueOf(out.stats, 'a')).toBe(10);
+    expect(valueOf(out.stats, 'a')).toBe(21);
     expect(valueOf(out.stats, 'off')).toBe(5);
     expect(out.moved).toEqual(['a']);
   });
@@ -194,7 +195,7 @@ describe('runStatCodeTurn', () => {
     expect(valueOf(out.stats, 'a')).toBe(23);
   });
 
-  it('reads a disabled stat’s name as a blank entry', async () => {
+  it('reads a disabled stat’s value as it stands', async () => {
     const out = await runStatCodeTurn(turn({
       stats: [
         stat({ id: 'a', name: 'A', value: 50, code: 'return stats.Off.value;' }),
@@ -202,14 +203,14 @@ describe('runStatCodeTurn', () => {
       ],
       enabled: { off: false },
     }));
-    expect(valueOf(out.stats, 'a')).toBe(0);
+    expect(valueOf(out.stats, 'a')).toBe(5);
     expect(valueOf(out.stats, 'off')).toBe(5);
     expect(out.moved).toEqual(['a']);
   });
 
   it('reads zero asks on a clock-only run, with the clock still ticking', async () => {
     const out = await runStatCodeTurn(turn({
-      stats: [stat({ id: 'a', value: 50, max: 1000, code: 'return self.delta.ai.value + self.delta.ai.max + deltaHours * 100;' })],
+      stats: [stat({ id: 'a', value: 50, max: 1000, code: 'return self.delta.ai.value + self.delta.ai.max + clock.deltaHours * 100;' })],
       asks: [],
       clock: { deltaHours: 3, elapsedHours: 10 },
     }));
@@ -291,10 +292,60 @@ describe('runStatCodeTurn timing', () => {
   it('still reads the clock in the before box', async () => {
     const out = await runStatCodeTurn(turn({
       timing: 'before',
-      stats: [stat({ id: 'a', max: 1000, beforeCode: 'return elapsedHours;' })],
+      stats: [stat({ id: 'a', max: 1000, beforeCode: 'return clock.elapsedHours;' })],
       clock: { deltaHours: 0, elapsedHours: 12 },
     }));
     expect(valueOf(out.stats, 'a')).toBe(12);
+  });
+
+  // The game clock's own reading of the turn's end and start hours, so the case holds for any calendar.
+  const end = dayAndHour(30);
+  const start = dayAndHour(0);
+  const CLOCK_READS = `return clock.day === ${end.day} && clock.daypart === '${daypart(end.hour)}'
+    && clock.deltaHours === 30 && clock.elapsedHours === 30
+    && clock.previous.day === ${start.day} && clock.previous.daypart === '${daypart(start.hour)}' ? 1 : 0;`;
+
+  it.each(['before', 'after'] as const)('reads the turn’s end and start from clock in the %s box', async (timing) => {
+    const out = await runStatCodeTurn(turn({
+      timing,
+      stats: [stat({ id: 'a', value: 50, [timing === 'before' ? 'beforeCode' : 'code']: CLOCK_READS })],
+      clock: { deltaHours: 30, elapsedHours: 30 },
+    }));
+    expect(valueOf(out.stats, 'a')).toBe(1);
+  });
+
+  it('reads a turn start that differs from its end, and the turn’s own hours', async () => {
+    const out = await runStatCodeTurn(turn({
+      stats: [stat({ id: 'a', max: 1000, code: 'return (clock.day - clock.previous.day) * 100 + clock.deltaHours;' })],
+      clock: { deltaHours: 30, elapsedHours: 30 },
+    }));
+    expect(valueOf(out.stats, 'a')).toBe(130);
+  });
+
+  it('drops a write to any clock field', async () => {
+    const out = await runStatCodeTurn(turn({
+      stats: [stat({
+        id: 'a',
+        code: `const was = [clock.day, clock.deltaHours, clock.previous.day];
+          clock.day = 99; clock.deltaHours = 99; clock.previous = null; clock.extra = 1;
+          return clock.day === was[0] && clock.deltaHours === was[1] && clock.previous.day === was[2]
+            && clock.extra === undefined ? 1 : 0;`,
+      })],
+      clock: { deltaHours: 30, elapsedHours: 30 },
+    }));
+    expect(valueOf(out.stats, 'a')).toBe(1);
+  });
+
+  it('drops a write to clock.previous', async () => {
+    const out = await runStatCodeTurn(turn({
+      stats: [stat({
+        id: 'a',
+        code: 'const was = [clock.previous.day, clock.previous.daypart]; clock.previous.day = 99; clock.previous.daypart = "x";'
+          + ' return clock.previous.day === was[0] && clock.previous.daypart === was[1] ? 1 : 0;',
+      })],
+      clock: { deltaHours: 30, elapsedHours: 30 },
+    }));
+    expect(valueOf(out.stats, 'a')).toBe(1);
   });
 
   it('keeps a bound the before box set through an after box that writes none', async () => {
@@ -378,7 +429,7 @@ describe('runStatCodeTurn trait code names', () => {
   const run = (code: string, roll: string) =>
     runStatCodeTurn(turn({
       stats: [stat({ id: 'a', name: 'Anchor', value: 40, code })],
-      traits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [fury, calm], groups: [] } },
+      bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [fury, calm], groups: [] } },
       traitNameOf: (trait) => resolvePlaceholders(trait.name, rolled(roll)),
       placeholders: rolled(roll),
     }));
@@ -762,7 +813,7 @@ describe('runStatCodeTurn bound writes', () => {
   it('keeps the active traits under a bound the code did not write', async () => {
     const out = await runStatCodeTurn(turn({
       stats: [seeded({ max: 120, code: 'self.min = 10;' })],
-      traits: inForce([raiseCap]),
+      bearers: inForce([raiseCap]),
     }));
     expect(only(out)).toMatchObject({ min: 10, max: 120 });
   });
@@ -805,26 +856,26 @@ describe('runStatCodeTurn traits', () => {
   const seeded = (over: Partial<PlayerStat>): PlayerStat => stat({
     min: 0, max: 100, regen: 0, baseMin: 0, baseMax: 100, baseRegen: 0, aiMaxDelta: 0, ...over,
   });
-  const group: TraitGroup = { id: 'g', name: 'Origin', parentId: null, exclusive: true };
+  const group: TraitGroup = { id: 'g', name: 'Origin', parentId: null, maxPicks: 1 };
   // Brave is acquired and on, Timid acquired and off, Cursed never acquired; Brave and Cursed share a group.
   const brave: Trait = { id: 'brave', name: 'Brave', groupId: 'g', statChanges: [{ statId: 'h', value: 10, type: 'starting' }] };
   const timid: Trait = { id: 'timid', name: 'Timid', statChanges: [{ statId: 'h', value: -20, type: 'starting' }] };
   const cursed: Trait = { id: 'cursed', name: 'Cursed', groupId: 'g', statChanges: [{ statId: 'h', value: 50, type: 'max' }] };
   const world = { traits: [brave, timid, cursed], groups: [group] };
-  const held = (over: Partial<StatCodeTraits> = {}): StatCodeTraits => ({
+  const held = (over: Partial<StatCodeBearers> = {}): StatCodeBearers => ({
     acquired: [brave, timid], disabledTraitIds: ['timid'], appliedValues: { brave: { h: 10 }, timid: { h: 20 } }, world, ...over,
   });
   /** Health at 60 under Brave, plus one stat per piece of code, in order. */
-  const run = (codes: string[], traits: StatCodeTraits = held()) =>
+  const run = (codes: string[], traits: StatCodeBearers = held()) =>
     runStatCodeTurn(turn({
       stats: [seeded({ id: 'h', name: 'Health', value: 60 }), ...codes.map((code, i) => seeded({ id: `s${i}`, name: `S${i}`, code }))],
-      traits,
+      bearers: traits,
     }));
   const health = (out: { stats: readonly PlayerStat[] }) => out.stats.find((s) => s.id === 'h')!;
 
   it('reads enabled and acquired for an enabled, a switched-off, and an unacquired trait', async () => {
     const code = 'return [traits.Brave, traits.Timid, traits.Cursed].map(e => (e.enabled ? 2 : 0) + (e.acquired ? 1 : 0)).join("") * 1;';
-    const out = await runStatCodeTurn(turn({ stats: [seeded({ id: 'a', max: 1000, code })], traits: held() }));
+    const out = await runStatCodeTurn(turn({ stats: [seeded({ id: 'a', max: 1000, code })], bearers: held() }));
     expect(valueOf(out.stats, 'a')).toBe(310);
   });
 
@@ -873,7 +924,7 @@ describe('runStatCodeTurn traits', () => {
   it('keeps a bound the code wrote this run over the bound its trait switch moved', async () => {
     const out = await runStatCodeTurn(turn({
       stats: [seeded({ id: 'h', name: 'Health', value: 60, code: 'traits.Cursed.enabled = true; self.max = 80;' })],
-      traits: held(),
+      bearers: held(),
     }));
     expect(health(out)).toMatchObject({ max: 80, codeBounds: { max: 80 } });
   });
@@ -912,7 +963,7 @@ describe('runStatCodeTurn traits', () => {
     const frail: Trait = { id: 'frail', name: 'Frail', statChanges: [{ statId: 'h', value: -50, type: 'max' }] };
     const out = await runStatCodeTurn(turn({
       stats: [seeded({ id: 'h', name: 'Health', value: 60, code: 'traits.Frail.enabled = true; self.value = 90;' })],
-      traits: held({ world: { ...world, traits: [brave, timid, cursed, frail] } }),
+      bearers: held({ world: { ...world, traits: [brave, timid, cursed, frail] } }),
     }));
     expect(health(out)).toMatchObject({ max: 50, value: 50 });
   });
@@ -930,7 +981,7 @@ describe('runStatCodeTurn traits', () => {
     const out = await runStatCodeTurn(turn({
       stats: [seeded({ id: 'h', value: 60 }), seeded({ id: 'off', code: 'traits.Timid.enabled = true;' })],
       enabled: { off: false },
-      traits: held(),
+      bearers: held(),
     }));
     expect(out.traits).toBeUndefined();
   });
@@ -938,10 +989,23 @@ describe('runStatCodeTurn traits', () => {
   it('logs a switch under the name the player reads, and still reaches the trait by its code name', async () => {
     const out = await runStatCodeTurn(turn({
       stats: [seeded({ id: 'h', name: 'Health', value: 60 }), seeded({ id: 's0', name: 'S0', code: 'traits.Brave.enabled = false;' })],
-      traits: held(),
+      bearers: held(),
       traitNameOf: (t) => t.name.toUpperCase(),
     }));
     expect(out.traits?.log).toEqual(['Trait switched off: BRAVE (by S0)']);
+  });
+
+  it('hands back the owned trait a code switch cascaded off', async () => {
+    // Ash's Loyal needs the player's Brave, so switching Brave off in code turns Loyal off too.
+    const loyal: Trait = { id: 'loyal', name: 'Loyal', statChanges: [], requires: [{ kind: 'trait', id: 'brave', bearer: { kind: 'you' } }] };
+    const ash = { id: 'ash', name: 'Ash', traits: [loyal], groups: [] };
+    const out = await run(['traits.Brave.enabled = false;'], held({
+      ownedTraits: { ash: { chosen: ['loyal'] } },
+      world: { ...world, entities: [], bearers: [{ id: 'world', name: '', traits: world.traits, groups: world.groups }, ash] },
+    }));
+    expect(out.traits?.log).toEqual(['Trait switched off: Brave (by S0)', "Trait switched off: Ash's Loyal (by S0)"]);
+    expect(out.traits?.ownedTraits).toEqual({ ash: { chosen: ['loyal'], disabled: ['loyal'] } });
+    expect(out.traits?.cascadeOffTraitIds).toEqual({ ash: ['loyal'] });
   });
 
   it('carries a switch onto the latest stats, re-derived under the traits now in force', async () => {
@@ -966,17 +1030,13 @@ describe('runStatCodeTurn placeholder paths', () => {
   /** A value that is exactly one chip — what nests one placeholder under another. */
   const holds = (id: string) => [{ id: `v:${id}`, text: encodePlaceholderToken({ id, mode: 'world', placementId: `p-${id}` }) }];
 
-  // Molly owns Hair, Hair owns Shade, and the world has a Hair of its own. Anna owns a Hair too.
-  const worldHair: Placeholder = { id: 'world-hair', name: 'Hair', values: phValues(['plain']) };
-  const mollyHair: Placeholder = { id: 'molly-hair', name: 'Hair', values: holds('shade') };
-  const shade: Placeholder = { id: 'shade', name: 'Shade', values: phValues(['ash']), ownerId: 'molly-hair' };
-  const annaHair: Placeholder = { id: 'anna-hair', name: 'Hair', values: phValues(['red']) };
-  const list = [worldHair, mollyHair, shade, annaHair];
-  const owners: PlaceholderOwners = new Map([
-    ['molly-hair', { kind: 'entity', id: 'e-molly', name: 'Molly' }],
-    ['shade', { kind: 'entity', id: 'e-molly', name: 'Molly' }],
-    ['anna-hair', { kind: 'entity', id: 'e-anna', name: 'Anna' }],
-  ]);
+  // The world's Hair holds Shade. Molly owns a Hair of her own.
+  const worldHair: Placeholder = { id: 'world-hair', name: 'Hair', values: holds('shade') };
+  const shade: Placeholder = { id: 'shade', name: 'Shade', values: phValues(['ash']), ownerId: 'world-hair' };
+  const mollyHair: Placeholder = { id: 'molly-hair', name: 'Hair', values: phValues(['red']) };
+  const probe: Placeholder = { id: 'probe', name: 'Probe', values: phValues(['unset']) };
+  const list = [worldHair, shade, mollyHair, probe];
+  const owners: PlaceholderOwners = new Map([['molly-hair', { kind: 'entity', id: 'e-molly', name: 'Molly' }]]);
 
   // `null` means no owner index at all, which an explicit `undefined` could not say: a default parameter
   // takes over for that.
@@ -986,47 +1046,48 @@ describe('runStatCodeTurn placeholder paths', () => {
       placeholders: { placeholders, owners: owned ?? undefined, rolls: { world: {} } },
     }));
 
-  it('reads each path as its own entry, and a bare name as the world’s own', async () => {
-    const code = 'placeholders.Probe.pin([placeholders.Hair.value, placeholders.Molly.Hair.Shade.value,'
-      + ' placeholders.Anna.Hair.value].join("|"));';
-    const probe: Placeholder = { id: 'probe', name: 'Probe', values: phValues(['unset']) };
-    const { pinWrites } = await run(code, [...list, probe]);
-    expect(pinWrites).toEqual({ probe: 'plain|ash|red' });
+  it('reads a held row by its path, and a bare name as the world’s own row', async () => {
+    const { pinWrites } = await run('placeholders.Probe.pin([placeholders.Hair.Shade.value, placeholders.Hair.value].join("|"));');
+    expect(pinWrites).toEqual({ probe: 'ash|ash' });
   });
 
   it('lands a pin through a path on that placeholder alone', async () => {
-    const { pinWrites } = await run('placeholders.Molly.Hair.Shade.pin("silver");');
+    const { pinWrites } = await run('placeholders.Hair.Shade.pin("silver");');
     expect(pinWrites).toEqual({ shade: 'silver' });
   });
 
-  it('lands a bare ambiguous name on the world’s own row, not on a scoped one', async () => {
+  it('reaches no held or owned row by a bare name or an owner name', async () => {
+    // An unknown name is a blank entry, so nothing hangs below it.
+    const out = await run('const blank = placeholders.Shade.value === "" && placeholders.Molly.Hair === undefined;'
+      + ' placeholders.Shade.pin("x"); return blank ? 1 : 0;');
+    expect(out.pinWrites).toEqual({});
+    expect(out.stats[0].value).toBe(1);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Shade'));
+  });
+
+  it('lands a bare name on the world’s own row, not on an owned one', async () => {
     const { pinWrites } = await run('placeholders.Hair.pin("shorn");');
     expect(pinWrites).toEqual({ 'world-hair': 'shorn' });
   });
 
-  it('lands a bare ambiguous name on the last authored where the world holds none of that name', async () => {
-    const { pinWrites } = await run('placeholders.Hair.pin("shorn");', [mollyHair, shade, annaHair]);
-    expect(pinWrites).toEqual({ 'anna-hair': 'shorn' });
-  });
-
   it('resolves a holder through the pin a path laid on its child, so the next prompt reads it', async () => {
-    const { pinWrites } = await run('placeholders.Molly.Hair.Shade.pin("silver");');
-    const chip = encodePlaceholderToken({ id: 'molly-hair', mode: 'world', placementId: 'p-read' });
+    const { pinWrites } = await run('placeholders.Hair.Shade.pin("silver");');
+    const chip = encodePlaceholderToken({ id: 'world-hair', mode: 'world', placementId: 'p-read' });
     const pins = collectPins({ traits: [], placeholders: list, rolls: { world: {} }, codePins: withPinWrites({}, pinWrites) });
-    // Molly's Hair is nothing but its Shade, so a pin on the child is what the holder reads as.
+    // The world's Hair is nothing but its Shade, so a pin on the child is what the holder reads as.
     expect(resolvePlaceholders(`Her hair is ${chip}.`, { placeholders: list, rolls: { world: {} }, pins })).toBe('Her hair is silver.');
   });
 
   it('reports a write through a segment no entry has, by the path that named it', async () => {
-    const { pinWrites } = await run('placeholders.Molly.Hiar.pin("x"); placeholders.Hair.pin("shorn");');
-    expect(pinWrites).toEqual({ 'world-hair': 'shorn' });
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Molly › Hiar'));
+    const { pinWrites } = await run('placeholders.Hair.Shaed.pin("x"); placeholders.Probe.pin("seen");');
+    expect(pinWrites).toEqual({ probe: 'seen' });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Hair › Shaed'));
   });
 
-  it('reads every placeholder by bare name where no owner index is given', async () => {
-    // The play site always has one; a caller that leaves it out gets the flat map the sandbox always had.
+  it('reads every unheld placeholder as the world’s own where no owner index is given', async () => {
+    // The play site always has one; a caller that leaves it out gets the flat map, the later Hair winning.
     const { pinWrites } = await run('placeholders.Hair.pin("shorn");', list, null);
-    expect(pinWrites).toEqual({ 'anna-hair': 'shorn' });
+    expect(pinWrites).toEqual({ 'molly-hair': 'shorn' });
   });
 });
 

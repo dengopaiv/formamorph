@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import EntityFields from './EntityFields';
+import { EntityDescriptionFields } from './EntityFields';
 import type { Entity } from '@/types';
 
 // Each field becomes a marker carrying its label and value, with its `labelAside` rendered inside it — so a
@@ -24,7 +24,7 @@ vi.mock('../lib/UtilityComponents', () => ({ ModelUpload: () => <div /> }));
 
 const BRIEF = '- classroom, second floor\n- windows face east';
 const setup = (value: Partial<Entity>) =>
-  render(<EntityFields value={{ id: 'e1', name: 'Ordec', ...value } as Entity} onChange={vi.fn()} />);
+  render(<EntityDescriptionFields value={{ id: 'e1', name: 'Ordec', ...value } as Entity} onChange={vi.fn()} />);
 
 const field = (label: string) =>
   screen.getAllByTestId('field').find((f) => f.getAttribute('data-label') === label);

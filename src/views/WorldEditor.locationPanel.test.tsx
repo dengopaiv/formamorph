@@ -42,7 +42,7 @@ const WORLD: World = benchEditorWorld({
     },
     { id: 'hollow', name: 'The Hollow', parentId: 'veil', aiDescription: 'A dip below the roots.' },
   ],
-  connections: [{ id: 'c1', from: 'veil', to: 'hollow', twoWay: true }],
+  connections: [{ id: 'c1', a: 'veil', b: 'hollow', aToB: {}, bToA: {} }],
   entities: [{ id: 'resident', name: 'Odd Wick', aiDescription: 'Keeps the lamps.', locations: ['veil'] }],
 });
 
@@ -91,10 +91,10 @@ const selectLocation = (name: string) => {
 beforeEach(() => { localStorage.clear(); });
 
 describe('the World Editor location panel tabs', () => {
-  it('offers four tabs in Advanced mode and opens on Details', () => {
+  it('offers five tabs in Advanced mode, Openings last, and opens on Details', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectLocation('The Veilwood');
-    expect(panelTabNames()).toEqual(['Details', 'Presence', 'Media', 'Pins']);
+    expect(panelTabNames()).toEqual(['Details', 'Presence', 'Media', 'Pins', 'Openings']);
     expect(panelTab('Details')).toHaveAttribute('aria-selected', 'true');
   });
 
@@ -172,7 +172,7 @@ describe('the World Editor location panel tabs', () => {
     selectLocation('The Veilwood');
     openPanelTab('Media');
     fireEvent.click(screen.getByRole('radio', { name: 'Canvas' }));
-    expect(panelTabNames()).toEqual(['Details', 'Presence', 'Media', 'Pins']);
+    expect(panelTabNames()).toEqual(['Details', 'Presence', 'Media', 'Pins', 'Openings']);
     expect(panelTab('Media')).toHaveAttribute('aria-selected', 'true');
   });
 });

@@ -3,13 +3,13 @@ import type { FontTuning, FontTuningMap } from '@/lib/fontTuning';
 import type { ConnectionStyle } from '@/lib/canvasEdgePath';
 import type { TravelView } from '@/lib/travelPrefs';
 
-// Built-in endpoint defaults, behind the read-only "Default" preset. Each honors its VITE_DEFAULT_* override.
+// Built-in endpoint defaults, behind the read-only default preset. Each honors its VITE_DEFAULT_* override.
 // Kept out of SettingsContext so that file only exports components/hooks (react-refresh).
-// The hosted endpoint behind the "Default" preset, on both platforms. Desktop used to point this at the
-// bundled engine instead; the engine is now its own preset (BUILTIN_ENGINE_PRESET_ID), so "Default" can mean
-// one thing everywhere and a desktop install can route some prompts to the engine and others to the cloud.
+// The default preset sends here on both platforms; the desktop engine is its own preset (BUILTIN_ENGINE_PRESET_ID).
 // Written as a base URL (normalizeEndpointUrl completes it), matching the shape every server's docs hand out.
-export const DEFAULT_ENDPOINT = import.meta.env.VITE_DEFAULT_ENDPOINT || 'https://api.lyonade.net/v1';
+// The preset is the Demo AI only while the build does not override DEFAULT_ENDPOINT.
+export const HOSTED_ENDPOINT = 'https://api.lyonade.net/v1';
+export const DEFAULT_ENDPOINT = import.meta.env.VITE_DEFAULT_ENDPOINT || HOSTED_ENDPOINT;
 export const DEFAULT_API_TOKEN = import.meta.env.VITE_DEFAULT_API_TOKEN || '';
 export const DEFAULT_MODEL_NAME = import.meta.env.VITE_DEFAULT_MODEL_NAME || 'default';
 export const DEFAULT_MAX_TOKENS = parseInt(import.meta.env.VITE_DEFAULT_MAX_TOKENS) || 1024;
@@ -97,6 +97,16 @@ export const CONTINUE_CHOICE_MODES: { value: ContinueChoiceMode; label: string }
   { value: 'always', label: 'Always' },
 ];
 export const DEFAULT_CONTINUE_CHOICE: ContinueChoiceMode = 'on';
+export const DEFAULT_IMAGE_ATTACHMENTS = false;
+
+// How the narration panel shows the story: one turn per page, or one scrolling list of turns. A per-player
+// display preference, never part of a world or save. No VITE_DEFAULT_* override.
+export type NarrationLayout = 'pages' | 'chat';
+export const NARRATION_LAYOUTS: { value: NarrationLayout; label: string }[] = [
+  { value: 'pages', label: 'Pages' },
+  { value: 'chat', label: 'Chat' },
+];
+export const DEFAULT_NARRATION_LAYOUT: NarrationLayout = 'pages';
 
 // Locations Canvas presentation. Per-user editor preferences: they never enter a world export, so no
 // VITE_DEFAULT_* override either — nothing about a deployment should decide how one author's canvas draws.
@@ -206,3 +216,17 @@ export const NARRATION_FONT_OPTIONS = [{ value: 'global', label: 'Use Global', s
 // change); line-height 1.5 matches the base. Both apply only to the story reading pane.
 export const DEFAULT_NARRATION_SCALE = 1;
 export const DEFAULT_NARRATION_LINE_HEIGHT = 1.5;
+
+// Quoted speech in the story text takes the theme's `--dialogue` color. On by default: a new player gets
+// the benefit before finding the setting, and every theme defines the token for both modes.
+export const DEFAULT_QUOTE_COLOR = true;
+// Quoted speech in italic, independent of the color. Off by default: italic is a stronger change to the page.
+export const DEFAULT_QUOTE_ITALIC = false;
+// A custom quote color per mode, as `#rrggbb`. Unset (null) follows the theme's `--dialogue` token.
+export const DEFAULT_QUOTE_COLOR_LIGHT: string | null = null;
+export const DEFAULT_QUOTE_COLOR_DARK: string | null = null;
+
+// The global Tools switch. On sends each prompt its offered Tools; each Tool is still opt-in.
+export const DEFAULT_TOOLS_ENABLED = true;
+// Calls one Tool may make per request when the Tool sets no limit of its own.
+export const DEFAULT_TOOL_CALL_LIMIT = 4;

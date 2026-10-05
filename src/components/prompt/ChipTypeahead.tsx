@@ -14,6 +14,8 @@ import { useWheelScroll } from '@/lib/useWheelScroll';
 import { PLACEHOLDER_PATH_SEPARATOR } from '@/lib/placeholders';
 import { chipRowMatches, chipSectionOpens, type ChipRow, type ChipVocabulary } from '@/lib/chipVocabulary';
 import ChipRowHeading from './ChipRowHeading';
+import BuiltinMark from './BuiltinMark';
+import BlueprintMark from './BlueprintMark';
 import { $createVariableNode } from './VariableNode';
 
 /**
@@ -305,6 +307,8 @@ export function ChipTypeaheadPlugin({ trigger, vocab }: {
               className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left text-label"
             >
               <span className={cn(CHIP_BASE, 'border')} style={{ backgroundColor: item.color, color: '#000' }}>
+                {vocab.builtin?.(item.token) && <BuiltinMark />}
+                {vocab.blueprint?.(item.token) && <BlueprintMark />}
                 {item.label}
               </span>
             </button>
@@ -324,7 +328,7 @@ export function ChipTypeaheadPlugin({ trigger, vocab }: {
           );
         })}
         {!items.length && !createName && (
-          <div className="px-1.5 py-1 text-helper text-muted-foreground">Nothing matches.</div>
+          <div className="px-1.5 py-1 text-helper text-muted-foreground">Nothing matches</div>
         )}
       </div>
       {createName && (

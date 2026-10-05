@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { probeEndpoint, useAiReachable } from './useAiReachable';
@@ -112,5 +113,18 @@ describe('useAiReachable revalidate (stale-probe fix)', () => {
     await act(async () => { ok = await result.current.revalidate(); });
     expect(ok, 'revalidate re-probed and saw the loaded model').toBe(true);
     await waitFor(() => expect(result.current.reachable, 'cached state catches up').toBe(true));
+  });
+});
+
+describe('useAiReachable while not enabled', () => {
+  it('checks nothing and stays undecided, then checks when it is enabled', async () => {
+    const fetchMock = mockFetch({ [LMS_URL]: { body: lmsList(['cydonia-24b-v4.3', 'loaded']) } });
+    const { result, rerender } = renderHook(({ enabled }) => useAiReachable({ enabled }), { initialProps: { enabled: false } });
+    await act(async () => { await Promise.resolve(); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.current.reachable).toBeNull();
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.reachable).toBe(true));
   });
 });

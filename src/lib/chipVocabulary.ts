@@ -11,8 +11,9 @@ import {
 } from './placeholderHomes';
 import type { Placeholder } from '@/types';
 import type { PromptSegment } from './promptTemplate';
-import { parsePromptTemplate } from './promptTemplate';
-import { HIGHLIGHT_PALETTE } from './highlightUtils';
+import { parsePromptTemplate, parseTemplateWithPlaceholders } from './promptTemplate';
+import { promptHeader } from './promptHeader';
+import { placeholderAccent } from './highlightUtils';
 import {
   labelForToken, colorForToken, variableForToken, baseToken, tokenVariant, splitToken, joinToken,
   variantLabelForToken, variableAxes, decodeVariant, encodeVariant,
@@ -25,10 +26,14 @@ import {
 } from './placeholders';
 import type { PlaceholderKindNoun, PlaceholderSegment } from './placeholders';
 import {
-  isOwnedPlaceholder, promotePlaceholder, qualifiedPlaceholderName, topLevelPlaceholders,
+  isOwnedPlaceholder, placeholderCycleExclusions, promotePlaceholder, qualifiedPlaceholderName,
+  topLevelPlaceholders,
 } from './placeholderTree';
 import { placeholderGroupOf, placeholderGroupsInTreeOrder } from './placeholderGroups';
+import { BUILTIN_HEADING, BUILTIN_PLACEHOLDERS, builtinForToken, type BuiltinPlaceholder } from './builtinPlaceholders';
 import type { PlaceholderGroup } from '@/types';
+import { acceptsBlueprintChips, isBlueprintChip, type ChipField } from './blueprintChips';
+import { blueprintIds } from './placeholderBlueprints';
 
 /** One token a menu or picker offers, named for the reader. */
 export interface ChipRow {
@@ -39,7 +44,7 @@ export interface ChipRow {
    *  together, so a surface draws the heading once, where it changes; absent for a loose row. */
   heading?: string;
   /** What the heading names, so a surface draws a folder as quiet text and an owner as a chip. */
-  headingKind?: 'folder' | 'owner';
+  headingKind?: 'folder' | 'owner' | 'builtin';
   /** Which kind of owner heads the section, for the icon that says so. Owner headings only. */
   ownerKind?: PlaceholderOwnerRef['kind'];
   /** The entity or book the section belongs to. Owner headings only. */
@@ -51,16 +56,21 @@ export interface ChipRow {
   /** The placeholder belongs to another one, so a chip cannot be aimed at it from outside its owner. Set
    *  only where a surface offers owned rows at all (see {@link ChipVocabulary.allRows}). */
   owned?: boolean;
+  /** What the typeahead matches besides the label: a Built-in's SillyTavern spelling. */
+  searchTerms?: readonly string[];
 }
 
 /** True where row `i` starts a new section of a sectioned list: the first row, or one whose heading
  *  differs from the row before it. A surface draws a heading (or a rule, for a loose run after a headed
  *  one) exactly there, so a section the filter emptied never shows a heading. */
-export function chipSectionOpens(rows: readonly Pick<ChipRow, 'heading' | 'ownerId'>[], i: number): boolean {
+export function chipSectionOpens(
+  rows: readonly Pick<ChipRow, 'heading' | 'headingKind' | 'ownerId'>[], i: number,
+): boolean {
   if (i === 0) return true;
   // Two owners may share a name, and their rows read bare under it, so the owner itself is what parts
   // the sections — a shared name would otherwise hide one entity's rows under the other's heading.
-  return rows[i - 1].heading !== rows[i].heading || rows[i - 1].ownerId !== rows[i].ownerId;
+  const [a, b] = [rows[i - 1], rows[i]];
+  return a.heading !== b.heading || a.ownerId !== b.ownerId || a.headingKind !== b.headingKind;
 }
 
 /** How a row reads as one path: its owner's heading and its bare name rejoined, so a row that shows as
@@ -71,9 +81,12 @@ export function chipRowPath(row: Pick<ChipRow, 'label' | 'heading' | 'headingKin
 }
 
 /** True where a row answers to a typed query, matching case-insensitively and taking a typed `.`, space,
- *  or `>` for the separator the label spells `›`. */
-export function chipRowMatches(row: Pick<ChipRow, 'label' | 'heading' | 'headingKind'>, query: string): boolean {
-  return foldSeparators(chipRowPath(row).toLowerCase()).includes(foldSeparators(query.toLowerCase()));
+ *  or `>` for the separator the label spells `›`. A row's search terms answer too. */
+export function chipRowMatches(
+  row: Pick<ChipRow, 'label' | 'heading' | 'headingKind' | 'searchTerms'>, query: string,
+): boolean {
+  const q = foldSeparators(query.toLowerCase());
+  return [chipRowPath(row), ...(row.searchTerms ?? [])].some((text) => foldSeparators(text.toLowerCase()).includes(q));
 }
 
 /** A part reached through whichever value the level rolls, rather than by naming one. */
@@ -109,7 +122,7 @@ export interface ChipVocabulary {
   label(token: string): string;
   /** What the chip reads as on the surface, where that differs from the label — a placement's own name or
    *  letter. Absent, the chip shows the label plus its {@link variantLabel} in parens. */
-  display?(token: string): string;
+  display?(token: string): string | undefined;
   /** Extra detail for the chip's tooltip — a placeholder chip names itself and puts its mode and values
    *  here. Undefined when the label already says everything. */
   hint?(token: string): string | undefined;
@@ -123,11 +136,15 @@ export interface ChipVocabulary {
   selection(token: string): Record<string, string | null>;
   /** The token with one axis changed. */
   setAxis(token: string, axisId: string, optionId: string | null): string;
-  /** The placement's prefix/suffix, or null when this chip doesn't take them (it renders a block, not a
-   *  phrase). See docs-internal/designs/chip-affixes/design.md. */
+  /** The placement's literal prefix/suffix, or null when affix controls are unavailable. */
   affixes(token: string): { pre: string; post: string } | null;
   /** The token with its affixes replaced. Empty strings remove them. */
   setAffixes(token: string, pre: string, post: string): string;
+  /** Raw section heading, or null for a chip without Header controls. */
+  header?(token: string): string | null;
+  setHeader?(token: string, header: string): string;
+  /** Generated section boundaries, separate from literal affixes. */
+  headerBoundaries?(token: string): { pre: string; post: string } | null;
   /** The author's name for this one placement (`''` when unset), or null while the chip cannot take one.
    *  Only a Unique placeholder chip takes one: a World chip is every other World chip of its placeholder. */
   placementLabel?(token: string): string | null;
@@ -136,11 +153,18 @@ export interface ChipVocabulary {
   /** Toolbar items to insert. Owned members are left out — they belong to one placeholder and are reached
    *  by drilling into it. */
   palette(): ChipRow[];
+  /** What the field's own toolbar offers, where that is not the palette its trigger opens. */
+  toolbar?(): ChipRow[];
   /** Every member the family has, owned ones included and flagged. For a picker that has to find a
    *  placeholder by name before it can say why the chip cannot be aimed there. */
   allRows?(): ChipRow[];
   /** Prepare a palette token for a fresh insertion (placeholders re-mint their placement id). */
   freshInsertToken(token: string): string;
+  /** True when this destination may accept a palette token. Omit when every offered token is valid. */
+  acceptsPaletteToken?(token: string): boolean;
+  /** True for a token this field refuses on every path, a paste included: a blueprint chip outside
+   *  blueprint-side text. */
+  refuses?(token: string): boolean;
   /** The rows one level under this token — each the same chip drilled one segment deeper. Present only where
    *  the family has structure to walk; the static prompt variables have none. */
   drill?(token: string): ChipRow[];
@@ -162,7 +186,18 @@ export interface ChipVocabulary {
   /** Rename what the chip stands for, everywhere it is used. Present only where the family is authored and
    *  a store is bound to write to — prompt variables are fixed, so they never offer it. */
   rename?(token: string, next: string): void;
+  /** True for a reserved chip, which has nothing to rename or re-aim. */
+  fixed?(token: string): boolean;
+  /** True for a Built-in Placeholder chip, which carries the Built-in mark and opens no pop-out. */
+  builtin?(token: string): boolean;
+  /** True for a chip naming a blueprint, which carries the blueprint mark. */
+  blueprint?(token: string): boolean;
 }
+
+const HEADER_FORMAT_AXIS: PromptVariantAxis = {
+  id: 'format', label: 'Format',
+  options: [{ id: null, label: 'Simple' }, { id: 'markdown', label: 'Markdown' }, { id: 'xml', label: 'XML' }],
+};
 
 /** Vocabulary backed by the static prompt-variable registry. `palette` is the subset a given prompt offers. */
 export function promptVocabulary(palette: PromptVariable[]): ChipVocabulary {
@@ -174,34 +209,64 @@ export function promptVocabulary(palette: PromptVariable[]): ChipVocabulary {
     color: colorForToken,
     axes: (t) => {
       const v = variableForToken(t);
-      return v ? variableAxes(v) : [];
+      if (!v) return [];
+      const inlineName = decodeVariant(v, tokenVariant(t)).content === 'name';
+      const axes = variableAxes(v);
+      const hasHeader = !!splitToken(t)?.header?.trim();
+      if (hasHeader && !axes.some(axis => axis.id === 'format')) return [...axes, HEADER_FORMAT_AXIS];
+      return axes.map(axis => inlineName && !hasHeader && axis.id === 'format'
+        ? { ...axis, readOnly: true, readOnlyHelp: v.token === '<PERSONA>'
+          ? 'Sends the name and pronouns as plain text' : 'Sends names as plain text' }
+        : axis);
     },
     selection: (t) => {
       const v = variableForToken(t);
-      return v ? decodeVariant(v, tokenVariant(t)) : {};
+      if (!v) return {};
+      const selection = decodeVariant(v, tokenVariant(t));
+      return variableAxes(v).some(axis => axis.id === 'format') ? selection
+        : { ...selection, format: splitToken(t)?.headerFormat ?? null };
     },
     setAxis: (t, axisId, optionId) => {
       const v = variableForToken(t);
       if (!v) return t;
+      if (axisId === 'format' && !variableAxes(v).some(axis => axis.id === 'format')) {
+        return joinToken({ ...splitToken(t), base: baseToken(t),
+          headerFormat: optionId === 'markdown' || optionId === 'xml' ? optionId : undefined });
+      }
       const next = { ...decodeVariant(v, tokenVariant(t)), [axisId]: optionId };
-      // Rebuilt through joinToken so switching a mode keeps the placement's affixes — withVariant knows
-      // nothing about them and would silently drop the user's wording.
+      // Preserve placement metadata while changing one selected axis.
       const parts = splitToken(t);
-      return joinToken({ base: baseToken(t), variantId: encodeVariant(v, next), pre: parts?.pre, post: parts?.post });
+      return joinToken({ ...parts, base: baseToken(t), variantId: encodeVariant(v, next) });
     },
     affixes: (t) => {
       const v = variableForToken(t);
-      if (!v?.affixable) return null;
+      if (!v || (!v.affixable && !variableAxes(v).some(axis => axis.id === 'format'))) return null;
       const parts = splitToken(t);
       return { pre: parts?.pre ?? '', post: parts?.post ?? '' };
     },
     setAffixes: (t, pre, post) => {
       const v = variableForToken(t);
-      if (!v?.affixable) return t;
-      return joinToken({ base: baseToken(t), variantId: tokenVariant(t), pre, post });
+      if (!v || (!v.affixable && !variableAxes(v).some(axis => axis.id === 'format'))) return t;
+      return joinToken({ ...splitToken(t), base: baseToken(t), variantId: tokenVariant(t), pre, post });
+    },
+    header: (t) => {
+      const v = variableForToken(t);
+      return v ? splitToken(t)?.header ?? '' : null;
+    },
+    setHeader: (t, header) => {
+      const v = variableForToken(t);
+      const parts = splitToken(t);
+      if (!parts || !v) return t;
+      return joinToken({ ...parts, header });
+    },
+    headerBoundaries: (t) => {
+      const parts = splitToken(t);
+      const v = variableForToken(t);
+      return parts && v ? promptHeader(parts.header, parts.headerFormat ?? decodeVariant(v, parts.variantId).format) : null;
     },
     palette: () => palette.map((v) => ({ token: v.token, label: v.label, color: v.color })),
     freshInsertToken: (t) => t,
+    acceptsPaletteToken: (t) => palette.some((item) => item.token === t),
   };
 }
 
@@ -215,19 +280,29 @@ const PLACEHOLDER_MODE_AXIS: PromptVariantAxis = {
   ],
 };
 
-/** Stable accent per placeholder id, so a chip keeps its color across the world — and every surface that
- *  draws one by id draws the same one. */
-export function placeholderAccent(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return HIGHLIGHT_PALETTE[h % HIGHLIGHT_PALETTE.length];
-}
+// Shown rather than hidden where no roll can differ per placement, so the author can tell a control that is
+// held shut from one that was never offered.
+const PLACEHOLDER_MODE_AXIS_FIXED: PromptVariantAxis = {
+  ...PLACEHOLDER_MODE_AXIS,
+  readOnly: true,
+  readOnlyHelp: 'Draws the same value everywhere, so Unique would change nothing. Unlocks once the placeholder can roll.',
+};
+
+const NO_IDS: ReadonlySet<string> = new Set();
 
 // Palette tokens carry a sentinel placement id; freshInsertToken re-mints a real one on insertion.
 const PALETTE_PID = 'palette';
 
 // What a chip reads as when the placeholder it names is gone. Displays only — resolution says `''`.
 const MISSING_NAME = '(missing)';
+
+const isBuiltin = (token: string) => !!builtinForToken(token);
+
+// A Built-in needs no definition, so its row has no values.
+const builtinRow = (row: BuiltinPlaceholder): ChipRow => ({
+  token: row.token, label: row.label, color: row.accent,
+  heading: BUILTIN_HEADING, headingKind: 'builtin', searchTerms: row.searchTerms,
+});
 
 // What a level holds, by what the level is. A Variable holds one value, so it heads one row.
 const HOLDS_LABEL: Record<PlaceholderKindNoun, string> = {
@@ -265,7 +340,10 @@ export function placeholderVocabulary(
   placeholders: readonly Placeholder[],
   /** What the vocabulary may write back, and where its fields sit. Omit where placeholders are only being
    *  displayed — the chips are then not renameable and the typeahead offers no inline create. */
-  { onRename, onCreate, onPromote, ownerId, owners, scope: scopeOwner, groups, letters = EMPTY_LETTERS }: {
+  {
+    onRename, onCreate, onPromote, ownerId, owners, scope: scopeOwner, groups, letters = EMPTY_LETTERS, builtins = false,
+    ownerKind = scopeOwner?.kind, blueprints = NO_IDS, refusesBlueprints = false,
+  }: {
     onRename?: (placeholder: Placeholder) => void;
     /** `home` names the list a member made inside an entity's or book's fields lands in. */
     onCreate?: (placeholder: Placeholder, home?: PlaceholderHome) => void;
@@ -285,9 +363,22 @@ export function placeholderVocabulary(
     groups?: readonly PlaceholderGroup[];
     /** The document's placement letters, so a Unique chip reads `Name (A)`. Absent, it reads `Name (Unique)`. */
     letters?: PlacementLetters;
+    /** Offer the Built-in chips first in the palette. A Built-in already in the text is a chip either way. */
+    builtins?: boolean;
+    /** The kind of entity or book whose own fields these are, where no world list says so: a library item
+     *  is its own document. Defaults to `scope`'s kind. */
+    ownerKind?: PlaceholderOwnerRef['kind'];
+    /** The world's blueprints, whose chips carry the blueprint mark. */
+    blueprints?: ReadonlySet<string>;
+    /** The field refuses blueprint chips: no menu offers one and no path inserts one. */
+    refusesBlueprints?: boolean;
   } = {},
 ): ChipVocabulary {
+  const refused = refusesBlueprints ? blueprints : NO_IDS;
   const byId = new Map(placeholders.map((p) => [p.id, p]));
+  const paletteIds = new Set(topLevelPlaceholders(placeholders).filter((p) => !refused.has(p.id)).map((p) => p.id));
+  const cycleExclusions = ownerId ? placeholderCycleExclusions(placeholders, ownerId) : null;
+  const offered = BUILTIN_PLACEHOLDERS.filter((row) => row.visible({ offered: builtins, ownerKind }));
   /** What one path segment adds, named by itself: a slot is already a name, a val names what it picks. */
   const segLabel = (seg: PlaceholderSegment) =>
     (seg.kind === 'slot' ? seg.name : byId.get(seg.ref)?.name ?? MISSING_NAME);
@@ -299,6 +390,8 @@ export function placeholderVocabulary(
   // which Hair. Inside its owner's own panel the chain is already given, and drops away. A scoped one
   // carries its entity's or book's name the same way, and drops it inside that owner's fields.
   const vocabLabel = (t: string) => {
+    const builtin = builtinForToken(t);
+    if (builtin) return builtin.label;
     const d = decodePlaceholderToken(t);
     if (!d) return t;
     return chipPathName(d, placeholders, { relativeTo: ownerId, missing: MISSING_NAME, owners, letters }) ?? MISSING_NAME;
@@ -347,20 +440,25 @@ export function placeholderVocabulary(
       if (ph && name && name !== ph.name) onRename({ ...ph, name });
     }),
     parse: parsePlaceholderText,
-    isKnown: (t) => decodePlaceholderToken(t) != null,
+    isKnown: (t) => decodePlaceholderToken(t) != null || !!builtinForToken(t),
+    // A Built-in is the one reserved chip here.
+    fixed: isBuiltin,
+    builtin: isBuiltin,
     label: vocabLabel,
     // A placement reads as its own name: the author's label, or the placeholder's name with its letter. A
     // chip whose placeholder is gone keeps the label beside the missing mark, since the label is the one
     // thing left that says what it was for.
     display: (t) => {
       const d = decodePlaceholderToken(t);
-      if (!d) return t;
+      if (!d) return vocabLabel(t);
       if (!byId.has(d.id)) return d.label ? `${MISSING_NAME} ${d.label}` : MISSING_NAME;
       return placementDisplayName(d, vocabLabel(t), letters);
     },
     // A chip in a field names its placement; the placeholder's mode and what it will become go in the
     // tooltip, so the chip stays one short word wide however many values there are.
     hint: (t) => {
+      const builtin = builtinForToken(t);
+      if (builtin) return builtin.hint;
       const d = decodePlaceholderToken(t);
       const ph = d && byId.get(d.id);
       if (!ph) return undefined;
@@ -372,14 +470,18 @@ export function placeholderVocabulary(
     },
     variantLabel: (t) => (decodePlaceholderToken(t)?.mode === 'unique' ? 'Unique' : null),
     color: (t) => {
+      const builtin = builtinForToken(t);
+      if (builtin) return builtin.accent;
       const d = decodePlaceholderToken(t);
       return d && byId.has(d.id) ? placeholderAccent(d.id) : undefined;
     },
-    // World | Unique only where a roll can differ per placement: a Wildcard, or anything whose values reach
-    // one. A plain Object applies every value and never draws, so the picker would change nothing.
+    // Every known placeholder chip answers the World-or-Unique question. The picker takes input only where a
+    // roll can differ per placement: a Wildcard, or anything whose values reach one. A Variable and a plain
+    // Object draw one fixed value, so theirs shows the stored mode and says why it is shut.
     axes: (t) => {
       const d = decodePlaceholderToken(t);
-      return d && placeholderRandomizes(placeholders, d.id) ? [PLACEHOLDER_MODE_AXIS] : [];
+      if (!d || !byId.has(d.id)) return [];
+      return [placeholderRandomizes(placeholders, d.id) ? PLACEHOLDER_MODE_AXIS : PLACEHOLDER_MODE_AXIS_FIXED];
     },
     selection: (t) => ({ mode: decodePlaceholderToken(t)?.mode === 'unique' ? 'unique' : null }),
     setAxis: (t, axisId, optionId) => {
@@ -407,14 +509,17 @@ export function placeholderVocabulary(
     // own section comes first.
     // Under its owner's heading a row reads bare: the heading already says whose it is, so a section of
     // ten does not repeat the owner's name ten times.
-    palette: () => sectionedRows(
-      topLevelPlaceholders(placeholders),
-      (p, underOwner) => (underOwner ? p.name : `${prefixFor(p.id)}${p.name}`),
-    ),
+    palette: () => [
+      ...offered.map(builtinRow),
+      ...sectionedRows(
+        topLevelPlaceholders(placeholders).filter((p) => paletteIds.has(p.id)),
+        (p, underOwner) => (underOwner ? p.name : `${prefixFor(p.id)}${p.name}`),
+      ),
+    ],
     // The same sections, plus what one placeholder owns — a picker looking a name up needs the owned rows
     // too, and each keeps the holder chain that tells it from a root of the same name.
     allRows: () => sectionedRows(
-      placeholders,
+      refused.size ? placeholders.filter((p) => !refused.has(p.id)) : placeholders,
       (p, underOwner) => {
         const qualified = qualifiedPlaceholderName(placeholders, p.id) ?? p.name;
         return underOwner ? qualified : `${prefixFor(p.id)}${qualified}`;
@@ -425,6 +530,14 @@ export function placeholderVocabulary(
       const d = decodePlaceholderToken(t);
       return d ? encodePlaceholderToken({ ...d, placementId: randomUUID() }) : t;
     },
+    acceptsPaletteToken: (t) => {
+      const builtin = builtinForToken(t);
+      if (builtin) return offered.includes(builtin);
+      const id = decodePlaceholderToken(t)?.id;
+      return !!id && paletteIds.has(id) && !cycleExclusions?.has(id);
+    },
+    refuses: (t) => isBlueprintChip(t, refused),
+    blueprint: (t) => isBlueprintChip(t, blueprints),
     // A row names only the part it adds; the breadcrumb above it carries where that part sits, and the
     // inserted chip's own label spells the whole path out.
     drill: (t) => {
@@ -517,6 +630,10 @@ export function usePlaceholderChipVocabulary(
   /** Whose fields these are — a placeholder's own value list, or an entity's or book's fields — see
    *  `ownerId` on {@link placeholderVocabulary}. */
   ownerId?: string,
+  /** Offer the Built-in chips: prose fields and the palette strip do, name and keyword fields do not.
+   *  `trait` marks a trait's or trait group's text, `owned` when an entity holds it. `anyField`: the
+   *  vocabulary serves no one field (the palette strip), so it refuses no blueprint. */
+  { builtins = false, trait, anyField = false }: { builtins?: boolean; trait?: { owned: boolean }; anyField?: boolean } = {},
 ): ChipVocabulary {
   const store = usePlaceholderStoreOptional();
   const letters = usePlacementLetters();
@@ -531,10 +648,73 @@ export function usePlaceholderChipVocabulary(
     [setPlaceholders],
   );
   const scope = useOwnerScope(lists, ownerId);
+  const traitOwned = trait?.owned;
+  const blueprints = useMemo(() => (lists ? blueprintIds(lists) : NO_IDS), [lists]);
+  const refusesBlueprints = useMemo(() => {
+    if (!lists || anyField) return false;
+    // An owner that is no entity or book is a placeholder: these are its values.
+    const field: ChipField = ownerId && !scope ? { kind: 'values', placeholderId: ownerId }
+      : traitOwned !== undefined ? { kind: 'trait', owned: traitOwned } : { kind: 'text' };
+    return !acceptsBlueprintChips(field, lists);
+  }, [lists, ownerId, scope, traitOwned, anyField]);
+  // Off-world, the store says whose item it is; a field naming another owner (a value list) is not its.
+  const bound = store?.owner;
+  const ownerKind = scope?.kind ?? (bound && (!ownerId || ownerId === bound.id) ? bound.kind : undefined);
   return useMemo(
-    () => placeholderVocabulary(placeholders, { onRename, onCreate, onPromote, ownerId, owners, scope, groups, letters }),
-    [placeholders, onRename, onCreate, onPromote, ownerId, owners, scope, groups, letters],
+    () => placeholderVocabulary(placeholders, {
+      onRename, onCreate, onPromote, ownerId, owners, scope, groups, letters, builtins, ownerKind, blueprints, refusesBlueprints,
+    }),
+    [placeholders, onRename, onCreate, onPromote, ownerId, owners, scope, groups, letters, builtins, ownerKind, blueprints, refusesBlueprints],
   );
+}
+
+/**
+ * Two token families in one field: a world custom prompt holds prompt variables and the world's
+ * placeholders. Each token goes to the family that knows it. The trigger and the panel's shared palette
+ * offer placeholders; the field's own toolbar keeps the prompt variables.
+ */
+export function worldPromptVocabulary(prompt: ChipVocabulary, placeholder: ChipVocabulary): ChipVocabulary {
+  const familyOf = (token: string) => (placeholder.isKnown(token) ? placeholder : prompt);
+  const placeholderFamilyOf = (token: string) => (placeholder.isKnown(token) ? placeholder : undefined);
+  return {
+    parse: parseTemplateWithPlaceholders,
+    isKnown: (t) => familyOf(t).isKnown(t),
+    label: (t) => familyOf(t).label(t),
+    display: (t) => familyOf(t).display?.(t),
+    hint: (t) => familyOf(t).hint?.(t),
+    variantLabel: (t) => familyOf(t).variantLabel(t),
+    color: (t) => familyOf(t).color(t),
+    axes: (t) => familyOf(t).axes(t),
+    selection: (t) => familyOf(t).selection(t),
+    setAxis: (t, axisId, optionId) => familyOf(t).setAxis(t, axisId, optionId),
+    affixes: (t) => familyOf(t).affixes(t),
+    setAffixes: (t, pre, post) => familyOf(t).setAffixes(t, pre, post),
+    header: (t) => familyOf(t).header?.(t) ?? null,
+    setHeader: (t, header) => familyOf(t).setHeader?.(t, header) ?? t,
+    headerBoundaries: (t) => familyOf(t).headerBoundaries?.(t) ?? null,
+    placementLabel: (t) => familyOf(t).placementLabel?.(t) ?? null,
+    setPlacementLabel: (t, label) => familyOf(t).setPlacementLabel?.(t, label) ?? t,
+    palette: placeholder.palette,
+    toolbar: prompt.palette,
+    allRows: placeholder.allRows,
+    freshInsertToken: (t) => familyOf(t).freshInsertToken(t),
+    acceptsPaletteToken: (t) => {
+      const family = familyOf(t);
+      return family.isKnown(t) && (family.acceptsPaletteToken?.(t) ?? true);
+    },
+    refuses: (t) => placeholderFamilyOf(t)?.refuses?.(t) ?? false,
+    blueprint: (t) => placeholderFamilyOf(t)?.blueprint?.(t) ?? false,
+    drill: (t) => placeholderFamilyOf(t)?.drill?.(t) ?? [],
+    structure: (t) => placeholderFamilyOf(t)?.structure?.(t) ?? null,
+    repoint: (t, at) => placeholderFamilyOf(t)?.repoint?.(t, at) ?? t,
+    create: placeholder.create,
+    createLabel: placeholder.createLabel,
+    promote: placeholder.promote,
+    rename: placeholder.rename && ((t, next) => placeholderFamilyOf(t)?.rename?.(t, next)),
+    // A prompt variable has nothing to rename or re-aim.
+    fixed: (t) => placeholderFamilyOf(t)?.fixed?.(t) ?? !placeholder.isKnown(t),
+    builtin: (t) => placeholderFamilyOf(t)?.builtin?.(t) ?? false,
+  };
 }
 
 /** The editor reads its vocabulary here. Defaults to the prompt family (empty palette) so existing prompt

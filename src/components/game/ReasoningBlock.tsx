@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { reasoningExpandPref, setReasoningExpandPref } from '@/lib/reasoningCollapsePref';
+import { cn } from '@/lib/utils';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 /**
@@ -22,26 +23,38 @@ export function ReasoningBlock({ text, ms, active }: { text: string; ms: number;
   }, [active]);
 
   if (!text) return null;
-  const seconds = Math.max(1, Math.round(ms / 1000));
 
   return (
     <Collapsible open={open} onOpenChange={(o) => { userToggled.current = true; setOpen(o); setReasoningExpandPref(o); }} className="mb-2">
       <CollapsibleTrigger className="flex items-center gap-1.5 text-meta text-muted-foreground hover:text-foreground">
         <ChevronRight className={`h-3.5 w-3.5 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} />
-        {active ? (
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse motion-reduce:animate-none" />
-            Thinking…
-          </span>
-        ) : (
-          `Thought for ${seconds}s`
-        )}
+        <ThinkingLabel active={active} ms={ms} />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-1 border-l-2 border-border pl-3 text-helper leading-snug text-muted-foreground [&_h1]:text-helper [&_h2]:text-helper [&_h3]:text-helper [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1">
-          <MarkdownRenderer text={text} />
-        </div>
+        <ReasoningBody text={text} className="mt-1" />
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+/** The header of a reasoning block: a pulsing dot while the model thinks, then the time it took. */
+export function ThinkingLabel({ active, ms }: { active: boolean; ms: number }) {
+  if (active) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse motion-reduce:animate-none" />
+        Thinking…
+      </span>
+    );
+  }
+  return <>{`Thought for ${Math.max(1, Math.round(ms / 1000))}s`}</>;
+}
+
+/** A model's reasoning as markdown, muted and smaller than the text it precedes. */
+export function ReasoningBody({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={cn('border-l-2 border-border pl-3 text-helper leading-snug text-muted-foreground [&_h1]:text-helper [&_h2]:text-helper [&_h3]:text-helper [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1', className)}>
+      <MarkdownRenderer text={text} />
+    </div>
   );
 }

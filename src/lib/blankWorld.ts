@@ -1,0 +1,86 @@
+import { randomUUID } from '@/lib/uuid';
+import { defaultDescriptorBands } from '@/lib/statDescriptors';
+import type { Entity, GameLocation, Stat, Trait, World } from '@/types';
+
+/** The name New World gives a world. */
+export const NEW_WORLD_NAME = 'New World';
+
+/** The world New World opens in the editor. It is not stored until the author saves it. */
+export function newBlankWorld(): World {
+  return {
+    id: `new-${randomUUID()}`,
+    worldOverview: {
+      name: NEW_WORLD_NAME,
+      description: 'A blank world ready for editing',
+      thumbnail: null,
+      use3DModel: false,
+      bgm: null,
+      systemPrompt: '',
+      author: '',
+      tags: [],
+    },
+    stats: [],
+    traits: [],
+    // No seeded trait groups: Simple mode cannot make or manage groups, so a new world starts flat.
+    traitGroups: [],
+    locations: [],
+    entities: [],
+    statUpdates: [], // This field is required by WorldStorageService
+    // Seed one "Default" book so new worlds start with a dictionary (Foreground by default).
+    dictionaries: [{ id: randomUUID(), name: 'Default', enabled: true, entries: [] }],
+  };
+}
+
+/** The name the Locations tab's Add button gives a location. */
+export const NEW_LOCATION_NAME = 'New Location';
+
+/** A location as the editor's Add button makes it. */
+export function newLocation(id: string, name = NEW_LOCATION_NAME): GameLocation {
+  return { id, name, playerDescription: '', aiDescription: '', aiSummary: '' };
+}
+
+/** How many entities and entity groups sit at the entity tree's root: the `order` a new root item takes. */
+export function entityRootCount(world: Pick<World, 'entities' | 'entityGroups'>): number {
+  return (world.entities ?? []).filter((e) => (e.groupId ?? null) === null).length
+    + (world.entityGroups ?? []).filter((g) => (g.parentId ?? null) === null).length;
+}
+
+/** The name the Entities tab's Add button gives an entity. */
+export const NEW_ENTITY_NAME = 'New Entity';
+
+/** An entity as the editor's Add button makes it, placed `order`th among the ungrouped entities. */
+export function newEntity(id: string, order: number, name = NEW_ENTITY_NAME): Entity {
+  return { id, name, playerDescription: '', aiDescription: '', aiSummary: '', type: '', groupId: null, order };
+}
+
+/** How many traits and trait groups sit at the trait tree's root: the `order` a new root item takes. */
+export function traitRootCount(world: Pick<World, 'traits' | 'traitGroups'>): number {
+  return (world.traits ?? []).filter((t) => (t.groupId ?? null) === null).length
+    + (world.traitGroups ?? []).filter((g) => (g.parentId ?? null) === null).length;
+}
+
+/** The name the Traits tab's Add button gives a trait. */
+export const NEW_TRAIT_NAME = 'New Trait';
+
+/** A trait as the editor's Add button makes it, placed `order`th at the trait tree's root. */
+export function newTrait(id: string, order: number, name = NEW_TRAIT_NAME): Trait {
+  return {
+    id, name, playerDescription: '', aiDescription: '', statChanges: [], groupId: null, isDefault: false, order,
+  };
+}
+
+/** The name the Stats tab's Add button gives a stat. */
+export const NEW_STAT_NAME = 'New Stat';
+
+/** A stat as the editor's Add button makes it, before the world gives it its default descriptors. */
+export function newStat(id: string, name = NEW_STAT_NAME): Omit<Stat, 'descriptors'> {
+  return { id, name, type: 'number', description: '', min: 0, max: 100, value: 0, regen: 0 };
+}
+
+/** The stat with the low, medium and high descriptors every added stat starts with. */
+export function withDefaultDescriptors(stat: Omit<Stat, 'descriptors'>): Stat {
+  return {
+    ...stat,
+    descriptors: defaultDescriptorBands(stat.name).map((band) => ({ id: randomUUID(), ...band })),
+  };
+}

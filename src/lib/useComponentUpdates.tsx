@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { UpdateAvailableDialog, type IncomingFile } from '@/components/modals/UpdateAvailableDialog';
 import { affectedCopies, type LiveWorld } from '@/lib/componentUpdateRun';
 import type { UpdateRow } from '@/lib/componentUpdates';
@@ -7,6 +8,8 @@ import {
   libraryItemData, libraryItems, replaceLibraryItemContent, type LibraryKind,
 } from '@/lib/librarySources';
 import { contentMatchesSource, type LibrarySource, type LinkableContent } from '@/lib/linkedContent';
+import type { LibraryDetails } from '@/types';
+import { libraryItemDetails } from '@/lib/librarySources';
 
 /** One review in progress: the item checked, its content, and the worlds behind it. */
 interface Review {
@@ -47,7 +50,7 @@ export function useComponentUpdates(live?: LiveWorld[]) {
       }
       setReview({ source: item, sourceData: await libraryItemData(kind, libraryId), rows });
     } catch (error) {
-      toast.error((error as Error).message || 'Formamorph could not check for updates.');
+      toastError(error, 'Formamorph could not check for updates.');
     }
   }, []);
 
@@ -63,20 +66,27 @@ export function useComponentUpdates(live?: LiveWorld[]) {
    * @param content - The file's content
    */
   const reviewImportedFile = useCallback(async (
-    kind: LibraryKind, libraryId: string, content: LinkableContent,
+    kind: LibraryKind, libraryId: string, content: LinkableContent, libraryDetails?: LibraryDetails,
   ) => {
     const item = (await libraryItems(kind)).find((row) => row.id === libraryId);
     if (!item) throw new Error('The library item this file follows was deleted.');
 
     const held = await libraryItemData(kind, libraryId);
+    const existingDetails = libraryDetails ? await libraryItemDetails(kind, libraryId) : undefined;
+    const details = libraryDetails ? { ...existingDetails, ...libraryDetails } : undefined;
     if (held && contentMatchesSource(content, held)) {
+      if (details && JSON.stringify(details) !== JSON.stringify(existingDetails)) {
+        await replaceLibraryItemContent(kind, libraryId, content, new Date().toISOString(), details);
+        toast.success(`“${item.name}” updated from the imported file.`);
+        return;
+      }
       toast.info(`“${item.name}” already has this file's content.`);
       return;
     }
 
     // One marker for the whole review, so a retry writes the same revision rather than a second one.
     const revision = new Date().toISOString();
-    const commit = () => replaceLibraryItemContent(kind, libraryId, content, revision);
+    const commit = () => replaceLibraryItemContent(kind, libraryId, content, revision, details);
     const source: LibrarySource = { ...item, revision };
     const rows = await affectedCopies(source, liveRef.current);
     if (!rows.length) {

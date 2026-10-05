@@ -2,16 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useState } from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { placeholderAccent, type ChipVocabulary } from '@/lib/chipVocabulary';
+import type { ChipVocabulary } from '@/lib/chipVocabulary';
+import { placeholderAccent } from '@/lib/highlightUtils';
 import { accentAtChance, BENCHED, chanceChipStyle, type ChanceStyle } from '@/lib/chanceColor';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { tintMarkStyle } from '@/lib/previewTint';
 import { EditorModeContext } from '@/lib/editorMode';
-import type { GameLocation, Placeholder, Stat, Trait, TraitGroup } from '@/types';
+import type { GameLocation, Placeholder, PlaceholderGroup, Stat, Trait, TraitGroup } from '@/types';
 import type { PinsWorld } from '@/components/editor/PlaceholderPinsSection';
-import PlaceholderEditor from './PlaceholderEditor';
+import LibraryPlaceholdersEditor from './LibraryPlaceholdersEditor';
 import PlaceholderManager from './PlaceholderManager';
 import { phValueId, phValues } from '@/test/placeholderValues';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 /** A color as jsdom stores it once set inline — `hsl(…)` comes back as `rgb(…)`, a `var()` form verbatim. */
 const cssColor = (value: string) => {
@@ -38,6 +40,7 @@ vi.mock('@/contexts/PlaceholderStoreContext', () => ({
 // editor with no world at all.
 interface TestWorld {
   traits: Trait[]; traitGroups: TraitGroup[]; locations: GameLocation[]; stats: Stat[]; placeholders: Placeholder[];
+  placeholderGroups?: PlaceholderGroup[];
 }
 let gameData: PinsWorld | null = null;
 /** The world as the host last rendered it — what a test reads a write back from. */
@@ -301,6 +304,27 @@ describe('PlaceholderManager — chips vs multiline', () => {
       expect(box(2)).toHaveValue('Dusk');
     });
 
+    it('opens a list of three values collapsed and a list of two expanded', () => {
+      const { unmount } = render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Green']) })} />);
+      pickStyle('Multiline');
+      expect(box(1)).toHaveValue('Red');
+      expect(box(2)).toHaveValue('Green');
+      unmount();
+
+      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Green', 'Blue']) })} />);
+      pickStyle('Multiline');
+      expect(screen.queryByLabelText('Value 1')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Expand value 3' })).toBeInTheDocument();
+    });
+
+    it('opens a value added to a collapsed list expanded', () => {
+      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Green', 'Blue']) })} />);
+      pickStyle('Multiline');
+      fireEvent.click(screen.getByRole('button', { name: 'Add Value' }));
+      expect(box(4)).toHaveValue('');
+      expect(screen.queryByLabelText('Value 1')).not.toBeInTheDocument();
+    });
+
     it('is not offered in the chip row, nor for a lone value', () => {
       const { unmount } = render(<PlaceholderManager placeholder={ph()} />);
       expect(screen.queryByRole('button', { name: /all values$/ })).not.toBeInTheDocument();
@@ -320,7 +344,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
  */
 describe('PlaceholderManager — kind', () => {
   it('is born a Wildcard', () => {
-    render(<PlaceholderEditor />);
+    render(<LibraryPlaceholdersEditor ownerName="Molly" />);
     fireEvent.click(screen.getByRole('button', { name: 'Add Placeholder' }));
     expect(addPlaceholder).toHaveBeenCalledWith(expect.objectContaining({ roll: true }));
   });
@@ -362,9 +386,9 @@ describe('PlaceholderManager — kind', () => {
   describe('the state line', () => {
     it('reads Variable at one value, whichever kind is declared', () => {
       const { rerender } = render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
-      expect(screen.getByText('A Variable: always resolves to its one value.')).toBeInTheDocument();
+      expect(screen.getByText('A Variable, so it always resolves to its one value')).toBeInTheDocument();
       rerender(<PlaceholderManager placeholder={ph({ values: phValues(['Red']), roll: false })} />);
-      expect(screen.getByText('A Variable: always resolves to its one value.')).toBeInTheDocument();
+      expect(screen.getByText('A Variable, so it always resolves to its one value')).toBeInTheDocument();
     });
 
     // A one-value Variable whose value nests wildcards is not a constant: the chips roll, so the line says
@@ -380,33 +404,33 @@ describe('PlaceholderManager — kind', () => {
         <PlaceholderManager placeholder={ph({ values: phValues([`The ${chip('adj')} ${chip('noun')}`]) })} />,
       );
       expect(screen.getByText(
-        'A Variable: its one value is a template. It rolls its chips, and picks World or Unique like a Wildcard.',
+        'A Variable whose one value is a template. It rolls its chips, and picks World or Unique like a Wildcard.',
       )).toBeInTheDocument();
       rerender(<PlaceholderManager placeholder={ph({ values: phValues([`King ${chip('king')}`]) })} />);
-      expect(screen.getByText('A Variable: always resolves to its one value.')).toBeInTheDocument();
+      expect(screen.getByText('A Variable, so it always resolves to its one value')).toBeInTheDocument();
       siblings = [];
     });
 
     it('counts the values a Wildcard picks between', () => {
       render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']) })} />);
-      expect(screen.getByText('Picks one of 3 values.')).toBeInTheDocument();
+      expect(screen.getByText('Picks one of 3 values')).toBeInTheDocument();
     });
 
     it('counts the values an Object shows together', () => {
       render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']), roll: false })} />);
-      expect(screen.getByText('Shows all 3 values.')).toBeInTheDocument();
+      expect(screen.getByText('Shows all 3 values')).toBeInTheDocument();
     });
 
     it('says an empty placeholder resolves to nothing', () => {
       render(<PlaceholderManager placeholder={ph({ values: [] })} />);
-      expect(screen.getByText('No values yet — this resolves to nothing.')).toBeInTheDocument();
+      expect(screen.getByText('No values yet, so this resolves to nothing')).toBeInTheDocument();
     });
 
     it('follows the selector as it is pressed', () => {
       render(<PlaceholderManager placeholder={ph()} />);
-      expect(screen.getByText('Picks one of 2 values.')).toBeInTheDocument();
+      expect(screen.getByText('Picks one of 2 values')).toBeInTheDocument();
       pickKind('Object');
-      expect(screen.getByText('Shows all 2 values.')).toBeInTheDocument();
+      expect(screen.getByText('Shows all 2 values')).toBeInTheDocument();
     });
   });
 });
@@ -456,7 +480,8 @@ describe('PlaceholderManager — chip values', () => {
   it('hands the multiline boxes the same placeholders to insert', () => {
     render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
     pickStyle('Multiline');
-    expect(box(1)).toHaveAttribute('data-palette', '2');
+    // The world's two placeholders, after the Player Name chip every prose field offers.
+    expect(box(1)).toHaveAttribute('data-palette', '3');
   });
 
   // The one-line summaries are plain text, so a chip in a value has nowhere to draw itself and would print
@@ -507,7 +532,7 @@ describe('PlaceholderManager — an Object', () => {
   it('shows no stepper in the box view', () => {
     render(<PlaceholderManager placeholder={ph({ roll: false, values: three() })} />);
     pickStyle('Multiline');
-    expect(box(3)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand value 3' })).toBeInTheDocument(); // three values open collapsed
     expect(stepper()).not.toBeInTheDocument();
   });
 
@@ -619,7 +644,7 @@ describe('PlaceholderManager — a shared row', () => {
   // The wiring: the list selects rows, and which row it is decides whether the panel locks. Both rows here
   // are the one placeholder, so a panel keyed by the placeholder alone could not tell them apart.
   it('locks the nested row and leaves the original unlocked, from the list', () => {
-    render(<PlaceholderEditor />);
+    render(<LibraryPlaceholdersEditor ownerName="Molly" />);
     const rows = screen.getAllByRole('button', { name: 'Duplicate' })
       .map((b) => b.parentElement as HTMLElement);
     const named = (name: string) =>
@@ -731,14 +756,14 @@ describe('PlaceholderManager — the preview sample', () => {
   });
 
   it('names itself Preview, and says on hover that the sample is only a look', async () => {
-    render(<PlaceholderManager placeholder={ph()} />);
+    render(<PlaceholderManager placeholder={ph()} />, { wrapper: TooltipProvider });
     await userEvent.hover(preview());
     await waitFor(() => expect(screen.getByText('Preview a sample of this placeholder')).toBeInTheDocument());
   });
 
   it('paints each direct chip’s run in its placeholder’s accent, named in the tip, literal text plain', async () => {
     siblings = [ph(), { id: 'p2', name: 'Hair', values: phValues(['Brown']) }, { id: 'p3', name: 'Eyes', values: phValues(['Green']) }];
-    render(<PlaceholderManager placeholder={ph({ values: phValues([`${chip('p2')} and ${chip('p3')}`]) })} />);
+    render(<PlaceholderManager placeholder={ph({ values: phValues([`${chip('p2')} and ${chip('p3')}`]) })} />, { wrapper: TooltipProvider });
     fireEvent.click(preview());
     const status = screen.getByRole('status', { name: 'Sample preview' });
     expect(status).toHaveTextContent('Brown and Green');
@@ -761,7 +786,9 @@ describe('PlaceholderManager — the preview sample', () => {
     siblings = [ph(), eyes, hair];
     // Both belong to Molly; the world's own Scene is edited first, so the tip carries her name.
     // Nothing here writes back; the tip only needs the owner index.
-    const noWrite = { updateTrait: () => {}, updateLocation: () => {}, updateStat: () => {}, updatePlaceholder: () => {} };
+    const noWrite = {
+      updateTrait: () => {}, updateEntity: () => {}, updateLocation: () => {}, updateStat: () => {}, updatePlaceholder: () => {},
+    };
     gameData = {
       ...noWrite,
       placeholders: siblings,
@@ -770,13 +797,13 @@ describe('PlaceholderManager — the preview sample', () => {
         ['p-hair', { kind: 'entity' as const, id: 'molly', name: 'Molly' }],
       ]),
     };
-    const { unmount } = render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p-eyes')]) })} />);
+    const { unmount } = render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p-eyes')]) })} />, { wrapper: TooltipProvider });
     fireEvent.click(preview());
     await userEvent.hover(within(screen.getByRole('status', { name: 'Sample preview' })).getByText('Green'));
     await waitFor(() => expect(screen.getAllByText('Molly › Eyes').length).toBeGreaterThan(0));
     unmount();
     // Molly's own Hair drawing Molly's Eyes: the panel already says whose it is, so the tip reads bare.
-    render(<PlaceholderManager placeholder={{ ...hair, values: phValues([chip('p-eyes')]) }} />);
+    render(<PlaceholderManager placeholder={{ ...hair, values: phValues([chip('p-eyes')]) }} />, { wrapper: TooltipProvider });
     fireEvent.click(preview());
     await userEvent.hover(within(screen.getByRole('status', { name: 'Sample preview' })).getByText('Green'));
     await waitFor(() => expect(screen.getAllByText('Eyes').length).toBeGreaterThan(0));
@@ -857,7 +884,7 @@ describe('PlaceholderManager — value pins', () => {
   it('refuses a pin on the value’s own placeholder: not offered, and noted where one is stored', async () => {
     render(<PlaceholderManager placeholder={pinned([{ placeholderId: 'p1', value: 'Blue' }])} />);
     await userEvent.click(pinButton('Red'));
-    expect(screen.getByText('A value cannot pin its own placeholder.')).toBeInTheDocument();
+    expect(screen.getByText("A value can't pin its own placeholder")).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Select placeholder' }));
     expect(screen.getAllByTestId('placeholder-section-row').map((r) => r.textContent)).toEqual(['Weather']);
   });
@@ -913,7 +940,7 @@ describe('PlaceholderManager — the Pins section', () => {
   });
 
   /** The world editor's store, reduced to what the section reads and writes. */
-  const Host = ({ initial }: { initial: TestWorld }) => {
+  const Host = ({ initial, placeholder = TOWN }: { initial: TestWorld; placeholder?: Placeholder }) => {
     const [state, setState] = useState(initial);
     const swap = <T extends { id: string }>(list: T[], item: T) => list.map((x) => (x.id === item.id ? item : x));
     latest = state;
@@ -923,8 +950,10 @@ describe('PlaceholderManager — the Pins section', () => {
       updateLocation: (l) => setState((w) => ({ ...w, locations: swap(w.locations, l) })),
       updateStat: (s) => setState((w) => ({ ...w, stats: swap(w.stats, s) })),
       updatePlaceholder: (p) => setState((w) => ({ ...w, placeholders: swap(w.placeholders, p) })),
+      // No entity in this world owns a trait.
+      updateEntity: () => {},
     };
-    return <PlaceholderManager placeholder={TOWN} />;
+    return <PlaceholderManager placeholder={placeholder} />;
   };
   const world = () => latest;
   const sources = () => screen.getAllByRole('combobox', { name: 'Pin Source' }) as HTMLSelectElement[];
@@ -989,6 +1018,23 @@ describe('PlaceholderManager — the Pins section', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Pin Kind' }), 'Placeholder Value');
     const picker = screen.getByRole('combobox', { name: 'New Pin Source' });
     expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'Region = Northern', 'Region = Southern']);
+  });
+
+  it('offers a blueprint only trait and blueprint-side value sources', async () => {
+    const garb: Placeholder = { id: 'garb', name: 'Garb', groupId: 'bp', values: [{ id: 'v-white', text: 'white tabard' }] };
+    const plate: Placeholder = { id: 'plate', name: 'Plate', groupId: 'bp', values: [{ id: 'v-gilt', text: 'gilt' }] };
+    const initial = {
+      ...base(), placeholders: [TOWN, REGION, garb, plate],
+      placeholderGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' as const }],
+    };
+    siblings = initial.placeholders;
+    render(<Host initial={initial} placeholder={garb} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Add Pin' }));
+    const kinds = screen.getByRole('combobox', { name: 'Pin Kind' });
+    expect(within(kinds).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'Trait', 'Placeholder Value']);
+    await userEvent.selectOptions(kinds, 'Placeholder Value');
+    const picker = screen.getByRole('combobox', { name: 'New Pin Source' });
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'Plate = gilt']);
   });
 
   it('is hidden in Simple mode', () => {

@@ -3,11 +3,14 @@ import { useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CodeArea } from './CodeArea';
+import type { CodeSurface } from '@/lib/codeSurface';
+import { STAT_CODE_SURFACE } from '@/lib/statCodeSurface';
+import { SCRIPT_SURFACE as SCRIPT } from '@/test/scriptSurface';
 
 /** The field is controlled by its parent everywhere it's used, so the harness owns the value too —
  *  testing it uncontrolled would exercise a wiring nothing ships. */
-function Harness({ slots = false, preview = false, initial = '', statNames }: {
-  slots?: boolean; preview?: boolean; initial?: string; statNames?: string[];
+function Harness({ slots = false, preview = false, initial = '', statNames, surface = STAT_CODE_SURFACE }: {
+  slots?: boolean; preview?: boolean; initial?: string; statNames?: string[]; surface?: CodeSurface;
 }) {
   const [value, setValue] = useState(initial);
   return (
@@ -16,6 +19,7 @@ function Harness({ slots = false, preview = false, initial = '', statNames }: {
         value={value}
         onChange={setValue}
         ariaLabel="Stat code"
+        surface={surface}
         statNames={statNames}
         slots={slots}
         preview={preview ? <p>what this makes</p> : undefined}
@@ -252,7 +256,7 @@ describe('CodeArea', () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(await editor());
-    await type(user, 'return elap');
+    await type(user, 'return cloc');
 
     await waitFor(() => expect(document.querySelector('.cm-tooltip-autocomplete')).toBeTruthy());
     const tooltip = document.querySelector('.cm-tooltip-autocomplete') as HTMLElement;
@@ -396,15 +400,15 @@ describe('CodeArea', () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(await editor());
-    await type(user, 'return elap');
+    await type(user, 'return cloc');
 
     await waitFor(() => expect(popup()).toBeTruthy());
     // The matched prefix is its own span, so the entry is found by what it reads as, not by one text node.
     const option = within(popup()!).getAllByRole('option')
-      .find(entry => entry.textContent?.startsWith('elapsedHours'));
+      .find(entry => entry.textContent?.startsWith('clock'));
     await user.click(option!);
 
-    expect(owned()).toBe('return elapsedHours');
+    expect(owned()).toBe('return clock');
   });
 
   it('offers the world’s stat names inside a string literal', async () => {
@@ -414,7 +418,7 @@ describe('CodeArea', () => {
     await type(user, 'return "');
 
     await waitFor(() => expect(popup()).toBeTruthy());
-    expect(within(popup()!).getByText('Stamina')).toBeInTheDocument();
+    await waitFor(() => expect(within(popup()!).getByText('Stamina')).toBeInTheDocument());
   });
 
   // Story 5 of the parent spec: Escape is the way out of the field, and the popup must not spend it.
@@ -422,42 +426,42 @@ describe('CodeArea', () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(await editor());
-    await type(user, 'return elap');
+    await type(user, 'return cloc');
     await waitFor(() => expect(popup()).toBeTruthy());
 
     await user.keyboard('{Escape}');
     await waitFor(() => expect(popup()).toBeNull());
     // That Escape went to the list, so this Tab still indents — the field is not yet being left.
     await user.tab();
-    expect(owned()).toBe('return elap  ');
+    expect(owned()).toBe('return cloc  ');
 
     await user.keyboard('{Escape}');
     await user.tab();
-    expect(owned()).toBe('return elap  ');
+    expect(owned()).toBe('return cloc  ');
   });
 
   it('takes the highlighted completion on Tab, the way every editor does', async () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(await editor());
-    await type(user, 'return elap');
+    await type(user, 'return cloc');
     await waitFor(() => expect(popup()).toBeTruthy());
     await settle();
 
     await user.tab();
-    expect(owned()).toBe('return elapsedHours');
+    expect(owned()).toBe('return clock');
   });
 
   it('still takes the highlighted completion on Enter', async () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(await editor());
-    await type(user, 'return elap');
+    await type(user, 'return cloc');
     await waitFor(() => expect(popup()).toBeTruthy());
     await settle();
 
     await user.keyboard('{Enter}');
-    expect(owned()).toBe('return elapsedHours');
+    expect(owned()).toBe('return clock');
   });
 
   // The popup hangs off `<body>`, and a dialog's scroll lock preventDefaults any scroll whose target is
@@ -467,7 +471,7 @@ describe('CodeArea', () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(await editor());
-    await type(user, 'return elap');
+    await type(user, 'return cloc');
     await waitFor(() => expect(popup()).toBeTruthy());
 
     const reachedDocument = vi.fn();
@@ -492,7 +496,7 @@ describe('CodeArea', () => {
   });
 
   it('marks a warning as a warning, leaving the names it recognizes unflagged', async () => {
-    render(<Harness initial="const total = elapsedHours * 2;" />);
+    render(<Harness initial="const total = clock.elapsedHours * 2;" />);
     const field = await editor();
     await waitFor(
       () => expect(field.querySelector('.cm-lintRange-warning')).toBeTruthy(),
@@ -506,7 +510,7 @@ describe('CodeArea', () => {
   it('leaves code the sandbox can run entirely unmarked', async () => {
     render(
       <>
-        <Harness initial="return elapsedHours;" />
+        <Harness initial="return clock.elapsedHours;" />
         <Harness initial="return nope;" />
       </>,
     );
@@ -523,6 +527,31 @@ describe('CodeArea', () => {
     await waitFor(() => expect(marks()).toEqual(['Helth']), { timeout: 3000 });
     rerender(<Harness initial="return stats.Helth.value;" statNames={['Health', 'Helth']} />);
     await waitFor(() => expect(marks()).toEqual([]), { timeout: 3000 });
+  });
+
+  describe('on a surface other than stat code', () => {
+    it('offers that surface’s inserts in the Variable menu, and none of stat code’s', async () => {
+      const user = userEvent.setup();
+      render(<Harness surface={SCRIPT} />);
+      await user.click(await editor());
+
+      await user.click(screen.getByLabelText('Variable'));
+      expect(screen.queryByText('This stat’s value')).toBeNull();
+      await user.click(screen.getByText('An argument'));
+
+      expect(owned()).toBe('args.name');
+    });
+
+    it('reads names against that surface, and re-reads them when the surface changes', async () => {
+      const { rerender } = render(<Harness initial="return args.name + self.value;" surface={SCRIPT} />);
+      const field = await editor();
+      const marks = () => [...field.querySelectorAll('.cm-lintRange-error')].map(mark => mark.textContent);
+      await waitFor(() => expect(marks()).toEqual(['self']), { timeout: 3000 });
+
+      const widened = { ...SCRIPT, globals: [...SCRIPT.globals, { name: 'self', detail: 'object', info: 'Test.' }] };
+      rerender(<Harness initial="return args.name + self.value;" surface={widened} />);
+      await waitFor(() => expect(marks()).toEqual([]), { timeout: 3000 });
+    });
   });
 
   it('puts history and the view control together on the right, after what gets inserted', async () => {

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useCommunityBrowserFilters } from './useCommunityBrowserFilters';
@@ -88,6 +89,28 @@ describe('sorting by likes', () => {
     // date does not carry it up the list.
     expect(names.slice(0, 2)).toEqual(['Loved', 'Liked']);
     expect(names.slice(2).sort()).toEqual(['Quiet', 'Unliked']);
+  });
+
+  it('sorts a hidden contest count with the unliked, so its place shows no rank', () => {
+    // The server leaves a hidden count out; a stray number riding along must still not rank it.
+    const rows = [
+      { id: 'entry', name: 'Entry', kind: 'world', likes: 40, likesHidden: true, updated_at: '2026-03-04T00:00:00.000Z', tags: [] },
+      ...catalog,
+    ] as unknown as WorldRecord[];
+
+    const names = order('likes', 'desc', rows);
+
+    expect(names.slice(0, 2)).toEqual(['Loved', 'Liked']);
+    expect(names.slice(2).sort()).toEqual(['Entry', 'Quiet']);
+  });
+
+  it('sorts a private count by its number', () => {
+    const rows = [
+      { id: 'mine', name: 'Mine', kind: 'world', likes: 7, likesPrivate: true, updated_at: '2026-03-04T00:00:00.000Z', tags: [] },
+      ...catalog,
+    ] as unknown as WorldRecord[];
+
+    expect(order('likes', 'desc', rows)).toEqual(['Loved', 'Mine', 'Liked', 'Quiet']);
   });
 
   it('leaves the download sort alone', () => {

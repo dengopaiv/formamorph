@@ -10,12 +10,13 @@ import { resolveLayout, usePromptSplitMode, useContainerWidth, MIN_PANE_WIDTH } 
 import { useMorphFullscreen } from '@/lib/useMorphFullscreen';
 import { FullscreenShell } from '@/components/FullscreenShell';
 import { cn } from '@/lib/utils';
-import { SLOT_SNIPPETS, STAT_CODE_SNIPPETS, type InsertSnippet } from '@/lib/codeSnippets';
+import { SLOT_SNIPPETS, type InsertSnippet } from '@/lib/codeSnippets';
+import type { CodeSurface } from '@/lib/codeSurface';
 import type { CodeSession } from '@/components/prompt/codeSession';
-import type { CodePlaceholders } from '@/lib/statCodeAnalysis';
+import type { CodeEntityNames, CodePlaceholders } from '@/lib/statCodeAnalysis';
 
 function InsertMenu({ items, label, Icon, onPick }: {
-  items: InsertSnippet[]; label: string; Icon: typeof Braces; onPick: (snippet: InsertSnippet) => void;
+  items: readonly InsertSnippet[]; label: string; Icon: typeof Braces; onPick: (snippet: InsertSnippet) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -56,8 +57,12 @@ interface CodeAreaProps {
   placeholder?: string;
   /** Shown at the start of the toolbar row, so a caption costs no extra line. */
   label?: ReactNode;
+  /** An affordance beside the label, such as a `HintInfo`. */
+  info?: ReactNode;
   /** Offer the `{{slot}}` menu. Template editing only. */
   slots?: boolean;
+  /** What the code can reach: the Variable menu, completions and diagnostics all read it. */
+  surface: CodeSurface;
   /** The world's stat names, completed after `stats` and inside string literals, and checked by name. */
   statNames?: readonly string[];
   /** The name of the stat the code belongs to, so a write to it through `stats` is not flagged. */
@@ -66,6 +71,8 @@ interface CodeAreaProps {
   placeholders?: CodePlaceholders;
   /** The world's trait names, completed after `traits` and checked by name. */
   traits?: readonly string[];
+  /** The world's entities and their trait names, completed after `entities` and `persona.traits` and checked by name. */
+  entities?: readonly CodeEntityNames[];
   /** What the code produces. Given this, the field grows the Edit | Preview pair, which becomes a
    *  side-by-side split once full screen has the width for it. */
   preview?: ReactNode;
@@ -76,9 +83,9 @@ interface CodeAreaProps {
 /** Toolbar + editor. Split out so the fullscreen overlay can mount a second copy against the same
  *  value without the outer component recursing into itself. */
 function CodeAreaBody({
-  value, onChange, ariaLabel, placeholder, label, slots, preview, className, rows = 8, fullscreen,
+  value, onChange, ariaLabel, placeholder, label, info, slots, surface, preview, className, rows = 8, fullscreen,
   onToggleFullscreen, session, active, expose,
-}: Omit<CodeAreaProps, 'statNames' | 'selfName' | 'placeholders' | 'traits'> & {
+}: Omit<CodeAreaProps, 'statNames' | 'selfName' | 'placeholders' | 'traits' | 'entities'> & {
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   /** The one editor both copies take turns hosting. Null until its chunk has loaded. */
@@ -159,8 +166,9 @@ function CodeAreaBody({
       <div className="flex items-center gap-1 flex-shrink-0">
         <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
           {label && <Label className="leading-none">{label}</Label>}
+          {info}
           {slots && <InsertMenu items={SLOT_SNIPPETS} label="Slot" Icon={Braces} onPick={insert} />}
-          <InsertMenu items={STAT_CODE_SNIPPETS} label="Variable" Icon={Variable} onPick={insert} />
+          <InsertMenu items={surface.snippets} label="Variable" Icon={Variable} onPick={insert} />
         </div>
         <div className="flex flex-shrink-0 items-center gap-1">
           <Tip tip="Undo">
@@ -228,7 +236,7 @@ function CodeAreaBody({
 }
 
 /**
- * A JavaScript editor with the affordances a bare textarea has none of: syntax colouring, bracket
+ * A JavaScript editor with the affordances a bare textarea has none of: syntax coloring, bracket
  * matching, undo and redo that survive the programmatic writes a template insert makes, a full-screen
  * toggle, and menus that name the variables and slot forms the sandbox understands — none of which the
  * field itself could hint at.
@@ -269,10 +277,12 @@ export function CodeArea(props: CodeAreaProps) {
         ariaLabel,
         placeholder,
         slots,
+        surface: latest.current.surface,
         statNames: latest.current.statNames,
         selfName: latest.current.selfName,
         placeholders: latest.current.placeholders,
         traits: latest.current.traits,
+        entities: latest.current.entities,
         onChange: (next) => latest.current.onChange(next),
         onUpdate,
       });
@@ -286,11 +296,13 @@ export function CodeArea(props: CodeAreaProps) {
   // A second gutter column is worth its width only where there is width to spare; inline, a problem is
   // read by hovering its squiggle.
   useEffect(() => { session?.setLintGutter(morph.mounted); }, [session, morph.mounted]);
+  useEffect(() => { session?.setSurface(props.surface); }, [session, props.surface]);
   // Stats are renamed and added while a code field is open, so the completions follow the list.
   useEffect(() => { session?.setStatNames(props.statNames); }, [session, props.statNames]);
   useEffect(() => { session?.setSelfName(props.selfName); }, [session, props.selfName]);
   useEffect(() => { session?.setPlaceholders(props.placeholders); }, [session, props.placeholders]);
   useEffect(() => { session?.setTraits(props.traits); }, [session, props.traits]);
+  useEffect(() => { session?.setEntities(props.entities); }, [session, props.entities]);
 
   return (
     <>

@@ -9,6 +9,7 @@ export interface PromptTabFlags {
   memoryDigests: boolean;
   characterDiaries: boolean;
   aiClock: boolean;
+  describeCharacters: boolean;
   /** Scene images are available at all — i.e. image generation isn't switched off wholesale. */
   sceneImages: boolean;
   /** Advanced editor mode. Gates the Authoring group only: the world editor's ✨ buttons work on their
@@ -23,7 +24,7 @@ export interface PromptTabFlags {
  * persisted Character Diaries flag is on.
  */
 export function computePromptTabAvailability(flags: PromptTabFlags): Record<string, boolean> {
-  const { thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, aiClock, sceneImages, advanced } = flags;
+  const { thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, describeCharacters, aiClock, sceneImages, advanced } = flags;
   return {
     narration: true,
     thinking: thinkingMode === 'precall',
@@ -31,9 +32,11 @@ export function computePromptTabAvailability(flags: PromptTabFlags): Record<stri
     statupdates: statUpdatesEnabled,
     location: locationChangeEnabled,
     summary: memoryDigests,
+    milestone: memoryDigests,
     diary: thinkingMode === 'staged' && characterDiaries,
     director: thinkingMode === 'staged',
     character: thinkingMode === 'staged',
+    discover: describeCharacters,
     storyboard: thinkingMode === 'staged',
     timepassed: aiClock,
     timeopening: aiClock,

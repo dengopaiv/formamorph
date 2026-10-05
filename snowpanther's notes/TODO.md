@@ -47,31 +47,45 @@ Write here. Anything, any length, any order.
 
 ## Where the branches stand
 
-Regenerated 2026-09-16, after the second sync — onto upstream `685b4152`, which is **v2.19.0 plus the
-unreleased native-reasoning work**, 237 commits. Everything below is on `origin`, pushed 2026-09-16, and
-every pre-sync tip is kept as `pre-2.19/<branch>` — on `origin` too, so the old line survives a clone.
+Regenerated 2026-10-05, after the third sync — onto upstream `2a2e8b33`, which is **v3.1.2**, 1,594
+commits. Every pre-sync tip is kept as `pre-3.1/<branch>`; the older `pre-2.19/<branch>` tags stay too.
 
 | Branch | Carries | Behind upstream | On `origin` |
 |---|---|---|---|
-| `main` | nothing of ours — a clean mirror of upstream | 0 | in sync |
-| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | in sync |
-| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** — one commit on upstream | 0 | in sync (pushed as a new branch, so nothing was force-replaced) |
-| `keyboard-tree-nesting` | the pre-rebuild line, kept only as history | 237 | matches `origin`, left alone — delete it when you are done with it |
-| `Colossally-expensive-curiosities` | nothing any more — its doc is now `snowpanther's notes/behemoth-128b.md` | 237 | on `origin`; retire when you say so |
+| `main` | nothing of ours — a clean mirror of upstream | 0 | see I2 |
+| `description-consistency` | the ✨/🔍 authoring work, the endpoint notes, the pod scripts, the Behemoth doc, this file | 0 | see I2 |
+| `keyboard-tree-nesting-2.19` | the keyboard-nesting a11y work, **and nothing else** | 0 | see I2 |
+| `keyboard-tree-nesting` | the pre-rebuild line, kept only as history | not synced | left alone — delete it when you are done with it |
+| `Colossally-expensive-curiosities` | nothing any more — its doc is now `snowpanther's notes/behemoth-128b.md` | not synced | on `origin`; retire when you say so |
 
-Both working branches are green: typecheck, lint, build, and the capped suite — 10360 tests on
-`description-consistency`. **Two runs at once is what makes the capped run fail**, see C5.
-
-What the 237 commits brought, in the order it is likely to matter here: **stat code rebuilt** (runs every
-turn, two boxes per stat, `self`/`previous`/`delta`, placeholder pins, trait switches), **linked library
-content** (a world's entities and books follow library items, with publish, download, update review and
-repairs), **every editor panel split into tabs**, and **native reasoning per prompt** with a capability
-record in place of the old seven-request probe. The last one reaches our work directly and is folded in;
-see I1.
+What v3 brought that reaches our work: **the ✨ helpers moved onto the request pipeline** (D4, done),
+**every World Editor guide split into one page per tab** (our doc notes moved with them), **the trait tree
+rebuilt around entity-owned traits, links and blueprints** (the keyboard work's announcer needed names for
+the new rows), **a per-prompt Max Output map** (overlaps our authoring caps, see I2), **the endpoint form
+extracted into `TextEndpointEditor`** (the cleartext warning moved there), **Tools**, **openings**,
+**pronouns**, **preset overviews and publishing**, and **a help system with Take Me There**.
 
 ---
 
-# I · Integrate upstream v2.17–v2.19
+# I · Integrate upstream
+
+### I2 · Bring upstream v3.1.2 (1,594 commits) into every branch
+
+**State:** Built, unverified — 2026-10-05. Both branches merged, gates below. Not yet heard by NVDA or run
+against a live endpoint.
+
+- **`keyboard-tree-nesting-2.19`:** 5 conflicts, all in the drag trees and the guide. Upstream had not
+  built keyboard nesting itself. Every new trait-tree row kind (entity nodes, links, blueprints) now carries
+  the plain-text `name` the announcer reads, and the keyboard steps moved to
+  `docs/World-Editor-Locations.md` → *How to Nest a Location*.
+- **`description-consistency`:** 20 conflicts. The authoring calls now use upstream's pipeline (D4). One
+  behaviour changed on purpose: **an empty 🔍 answer is "they agree" only when the model finished on its
+  own.** One cut off at the cap is an error now, where it used to read as agreement.
+- **The authoring caps and upstream's Max Output map overlap.** Upstream's per-prompt **Max Output** is
+  keyed by turn request; the editor kinds have no preset rows, so our `descTokens` stays separate for now.
+  Folding them is a design question, not a merge one: say if you want it.
+- **The four authoring prompt defaults moved to `lib/authoringPromptDefaults`.** Upstream gathers every
+  default in `GamePrompts`, and importing ours from the modules that send them made an import cycle.
 
 ### I1 · Bring 237 upstream commits into every branch
 
@@ -232,7 +246,9 @@ it are not evidence until it has seen a new run.
 ---
 ### D4 · Our authoring calls sit outside upstream's request layer, and that now costs something
 
-**State:** Filed, new on 2026-09-07 — found while folding in upstream, not by a failing test.
+**State:** Done, 2026-10-05. Upstream v3 built the proper half itself (`d0383bb9`, 30 Sep): the ✨ helpers
+run through `requestAiText` as editor request kinds. The 🔍 check joined them as `descriptionCheck` in the
+v3.1.2 sync, and our own `fetch` code is gone. See I2.
 
 `checkDescriptions`, `bridgeDescription` and `summarizeDescription` each build their own `fetch`. That
 was fine when the shared path had nothing they needed. Upstream's endpoint-override work changed that.

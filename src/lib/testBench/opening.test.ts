@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { OPENING_SCENE_CUE } from '@/components/game/GamePrompts';
 import { estimateTokens } from '@/lib/memoryUtils';
+import { drawNewGameOpening } from '@/lib/newGameOpening';
 import { activeDescriptor } from '@/lib/statContext';
 import type { Entity, GameLocation, Stat, Trait, TraitGroup, WorldOverview } from '@/types';
 import type { PlaceholderPick } from '@/lib/placeholders';
@@ -13,7 +14,7 @@ import {
 // Chip tokens, spelled as the editor inserts them.
 const chip = (id: string, mode: 'world' | 'unique', placement: string) => `{{ph:${id}:${mode}:${placement}}}`;
 
-const groups: TraitGroup[] = [{ id: 'g-origin', name: 'Origin', parentId: null, exclusive: true }];
+const groups: TraitGroup[] = [{ id: 'g-origin', name: 'Origin', parentId: null, maxPicks: 1 }];
 
 const traits: Trait[] = [
   // The default PC of the exclusive group — replaced when the lens picks a sibling.
@@ -286,10 +287,15 @@ describe('the assembled first prompt', () => {
     expect(opening.user).toContain(OPENING_SCENE_CUE);
   });
 
-  it('sends the world’s own cue once the author switches it on, chips and all resolved', () => {
+  it('sends the world’s first drawable opening, chips and all resolved', () => {
     const cue = `You wake with ${chip('ph-hair', 'world', 'pl-h9')} hair and the tide already climbing.`;
     const w = world({
-      worldOverview: { name: 'Sedge Landing', description: '', systemPrompt: '', openingCue: cue } as WorldOverview,
+      worldOverview: {
+        name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '',
+        use3DModel: false, tags: [],
+        openings: [{ id: 'o0', text: 'Benched.', kind: 'action' }, { id: 'o1', text: cue, kind: 'action' }],
+        openingWeights: { o0: 0 },
+      },
     });
     const opening = openingFor(w);
 
@@ -297,12 +303,13 @@ describe('the assembled first prompt', () => {
     expect(opening.user).not.toContain(OPENING_SCENE_CUE);
   });
 
-  it('keeps the shipped cue for a world whose cue is switched off or blank', () => {
+  it('keeps the shipped cue for a world whose openings are switched off or blank', () => {
     const ov = (over: Partial<WorldOverview>) =>
       world({ worldOverview: { name: 'W', description: '', systemPrompt: '', ...over } as WorldOverview });
-    expect(openingFor(ov({ openingCue: 'Never applied.', openingCueEnabled: false })).user)
-      .toContain(OPENING_SCENE_CUE);
-    expect(openingFor(ov({ openingCue: '   ', openingCueEnabled: true })).user).toContain(OPENING_SCENE_CUE);
+    expect(openingFor(ov({
+      openings: [{ id: 'o1', text: 'Never applied.', kind: 'action' }], openingsEnabled: false,
+    })).user).toContain(OPENING_SCENE_CUE);
+    expect(openingFor(ov({ openings: [{ id: 'o1', text: '   ', kind: 'action' }] })).user).toContain(OPENING_SCENE_CUE);
   });
 
   it('resolves chips through the active traits’ pins', () => {
@@ -345,6 +352,121 @@ describe('the fresh game’s stage', () => {
     const opening = openingFor(noStart);
     expect(opening.location?.id).toBe('harbor');
     expect(opening.startPool).toBe(2);
+  });
+});
+
+describe('the Character Name chip on turn one', () => {
+  // Tobin's name holds a chip, which resolves before it fills the Character Name chip.
+  const w = () => world({
+    worldOverview: { name: 'Sedge Landing', description: '', systemPrompt: '' } as WorldOverview,
+    entities: [{
+      id: 'e2', name: `${chip('ph-hair', 'world', 'pl-h1')} Tobin`, locations: ['harbor'],
+      aiDescription: '{{char}} mends nets.',
+      openings: [{ id: 'o-nets', text: '{{char}} nods at {{user}}.', kind: 'action' }],
+    }],
+  });
+
+  it('names the owner of an entity row', () => {
+    expect(openingFor(w()).pool[0].text).toBe('ash Tobin nods at you.');
+  });
+
+  it('names each entity in its own text in the first prompt', () => {
+    expect(openingFor(w()).system).toContain('ash Tobin mends nets.');
+  });
+});
+
+describe('the opening pool', () => {
+  const ov = (over: Partial<WorldOverview> = {}) =>
+    ({ name: 'Sedge Landing', description: '', systemPrompt: '', ...over }) as WorldOverview;
+  // Two starts; Maren waits at the market only, with one row of each kind.
+  const pooled = (over: Partial<WorldOverview> = {}) => world({
+    worldOverview: ov({
+      openings: [
+        { id: 'o-bench', text: 'Benched.', kind: 'action' },
+        { id: 'o-wake', text: `You wake with ${chip('ph-hair', 'world', 'pl-h9')} hair.`, kind: 'action' },
+        { id: 'o-rain', text: 'Rain on the steps.', kind: 'narration' },
+      ],
+      openingWeights: { 'o-bench': 0, 'o-rain': 3 },
+      ...over,
+    }),
+    locations: locations.map((l) => ({ ...l, isStarting: true })),
+    entities: [{
+      id: 'e-maren', name: 'Maren', locations: ['market'],
+      openings: [{ id: 'o-stall', text: 'Maren waves you over.', kind: 'narration' }],
+    }],
+  });
+  const at = (w: OpeningWorld, startLocationId: string | null, openingKey: string | null = null) =>
+    buildOpening(w, lensAt(w), primeOpeningRolls(w, {}, pickFirst), { startLocationId, openingKey });
+
+  it('lists the pool for the chosen start, with each row’s share of it', () => {
+    const w = pooled();
+    const harbor = at(w, 'harbor');
+    expect(harbor.location?.id).toBe('harbor');
+    expect(harbor.pool.map((r) => [r.ownerName, r.text, r.kind, r.chance])).toEqual([
+      [null, 'You wake with ash hair.', 'action', 25],
+      [null, 'Rain on the steps.', 'narration', 75],
+    ]);
+
+    const market = at(w, 'market');
+    expect(market.location?.id).toBe('market');
+    expect(market.pool.map((r) => [r.ownerName, r.chance])).toEqual([[null, 20], [null, 60], ['Maren', 20]]);
+  });
+
+  it('renders the user macro as the draw does', () => {
+    const w = pooled({ openings: [{ id: 'o-greet', text: '{{user}} steps off the boat.', kind: 'narration' }] });
+    expect(at(w, 'harbor').opening.text).toBe('You steps off the boat.');
+  });
+
+  it('offers every start a new game may begin in', () => {
+    expect(at(pooled(), null).starts).toEqual([{ id: 'harbor', name: 'Harbor Steps' }, { id: 'market', name: 'The Long Market' }]);
+  });
+
+  it('shows the first drawable row by default', () => {
+    const opening = at(pooled(), 'harbor');
+    expect(opening.selectedKey).toBe(opening.pool[0].key);
+    expect(opening.opening).toEqual({ kind: 'action', text: 'You wake with ash hair.' });
+    expect(opening.user).toContain('You wake with ash hair.');
+  });
+
+  it('falls back to the first row when the chosen one is not in this start’s pool', () => {
+    const w = pooled();
+    const stall = at(w, 'market').pool[2].key;
+    expect(at(w, 'harbor', stall).selectedKey).toBe(at(w, 'harbor').pool[0].key);
+  });
+
+  it('shows an Opening Narration as page one, with no narration prompt', () => {
+    const w = pooled();
+    const stall = at(w, 'market').pool[2].key;
+    const opening = at(w, 'market', stall);
+    expect(opening.opening).toEqual({ kind: 'narration', text: 'Maren waves you over.' });
+    expect(opening.system).toBe('');
+    expect(opening.user).toBe('');
+    expect(opening.totalTokens).toBe(0);
+  });
+
+  it('assembles the turn-one prompt for a chosen Opening Action', () => {
+    const w = pooled();
+    const wake = at(w, 'harbor').pool[0].key;
+    const opening = at(w, 'harbor', wake);
+    expect(opening.opening.kind).toBe('action');
+    expect(opening.user).toContain('You wake with ash hair.');
+    expect(opening.system).not.toBe('');
+  });
+
+  it('shows the default Opening Action for a switched-off list', () => {
+    const opening = at(pooled({ openingsEnabled: false }), 'market');
+    expect(opening.pool).toEqual([]);
+    expect(opening.openingsEnabled).toBe(false);
+    expect(opening.selectedKey).toBeNull();
+    expect(opening.opening).toEqual({ kind: 'action', text: OPENING_SCENE_CUE });
+    expect(opening.user).toContain(OPENING_SCENE_CUE);
+  });
+
+  it('shows the default Opening Action for an empty pool', () => {
+    const opening = at(pooled({ openings: [], openingWeights: undefined }), 'harbor');
+    expect(opening.pool).toEqual([]);
+    expect(opening.openingsEnabled).toBe(true);
+    expect(opening.opening).toEqual({ kind: 'action', text: OPENING_SCENE_CUE });
   });
 });
 
@@ -447,5 +569,180 @@ describe('a pin carrying a Unique chip', () => {
     expect(before.unique?.['pin-u1']).toBe('knife');
     // Masked by the Gifted pin, so the reroll leaves it alone — the value the pin hides is not lost.
     expect(rerollOpeningRolls(w, lensAt(w), before, pickLast).unique?.['pin-u1']).toBe('knife');
+  });
+});
+
+describe('a blueprint chip in the PC’s trait text', () => {
+  const garb = { id: 'garb', name: 'Garb', values: phValues(['tabard', 'robe']) };
+  // The Custom Persona entity's copy rewords tabard.
+  const newcomer: Entity = {
+    id: 'cp', name: 'Newcomer', customPersona: true,
+    placeholders: [{
+      id: 'cp-garb', name: 'Garb', values: [], blueprintId: 'garb',
+      valueOverrides: { [phValueId('tabard')]: { text: { value: 'rags', blueprint: 'tabard' } } },
+    }],
+  };
+  const garbed = () => {
+    const w = world();
+    return world({
+      traits: traits.map((t) => (t.id === 't-sedge' ? { ...t, name: `${chip('garb', 'world', 'pl-garb')} Sedge-Born` } : t)),
+      entities: [...entities, newcomer],
+      placeholders: [...w.placeholders!, garb],
+    });
+  };
+
+  it('primes the player’s copy as Enter World does, beside the blueprint', () => {
+    const rolls = primeOpeningRolls(garbed(), {}, pickFirst);
+    expect(rolls.world?.['cp-garb']).toBe('rags');
+    expect(rolls.world?.garb).toBe('tabard');
+  });
+
+  it('reads a cast entity’s linked trait through that entity’s own copy', () => {
+    const vow: Trait = { id: 't-vow', name: 'Vow', groupId: 'g-bp', isDefault: true, statChanges: [], aiDescription: `Wears ${chip('garb', 'world', 'pl-vow')}.` };
+    const maren: Entity = {
+      ...entities[0],
+      placeholders: [{
+        id: 'maren-garb', name: 'Garb', values: [], blueprintId: 'garb',
+        valueOverrides: { [phValueId('tabard')]: { text: { value: 'mail', blueprint: 'tabard' } }, [phValueId('robe')]: { removed: true } },
+      }],
+      traitLinks: [{ id: 'l-vow', originalId: 't-vow', kind: 'trait', originalName: 'Vow', groupId: null }],
+    };
+    const w = garbed();
+    const linked = world({
+      ...w, traits: [...w.traits, vow], traitGroups: [...groups, { id: 'g-bp', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+      entities: [maren, entities[1], newcomer],
+    });
+    expect(openingFor(linked).system).toContain('Wears mail.');
+  });
+
+  it('names the PC’s traits through the player’s copy', () => {
+    const opening = openingFor(garbed(), 't-sedge');
+    expect(opening.traits.find((t) => t.id === 't-sedge')?.name).toBe('{rags|robe} Sedge-Born');
+    expect(opening.pcName).toBe('{rags|robe} Sedge-Born');
+  });
+});
+
+describe('the persona pick', () => {
+  const ov = { name: 'Sedge Landing', description: '', systemPrompt: '' } as WorldOverview;
+  const row = (id: string, text: string, self?: boolean) => ({ id, text, kind: 'narration' as const, ...(self ? { self } : {}) });
+  // Wren and Sable are personas; Wren has Self rows. The Custom Persona entity carries its own. Maren waits at the harbor.
+  const cast = (): Entity[] => [
+    { id: 'e-maren', name: 'Maren', locations: ['harbor'], openings: [row('o-maren', 'Maren waves.')] },
+    {
+      id: 'e-wren', name: 'Wren', persona: true,
+      openings: [row('o-wren', 'You are Wren.', true), row('o-wren-other', 'Wren waves.')],
+    },
+    { id: 'e-sable', name: 'Sable', persona: true, openings: [row('o-sable', 'Sable waves.')] },
+  ];
+  const custom = (): Entity => ({
+    id: 'e-custom', name: 'Newcomer', customPersona: true, personaOnly: true,
+    openings: [row('o-custom', 'You arrive as yourself.', true)],
+  });
+  const staged = (over: Partial<OpeningWorld> = {}) => world({
+    worldOverview: { ...ov, openings: [row('o-world', 'The fen wakes.')] },
+    locations: [
+      { ...locations[0], openings: [row('o-harbor', 'Gulls over the steps.')] },
+      { ...locations[1], isStarting: true, openings: [row('o-market', 'Stalls open.')] },
+    ],
+    entities: cast(),
+    ...over,
+  });
+  const at = (w: OpeningWorld, choice: Parameters<typeof buildOpening>[3]) =>
+    buildOpening(w, lensAt(w), primeOpeningRolls(w, {}, pickFirst), { startLocationId: 'harbor', ...choice });
+  const texts = (o: ReturnType<typeof at>) => o.pool.map((r) => r.text);
+
+  it('replaces the pool with the persona’s Self rows, owned by the persona', () => {
+    const opening = at(staged(), { personaId: 'e-wren' });
+    expect(opening.pool.map((r) => [r.ownerName, r.text, r.self, r.chance])).toEqual([['Wren', 'You are Wren.', true, 100]]);
+    expect(opening.opening).toEqual({ kind: 'narration', text: 'You are Wren.' });
+  });
+
+  it('falls through to the location pool for a persona with no Self rows', () => {
+    expect(texts(at(staged(), { personaId: 'e-sable' }))).toEqual(['The fen wakes.', 'Gulls over the steps.', 'Maren waves.']);
+  });
+
+  it('draws the Custom Persona entity’s Self rows under None', () => {
+    const w = staged({ entities: [...cast(), custom()] });
+    const opening = at(w, {});
+    expect(opening.pool.map((r) => [r.ownerName, r.text, r.self])).toEqual([['Newcomer', 'You arrive as yourself.', true]]);
+    expect(at(w, { personaId: null }).pool).toEqual(opening.pool);
+  });
+
+  it('keeps a persona’s own Self rows over the Custom Persona entity’s', () => {
+    const w = staged({ entities: [...cast(), custom()] });
+    expect(texts(at(w, { personaId: 'e-wren' }))).toEqual(['You are Wren.']);
+  });
+
+  it('adds the location’s rows at the picked start and not at another', () => {
+    const w = staged();
+    const harbor = at(w, { startLocationId: 'harbor' }).pool;
+    expect(harbor.map((r) => [r.locationName, r.text])).toEqual([
+      [null, 'The fen wakes.'], ['Harbor Steps', 'Gulls over the steps.'], [null, 'Maren waves.'],
+    ]);
+    const market = at(w, { startLocationId: 'market' }).pool;
+    expect(market.map((r) => [r.locationName, r.text])).toEqual([[null, 'The fen wakes.'], ['The Long Market', 'Stalls open.']]);
+  });
+
+  it('never joins location rows to a persona’s Self pool', () => {
+    expect(texts(at(staged(), { personaId: 'e-wren', startLocationId: 'market' }))).toEqual(['You are Wren.']);
+  });
+
+  it('lists the world’s personas, with the pick resolved', () => {
+    const opening = at(staged({ entities: [...cast(), custom()] }), { personaId: 'e-sable' });
+    expect(opening.personas).toEqual([{ id: 'e-wren', name: 'Wren' }, { id: 'e-sable', name: 'Sable' }]);
+    expect(opening.personaId).toBe('e-sable');
+  });
+
+  it('reads a pick that names no persona as None', () => {
+    const w = staged({ entities: [...cast(), custom()] });
+    const opening = at(w, { personaId: 'e-gone' });
+    expect(opening.personaId).toBeNull();
+    expect(texts(opening)).toEqual(['You arrive as yourself.']);
+  });
+
+  it('names the persona as the Character Name of its own row', () => {
+    const w = staged({ entities: [{ ...cast()[1], openings: [row('o-wren', '{{char}} steps ashore.', true)] }] });
+    expect(at(w, { personaId: 'e-wren' }).opening.text).toBe('Wren steps ashore.');
+  });
+
+  it('names the persona as the Player Name of its own row', () => {
+    const w = staged({ entities: [{ ...cast()[1], openings: [row('o-wren', '{{user}} steps ashore.', true)] }] });
+    expect(at(w, { personaId: 'e-wren' }).opening.text).toBe('Wren steps ashore.');
+  });
+
+  it('names the Custom Persona entity as the Player Name under None', () => {
+    const w = staged({ entities: [{ ...custom(), openings: [row('o-custom', '{{user}} arrives.', true)] }] });
+    expect(at(w, {}).opening.text).toBe('Newcomer arrives.');
+  });
+
+  it('reads the Player Name as "you" when the world has no persona to play', () => {
+    const w = staged({ worldOverview: { ...ov, openings: [row('o-world', '{{user}} wake.')] } });
+    expect(at(w, {}).opening.text).toBe('You wake.');
+  });
+
+  it('shows the default opening when the switch is off, whatever the persona', () => {
+    const off = staged({ worldOverview: { ...ov, openings: [row('o-world', 'The fen wakes.')], openingsEnabled: false } });
+    expect(at(off, { personaId: 'e-wren' }).pool).toEqual([]);
+  });
+
+  // The Bench reads the pool play draws from: every row a sweep of new-game draws can land on is a row
+  // the Bench lists, and no other. Row texts are unique and weights equal, so text names a row and the
+  // sweep reaches every one.
+  it.each([
+    ['a persona with Self rows', { source: 'world', entityId: 'e-wren' } as const, 'e-wren'],
+    ['a persona with none', { source: 'world', entityId: 'e-sable' } as const, 'e-sable'],
+    ['None', { source: 'none' } as const, null],
+  ])('lists exactly what play draws for %s', (_label, ref, personaId) => {
+    const w = staged({ entities: [...cast(), custom()] });
+    for (const start of ['harbor', 'market']) {
+      const drawn = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        drawn.add(drawNewGameOpening({
+          pick: { ref }, worldEntities: w.entities ?? [], overview: w.worldOverview, locations: w.locations,
+          startingLocationId: start, picked: [], random: () => i / 50,
+        }).draw.opening.text);
+      }
+      expect(new Set(texts(at(w, { personaId, startLocationId: start })))).toEqual(drawn);
+    }
   });
 });

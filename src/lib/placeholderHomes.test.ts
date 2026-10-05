@@ -365,6 +365,22 @@ describe('carriedPlaceholders', () => {
     expect(carriedPlaceholders({ placeholders: owned })).toBe(owned);
     expect(carriedPlaceholders({})).toEqual([]);
   });
+
+  it('keeps the pool’s identity while neither source list changes', () => {
+    const owned = [EYES];
+    const shared = [SHARED];
+    const pool = carriedPlaceholders({ placeholders: owned, sharedPlaceholders: shared });
+    // A keystroke rebuilds the item around the same two lists.
+    const edited = { name: 'edited', placeholders: owned, sharedPlaceholders: shared };
+    expect(carriedPlaceholders(edited)).toBe(pool);
+    expect(carriedPlaceholders({ placeholders: [EYES], sharedPlaceholders: shared })).not.toBe(pool);
+    expect(carriedPlaceholders({ placeholders: owned, sharedPlaceholders: [SHARED] })).not.toBe(pool);
+  });
+
+  it('keeps the pool’s identity for an item that owns nothing', () => {
+    const shared = [SHARED];
+    expect(carriedPlaceholders({ sharedPlaceholders: shared })).toBe(carriedPlaceholders({ sharedPlaceholders: shared }));
+  });
 });
 
 const chipIds = (text: string) => [...text.matchAll(/\{\{ph:[^}]+\}\}/g)].map((m) => decodePlaceholderToken(m[0])?.id);
@@ -385,6 +401,18 @@ describe('adoptEntityPlaceholders', () => {
     expect(owned?.name).toBe('Eyes');
     expect(owned?.id).not.toBe('eyes');
     expect(chipIds(entity.aiDescription!)).toEqual([owned?.id, 'w-weather']);
+  });
+
+  it('re-aims the chips in an entity’s openings at the defs they land on', () => {
+    const card: Entity = {
+      id: 'card', name: 'Molly',
+      openings: [{ id: 'o1', text: `${chip('eyes', 'a')} under ${chip('shared', 'b')}`, kind: 'narration' }],
+      placeholders: [P('eyes', 'Eyes', ['amber'])],
+      sharedPlaceholders: [P('shared', 'Weather', ['rain', 'sun'])],
+    };
+    const { entity } = adoptEntityPlaceholders(card, [P('w-weather', 'Weather', ['rain', 'sun'])]);
+    expect(chipIds(entity.openings![0].text)).toEqual([entity.placeholders?.[0].id, 'w-weather']);
+    expect(entity.openings![0]).toMatchObject({ id: 'o1', kind: 'narration' });
   });
 
   it('adds a shared def the world has no match for, and re-aims a chip inside an owned value at it', () => {

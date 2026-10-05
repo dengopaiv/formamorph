@@ -180,11 +180,8 @@ interface MultiSelectProps
 	 */
 	className?: string;
 
-	/**
-	 * If true, disables the select all functionality.
-	 * Optional, defaults to false.
-	 */
-	hideSelectAll?: boolean;
+	/** Shown as one chip in place of the per-option chips while every option is selected. */
+	allSelectedLabel?: string;
 
 	/**
 	 * If true, shows search functionality in the popover.
@@ -333,7 +330,7 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 			maxCount = 3,
 			modalPopover = true,
 			className,
-			hideSelectAll = false,
+			allSelectedLabel,
 			searchable = true,
 			emptyIndicator,
 			autoSize = false,
@@ -668,13 +665,18 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 			onValueChange(newSelectedValues);
 		};
 
+		const selectableOptions = getAllOptions().filter((option) => !option.disabled);
+		const everySelected =
+			selectableOptions.length > 0 &&
+			selectableOptions.every((option) => selectedValues.includes(option.value));
+		const showAllChip = !!allSelectedLabel && everySelected;
+
 		const toggleAll = () => {
 			if (disabled) return;
-			const allOptions = getAllOptions().filter((option) => !option.disabled);
-			if (selectedValues.length === allOptions.length) {
+			if (everySelected) {
 				handleClear();
 			} else {
-				const allValues = allOptions.map((option) => option.value);
+				const allValues = selectableOptions.map((option) => option.value);
 				setSelectedValues(allValues);
 				onValueChange(allValues);
 			}
@@ -850,7 +852,35 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 												  }
 												: {}
 										}>
-										{selectedValues
+										{showAllChip && (
+											<Badge
+												className={cn(
+													multiSelectVariants({ variant }),
+													responsiveSettings.compactMode && "text-meta px-1.5 py-0.5",
+													singleLine && "flex-shrink-0 whitespace-nowrap"
+												)}>
+												<span>{allSelectedLabel}</span>
+												<div
+													role="button"
+													tabIndex={0}
+													onClick={(event) => {
+														event.stopPropagation();
+														handleClear();
+													}}
+													onKeyDown={(event) => {
+														if (event.key === "Enter" || event.key === " ") {
+															event.preventDefault();
+															event.stopPropagation();
+															handleClear();
+														}
+													}}
+													aria-label={`Remove ${allSelectedLabel} from selection`}
+													className="ml-2 h-4 w-4 cursor-pointer hover:bg-foreground/20 rounded-sm p-0.5 -m-0.5 focus:outline-none focus:ring-1 focus:ring-ring">
+													<XCircle className="h-3 w-3" />
+												</div>
+											</Badge>
+										)}
+										{!showAllChip && selectedValues
 											.slice(0, responsiveSettings.maxCount)
 											.map((value) => {
 												const option = getOptionByValue(value);
@@ -941,7 +971,7 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 												);
 											})
 											.filter(Boolean)}
-										{selectedValues.length > responsiveSettings.maxCount && (
+										{!showAllChip && selectedValues.length > responsiveSettings.maxCount && (
 											<Badge
 												className={cn(
 													"bg-transparent text-foreground border-foreground/10 hover:bg-transparent",
@@ -1035,7 +1065,8 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 						}}
 						align="start"
 						onEscapeKeyDown={() => setIsPopoverOpen(false)}>
-						<Command>
+						{/* filteredOptions already filters; cmdk's own filter hides items that mount mid-search. */}
+						<Command shouldFilter={false}>
 							{searchable && (
 								<CommandInput
 									placeholder="Search options..."
@@ -1060,16 +1091,14 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 								<CommandEmpty>
 									{emptyIndicator || "No results found."}
 								</CommandEmpty>{" "}
-								{!hideSelectAll && !searchValue && (
+								{!searchValue && (
+									<>
 									<CommandGroup>
 										<CommandItem
 											key="all"
 											onSelect={toggleAll}
 											role="option"
-											aria-selected={
-												selectedValues.length ===
-												getAllOptions().filter((opt) => !opt.disabled).length
-											}
+											aria-selected={everySelected}
 											aria-label={`Select all ${
 												getAllOptions().length
 											} options`}
@@ -1077,24 +1106,18 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 											<div
 												className={cn(
 													"mr-2 flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
-													selectedValues.length ===
-														getAllOptions().filter((opt) => !opt.disabled)
-															.length
+													everySelected
 														? "bg-primary text-primary-foreground"
 														: "opacity-50 [&_svg]:invisible"
 												)}
 												aria-hidden="true">
 												<CheckIcon className="h-4 w-4" />
 											</div>
-											<span>
-												(Select All
-												{getAllOptions().length > 20
-													? ` - ${getAllOptions().length} options`
-													: ""}
-												)
-											</span>
+											<span>Select All</span>
 										</CommandItem>
 									</CommandGroup>
+									<CommandSeparator />
+									</>
 								)}
 								{isGroupedOptions(filteredOptions) ? (
 									filteredOptions.map((group) => (
@@ -1183,30 +1206,30 @@ export const MultiSelect = React.forwardRef<MultiSelectRef, MultiSelectProps>(
 										})}
 									</CommandGroup>
 								)}
-								<CommandSeparator />
-								<CommandGroup>
-									<div className="flex items-center justify-between">
-										{selectedValues.length > 0 && (
-											<>
-												<CommandItem
-													onSelect={handleClear}
-													className="flex-1 justify-center cursor-pointer">
-													Clear
-												</CommandItem>
-												<Separator
-													orientation="vertical"
-													className="flex min-h-6 h-full"
-												/>
-											</>
-										)}
-										<CommandItem
-											onSelect={() => setIsPopoverOpen(false)}
-											className="flex-1 justify-center cursor-pointer max-w-full">
-											Close
-										</CommandItem>
-									</div>
-								</CommandGroup>
 							</CommandList>
+							{/* Footer stays outside the scroll list; forceMount keeps it through search filtering. */}
+							<div className="flex shrink-0 items-center justify-between border-t border-border p-1">
+								{selectedValues.length > 0 && (
+									<>
+										<CommandItem
+											forceMount
+											onSelect={handleClear}
+											className="flex-1 justify-center cursor-pointer">
+											Clear
+										</CommandItem>
+										<Separator
+											orientation="vertical"
+											className="flex min-h-6 h-full"
+										/>
+									</>
+								)}
+								<CommandItem
+									forceMount
+									onSelect={() => setIsPopoverOpen(false)}
+									className="flex-1 justify-center cursor-pointer max-w-full">
+									Close
+								</CommandItem>
+							</div>
 						</Command>
 					</PopoverContent>
 					{animation > 0 && selectedValues.length > 0 && (

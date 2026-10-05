@@ -70,14 +70,13 @@ vi.mock('@/components/prompt/PlaceholderField', () => ({
 vi.mock('./ImageTagsField', () => ({
   ImageGallery: () => null,
   ImageTags: () => null,
-  ImageWidget: () => null,
+  ImageWidget: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('./EntityFields', async (importOriginal) => {
   const real = await importOriginal<typeof import('./EntityFields')>();
   return {
     ...real,
-    EntityImageWidget: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
     EntityDescriptionFields: () => null,
     EntityLocationsField: () => null,
     EntityModelField: () => null,
@@ -89,7 +88,7 @@ const Harness = () => {
   store.rerender = () => setTick((n) => n + 1);
   return (
     <CodeRenameProvider>
-      <EntityManager entity={store.entity} tab="profile" onTabChange={() => {}} />
+      <EntityManager entity={store.entity} tab="profile" onTabChange={() => {}} traitId={null} onTraitIdChange={() => {}} placeholderId={null} onPlaceholderIdChange={() => {}} onOpenWorldPlaceholder={() => {}} />
       <button type="button">elsewhere</button>
     </CodeRenameProvider>
   );
@@ -99,7 +98,7 @@ beforeEach(() => {
   store.entity = { id: 'e1', name: 'Molly' } as unknown as Entity;
   store.stats = [
     { id: 's1', name: 'Health', type: 'number', description: '', min: 0, max: 100, value: 0, regen: 0,
-      code: `return placeholders.Molly.Hair.text.length;` } as unknown as Stat,
+      code: `return entities.Molly.placeholders.Hair.text.length;` } as unknown as Stat,
   ];
 });
 
@@ -117,6 +116,6 @@ describe('the entity panel’s rename offer', () => {
     // author renamed is the entity, and naming the wrong one sends them looking in the wrong tab.
     expect(screen.getByText(/names the entity “Molly” 1 time\./)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Update Code' }));
-    expect(store.stats[0].code).toBe('return placeholders.Maud.Hair.text.length;');
+    expect(store.stats[0].code).toBe('return entities.Maud.placeholders.Hair.text.length;');
   });
 });

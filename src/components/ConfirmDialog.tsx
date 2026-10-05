@@ -26,6 +26,7 @@ export function ConfirmDialog({
   open,
   onOpenChange,
   confirmLabel = "Confirm",
+  onCloseAutoFocus,
 }: {
   title?: ReactNode
   description?: ReactNode
@@ -39,6 +40,8 @@ export function ConfirmDialog({
   /** Wording on the action button. A verb naming what happens reads better than "Confirm" on a dialog
    *  that is not asking about deletion — and is what a screen reader announces on focus. */
   confirmLabel?: string
+  /** Runs as the dialog closes. A controlled dialog has no trigger, so this is where it returns focus. */
+  onCloseAutoFocus?: (event: Event) => void
 }) {
   const handleConfirm = () => {
     onConfirm?.()
@@ -55,7 +58,7 @@ export function ConfirmDialog({
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       {children && <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>}
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle className={shown.icon ? "flex items-center gap-2" : undefined}>
             {shown.icon}{shown.title}

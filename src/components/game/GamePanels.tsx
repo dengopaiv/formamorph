@@ -4,25 +4,45 @@ import { useGameplayText, setGameplayText } from '@/lib/gameplayTextStore';
 import { revealActive, revealAnimName, revealVars } from '@/lib/narrationRevealConfig';
 import { usePlaceholderResolver } from '@/lib/usePlaceholderResolver';
 import { useSettings } from '@/contexts/SettingsContext';
+import { templateChipKeys } from '@/lib/promptTemplate';
 import { useSentenceHighlight } from '@/lib/useSentenceHighlight';
 import { findEntityNames, resolveEntityByName } from '@/lib/entityMatch';
 import { clearTurnDerived } from '@/lib/turnDigest';
 import { usePlayerModelUrl } from '@/lib/usePlayerModelUrl';
 import { mergeBodyMorphs } from '@/lib/bodyMorphs';
 import { useIsMobile } from '@/lib/useIsMobile';
-import { traitOrderIndex, inAuthoredOrder, activeStatEnabled, refreshChosenTraits } from '@/lib/traitEffects';
-import { listablePlayerTraits } from '@/lib/traitRuntime';
+import { traitOrderIndex, activeStatEnabled, refreshChosenTraits } from '@/lib/traitEffects';
+import { listablePlayerTraits, statTraitsInForce, traitGateInput, type TraitWorld } from '@/lib/traitRuntime';
+import {
+  activeOwnedTraitIds, bearerTraitTree, inPlayBearers, playerEntityIds, rowBearer, withBearerNames,
+} from '@/lib/ownedTraitsInPlay';
+import { useGameDataOptional } from '@/contexts/GameDataContext';
+import { WORLD_OWNER } from '@/lib/traitGates';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBlock } from './ReasoningBlock';
+import { ChatNarration, type ChatBubbleTurn, type ChatPlayerTurn } from './ChatNarration';
+import { ChatChoices } from './ChatChoices';
+import { ChoiceRows } from './ChoiceRows';
+import { TurnCard } from './TurnCard';
+import { ActionLine } from './ActionLine';
+import { StatsActions } from './StatsActions';
+import { bubbleActions, choicesActions, playerBubbleActions } from '@/lib/bubbleActions';
+import { rewriteTurnAction } from '@/lib/turnHistory';
+import { copyWithToast } from '@/lib/clipboard';
 import { useLiveReasoning } from '@/lib/reasoningStreamStore';
+import { useAutoGrowTextarea } from '@/lib/useAutoGrowTextarea';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TokenAutocomplete } from "@/components/TokenAutocomplete";
 import { COMMON_LANGUAGES } from "@/lib/languages";
-import { Send, RefreshCw, Pencil, Languages, Loader2, Headphones, Square, ChevronUp, ChevronDown, X, Trash2, Image as ImageIcon, Dices, MoreHorizontal } from "lucide-react";
+import { Send, RefreshCw, Languages, Loader2, Headphones, Square, ChevronUp, ChevronDown, X, MoreHorizontal, User, Users, NotebookPen, Brain, ScrollText, ChartColumn, Sparkles, MapPin, type LucideIcon } from "lucide-react";
+import { pageTurnId, withoutAttachment, setTurnAttachments, turnAttachments } from '@/lib/actionAttachments';
+import { useAttachmentIntake } from '@/lib/useAttachmentIntake';
+import { useImageAttachments } from '@/lib/useImageAttachments';
+import { AttachmentThumbs } from './AttachmentThumbs';
+import { AttachImagesButton } from '@/components/AttachImagesButton';
 import { ActionIcon } from "@/lib/actionIcons";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { CONTINUE_CHOICE } from "@/lib/choices";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,41 +58,61 @@ import { useEntityGallery } from '@/lib/useEntityGallery';
 import TtsPlaybackBar from './TtsPlaybackBar';
 import { MemoryPanel } from './MemoryPanel';
 import { SceneImagePanel } from './SceneImagePanel';
+import { ScenePlate } from './ScenePlate';
 import { GAME_LEFT_PANEL_TABS } from './leftPanelTabs';
 import { useDevRoute } from '@/lib/devRouter';
 import type { TTSProgress } from './TTSModal';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { HelpButton } from '../HelpButton';
 import { EditTextModal } from '../modals/EditTextModal';
-import type { Entity, SceneEntity } from '@/types';
+import type { Entity, PersonaRef, SceneEntity, Trait } from '@/types';
+import { gateStates } from '@/lib/traitGates';
+import { worldEntitiesOf } from '@/lib/persona';
+import type { TraitCascade } from './SetupTraitList';
 import { formatAbsolute, formatClock } from '@/lib/gameClock';
 import { logKind } from '@/lib/playLog';
 import { cn } from "@/lib/utils";
 import { useResolvedWorld } from '@/lib/useResolvedWorld';
-import { effectiveDestinations } from '@/lib/locationGraph';
+import { LocationTabBody } from './LocationTabBody';
+import { EntityListRow } from './EntityListRow';
 import { TraitsTab } from './TraitsTab';
 import { StatRow } from './StatRow';
+import { PersonaRow } from './PersonaRow';
+import { useNarrationLayout } from '@/lib/useNarrationLayout';
+import { useStatsSnap } from '@/lib/useStatsSnap';
 
-/** A committed turn's saved reasoning (from its assistant-message JSON), or null. */
-function parseSavedReasoning(content: string): { text: string; ms: number } | null {
-  try {
-    const r = JSON.parse(content)?.reasoning;
-    return r && typeof r.text === 'string' ? { text: r.text, ms: typeof r.ms === 'number' ? r.ms : 0 } : null;
-  } catch { return null; }
-}
+import { parseSavedReasoning } from '@/lib/savedReasoning';
 
-export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
+/** One side-panel tab: an icon, and the label where the panel is wide enough to hold it. */
+const PanelTab = ({ value, icon: Icon, label }: { value: string; icon: LucideIcon; label: string }) => (
+  // The label's own text names the tab; the tip shows it where the label is hidden.
+  <Tip tip={label} labelsChild={false}>
+    <TabsTrigger value={value} className="min-w-0 gap-1.5 px-1">
+      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+      <span className="sr-only truncate max-md:not-sr-only xl:not-sr-only">{label}</span>
+    </TabsTrigger>
+  </Tip>
+);
+
+export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrationPrompt, requestedTab, requestKey }: {
   entities: Entity[];
+  /** A tab an outside request selects. */
+  requestedTab?: string;
+  /** Changes with each outside request, so a repeat request selects its tab again. */
+  requestKey?: string;
   onEntityClick: (entityId: string) => void;
   /** Re-run the digest prompt for one turn (Memory Manager's regenerate); owned by GameViewer. */
   onRegenerateMemory?: (turnId: string) => Promise<boolean>;
+  /** The narration prompt this world actually sends: the world's own unless declined, else the preset's. */
+  narrationPrompt: string;
 }) => {
-  // Import systemPrompt from settings context
-  const { systemPrompt } = useSettings();
+  const placesNotes = templateChipKeys(narrationPrompt).has('<NOTES>');
   // The authored cast, separate from the `entities` prop (authored + runtime-discovered).
   // Resolved, not the authored context: a chip-bearing name compared against a resolved scene name would
   // read as a character the world never defined.
-  const { entities: authoredEntities } = useResolvedWorld();
+  const { entities: authoredEntities, persona } = useResolvedWorld();
+  // The played entity heads the Entities tab in every scene; the scene parse never lists it.
+  const personaEntity = persona?.entity;
   const {
     // Aliased to the viewed-page values so paging back shows that turn's appearance + scene (they equal
     // the live values on the latest page). Body morphs still ride live `bodyMorphValues`, which the
@@ -121,10 +161,12 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
   const [modelTab, setModelTab] = React.useState("avatar");
   // Entity picked from the list; falls back to the first detected showable entity.
   const [selectedEntityName, setSelectedEntityName] = React.useState<string | undefined>(undefined);
-  const [leftTab, setLeftTab] = React.useState(isMobile ? "model" : "notes");
+  const [leftTab, setLeftTab] = React.useState(requestedTab ?? (isMobile ? "model" : "notes"));
+  React.useEffect(() => { if (requestedTab) setLeftTab(requestedTab); }, [requestedTab, requestKey]);
 
   const entityViewEntity =
-    entities.find((e) => e.name === selectedEntityName) ?? firstShowableEntity;
+    [...entities, ...(personaEntity ? [personaEntity] : [])].find((e) => e.name === selectedEntityName)
+    ?? firstShowableEntity;
   const entityViewPreference = useEntityVisualPreference(entityViewEntity?.id);
   const entityViewGallery = useEntityGallery(entityViewEntity);
 
@@ -135,13 +177,16 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
   const handleEntityListClick = (se: SceneEntity) => {
     const match = resolveEntityByName(se.name, entities);
     if (!match) return; // un-named (ad-hoc) participant — nothing to show
+    openEntity(match, se.revealed);
+  };
 
+  const openEntity = (match: Entity, revealed: boolean) => {
     const entitiesViewActive = !characterData || modelTab === "entities";
     const alreadyShown = entitiesViewActive && match === entityViewEntity;
     if (!isMobile && showModel && hasEntityVisual(match) && !alreadyShown) {
       setSelectedEntityName(match.name);
       setModelTab("entities");
-    } else if (se.revealed) {
+    } else if (revealed) {
       onEntityClick(match.name);
     }
   };
@@ -198,7 +243,7 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
   ) : null;
 
   return (
-  <Card className="w-full md:w-1/4 md:mr-1 grow md:grow-0 min-h-0 flex flex-col bg-background/60 border-border overflow-hidden">
+  <Card className="w-full md:w-1/4 md:shrink-0 md:mr-1 grow md:grow-0 min-h-0 flex flex-col bg-background/60 border-border overflow-hidden">
     <CardContent className="flex-grow flex flex-col overflow-hidden p-4 sm:p-1">
       {/* Landscape: model on top with a show/hide toggle in the upper right */}
       {!isMobile && (
@@ -250,13 +295,13 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
         </div>
       )}
 
-      <Tabs value={leftTab} onValueChange={setLeftTab} className="w-full flex-grow flex flex-col overflow-hidden">
-        <TabsList className="flex-shrink-0">
-          {isMobile && <TabsTrigger value="model">Avatar</TabsTrigger>}
-          <TabsTrigger value="entities">Entities</TabsTrigger>
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="memory">Memory</TabsTrigger>
-          <TabsTrigger value="logs">Logs ({logEntries.reduce((sum, entry) => sum + 1 + (entry.repeat || 0), 0)})</TabsTrigger>
+      <Tabs surfaceTabs="gameViewer" value={leftTab} onValueChange={setLeftTab} className="w-full flex-grow flex flex-col overflow-hidden">
+        <TabsList className="grid w-full flex-shrink-0 auto-cols-fr grid-flow-col">
+          {isMobile && <PanelTab value="model" icon={User} label="Avatar" />}
+          <PanelTab value="entities" icon={Users} label="Entities" />
+          <PanelTab value="notes" icon={NotebookPen} label="Notes" />
+          <PanelTab value="memory" icon={Brain} label="Memory" />
+          <PanelTab value="logs" icon={ScrollText} label={`Logs (${logEntries.reduce((sum, entry) => sum + 1 + (entry.repeat || 0), 0)})`} />
         </TabsList>
         {isMobile && (
           <TabsContent value="model" className="flex-grow overflow-hidden min-h-[100px]">
@@ -273,6 +318,9 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
           </div>
           <ScrollArea className="flex-grow min-h-0">
             <div className="p-2">
+              {personaEntity && (
+                <EntityListRow label={`${personaEntity.name} (You)`} onClick={() => openEntity(personaEntity, true)} />
+              )}
               {visibleEntities.length > 0 ? (
                 visibleEntities.map((se, index) => {
                   const entityItem = resolveEntityByName(se.name, entities);
@@ -287,32 +335,16 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
                   // Authored characters belong to the world and are never deletable from play.
                   const isRemovable = !isAuthored;
                   return (
-                    <div
+                    <EntityListRow
                       key={index}
-                      className={`mb-1 flex justify-between items-center gap-2 p-2 ${
-                        isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted cursor-pointer'
-                      }`}
+                      label={label}
+                      disabled={isDisabled}
                       onClick={() => handleEntityListClick(se)}
-                    >
-                      <span className="min-w-0 truncate">{label}</span>
-                      {isRemovable && (
-                        <span className="flex items-center gap-1 shrink-0">
-                          <Tip tip={`Remove ${label}`}>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                              onClick={(e) => { e.stopPropagation(); setPendingRemoval(label); }}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </Tip>
-                        </span>
-                      )}
-                    </div>
+                      onRemove={isRemovable ? () => setPendingRemoval(label) : undefined}
+                    />
                   );
                 })
-              ) : (
+              ) : personaEntity ? null : (
                 <p>No entity visible.</p>
               )}
             </div>
@@ -329,7 +361,7 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory }: {
 
         <TabsContent value="notes" className="flex-grow overflow-hidden min-h-[100px]">
           <div className="h-full p-2 flex flex-col">
-            {!systemPrompt.includes('<NOTES>') && (
+            {!placesNotes && (
               <div className="mb-2 p-2 bg-warning/20 border border-warning rounded  text-label">
                 Warning: The current system prompt does not include the &lt;NOTES&gt; placeholder!
               </div>
@@ -395,56 +427,39 @@ const ActionInput = ({
   placeholder: string;
   disabled: boolean;
 }) => {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const [focused, setFocused] = useState(false);
   // The wrapper mirrors the grown height so the box is real layout, not an overlay: the row above it moves
   // up instead of being covered, which is what lets it clear the on-screen keyboard.
-  const [height, setHeight] = useState(ACTION_INPUT_LINE_H);
-
-  // Size the textarea to its content while focused (bounded, then scroll); reset to the one-line anchor when
-  // blurred. Runs on every value/focus change so growth tracks typing.
-  React.useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (!focused) {
-      el.style.height = "";
-      el.style.overflowY = "hidden";
-      setHeight(ACTION_INPUT_LINE_H);
-      return;
-    }
-    el.style.height = "auto";
-    const h = Math.min(Math.max(el.scrollHeight, ACTION_INPUT_LINE_H), ACTION_INPUT_MAX_H);
-    el.style.height = `${h}px`;
-    el.style.overflowY = el.scrollHeight > ACTION_INPUT_MAX_H ? "auto" : "hidden";
-    setHeight(h);
-  }, [value, focused]);
+  const { height, focused, stateClass, fieldProps } = useAutoGrowTextarea(value, ACTION_INPUT_LINE_H, ACTION_INPUT_MAX_H);
 
   return (
     <div className="relative flex-grow mr-2 flex-shrink-0" style={{ height }} data-testid="action-input-wrap">
       <textarea
-        ref={ref}
-        rows={1}
+        {...fieldProps}
         value={value}
         onChange={onChange}
         onKeyDown={onKeyDown}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
         placeholder={placeholder}
         disabled={disabled}
         className={cn(
           // ring-inset (no ring-offset): the focus glow draws inside the box so the overflow-hidden panel
           // walls can't clip it (the box sits flush against them).
           "absolute inset-x-0 bottom-0 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-helper leading-normal placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-          focused
-            ? "z-20 shadow-lg whitespace-pre-wrap"
-            : "h-10 overflow-hidden whitespace-nowrap",
+          stateClass,
+          focused ? "z-20 shadow-lg" : "h-10",
         )}
       />
     </div>
   );
 };
 
+// The prompt of Rewind to Here, in both layouts.
+const ROLLBACK_CONFIRM = {
+  title: "Confirm Rollback",
+  description: "Are you sure you want to rollback to the previous state? This action cannot be undone.",
+};
+
 export const MiddlePanel = ({
+  narrationBadge,
   parseAssistantMessage,
   totalPages,
   handlePageChange,
@@ -475,19 +490,24 @@ export const MiddlePanel = ({
   ttsProgress,
   memoryBar,
   progressBar,
+  likePrompt,
   locationSuggestion,
   commandPreview,
   onDismissCommandPreview
 }: {
+  /** A status badge that leads the narration options. */
+  narrationBadge?: React.ReactNode;
   parseAssistantMessage: (content: string) => string;
   totalPages: number;
   handlePageChange: (page: number) => void;
   handleSendAction: () => void;
   handleKeyPress: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  handleRollback: () => void;
-  handleRegenerate: () => void;
+  /** Rolls back to `page`, or to the viewed page. */
+  handleRollback: (page?: number) => void;
+  /** Re-generates the turn on `page`, or on the viewed page. */
+  handleRegenerate: (page?: number) => void;
   handleRegenerateChoices: () => void;
-  handleRegenerateStats: () => void;
+  handleRegenerateStats: (page?: number) => void;
   abortGeneration: () => void;
   disabled: boolean;
   /** The viewed turn's scene images, oldest first. */
@@ -504,19 +524,23 @@ export const MiddlePanel = ({
   sceneImagePreview: string | null;
   /** False when image generation is switched off app-wide — the affordance disappears with it. */
   sceneImagesAvailable: boolean;
-  onSceneImage: (tags?: string) => void;
+  /** Draws the turn on `page`, or the viewed turn. */
+  onSceneImage: (tags?: string, page?: number) => void;
   /** Re-run the tag pass alone, no image. */
-  onSceneTags: () => void;
+  onSceneTags: (page?: number) => void;
   onCancelSceneImage: () => void;
-  onDeleteSceneImage: (index: number) => void;
+  onDeleteSceneImage: (turnId: string, index: number) => void;
   onTTSClick: () => void;
   onExportStory: () => void;
-  onRegenerateTTS: () => Promise<void> | void;
+  /** Synthesizes `text`, or the current text. */
+  onRegenerateTTS: (text?: string) => Promise<void> | void;
   ttsLoaded: boolean;
   ttsGenerating: boolean;
   ttsProgress: TTSProgress | null;
   memoryBar: React.ReactNode;
   progressBar: React.ReactNode;
+  /** The once-only in-game like prompt, above the pager and in the flow so it covers no narration. */
+  likePrompt?: React.ReactNode;
   locationSuggestion: React.ReactNode;
   commandPreview: boolean;
   onDismissCommandPreview: () => void;
@@ -540,21 +564,36 @@ export const MiddlePanel = ({
     playerStats,
     isViewingPast,
     viewChoices: choices,
+    choices: latestChoices,
+    fullMessageHistory,
     viewSelectedChoice,
-    viewContinueUsed
+    viewContinueUsed,
+    isGameStarted,
+    actionAttachments,
+    setActionAttachments,
+    pendingAttachments,
+    setPendingAttachments,
   } = useGameplay();
   const gameplayText = useGameplayText();
   const { ttsHighlight, choicesEnabled, setChoicesEnabled, continueChoiceMode, statUpdatesEnabled, revealSpec, revealEasing, showReasoning, memoryDigests, setMemoryDigests } = useSettings();
+  const imageAttachments = useImageAttachments();
+
+  // Paste and drop wait for the game to start, like the button.
+  const { attaching, dragOver: attachDragOver, attachFiles, intakeProps } = useAttachmentIntake({
+    enabled: imageAttachments && isGameStarted && !disabled,
+    pending: pendingAttachments,
+    setPending: setPendingAttachments,
+  });
+  const chatLayout = useNarrationLayout() === 'chat';
   const liveReasoning = useLiveReasoning();
   // Per-word reveal: any enabled effect ⇒ animate (composed keyframe + CSS vars on the container);
   // nothing enabled ⇒ smooth crawl. The keyframe name feeds Streamdown, the amounts ride as CSS vars.
   const revealOn = revealActive(revealSpec);
   const revealAnim = revealAnimName(revealSpec);
   const revealStyle = revealVars(revealSpec) as React.CSSProperties;
-  // Which partial re-generate options the flyout should offer (mirrors the aux-request gates).
-  const canRegenChoices = choicesEnabled;
+  // Which partial re-generate actions to offer (mirrors the aux-request gates).
+  const canRegenChoices = choicesEnabled && fullMessageHistory[fullMessageHistory.length - 1]?.role === 'assistant';
   const canRegenStats = statUpdatesEnabled && playerStats.length > 0;
-  const [regenMenuOpen, setRegenMenuOpen] = useState(false);
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
 
   // Ctrl/Cmd+click or a touch long-press appends a choice as a new sentence; a plain tap replaces it.
@@ -573,6 +612,17 @@ export const MiddlePanel = ({
     if (longPress.current.timer) clearTimeout(longPress.current.timer);
     longPress.current.timer = null;
   };
+  /** The press handlers of one choice button, shared by Pages and Chat. */
+  const choicePress = (choice: string) => ({
+    onClick: (e: React.MouseEvent) => {
+      if (longPress.current.fired) { longPress.current.fired = false; return; } // swallow the click after a long-press
+      if (e.ctrlKey || e.metaKey) appendChoice(choice); else setPlayerInput(choice);
+    },
+    onPointerDown: () => startLongPress(choice),
+    onPointerUp: cancelLongPress,
+    onPointerLeave: cancelLongPress,
+    onPointerCancel: cancelLongPress,
+  });
 
   // The hard-coded continue pseudo-choice. 'always' keeps it even with the choices request switched off,
   // where it stands alone. Live: shown once nothing is generating, even with zero generated choices (it's
@@ -584,12 +634,14 @@ export const MiddlePanel = ({
   const continueOffered = continueChoiceMode === 'always' || (continueChoiceMode === 'on' && choicesEnabled);
   const showContinue = continueOffered && (isViewingPast ? viewContinueUsed : storyStarted && !disabled);
 
+  // Chat shows the latest turn's choices wherever the player scrolled, so it reads the live state, never the viewed page.
+  const chatShowContinue = continueOffered && fullMessageHistory.some((m) => m.role === 'assistant') && !disabled;
+  // Busy from the icon's click until the re-roll ends.
+  const [choicesRegenerating, setChoicesRegenerating] = useState(false);
+  React.useEffect(() => { if (!isWaitingForAI) setChoicesRegenerating(false); }, [isWaitingForAI]);
+
   // Whether TTS has produced playable audio for the current text (drives the frozen top row).
   const hasAudio = ttsPlayback.duration > 0;
-
-  // A job whose progress spinner lives inside the collapsed narration menu; the trigger has to show it
-  // (and stay un-faded) or the work becomes invisible while the menu is closed.
-  const toolBusy = sceneImageJob !== null || ttsGenerating;
 
   // Karaoke highlighter: paint the spoken sentence in the current page's narration as audio plays.
   const narrationRef = useRef<HTMLDivElement>(null);
@@ -599,8 +651,7 @@ export const MiddlePanel = ({
     enabled: ttsHighlight,
   });
 
-  // Game text of the page currently being viewed, so the Edit button is page-aware
-  // (rather than always editing the most recent text).
+  // The viewed page's narration: the editor's text when no action row opened it.
   const currentAssistantMessage = displayedMessages.find(m => m.role === 'assistant');
   let currentPageText = gameplayText;
   if (currentAssistantMessage) {
@@ -613,8 +664,119 @@ export const MiddlePanel = ({
     }
   }
 
+  // A turn's Edit and Rewind to Here target that turn's own page, never the viewed one.
+  const [editTarget, setEditTarget] = useState<{ kind: 'narration' | 'action'; page: number; text: string; turnId?: string } | null>(null);
+  const [rewindPage, setRewindPage] = useState<number | null>(null);
+  const actionsFor = (turn: ChatBubbleTurn) => {
+    const page = turn.index + 1;
+    return bubbleActions(
+      {
+        isLatest: turn.isLatest,
+        live: turn.live,
+        busy: isWaitingForAI,
+        hasImage: turn.hasImage,
+        canRegenStats,
+        sceneImagesAvailable,
+        sceneJob: sceneImageJob,
+        ttsLoaded,
+        ttsGenerating,
+      },
+      {
+        regenerate: () => handleRegenerate(page),
+        regenerateStats: () => handleRegenerateStats(page),
+        sceneImage: () => onSceneImage(undefined, page),
+        sceneTags: () => onSceneTags(page),
+        edit: () => { setEditTarget({ kind: 'narration', page, text: turn.text }); setIsEditMode(true); },
+        textToSpeech: onTTSClick,
+        regenerateAudio: () => { void onRegenerateTTS(turn.text); },
+        copy: () => copyWithToast(turn.text),
+        rewind: () => setRewindPage(page),
+      },
+    );
+  };
+  const editAction = (page: number, text: string) => {
+    setEditTarget({ kind: 'action', page, text, turnId: pageTurnId(fullMessageHistory, page) });
+    setIsEditMode(true);
+  };
+  const playerActionsFor = (turn: ChatPlayerTurn) => playerBubbleActions({ live: turn.live, busy: isWaitingForAI }, {
+    edit: () => { editAction(turn.index + 1, turn.text); },
+    copy: () => copyWithToast(turn.text),
+  });
+
+  // Pages shows the viewed turn. The opening's user message is the hidden start proxy, so page 1 has no action line.
+  const actionLine = currentPage > 1 ? displayedMessages.find((m) => m.role === 'user')?.content : undefined;
+  // The live stream belongs to the latest page only; a past page shows its committed text.
+  const pageLive = !isViewingPast && isRevealingNarration && !!currentAssistantMessage;
+  const pageNarration = pageLive ? gameplayText : currentAssistantMessage ? parseAssistantMessage(currentAssistantMessage.content) : '';
+  const pageReasoningLive = !isViewingPast && !!liveReasoning.text;
+  const pageReasoning = pageReasoningLive
+    ? liveReasoning
+    : currentAssistantMessage ? parseSavedReasoning(currentAssistantMessage.content) : null;
+  const pageActions = currentAssistantMessage ? actionsFor({
+    index: currentPage - 1, isLatest: !isViewingPast, live: pageLive, hasImage: sceneImages.length > 0, text: pageNarration,
+  }) : [];
+  // The turn is live from submit, before its narration exists, until the reveal ends.
+  const actionLineActions = actionLine === undefined ? [] : playerActionsFor({
+    index: currentPage - 1, live: !isViewingPast && (pageLive || (isWaitingForAI && !currentAssistantMessage)), text: actionLine,
+  });
+  /** The choices block's actions, for a block that shows `hasChoices`. */
+  const regenChoicesActions = (hasChoices: boolean) => choicesActions(
+    { canRegenerate: canRegenChoices, hasChoices, busy: disabled || isWaitingForAI || isRevealingNarration, regenerating: choicesRegenerating && isWaitingForAI },
+    () => { setChoicesRegenerating(true); handleRegenerateChoices(); },
+  );
+  const pageChoicesActions = isViewingPast ? [] : regenChoicesActions((choices?.length ?? 0) > 0 || showContinue);
+
+  const narrationFrame = `narration-text flex-grow border border-border p-2 bg-muted/80 min-h-0 ${isFlashing ? 'flash-animation' : ''} relative`;
+  // The corner holds the whole-story items; the per-turn ones sit on each turn's card. Idle fade: `.narration-tool` in index.css.
+  const optionsControl = (
+    <div className="absolute top-2 right-2 z-10 flex gap-1">
+      {narrationBadge}
+      <Popover open={toolMenuOpen} onOpenChange={setToolMenuOpen}>
+        <Tip tip="More narration options">
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="narration-tool h-8 w-8"
+              data-idle={toolMenuOpen ? undefined : "true"}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </PopoverTrigger>
+        </Tip>
+        <PopoverContent align="end" className="w-52 p-1">
+          <div className="flex flex-col">
+            <Button
+              variant="ghost"
+              className="justify-start gap-2 text-meta h-8"
+              onClick={() => { setToolMenuOpen(false); onExportStory(); }}
+            >
+              <ActionIcon.export className="h-4 w-4" />
+              Export Story
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+  const commandPreviewBlock = commandPreview && (
+      <div className="mb-3 p-2 border border-dashed border-primary/50 rounded relative">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-meta text-muted-foreground">Markdown preview (/markdown test)</span>
+          <Tip tip="Dismiss preview">
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onDismissCommandPreview}>
+              <X className="h-4 w-4" />
+            </Button>
+          </Tip>
+        </div>
+        <div style={revealStyle}>
+          <MarkdownRenderer text={gameplayText} animate={revealOn} animation={revealAnim} easing={revealEasing} />
+        </div>
+      </div>
+  );
+
   return (
-    <Card className="w-full flex-grow md:mx-0.5 md:max-w-[48%] min-h-0 flex flex-col bg-background/60 border-border overflow-hidden">
+    <Card className="w-full flex-grow md:mx-0.5 md:min-w-0 md:basis-0 min-h-0 flex flex-col bg-background/60 border-border overflow-hidden">
       <CardContent className="flex-grow flex flex-col overflow-hidden p-4 sm:p-1">
         {memoryBar}
         {/* Determinate generation progress (sentence X of N) while narration synthesizes; playback
@@ -655,252 +817,115 @@ export const MiddlePanel = ({
               </Button>
             </div>
           )}
-          <ScrollArea className={`narration-text flex-grow border border-border p-2 bg-muted/80 min-h-0 ${isFlashing ? 'flash-animation' : ''} relative`}>
-            {/* Edit stays inline as the one action about the text itself; everything else folds into the
-                overflow menu so this row can't grow back across the narration. Each button fades on its
-                own while idle — pointer devices only, see `.narration-tool` in index.css. */}
-            <div className="absolute top-2 right-2 z-10 flex gap-1">
-              <Tip tip="Edit text">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="narration-tool h-8 w-8"
-                  data-idle="true"
-                  onClick={() => setIsEditMode(true)}
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-              </Tip>
-              <Popover open={toolMenuOpen} onOpenChange={setToolMenuOpen}>
-                <Tip tip="More narration options">
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="narration-tool h-8 w-8"
-                      data-idle={toolMenuOpen || toolBusy ? undefined : "true"}
-                    >
-                      {toolBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
-                    </Button>
-                  </PopoverTrigger>
-                </Tip>
-                <PopoverContent align="end" className="w-52 p-1">
-                  <div className="flex flex-col">
-                    {sceneImagesAvailable && (
-                      <>
-                        {/* Tags first: it costs one small text request and no render, so it is the cheap way to
-                            see what this turn would be drawn as before spending a picture on it. */}
-                        <Button
-                          variant="ghost"
-                          className="justify-start gap-2 text-meta h-8"
-                          onClick={() => { setToolMenuOpen(false); onSceneTags(); }}
-                          disabled={sceneImageJob !== null || !sceneTurnId}
-                        >
-                          {sceneImageJob === 'tags' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Dices className="h-4 w-4" />}
-                          Write Scene Tags
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          className="justify-start gap-2 text-meta h-8"
-                          onClick={() => { setToolMenuOpen(false); onSceneImage(); }}
-                          disabled={sceneImageJob !== null || !sceneTurnId}
-                        >
-                          {sceneImageJob === 'image' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-                          Draw This Scene
-                        </Button>
-                      </>
-                    )}
-                    {!hasAudio && ttsLoaded && (
-                      <Button
-                        variant="ghost"
-                        className="justify-start gap-2 text-meta h-8"
-                        onClick={() => { setToolMenuOpen(false); onRegenerateTTS(); }}
-                        disabled={ttsGenerating}
-                      >
-                        {ttsGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                        Regenerate Audio
-                      </Button>
-                    )}
-                    {!hasAudio && (
-                      <Button
-                        variant="ghost"
-                        className="justify-start gap-2 text-meta h-8"
-                        onClick={() => { setToolMenuOpen(false); onTTSClick(); }}
-                      >
-                        <Headphones className="h-4 w-4" />
-                        Text to Speech
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      className="justify-start gap-2 text-meta h-8"
-                      onClick={() => { setToolMenuOpen(false); onExportStory(); }}
-                    >
-                      <ActionIcon.export className="h-4 w-4" />
-                      Export Story
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
+          {chatLayout ? (
+            <div className={`${narrationFrame} flex flex-col`}>
+              {optionsControl}
+              {commandPreviewBlock}
+              <ChatNarration
+                parseAssistantMessage={parseAssistantMessage}
+                actionsFor={actionsFor}
+                playerActionsFor={playerActionsFor}
+                onDeleteSceneImage={onDeleteSceneImage}
+                latestFooter={
+                  <ChatChoices
+                    choices={latestChoices}
+                    showContinue={chatShowContinue}
+                    disabled={disabled || isWaitingForAI}
+                    isSelected={(choice) => playerInput.includes(choice)}
+                    choicePress={choicePress}
+                    actions={regenChoicesActions(latestChoices.length > 0 || chatShowContinue)}
+                  />
+                }
+              />
             </div>
-            {commandPreview && (
-              <div className="mb-3 p-2 border border-dashed border-primary/50 rounded relative">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-meta text-muted-foreground">Markdown preview (/markdown test)</span>
-                  <Tip tip="Dismiss preview">
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onDismissCommandPreview}>
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </Tip>
-                </div>
-                <div style={revealStyle}>
-                  <MarkdownRenderer text={gameplayText} animate={revealOn} animation={revealAnim} easing={revealEasing} />
-                </div>
-              </div>
-            )}
-            {displayedMessages.map((message, index) => {
-              const isLatestMessage = index === displayedMessages.length - 1;
-              // The live stream (narration + reasoning) belongs only to the current turn on the latest page.
-              // While viewing history, generation keeps running in the background but this page shows the
-              // paged turn's committed text — the stream must not bleed onto it (`isLatestMessage` alone is
-              // page-local, so a past page's last message would otherwise pick up the live reveal).
-              const showLiveReveal = !isViewingPast && isLatestMessage && isRevealingNarration;
-              return (
-                <div key={index} className={`mb-2 ${message.role === 'user' ? 'text-warning' : ''}`}>
-                  <strong>{message.role === 'user' ? 'You:' : 'Event:'}</strong>
-                  {message.role === 'user' ? (
-                    // Markdown like the narration it sits among — `remarkBreaks` keeps the typed line breaks
-                    // the plain-text render used to hold. Never animated: the player's own text is committed
-                    // the moment it appears.
-                    <MarkdownRenderer text={message.content} />
-                  ) : (
-                    <div ref={narrationRef} data-testid="narration" style={revealStyle}>
-                      {/* The turn's reasoning aside, above the narration: live for the streaming latest turn
-                          on the current page, otherwise this turn's saved scratchpad. */}
-                      {showReasoning && (() => {
-                        const useLive = !isViewingPast && isLatestMessage && !!liveReasoning.text;
-                        const r = useLive ? liveReasoning : parseSavedReasoning(message.content);
-                        return r?.text ? <ReasoningBlock text={r.text} ms={r.ms} active={useLive && liveReasoning.active} /> : null;
-                      })()}
-                      {/* Show the live reveal only while THIS turn's narration is actually streaming and we're
-                          on the current page; during setup/thinking (or after), or while viewing history, show
-                          the committed text so stale/other-turn text can't animate all at once. */}
-                      {(() => {
-                        const narrationText = showLiveReveal ? gameplayText : parseAssistantMessage(message.content);
-                        // Streamdown memoizes its element components on the markdown node's source POSITION,
-                        // never its text, so swapping in another turn's narration of the same shape reads as
-                        // "unchanged" and the old text stays painted. Keying committed text by its content
-                        // remounts whenever it actually differs; the live stream keeps one key so it still
-                        // animates token by token instead of remounting per chunk.
-                        return (
-                          <MarkdownRenderer
-                            key={showLiveReveal ? 'live' : `committed:${narrationText}`}
-                            text={narrationText}
-                            animate={showLiveReveal && revealOn}
-                            animation={revealAnim}
-                            easing={revealEasing}
-                          />
-                        );
-                      })()}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {/* Thinking phase: the narration's assistant message isn't in history yet, so show the live
-                reasoning block on its own (below the just-submitted action) until narration commits it. */}
-            {showReasoning && liveReasoning.text && displayedMessages[displayedMessages.length - 1]?.role === 'user' && (
-              <div className="mb-2">
-                <ReasoningBlock text={liveReasoning.text} ms={liveReasoning.ms} active={liveReasoning.active} />
-              </div>
+          ) : (
+          <ScrollArea className={narrationFrame}>
+            {optionsControl}
+            {commandPreviewBlock}
+            {(actionLine !== undefined || currentAssistantMessage || (showReasoning && pageReasoning?.text)) && (
+              <TurnCard actions={pageActions} turnNumber={currentPage} live={pageLive} style={revealStyle}>
+                {sceneTurnId && (
+                  <ScenePlate
+                    turnId={sceneTurnId}
+                    images={sceneImages}
+                    onDelete={(index) => onDeleteSceneImage(sceneTurnId, index)}
+                    className="mb-3"
+                  />
+                )}
+                {actionLine !== undefined && (
+                  <ActionLine text={actionLine} actions={actionLineActions} attachments={turnAttachments(actionAttachments, sceneTurnId)} />
+                )}
+                {showReasoning && pageReasoning?.text && (
+                  <ReasoningBlock text={pageReasoning.text} ms={pageReasoning.ms} active={pageReasoningLive && liveReasoning.active} />
+                )}
+                {currentAssistantMessage && (
+                  <div ref={narrationRef} data-testid="narration">
+                    {/* Streamdown memoizes on source position, not text, so committed text keys by its content. */}
+                    <MarkdownRenderer
+                      key={pageLive ? 'live' : `committed:${pageNarration}`}
+                      text={pageNarration}
+                      animate={pageLive && revealOn}
+                      animation={revealAnim}
+                      easing={revealEasing}
+                      dialogue
+                    />
+                  </div>
+                )}
+              </TurnCard>
             )}
             {sceneImagesAvailable && (
               <SceneImagePanel
-                // Keyed by turn: paging to another turn remounts the panel, so the tag draft, image
-                // index, and open editor can't carry one turn's state onto another.
+                // Keyed by turn: paging to another turn remounts the panel, so the tag draft and open
+                // editor can't carry one turn's state onto another.
                 key={sceneTurnId}
-                images={sceneImages}
+                hasImage={sceneImages.length > 0}
                 tags={sceneTags}
                 ready={!!sceneTurnId}
                 job={sceneImageJob}
                 progress={sceneImageProgress}
                 preview={sceneImagePreview}
                 onGenerate={onSceneImage}
-                onRegenerateTags={onSceneTags}
+                onRegenerateTags={() => onSceneTags()}
                 onCancel={onCancelSceneImage}
-                onDelete={onDeleteSceneImage}
               />
             )}
-            <div className="mt-4 flex flex-col gap-2">
-                {choices && choices.length > 0 && choices.map((choice, index) => {
-                  // On a past page, highlight the inferred choice(s) the player acted on; on the live page,
-                  // any choice whose text is staged in the input box (plain-click replaces, shift-click appends).
-                  const isSelected = isViewingPast ? viewSelectedChoice.includes(index) : playerInput.includes(choice);
-                  return (
-                    <Button
-                      key={index}
-                      // Ctrl/Cmd+click (or a touch long-press) appends the choice as a new sentence; a plain tap replaces.
-                      onClick={(e) => {
-                        if (longPress.current.fired) { longPress.current.fired = false; return; } // swallow the click after a long-press
-                        if (e.ctrlKey || e.metaKey) appendChoice(choice); else setPlayerInput(choice);
-                      }}
-                      onPointerDown={() => startLongPress(choice)}
-                      onPointerUp={cancelLongPress}
-                      onPointerLeave={cancelLongPress}
-                      onPointerCancel={cancelLongPress}
-                      disabled={disabled || isViewingPast}
-                      variant={isSelected ? "default" : "outline"}
-                      className={`w-full transition-all duration-200 h-auto min-h-[3rem] whitespace-normal
-                        ${isSelected
-                          ? "bg-primary text-primary-foreground font-bold shadow-lg"
-                          : "border-primary hover:bg-accent hover:text-accent-foreground"
-                        }`}
-                    >
-                      {choice.split('**').map((part, i) =>
-                        i % 2 === 0 ?
-                          <span key={i}>{part}</span> :
-                          <strong key={i}>{part}</strong>
-                      )}
-                    </Button>
-                  );
-                })}
-                {showContinue && (
-                  <>
-                    {choices && choices.length > 0 && <Separator className="my-1" />}
-                    <Button
-                      // Same click contract as a generated choice: plain tap replaces the input, Ctrl/Cmd+click
-                      // (or a long-press) appends. Never submits — the player still presses send.
-                      onClick={(e) => {
-                        if (longPress.current.fired) { longPress.current.fired = false; return; }
-                        if (e.ctrlKey || e.metaKey) appendChoice(CONTINUE_CHOICE); else setPlayerInput(CONTINUE_CHOICE);
-                      }}
-                      onPointerDown={() => startLongPress(CONTINUE_CHOICE)}
-                      onPointerUp={cancelLongPress}
-                      onPointerLeave={cancelLongPress}
-                      onPointerCancel={cancelLongPress}
-                      disabled={disabled || isViewingPast}
-                      variant={continueSelected ? "default" : "outline"}
-                      className={`w-full transition-all duration-200 h-auto min-h-[3rem] whitespace-normal
-                        ${continueSelected
-                          ? "bg-primary text-primary-foreground font-bold shadow-lg"
-                          : "border-primary hover:bg-accent hover:text-accent-foreground"
-                        }`}
-                    >
-                      {CONTINUE_CHOICE}
-                    </Button>
-                  </>
-                )}
-            </div>
+            <ChoiceRows
+              choices={choices ?? []}
+              showContinue={showContinue}
+              disabled={disabled || isViewingPast}
+              // Past: the choice the player took. Live: any choice staged in the input.
+              isSelected={(choice, index) => isViewingPast ? viewSelectedChoice.includes(index) : playerInput.includes(choice)}
+              continueSelected={continueSelected}
+              choicePress={choicePress}
+              actions={pageChoicesActions}
+            />
           </ScrollArea>
+          )}
+          <ConfirmDialog
+            open={rewindPage !== null}
+            onOpenChange={(open) => { if (!open) setRewindPage(null); }}
+            {...ROLLBACK_CONFIRM}
+            onConfirm={() => { if (rewindPage !== null) handleRollback(rewindPage); }}
+          />
           <EditTextModal
             isOpen={isEditMode}
-            onOpenChange={setIsEditMode}
-            text={currentPageText}
-            onSave={(text) => {
+            onOpenChange={(open) => { setIsEditMode(open); if (!open) setEditTarget(null); }}
+            text={editTarget?.text ?? currentPageText}
+            // Removal shows with the setting off too: it sends nothing, and it lets the player take an image back.
+            attachments={editTarget?.kind === 'action' ? turnAttachments(actionAttachments, editTarget.turnId) : undefined}
+            onSave={(text, images) => {
+              const page = editTarget?.page ?? currentPage;
+              if (editTarget?.kind === 'action') {
+                // Rewrites only the turn's user message; the turn's memory digest stays as it is.
+                setFullMessageHistory(prev => rewriteTurnAction(prev, page, text, 2));
+                const { turnId } = editTarget;
+                if (turnId) setActionAttachments((prev) => setTurnAttachments(prev, turnId, images));
+                return;
+              }
               // Only the most recent page drives the live gameplay text (used by TTS, etc.).
-              if (currentPage === totalPages) setGameplayText(text);
-              // Update the message in history for the current page
-              const messageIndex = (currentPage - 1) * 2 + 1; // +1 for assistant message
+              if (page === totalPages) setGameplayText(text);
+              // Update the message in history for the edited page
+              const messageIndex = (page - 1) * 2 + 1; // +1 for assistant message
               setFullMessageHistory(prev => {
                 const updatedHistory = [...prev];
                 let editedTurnId: string | undefined;
@@ -949,8 +974,8 @@ export const MiddlePanel = ({
                 }
                 return updatedHistory;
               });
-              // Force update of displayed messages
-              setDisplayedMessages(prev => {
+              // Force update of displayed messages, which hold the viewed page only
+              if (page === currentPage) setDisplayedMessages(prev => {
                 const updatedMessages = [...prev];
                 const assistantMessageIndex = updatedMessages.findIndex(m => m.role === 'assistant');
                 if (assistantMessageIndex !== -1) {
@@ -978,84 +1003,26 @@ export const MiddlePanel = ({
               });
             }}
           />
-          <div className="relative flex flex-col items-center gap-2">
+          <div className="flex flex-col items-center gap-2">
+            {likePrompt}
             {locationSuggestion}
-            <div className="relative flex w-full items-center justify-center">
-              <Pager page={currentPage} pageCount={totalPages} onPageChange={handlePageChange} className="justify-start md:justify-center" />
-              {/* Right-aligned action: rollback when viewing a past page, re-generate on the current one. */}
-              <div className="absolute right-0">
-                {currentPage < totalPages ? (
-                  <ConfirmDialog
-                    title="Confirm Rollback"
-                    description="Are you sure you want to rollback to the previous state? This action cannot be undone."
-                    onConfirm={handleRollback}
-                  >
-                    <Button variant="outline" className="gap-1 w-32" disabled={isWaitingForAI}>
-                      <RefreshCw className="h-3 w-3" />
-                      Rollback
-                    </Button>
-                  </ConfirmDialog>
-                ) : totalPages > 0 ? (
-                  <div className="flex">
-                    {/* Left half: full re-generate, unchanged. Right caret opens the partial-regenerate flyout. */}
-                    <Button
-                      variant="outline"
-                      aria-label="Re-generate"
-                      className={`gap-1 ${canRegenChoices || canRegenStats ? "rounded-r-none md:w-28" : "md:w-32"}`}
-                      onClick={handleRegenerate}
-                      disabled={isWaitingForAI}
-                    >
-                      <RefreshCw className="h-3 w-3" />
-                      <span className="hidden md:inline">Re-generate</span>
-                    </Button>
-                    {(canRegenChoices || canRegenStats) && (
-                      <Popover open={regenMenuOpen} onOpenChange={setRegenMenuOpen}>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            className="rounded-l-none border-l-0 px-2"
-                            disabled={isWaitingForAI}
-                            aria-label="More re-generate options"
-                          >
-                            <ChevronUp className="h-3 w-3" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent side="top" align="end" className="w-48 p-1">
-                          <div className="flex flex-col">
-                            {/* Held while a scene renders: these keep the turn, so the picture being drawn is
-                                still the right one for it — and one graphics card can't write and draw at once. */}
-                            {canRegenStats && (
-                              <Button
-                                variant="ghost"
-                                className="justify-start text-meta h-8"
-                                onClick={() => { setRegenMenuOpen(false); handleRegenerateStats(); }}
-                                disabled={sceneImageJob !== null}
-                              >
-                                Re-generate Stats
-                              </Button>
-                            )}
-                            {canRegenChoices && (
-                              <Button
-                                variant="ghost"
-                                className="justify-start text-meta h-8"
-                                onClick={() => { setRegenMenuOpen(false); handleRegenerateChoices(); }}
-                                disabled={sceneImageJob !== null}
-                              >
-                                Re-generate Choices
-                              </Button>
-                            )}
-                          </div>
-                        </PopoverContent>
-                      </Popover>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            {/* Chat has no Pager: the scroll is the one way through the turns. */}
+            {!chatLayout && <Pager page={currentPage} pageCount={totalPages} onPageChange={handlePageChange} className="justify-center" />}
           </div>
           {progressBar}
-          <div className="flex flex-col gap-2">
+          <div className={cn('flex flex-col gap-2', attachDragOver && 'rounded-md ring-2 ring-inset ring-ring')} {...intakeProps}>
+            {imageAttachments && (
+              <AttachmentThumbs
+                attachments={pendingAttachments}
+                onRemove={(id) => setPendingAttachments((prev) => withoutAttachment(prev, id))}
+                className="pt-1.5"
+              />
+            )}
             <div className="flex items-end">
+              {/* The opening turn sends the drawn opening, so images wait for the game to start. */}
+              {imageAttachments && isGameStarted && (
+                <AttachImagesButton attaching={attaching} disabled={disabled} onFiles={(files) => void attachFiles(files)} className="mr-2 shrink-0" />
+              )}
               <ActionInput
                 value={playerInput}
                 onChange={(e) => setPlayerInput(e.target.value)}
@@ -1114,13 +1081,24 @@ export const MiddlePanel = ({
   );
 };
 
-export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLanguage }: {
+export const RightPanel = ({
+  onLocationClick, onToggleTrait, onPersonaChange, traitCascade, onDismissTraitCascade, onRegenerateStats, sceneImageJob,
+  language, setLanguage,
+}: {
   onLocationClick: () => void;
-  /** Switch a chosen trait on or off mid-play; owned by GameViewer, which reverses its stat changes. */
-  onToggleTrait: (traitId: string, enabled: boolean) => void;
+  /** Switch a bearer's trait on or off mid-play; owned by GameViewer, which reverses its stat changes. */
+  onToggleTrait: (traitId: string, enabled: boolean, bearerId: string) => void;
+  /** Settle the traits after the player picks another persona. `name` is that persona's; null for None. */
+  onPersonaChange: (ref: PersonaRef, name: string | null) => void;
+  /** What the player's last trait switch or persona change turned off. */
+  traitCascade: TraitCascade | null;
+  onDismissTraitCascade: () => void;
+  onRegenerateStats: (page: number) => void;
+  sceneImageJob: 'tags' | 'image' | null;
   language: string;
   setLanguage: (value: string) => void;
 }) => {
+  const { statUpdatesEnabled } = useSettings();
   const {
     // Aliased to the viewed-page values (equal to live on the latest page) so paging back shows that
     // turn's stats/traits/time/deltas read-only. `commitManualStatEdit` writes live and rebaselines the
@@ -1129,6 +1107,8 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
     calendar,
     viewLocationId,
     isViewingPast,
+    isWaitingForAI,
+    isRevealingNarration,
     currentPage,
     totalPages,
     activeTab,
@@ -1138,12 +1118,19 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
     commitManualStatEdit,
     viewTraits: savedTraits,
     viewDisabledTraitIds,
+    viewOwnedTraits,
     viewStatChanges: recentStatChanges,
     recentStatFading,
     heldStatChanges,
-    drainingStatChanges
+    drainingStatChanges,
+    personaRef,
   } = useGameplay();
-  const { locations, connections, traits, traitGroups, viewStats: playerStats, currentLocation, resolveTraitText } = useResolvedWorld();
+  const {
+    locations, connections, traits, traitGroups, viewStats: playerStats, currentLocation, resolveTraitText, resolveEntityText,
+    entities: cast, persona, traitEntities, traitLibrary,
+  } = useResolvedWorld();
+  // In Chat a scroll moves the viewed turn, so the stat rows snap to it.
+  const snapStats = useStatsSnap({ page: currentPage, totalPages }, useNarrationLayout() === 'chat');
   const resolvePH = usePlaceholderResolver();
   const [isEditMode, setIsEditMode] = React.useState(false);
   // The traits actually in force on the viewed turn, and the stats they leave live. A switched-off trait
@@ -1152,23 +1139,60 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
   // The save froze each chosen trait as the world stood on turn 1, so its authoring is re-read from the
   // world — otherwise a trait made switchable after this playthrough began would never get its control.
   const playerTraits = React.useMemo(() => refreshChosenTraits(savedTraits, traits), [savedTraits, traits]);
-  const traitOrder = React.useMemo(() => traitOrderIndex(traits, traitGroups), [traits, traitGroups]);
   const heldTraitIds = React.useMemo(() => new Set(playerTraits.map((t) => t.id)), [playerTraits]);
-  const activeTraits = React.useMemo(
-    () => inAuthoredOrder(playerTraits.filter((t) => !disabledTraits.has(t.id)), traitOrder),
-    [playerTraits, disabledTraits, traitOrder],
+  // The one tree from the bearer resolver: the player's rows at the top, then a node per present bearer with
+  // its owned traits and links expanded. A trait under two bearers is two rows, told apart by their node.
+  const gameData = useGameDataOptional();
+  const bearerWorld = React.useMemo(
+    () => ({ traits, traitGroups, entities: traitEntities }),
+    [traits, traitGroups, traitEntities],
   );
+  // A linked row's name reads its entity as the Character Name, from the original's authored text.
+  const traitTree = React.useMemo(
+    () => withBearerNames(
+      bearerTraitTree(bearerWorld, personaRef, traitLibrary),
+      { traits: gameData?.traits ?? [], traitGroups: gameData?.traitGroups ?? [] },
+      (text, bearer, trait) => (trait ? resolveTraitText(trait, text, bearer) : resolveEntityText(bearer, text)),
+    ),
+    [bearerWorld, personaRef, traitLibrary, gameData?.traits, gameData?.traitGroups, resolveTraitText, resolveEntityText],
+  );
+  // A bearer's trait card reads that bearer as the Character Name, as the AI does.
+  const resolveTreeTraitText = React.useCallback(
+    (trait: Trait, text: string, bearerId: string) =>
+      resolveTraitText(trait, text, bearerId === WORLD_OWNER ? null : traitTree.entityNodes.get(bearerId) ?? null),
+    [traitTree, resolveTraitText],
+  );
+  const activeOwned = React.useMemo(() => activeOwnedTraitIds(viewOwnedTraits), [viewOwnedTraits]);
   // Every toggleable trait is available at any time, so the list holds the player's traits and the ones they
   // could take, together in authored order — owned and unowned differ only by the checkbox. A past turn shows
-  // only what was held then: acquirables can't be acted on there.
-  const listedTraits = React.useMemo(
-    () => (isViewingPast ? playerTraits : listablePlayerTraits(playerTraits, traits, traitOrder)),
-    [isViewingPast, playerTraits, traits, traitOrder],
+  // only what was held then: acquirables can't be acted on there. An entity's rows list the same way.
+  const listedTraits = React.useMemo(() => {
+    const playerRows = traitTree.traits.filter((t) => rowBearer(traitTree, t) === WORLD_OWNER);
+    const entityRows = traitTree.traits.filter((t) => {
+      const bearer = rowBearer(traitTree, t);
+      return bearer !== WORLD_OWNER && (!!viewOwnedTraits[bearer]?.chosen.includes(t.id) || (!isViewingPast && !!t.playerToggle));
+    });
+    const playerOrder = traitOrderIndex(playerRows, traitTree.groups);
+    // A Custom Persona pick lies dormant under a world persona: it has no row until a return to None.
+    const heldRows = new Set(playerRows.map((t) => t.id));
+    const held = playerTraits.filter((t) => heldRows.has(t.id));
+    return [...(isViewingPast ? held : listablePlayerTraits(held, playerRows, playerOrder)), ...entityRows];
+  }, [isViewingPast, playerTraits, traitTree, viewOwnedTraits]);
+  // The played world entity is out of the cast, and a "playing as" gate has to find it.
+  const gateWorld = React.useMemo<TraitWorld>(() => ({
+    traits, groups: traitGroups, entities: worldEntitiesOf(cast, persona), persona: personaRef ?? { source: 'none' },
+    bearers: inPlayBearers(bearerWorld, personaRef, traitLibrary),
+  }), [traits, traitGroups, cast, persona, personaRef, bearerWorld, traitLibrary]);
+  const viewTraitState = React.useMemo(
+    () => ({ traits: playerTraits, disabledTraitIds: viewDisabledTraitIds, ownedTraits: viewOwnedTraits }),
+    [playerTraits, viewDisabledTraitIds, viewOwnedTraits],
   );
+  // The stats a trait switched off stay off under the player's world traits and the played persona's linked ones.
   const statEnabled = React.useMemo(
-    () => activeStatEnabled(playerStats, activeTraits),
-    [playerStats, activeTraits],
+    () => activeStatEnabled(playerStats, statTraitsInForce(viewTraitState, gateWorld)),
+    [playerStats, viewTraitState, gateWorld],
   );
+  const traitGates = React.useMemo(() => gateStates(traitGateInput(viewTraitState, gateWorld)), [viewTraitState, gateWorld]);
   // Filtered for display but carrying each stat's index in the full array, which the edit slider writes back to.
   // Hidden stats stay live for the AI, regen and code — they just never render, which also drops their
   // delta chip, bar band and history deltas (all keyed off the row).
@@ -1178,26 +1202,17 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
   // Whether the descriptor line is part of this world's stat list at all. Held across every row so the list
   // keeps its shape as values move in and out of bands; a world that names none of them pays nothing, and a
   // stat the player never sees can't put the line there for the ones they do.
+  // A world with no stat the player can see gets no Stats tab; the panel then opens on Traits.
+  const hasShownStats = playerStats.some((stat) => stat.hidden !== true);
+  const shownTab = !hasShownStats && activeTab === 'stats' ? 'traits' : activeTab;
   const anyDescriptors = visibleStats.some(({ stat }) => (stat.descriptors?.length ?? 0) > 0);
   // On a past page show the viewed turn's location (Location tab); live otherwise.
   const displayLocation = isViewingPast
     ? (locations.find((l) => l.id === viewLocationId) ?? currentLocation)
     : currentLocation;
-  // The authored links leading out of here, named. Implicit travel is deliberately absent: this panel has
-  // always listed what the author drew, so a world with no Connections shows no section at all.
-  const connectedNames = React.useMemo(() => {
-    if (!displayLocation) return [];
-    const names: string[] = [];
-    for (const [id, via] of effectiveDestinations(displayLocation.id, locations, connections)) {
-      if (via.via !== 'connection') continue;
-      const name = locations.find((l) => l.id === id)?.name;
-      if (name) names.push(name);
-    }
-    return names;
-  }, [connections, locations, displayLocation]);
 
   return (
-    <Card className="w-full md:w-1/4 md:ml-1 grow md:grow-0 min-h-0 flex flex-col md:h-full bg-background/60 border-border overflow-hidden">
+    <Card className="w-full md:w-1/4 md:shrink-0 md:ml-1 grow md:grow-0 min-h-0 flex flex-col md:h-full bg-background/60 border-border overflow-hidden">
       <CardContent className="flex flex-col h-full overflow-hidden p-4 sm:p-1">
       <div className="mb-4 sm:mb-1 flex-shrink-0 flex flex-col gap-2">
         <div className="flex items-center gap-2 pl-2">
@@ -1216,13 +1231,14 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
         {/* The story's position, not an hour count: elapsed hours read as a stopwatch, and the daypart is
             what the prose is actually written around. Same wording the memory stamps use. */}
         <p className="text-center">{formatAbsolute(gameTime, calendar)}</p>
+        <PersonaRow onChange={onPersonaChange} />
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-grow flex flex-col overflow-hidden">
-        <TabsList className="flex-shrink-0">
-          <TabsTrigger value="stats">Stats</TabsTrigger>
-          <TabsTrigger value="traits">Traits</TabsTrigger>
-          <TabsTrigger value="location">Location</TabsTrigger>
+      <Tabs value={shownTab} onValueChange={setActiveTab} className="w-full flex-grow flex flex-col overflow-hidden">
+        <TabsList className="grid w-full flex-shrink-0 auto-cols-fr grid-flow-col">
+          {hasShownStats && <PanelTab value="stats" icon={ChartColumn} label="Stats" />}
+          <PanelTab value="traits" icon={Sparkles} label="Traits" />
+          <PanelTab value="location" icon={MapPin} label="Location" />
         </TabsList>
         <TabsContent value="stats" className="flex-grow overflow-hidden">
           <ScrollArea className="h-[calc(100%-1rem)] relative">
@@ -1241,6 +1257,7 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
                   draining={!isViewingPast && !heldStatChanges[key] && !!drainingStatChanges[key]}
                   page={currentPage}
                   isViewingPast={isViewingPast}
+                  snap={snapStats}
                   fading={recentStatFading}
                   editable={isEditMode && !isViewingPast}
                   reserveDescriptorLine={anyDescriptors}
@@ -1252,19 +1269,14 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
                 />
               );
             })}
-            <div className="absolute bottom-2 right-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsEditMode(!isEditMode)}
-                disabled={isViewingPast}
-                aria-label="Edit Stats"
-                aria-pressed={isEditMode}
-                className="h-8 w-8"
-              >
-                <Pencil className="h-4 w-4" />
-              </Button>
-            </div>
+            <StatsActions
+              className="absolute bottom-2 right-2"
+              past={isViewingPast}
+              busy={totalPages === 0 || isWaitingForAI || isRevealingNarration || sceneImageJob !== null}
+              editing={isEditMode}
+              onEditingChange={setIsEditMode}
+              onRegenerate={statUpdatesEnabled && playerStats.length > 0 ? () => onRegenerateStats(currentPage) : undefined}
+            />
           </ScrollArea>
         </TabsContent>
         <TabsContent value="traits" className="flex-grow overflow-hidden">
@@ -1272,39 +1284,33 @@ export const RightPanel = ({ onLocationClick, onToggleTrait, language, setLangua
               because a trait that can be taken at will makes "owned" a distinction without a difference. */}
           <TraitsTab
             traits={listedTraits}
-            groups={traitGroups}
+            groups={traitTree.groups}
+            entityNodes={traitTree.entityNodes}
+            playerEntityIds={playerEntityIds(traitTree)}
             stats={playerStats}
-            isOff={(id) => disabledTraits.has(id) || !heldTraitIds.has(id)}
+            isOff={(id, bearerId) => (bearerId === WORLD_OWNER
+              ? disabledTraits.has(id) || !heldTraitIds.has(id)
+              : !activeOwned[bearerId]?.includes(id))}
             readOnly={isViewingPast}
             onToggleTrait={onToggleTrait}
-            resolveTraitText={resolveTraitText}
+            resolveTraitText={resolveTreeTraitText}
             view={traitsView}
             setView={setTraitsView}
+            gates={traitGates}
+            cascade={traitCascade}
+            onDismissCascade={onDismissTraitCascade}
           />
         </TabsContent>
         <TabsContent value="location" className="flex-grow overflow-hidden">
           <ScrollArea className="h-[calc(100%-1rem)]">
-            <div className="p-2 flex flex-col gap-4">
-              <Button onClick={onLocationClick} disabled={isViewingPast} className="w-full">
-                {isViewingPast ? 'Location' : 'Current Location'}: {displayLocation?.name || 'Unknown'}
-              </Button>
-              {displayLocation && (
-                <div className="space-y-2">
-                  <p className="font-semibold">Description:</p>
-                  <p className="text-label">{resolvePH(displayLocation.playerDescription || displayLocation.description || '')}</p>
-                  {connectedNames.length > 0 && (
-                    <>
-                      <p className="font-semibold mt-4">Connected Locations:</p>
-                      <ul className="list-disc list-inside text-label">
-                        {connectedNames.map((name, index) => (
-                          <li key={index}>{name}</li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+            <LocationTabBody
+              location={displayLocation}
+              locations={locations}
+              connections={connections}
+              resolveText={resolvePH}
+              past={isViewingPast}
+              onLocationClick={onLocationClick}
+            />
           </ScrollArea>
         </TabsContent>
       </Tabs>

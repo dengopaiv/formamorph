@@ -5,17 +5,19 @@
  *
  * Slot syntax is `{{name:type=default}}`; `type` and `=default` are both optional, and repeating a name
  * reuses the first occurrence's declaration. Substitution is textual, so a template controls its own
- * quoting: a `stat`, `placeholder`, `trait` or `daypart` slot emits a quoted string, while `number`,
- * `choice` and `text` emit their value verbatim (which is what lets a choice supply a comparison operator).
+ * quoting: a `stat`, `placeholder`, `trait`, `entity` or `daypart` slot emits a quoted string, while
+ * `number`, `choice` and `text` emit their value as typed (which is what lets a choice supply a comparison
+ * operator). `trait(slot)` lists the traits of the entity that `entity` slot picked, and `trait(persona)` lists the
+ * persona's traits unless the template declares an `entity` slot named `persona`.
  */
 
 import type { StatCodeTiming } from './statCodeTiming';
 
-export const SLOT_TYPES = ['stat', 'placeholder', 'trait', 'number', 'daypart', 'choice', 'text'] as const;
+export const SLOT_TYPES = ['stat', 'placeholder', 'trait', 'entity', 'number', 'daypart', 'choice', 'text'] as const;
 export type SlotType = (typeof SLOT_TYPES)[number];
 
 /** The slot types filled from a list of the world's own names. Each renders as a quoted string. */
-export const NAME_SLOT_TYPES = ['stat', 'placeholder', 'trait'] as const satisfies readonly SlotType[];
+export const NAME_SLOT_TYPES = ['stat', 'placeholder', 'trait', 'entity'] as const satisfies readonly SlotType[];
 export type NameSlotType = (typeof NAME_SLOT_TYPES)[number];
 
 export const isNameSlotType = (type: SlotType): type is NameSlotType =>
@@ -31,7 +33,12 @@ export interface TemplateSlot {
   defaultValue?: string;
   /** The `choice(a|b|…)` options, in declaration order. Only ever set for `choice` slots. */
   options?: string[];
+  /** Whose traits a `trait` slot lists: `persona`, or the name of an `entity` slot. Absent, the world's. */
+  owner?: string;
 }
+
+/** The `trait(…)` owner that lists the persona's traits. */
+export const PERSONA_TRAIT_OWNER = 'persona';
 
 export interface StatCodeTemplate {
   id: string;
@@ -111,10 +118,17 @@ export function parseTemplateSlots(code: string): ParsedTemplate {
 
     const slot: TemplateSlot = { name, type };
     if (rawDefault !== undefined && rawDefault !== '') slot.defaultValue = rawDefault;
-    if (options && options.length > 0) slot.options = options;
+    if (type === 'trait' && options?.length === 1) slot.owner = options[0];
+    else if (options && options.length > 0) slot.options = options;
 
     byName.set(name, slot);
     slots.push(slot);
+  }
+
+  // A tie to anything but an entity slot or `persona` is dropped, so the slot lists the world's traits.
+  for (const slot of slots) {
+    if (slot.owner === undefined || slot.owner === PERSONA_TRAIT_OWNER || byName.get(slot.owner)?.type === 'entity') continue;
+    delete slot.owner;
   }
 
   return { slots, errors };
@@ -156,8 +170,8 @@ export function defaultSlotValues(slots: TemplateSlot[]): Record<string, string>
   return values;
 }
 
-/** How one filled slot reaches the generated code. String-valued slots are emitted as JSON so an authored
- *  name containing a quote can't break out of its literal; the rest are pasted as written. */
+/** How one filled slot reaches the generated code. Name and daypart slots are emitted as JSON so an
+ *  authored name containing a quote can't break out of its literal; the rest are pasted as typed. */
 function renderSlot(slot: TemplateSlot, raw: string): string {
   const value = (raw ?? '').trim();
   if (isNameSlotType(slot.type)) return JSON.stringify(value);
@@ -210,8 +224,8 @@ export function fillTemplate(code: string, values: Record<string, string>): stri
  * The bundled templates, both boxes' menus in one list. Eight value formulas rather than a longer literal
  * list: a signed rate covers decay and growth, a comparison slot covers both threshold directions, a
  * direction slot covers counting up and down, and "regen toward target" with the target set to the stat's
- * max is the soft-capped regen. Those eight and Bound From Another Stat run after the AI, so the after
- * menu holds the nine of them.
+ * max is the soft-capped regen. Those eight, Bound From Another Stat and the two trait readers run after
+ * the AI, so the after menu holds the eleven of them.
  *
  * The before menu holds the three setup shapes instead: pin a placeholder, switch a trait, and set an
  * opening value. Each is a write the AI should read on the same turn, which is the box's whole point.
@@ -251,7 +265,7 @@ return source {{comparison:choice(>=|<=)=>=}} {{threshold:number=50}} ? self.max
     name: 'Hourly Change',
     description: 'Change by a fixed amount per story hour. A negative rate decreases (hunger, fuel). A positive rate increases. Stacks with Regen, so set one or the other.',
     code: `const ratePerHour = {{ratePerHour:number=-5}};
-return self.value + ratePerHour * deltaHours;`,
+return self.value + ratePerHour * clock.deltaHours;`,
   },
   {
     id: 'builtin-timer',
@@ -259,7 +273,7 @@ return self.value + ratePerHour * deltaHours;`,
     name: 'Timer',
     description: 'Move across this stat’s range over a set number of story hours, up or down.',
     code: `const totalHours = {{totalHours:number=24}};
-const fraction = Math.min(1, Math.max(0, elapsedHours / totalHours));
+const fraction = Math.min(1, Math.max(0, clock.elapsedHours / totalHours));
 const progress = '{{direction:choice(up|down)=up}}' === 'up' ? fraction : 1 - fraction;
 return self.min + (self.max - self.min) * progress;`,
   },
@@ -269,15 +283,15 @@ return self.min + (self.max - self.min) * progress;`,
     name: 'Daypart Modifier',
     description: 'Follow another stat, with a bonus that only applies during one part of the day.',
     code: `const base = stats[{{base:stat}}].value;
-return base + (daypart === {{when:daypart=night}} ? {{bonus:number=20}} : 0);`,
+return base + (clock.daypart === {{when:daypart=night}} ? {{bonus:number=20}} : 0);`,
   },
   {
     id: 'builtin-random-roll',
     timing: 'after',
     name: 'Random Per-Turn Roll',
     description: 'A fresh random value each turn, spread across this stat’s range. Use only one per world. A second draws the same numbers.',
-    code: `// elapsedHours keeps the roll moving even when the clock seed hasn't changed between turns.
-const roll = (Math.random() * 100 + elapsedHours) % 100;
+    code: `// clock.elapsedHours keeps the roll moving even when the clock seed hasn't changed between turns.
+const roll = (Math.random() * 100 + clock.elapsedHours) % 100;
 return self.min + (self.max - self.min) * (roll / 100);`,
   },
   {
@@ -288,7 +302,7 @@ return self.min + (self.max - self.min) * (roll / 100);`,
     code: `const value = self.value;
 const target = {{target:number=100}};
 const rate = {{rate:number=0.1}};
-return value + (target - value) * rate * deltaHours;`,
+return value + (target - value) * rate * clock.deltaHours;`,
   },
   {
     id: 'builtin-bound-from-stat',
@@ -297,6 +311,24 @@ return value + (target - value) * rate * deltaHours;`,
     description: 'Set this stat’s Min, Max, or Regen from another stat times a factor. The value keeps its normal changes.',
     code: `const source = stats[{{source:stat}}].value;
 self.{{bound:choice(max|min|regen)=max}} = Math.round(source * {{factor:number=2}});`,
+  },
+  {
+    id: 'builtin-persona-trait-bonus',
+    timing: 'after',
+    name: 'Bonus From Persona Trait',
+    description: 'Follow another stat, with a bonus while the played persona has a trait on. A persona with no such trait gets no bonus.',
+    code: `const base = stats[{{base:stat}}].value;
+const active = persona.traits[{{trait:trait(persona)}}].enabled;
+return base + (active ? {{bonus:number=10}} : 0);`,
+  },
+  {
+    id: 'builtin-entity-trait-penalty',
+    timing: 'after',
+    name: 'Penalty From Entity Trait',
+    description: 'Follow another stat, with a penalty while one entity has a trait on. An entity that isn’t in play adds no penalty.',
+    code: `const base = stats[{{base:stat}}].value;
+const active = entities[{{entity:entity}}].traits[{{trait:trait(entity)}}].enabled;
+return base - (active ? {{penalty:number=10}} : 0);`,
   },
   {
     id: 'builtin-placeholder-follows-stat',
@@ -322,7 +354,7 @@ if (target.values.length) target.pin(target.values[Math.max(0, Math.min(band, ta
     description: 'Set a value on the opening turn only. Later turns do not run it. Use it for a value the first narration must read.',
     // The before box reads the clock at turn start, so the opening turn is the one with no hours behind
     // it. Returning nothing leaves the value where the turn found it.
-    code: `if (elapsedHours > 0) return;
+    code: `if (clock.elapsedHours > 0) return;
 return {{openingValue:number=50}};`,
   },
 ];

@@ -3,9 +3,13 @@ import { Capacitor } from '@capacitor/core';
 import { ThemeProvider } from "./components/theme-provider";
 import { AndroidBackHandler } from './components/AndroidBackHandler';
 import { recordView } from './lib/backAction';
+import { watchSessionForClaim } from './lib/anonymousLikeClaim';
+import { COMMUNITY_ENABLED } from './lib/featureFlags';
 import { useDevRoute, installDevRouter, registerDevHook } from './lib/devRouter';
 import { installViewportHeightVar, APP_HEIGHT_VAR } from './lib/viewportHeight';
 import { type DevView } from './lib/devRoutes';
+import { surfaceRegistry } from './lib/surface/surfaceRegistry';
+import { SurfaceLayer, SurfaceReporterContext } from './components/ui/surface';
 import { DevFixtureLoader } from './components/DevFixtureLoader';
 import { ViewportReadout } from './components/ViewportReadout';
 import { GameDataProvider } from './contexts/GameDataContext';
@@ -17,13 +21,16 @@ import { AgeGateProvider } from './contexts/AgeGateContext';
 import { PrivacyPolicyProvider } from './contexts/PrivacyPolicyContext';
 import { AccountDeletionProvider } from './contexts/AccountDeletionContext';
 import { UpdateRequiredGate } from './components/modals/UpdateRequiredDialog';
+import { SignInHost } from './components/SignInHost';
 import { EXIT_TO_MENU_PROMPT } from './lib/leavePrompts';
 import { LocalEngineManager } from './components/LocalEngineManager';
 import { IntroSequence } from './components/IntroSequence';
+import { Formaquestion } from './components/formaquestion/Formaquestion';
 import { TooltipProvider } from './components/ui/tooltip';
 import GameViewer from './views/GameViewer';
 import MainMenu from './views/MainMenu';
-import type { CharacterData, Dictionary, Entity } from '@/types';
+import type { CharacterData, Dictionary, Entity, OwnedTraitPicks } from '@/types';
+import type { PersonaPick } from '@/lib/persona';
 
 const DesignSystemShowcase = import.meta.env.DEV
   ? lazy(() => import('./views/DesignSystemShowcase'))
@@ -72,6 +79,14 @@ function AppViews() {
   // preview verification can land in one call (see `devRouter.ts`). No-op / tree-shaken in production.
   useEffect(() => installDevRouter(), []);
 
+  // Move the likes given before sign-in onto the account that just arrived. Here rather than in the
+  // community browser, because signing in happens on the menu and in another tab, and a guest who never
+  // opens the browser again would otherwise lose the hearts they filled.
+  useEffect(() => {
+    if (!COMMUNITY_ENABLED) return;
+    return watchSessionForClaim();
+  }, []);
+
   // Track the visual viewport into `--app-h` so full-height screens shrink for the on-screen keyboard
   // (see `viewportHeight.ts`). The DEV hook fakes the iOS case — a keyboard the layout viewport doesn't
   // know about — so the layout side is verifiable without a device; clearing it is what Chrome looks like.
@@ -84,11 +99,15 @@ function AppViews() {
   useEffect(() => {
     if (import.meta.env.DEV && devRoute?.view) setCurrentView(devRoute.view as DevView);
   }, [devRoute?.view]);
+  // DEV: `window.__fmDev.surface()` reads what the surface registry holds.
+  useEffect(() => registerDevHook('surface', surfaceRegistry.get), []);
   const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
+  const [initialOwnedTraits, setInitialOwnedTraits] = useState<OwnedTraitPicks>({});
   const [initialCharacterData, setInitialCharacterData] = useState<CharacterData | null>(null);
   const [initialLocationId, setInitialLocationId] = useState<string | null>(null);
   const [initialDictionaries, setInitialDictionaries] = useState<Dictionary[] | null>(null);
   const [initialCharacters, setInitialCharacters] = useState<Entity[] | null>(null);
+  const [initialPersona, setInitialPersona] = useState<PersonaPick | null>(null);
   const [initialSaveId, setInitialSaveId] = useState<string | null>(null);
 
   const handleStartGame = (
@@ -98,12 +117,16 @@ function AppViews() {
     startingLocationId?: string | null,
     dictionaries?: Dictionary[] | null,
     characters?: Entity[] | null,
+    persona?: PersonaPick | null,
+    ownedTraits?: OwnedTraitPicks,
   ) => {
     setSelectedTraits(traits);
+    setInitialOwnedTraits(ownedTraits ?? {});
     setInitialCharacterData(customCharacterData);
     setInitialLocationId(startingLocationId ?? null);
     setInitialDictionaries(dictionaries ?? null);
     setInitialCharacters(characters ?? null);
+    setInitialPersona(persona ?? null);
     setInitialSaveId(null); // a fresh game, not a cold-loaded save
     // Quick Start reaches here without passing through the enter-world flow, so it opens the session itself.
     // Already-open is a no-op that keeps the flow's rolls, which is what makes the normal path idempotent.
@@ -139,7 +162,7 @@ function AppViews() {
 
   return (
     <>
-      <DevFixtureLoader />
+      <DevFixtureLoader onPicked={setInitialCharacters} />
       {/* Android only: elsewhere there is no hardware back button and the plugin has nothing to send.
           The DEV route mounts it anyway, so the exit prompt's copy is reachable without a phone. */}
       {(Capacitor.isNativePlatform() || (import.meta.env.DEV && devRoute?.modal === 'exitApp')) && (
@@ -151,29 +174,41 @@ function AppViews() {
         />
       )}
       {import.meta.env.DEV && devRoute?.probe === 'viewport' && <ViewportReadout />}
+      {/* One help window for every view, so it stays open with its state across a view swap. The welcome
+          animation covers the screen and takes no input, so help stands down while it plays. */}
+      <Formaquestion suspended={currentView === 'mainMenu' && introPace !== null} />
+      {/* Each view reports itself as the open screen. Its tabs and dialogs report from inside it. */}
       {currentView === 'mainMenu' && (
-            <MainMenu
-              onStartGame={handleStartGame}
-              onLoadSaveGame={handleLoadSaveGame}
-              onReplayIntro={() => setIntroPace('snap')}
-              introActive={introPace !== null}
+        <SurfaceLayer id="mainMenu">
+          <MainMenu
+            onStartGame={handleStartGame}
+            onLoadSaveGame={handleLoadSaveGame}
+            onReplayIntro={() => setIntroPace('snap')}
+            introActive={introPace !== null}
+          />
+        </SurfaceLayer>
+      )}
+      {currentView === 'mainMenu' && introPace && (
+        <SurfaceLayer id="intro">
+          <IntroSequence pace={introPace} onComplete={handleIntroDone} />
+        </SurfaceLayer>
+      )}
+      {currentView === 'gameViewer' && (
+        <SurfaceLayer id="gameViewer">
+          <GameplayProvider>
+            <GameViewer
+              initialTraits={selectedTraits}
+              initialOwnedTraits={initialOwnedTraits}
+              initialCharacterData={initialCharacterData}
+              initialLocationId={initialLocationId}
+              initialDictionaries={initialDictionaries}
+              initialCharacters={initialCharacters}
+              initialPersona={initialPersona}
+              initialSaveId={initialSaveId}
+              onExitToMenu={handleExitToMenu}
             />
-          )}
-          {currentView === 'mainMenu' && introPace && (
-            <IntroSequence pace={introPace} onComplete={handleIntroDone} />
-          )}
-          {currentView === 'gameViewer' && (
-            <GameplayProvider>
-              <GameViewer
-                initialTraits={selectedTraits}
-                initialCharacterData={initialCharacterData}
-                initialLocationId={initialLocationId}
-                initialDictionaries={initialDictionaries}
-                initialCharacters={initialCharacters}
-                initialSaveId={initialSaveId}
-                onExitToMenu={handleExitToMenu}
-              />
-        </GameplayProvider>
+          </GameplayProvider>
+        </SurfaceLayer>
       )}
     </>
   );
@@ -198,8 +233,11 @@ function App() {
 
   return (
     <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
-      {/* One tooltip provider for the app: it owns the open delay and the instant-open window shared by
-          every tip, so no screen can time its own differently. */}
+      {/* Above everything that opens a dialog: screens, dialogs and tabs report what is open to the
+          surface registry. */}
+      <SurfaceReporterContext.Provider value={surfaceRegistry}>
+      {/* One tooltip provider for the app: it owns the popup every tip shares, and the open delay and
+          instant-open window, so no screen can time its own differently. */}
       <TooltipProvider>
         <SettingsProvider>
           <LocalEngineManager />
@@ -223,6 +261,9 @@ function App() {
                           made from either screen, and sibling effects run in order — so the header this
                           installs is on `fetch` before any screen's mount effect asks for anything. */}
                       <UpdateRequiredGate />
+                      {/* One sign-in for every view, inside the age gate and the privacy prompt it
+                          answers to. A view swap never remounts it. */}
+                      {COMMUNITY_ENABLED && <SignInHost />}
                       <AppViews />
                     </PrivacyPolicyProvider>
                   </AccountDeletionProvider>
@@ -232,6 +273,7 @@ function App() {
           </GameDataProvider>
         </SettingsProvider>
       </TooltipProvider>
+      </SurfaceReporterContext.Provider>
     </ThemeProvider>
   );
 }

@@ -9,6 +9,47 @@ export interface ChatMessage {
   content: string;
 }
 
+/** One function call the model made, as the wire carries it. `arguments` is the raw JSON text. */
+export interface ToolCallPart {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+/** The assistant message between tool rounds: what the model wrote, called and thought. The reasoning rides
+ *  under the field name the server streamed it in. */
+export interface AssistantToolCallMessage {
+  role: 'assistant';
+  content: string | null;
+  tool_calls: ToolCallPart[];
+  reasoning?: string;
+  reasoning_content?: string;
+}
+
+/** A Tool's result, answering one call by id. */
+export interface ToolResultMessage {
+  role: 'tool';
+  tool_call_id: string;
+  content: string;
+}
+
+/** One piece of a user message that carries images. */
+export type UserContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/** A user message with images: the text part first, then one part per image. Wire-only. */
+export interface UserPartsMessage {
+  role: 'user';
+  content: UserContentPart[];
+}
+
+/** A message one request states: history text, or this turn's user message with its images. */
+export type RequestMessage = ChatMessage | UserPartsMessage;
+
+/** Any message a chat-completions request may carry. Turn history holds only {@link ChatMessage}. */
+export type WireMessage = RequestMessage | AssistantToolCallMessage | ToolResultMessage;
+
 /** OpenAI-compatible chat-completion request body. */
 export interface ChatCompletionRequest {
   model: string;
@@ -46,7 +87,60 @@ export type AIRequestType =
   | 'discoverEntity'
   | 'timePassed'
   | 'openingTime'
-  | 'sceneTags';
+  | 'sceneTags'
+  | EditorRequestType;
+
+/** The World Editor's generate buttons and the Formaquestion help prompt. No preset rows: they follow the
+ *  active endpoint with reasoning off. */
+export type EditorRequestType = 'descriptionSummary' | 'descriptionBridge' | 'descriptionCheck' | 'imageTags' | 'help';
+
+/** The value type of a Tool parameter; `enum` takes one of the parameter's `options`. */
+export type ToolParamType = 'string' | 'number' | 'boolean' | 'enum';
+
+/** One argument the AI passes when it calls a Tool. */
+export interface ToolParam {
+  name: string;
+  type: ToolParamType;
+  description: string;
+  required: boolean;
+  /** The allowed values of an `enum` parameter; empty for the other types. */
+  options: string[];
+}
+
+/** The world data a Lookup handler searches. `memories` is catalog-only: a user Tool can't store it. */
+export type ToolLookupSource = 'entities' | 'locations' | 'dictionary' | 'memories';
+
+/** What runs when the AI calls a Tool. */
+export type ToolHandler =
+  | { kind: 'lookup'; source: ToolLookupSource; param: string; returns: 'full' | 'summary' }
+  | { kind: 'template'; body: string }
+  | { kind: 'script'; code: string };
+
+/** A function the AI can call during a request. User Tools live in one global list; built-in Tools are the catalog. */
+export interface Tool {
+  id: string;
+  /** The function name the AI calls. */
+  name: string;
+  /** What the AI reads to decide when to call the Tool. */
+  description: string;
+  params: ToolParam[];
+  handler: ToolHandler;
+  /** The text the AI receives when the handler finds nothing. */
+  emptyResult: string;
+  /** The prompts that send this Tool. */
+  offeredTo: AIRequestType[];
+  /** Calls allowed per request; absent uses the global default. */
+  callLimit?: number;
+}
+
+/** Which Tools a prompt preset switches on, keyed by Tool id; a missing id is off. */
+export type ToolEnabledMap = Record<string, boolean>;
+
+/** A player's global edit to one catalog Tool: its Availability fields, which replace the shipped ones. */
+export type CatalogToolOverride = Pick<Tool, 'offeredTo' | 'callLimit'>;
+
+/** Catalog Tool overrides keyed by catalog Tool id; a missing id uses the shipped Tool. */
+export type CatalogToolOverrides = Record<string, CatalogToolOverride>;
 
 /**
  * Structured payload the game stores per turn (mirrors the JSON the app round-trips).

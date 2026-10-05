@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { PROMPT_GROUPS, visibleGroups, allGroupedTabs, PROMPT_DESCRIPTIONS } from './promptGroups';
+import { PROMPT_GROUPS, visibleGroups, allGroupedTabs, PROMPT_DESCRIPTIONS, PROMPT_TAB_REQUESTS, isPromptTab, isAuthoringTab, AUTHORING_TABS } from './promptGroups';
 import { computePromptTabAvailability } from './promptTabAvailability';
+import { sentenceShapeViolation } from '@/test/copyShape';
 
 const everyFeature = {
   choicesEnabled: true, statUpdatesEnabled: true, locationChangeEnabled: true,
-  memoryDigests: true, characterDiaries: true, aiClock: true, sceneImages: true, advanced: true,
+  memoryDigests: true, characterDiaries: true, describeCharacters: true, aiClock: true, sceneImages: true, advanced: true,
 };
 
 /**
@@ -39,6 +40,23 @@ describe('PROMPT_GROUPS', () => {
 
   it('opens on Narration, the prompt that carries the story', () => {
     expect(PROMPT_GROUPS[0].tabs[0]).toBe('narration');
+  });
+});
+
+describe('PROMPT_TAB_REQUESTS', () => {
+  it('names a request type for every grouped tab, so no tab tunes another prompt', () => {
+    // The authoring prompts are the exception, and safe: they have no Options view, so they tune nothing.
+    const unmapped = allGroupedTabs().filter((t) => !isPromptTab(t) && !isAuthoringTab(t));
+    expect(unmapped).toEqual([]);
+  });
+
+  it('keeps the authoring prompts out of the map, since they have no preset rows to tune', () => {
+    expect(AUTHORING_TABS.filter((t) => isPromptTab(t))).toEqual([]);
+  });
+
+  it('names a distinct request type per tab, so a jump from a request has one tab to land on', () => {
+    const types = Object.values(PROMPT_TAB_REQUESTS);
+    expect(types.length).toBe(new Set(types).size);
   });
 });
 
@@ -84,6 +102,16 @@ describe('PROMPT_DESCRIPTIONS', () => {
       expect(text.length, tab).toBeLessThanOrEqual(140);
       expect(text, tab).not.toContain(String.fromCharCode(10));
     }
+  });
+
+  it('drops the period on a one-sentence description and keeps it on a longer one', () => {
+    // The same period rule the settings copy follows: the line heads an editor the way a caption heads a
+    // control, so a lone sentence carries no period.
+    const bad = Object.entries(PROMPT_DESCRIPTIONS).flatMap(([tab, text]) => {
+      const why = sentenceShapeViolation(text);
+      return why ? [`${tab}: ${text} (${why})`] : [];
+    });
+    expect(bad).toEqual([]);
   });
 
   it('drops the "only used when X is on" caveat', () => {

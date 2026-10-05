@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, type SettingCopy, type SettingOptionCopy } from './settingsCopy';
+import { sentenceShapeViolation } from '@/test/copyShape';
+import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_NOTES, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, type SettingCopy, type SettingOptionCopy } from './settingsCopy';
 
 /**
  * The Settings modal's copy rules, asserted rather than reviewed. Their point is that consistency
@@ -55,11 +56,25 @@ describe('settings copy', () => {
     expect(entries.filter(([, c]) => !c.description.trim()).map(([k]) => k)).toEqual([]);
   });
 
-  it('keeps every description to one sentence that ends with a period', () => {
-    // R2 — the interior check catches a description that grew a second sentence.
-    const bad = entries.filter(([, c]) =>
-      !c.description.endsWith('.') || c.description.slice(0, -1).includes('. '));
-    expect(bad.map(([k, c]) => `${k}: ${c.description}`)).toEqual([]);
+  it('drops the period on a one-sentence description and keeps it on a longer one', () => {
+    // R2 — the line beside a control reads like a label's caption, so a lone sentence carries no period.
+    const bad = entries.flatMap(([k, c]) => {
+      const why = sentenceShapeViolation(c.description);
+      return why ? [`${k}: ${c.description} (${why})`] : [];
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('gives every note the sentence shape: a lone sentence has no period, a longer note ends with one', () => {
+    const bad = Object.entries(SETTINGS_NOTES).flatMap(([k, note]) => {
+      const why = sentenceShapeViolation(note);
+      return why ? [`${k}: ${note} (${why})`] : [];
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it('quotes the Enable Image Generation label exactly in its off note', () => {
+    expect(SETTINGS_NOTES.imageGenerationOff).toContain(`“${SETTINGS_COPY.enableImageGeneration.label}”`);
   });
 
   it('keeps every description within one line of the description column', () => {
@@ -91,12 +106,11 @@ describe('settings copy', () => {
 
   it('says when every narration message is sent, in one line', () => {
     // The message fields are runtime-conditional riders, so visibility alone can't say when one is sent —
-    // each carries a `sentWhen`, held to the same one-sentence, one-line ceiling as a description.
+    // each carries a `sentWhen`, held to the same period rule and one-line ceiling as a description.
     const messages = entries.filter(([k]) => k.endsWith('Message'));
     expect(messages.filter(([, c]) => !c.sentWhen?.trim()).map(([k]) => k)).toEqual([]);
     const bad = messages.filter(([, c]) =>
-      !c.sentWhen!.endsWith('.')
-      || c.sentWhen!.slice(0, -1).includes('. ')
+      sentenceShapeViolation(c.sentWhen!)
       || c.sentWhen!.trim().split(/\s+/).length > MAX_DESCRIPTION_WORDS);
     expect(bad.map(([k, c]) => `${k}: ${c.sentWhen}`)).toEqual([]);
   });
@@ -109,10 +123,9 @@ describe('settings copy', () => {
 
   it('holds every option help to the description rules', () => {
     // R2 again — an option's help replaces the row description on these rows, so it is read in the same
-    // slot and must survive the same one-sentence, one-line ceiling.
+    // slot and must survive the same period rule and one-line ceiling.
     const bad = helps.filter(([, help]) =>
-      !help.endsWith('.')
-      || help.slice(0, -1).includes('. ')
+      sentenceShapeViolation(help)
       || help.trim().split(/\s+/).length > MAX_DESCRIPTION_WORDS);
     expect(bad.map(([k, help]) => `${k}: ${help}`)).toEqual([]);
   });

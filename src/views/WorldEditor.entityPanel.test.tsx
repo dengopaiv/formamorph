@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, within } from '@testing-library/react';
-import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { asMobile, benchEditorWorld, panelTabLayout, renderWorldEditorBench } from '@/test/worldEditorBench';
 import type { World } from '@/types';
 
 /**
@@ -76,10 +76,10 @@ const selectEntity = (name: string) => {
 beforeEach(() => { localStorage.clear(); });
 
 describe('the World Editor entity panel tabs', () => {
-  it('offers three tabs in Advanced mode and opens on Profile', () => {
+  it('offers five tabs in Advanced mode and opens on Profile', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectEntity('Wren');
-    expect(panelTabNames()).toEqual(['Profile', 'Descriptions', 'Placeholders']);
+    expect(panelTabNames()).toEqual(['Profile', 'Descriptions', 'Traits', 'Placeholders', 'Openings']);
     expect(panelTab('Profile')).toHaveAttribute('aria-selected', 'true');
   });
 
@@ -150,5 +150,33 @@ describe('the World Editor entity panel tabs', () => {
     fireEvent.click(screen.getByText('Fen Folk'));
     expect(screen.getByText('Group Name')).toBeInTheDocument();
     expect(panelTabNames()).toEqual([]);
+  });
+});
+
+const layout = () => panelTabLayout('Entity Fields');
+const FIXED_SCROLL = { strip: 'fixed', body: 'scroll' };
+const FIXED_FILL = { strip: 'fixed', body: 'fill' };
+
+describe('the World Editor entity panel height', () => {
+  it.each([
+    ['desktop', () => () => {}],
+    ['mobile', asMobile],
+  ])('keeps the strip fixed, fills the pane for Traits and Placeholders, and scrolls the other tabs on %s', (_, setUp) => {
+    const undo = setUp();
+    try {
+      renderWorldEditorBench(WORLD, 'advanced');
+      selectEntity('Wren');
+      expect(layout()).toEqual(FIXED_SCROLL);
+      openPanelTab('Traits');
+      expect(layout()).toEqual(FIXED_FILL);
+      openPanelTab('Placeholders');
+      expect(layout()).toEqual(FIXED_FILL);
+      for (const tab of ['Descriptions', 'Openings', 'Profile']) {
+        openPanelTab(tab);
+        expect(layout()).toEqual(FIXED_SCROLL);
+      }
+    } finally {
+      undo();
+    }
   });
 });

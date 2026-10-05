@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { toast } from 'react-toastify';
 import { ScanSearch, Loader2 } from 'lucide-react';
 import { useSettings } from '@/contexts/SettingsContext';
 import { checkDescriptions } from '@/lib/descriptionCheck';
@@ -9,7 +8,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { Tip } from '@/components/ui/tooltip';
-import { authoringFailureMessage } from '@/lib/authoringRequest';
+import { authoringServerNote } from '@/lib/authoringRequest';
+import { useAiSettingsSnapshot } from '@/lib/aiRequest/useAiSettingsSnapshot';
+import { toastError } from '@/lib/linkToast';
 
 /**
  * Reads a subject's Player-Facing and AI-Facing descriptions against each other and reports where they
@@ -30,10 +31,8 @@ const DescriptionCheckButton = ({ playerText, aiText, kind, subjectName }: {
   /** The subject's own name, for the dialog title — so a reader arriving at the results knows whose. */
   subjectName?: string;
 }) => {
-  const {
-    activeEndpointUrl, activeApiToken, activeModelName, descCheckPrompt, descMaxTokens,
-    reasoningCapability, localModelActive,
-  } = useSettings();
+  const { descCheckPrompt, descMaxTokens } = useSettings();
+  const snapshot = useAiSettingsSnapshot();
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [findings, setFindings] = useState<string[]>([]);
@@ -55,19 +54,16 @@ const DescriptionCheckButton = ({ playerText, aiText, kind, subjectName }: {
     setLoading(true);
     try {
       const result = await checkDescriptions(player, ai, kind, {
-        endpointUrl: activeEndpointUrl,
-        apiToken: activeApiToken,
-        modelName: activeModelName,
+        snapshot,
         template: descCheckPrompt,
         maxTokens: descMaxTokens.desccheck,
         signal: controller.signal,
-        reasoning: { capability: reasoningCapability, localEngine: localModelActive },
       });
       setFindings(result);
       setOpen(true);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
-      toast.error(authoringFailureMessage('Failed to check the descriptions.', error));
+      toastError(error, { headline: 'Failed to check the descriptions.' }, authoringServerNote(error));
     } finally {
       setLoading(false);
     }

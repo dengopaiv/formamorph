@@ -34,10 +34,12 @@ import { labelPlaceholders } from '@/lib/placementLetters';
 import type { ConnectionDirection } from '@/lib/connectionEditing';
 import {
   applyCanvasDrops, applyCanvasIntent, beginCanvasDrag, buildLocationCanvas, CANVAS_GRID, connectIntent,
-  connectionEnds, deleteIntent, directionIntent, directionOf, hintIntent, isStationaryClick, leafTarget,
+  connectionEnds, deleteIntent, directionIntent, directionOf, updateIntent, isStationaryClick, leafTarget,
   LONG_PRESS_MS, multiDropIntents, TOUCH_SLOP, UNNAMED_LOCATION,
   type CanvasDragSession, type CanvasIntent, type CanvasNodeData,
 } from '@/lib/locationCanvas';
+import { connectionLegs } from '@/lib/locationGraph';
+import { TravelHintPair, type TravelHintFocus } from '@/components/editor/TravelHintPair';
 import {
   canvasMenuSections, type CanvasMenuItem, type CanvasMenuSection,
 } from '@/lib/canvasMenu';
@@ -255,8 +257,10 @@ const DIRECTIONS: { value: ConnectionDirection; Icon: typeof ArrowRight; label: 
  * describe making the trip, and whether the link exists at all. Every control hands its intent back, so the
  * panel decides nothing about what an edit means.
  */
-const ConnectionInspector = ({ connection, nameOf, onIntent, onClose }: {
+const ConnectionInspector = ({ connection, focus, nameOf, onIntent, onClose }: {
   connection: Connection;
+  /** The leg whose arrow was clicked last. */
+  focus: TravelHintFocus | null;
   nameOf: (id: string) => string;
   onIntent: (intent: CanvasIntent, mergeKey?: string) => void;
   onClose: () => void;
@@ -300,12 +304,24 @@ const ConnectionInspector = ({ connection, nameOf, onIntent, onClose }: {
           </Tip>
         ))}
       </ToggleGroup>
-      <Input
-        value={connection.aiHint || ''}
-        // A run of keystrokes on one record is one edit to undo, not one per letter.
-        onChange={(e) => onIntent(hintIntent(connection, e.target.value), `hint:${connection.id}`)}
-        placeholder="Travel Hint, e.g. through the shimmering portal"
-        aria-label="Travel Hint"
+      <TravelHintPair
+        connection={connection}
+        legs={connectionLegs(connection).map(({ key }) => {
+          const [Icon, destination] = key === 'aToB' ? [ArrowRight, names[1]] : [ArrowLeft, names[0]];
+          return {
+            key,
+            label: (
+              <>
+                <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="min-w-0 truncate">{destination}</span>
+              </>
+            ),
+            name: `Travel Hint to ${destination}`,
+          };
+        })}
+        idPrefix={`canvas-connection-${connection.id}`}
+        onChange={(next, mergeKey) => onIntent(updateIntent(next), mergeKey)}
+        focus={focus}
       />
     </Panel>
   );
@@ -863,12 +879,20 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     else if (intent.kind === 'remove') setSelectedConnectionId(null);
   }, [connections, commitConnections, setSelectedConnectionId]);
 
+  // The leg whose arrow was clicked last, tied to its record so a later selection never inherits it.
+  const [hintFocus, setHintFocus] = useState<TravelHintFocus & { connectionId: string } | null>(null);
+
   // A dashed arrow is a click away from being authored; a solid one opens the record it came from.
   const handleEdgeClick = useCallback((_: unknown, edge: Edge) => {
     const clicked = map.edges.find((e) => e.id === edge.id);
     if (!clicked) return;
-    if (clicked.connectionId) setSelectedConnectionId(clicked.connectionId);
-    else applyIntent(connectIntent(clicked.source, clicked.target, connections));
+    if (!clicked.connectionId) {
+      applyIntent(connectIntent(clicked.source, clicked.target, connections));
+      return;
+    }
+    setSelectedConnectionId(clicked.connectionId);
+    const { connectionId, leg } = clicked;
+    if (leg) setHintFocus((last) => ({ connectionId, leg, nonce: (last?.nonce ?? 0) + 1 }));
   }, [map, connections, applyIntent, setSelectedConnectionId]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<LocationNodeType>([]);
@@ -1338,6 +1362,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
         {selectedConnection && (
           <ConnectionInspector
             connection={selectedConnection}
+            focus={hintFocus?.connectionId === selectedConnection.id ? hintFocus : null}
             nameOf={nameOf}
             onIntent={applyIntent}
             onClose={() => setSelectedConnectionId(null)}

@@ -4,9 +4,9 @@ import { blobHash } from '@/lib/blobHash';
 import { readVrmMeta } from '@/lib/vrmMeta';
 import { optimizeImageDataUrl, IMAGE_CAPS } from '@/lib/imageOptim';
 import { renderVrmThumbnail } from '@/lib/vrmThumbnail';
-import { DEFAULT_AVATAR_ID, LEGACY_DEFAULT_AVATAR_ID } from '@/lib/defaultAvatar';
+import { DEFAULT_AVATAR_ID, DEFAULT_AVATAR_URL, LEGACY_DEFAULT_AVATAR_ID } from '@/lib/defaultAvatar';
 import { LibraryStore, type StoredRecord } from './LibraryStore';
-import type { ModelMetadata, VrmData, VrmLicense } from '@/types';
+import type { AvatarThumbnailSource, ModelMetadata, VrmData, VrmLicense } from '@/types';
 
 /** A locally-stored VRM plus its library timestamps. Local-only, like `StoredEntityRecord`. */
 export type StoredModelRecord = StoredRecord<VrmData>;
@@ -43,6 +43,18 @@ const isFlat = (record: unknown): record is FlatModelRecord =>
 const shrinkThumbnail = (thumbnail: string | undefined): Promise<string | undefined> =>
   thumbnail ? optimizeImageDataUrl(thumbnail, IMAGE_CAPS.thumbnail) : Promise.resolve(undefined);
 
+/** A freshly read file's thumbnail fields: its embedded image shown as the file variant, or `null` for none. */
+const fileThumbnailFields = async (embedded: string | undefined): Promise<Pick<VrmData, 'thumbnail' | 'fileThumbnail'>> => {
+  const fileThumbnail = (await shrinkThumbnail(embedded)) ?? null;
+  return { thumbnail: fileThumbnail ?? undefined, fileThumbnail };
+};
+
+/** The chosen variant, else whichever one exists. */
+const shownThumbnail = (data: VrmData): string | undefined =>
+  data.thumbnailSource === 'generated'
+    ? data.generatedThumbnail ?? data.fileThumbnail ?? undefined
+    : data.fileThumbnail ?? data.generatedThumbnail;
+
 /** A license predates the Permissive License gate's fields if it lacks the `avatarPermission` key entirely — `readVrmMeta` always sets that key now, even to `undefined` for VRM 0.0. */
 const isLicenseStale = (license: VrmLicense | undefined): boolean =>
   !license || !('avatarPermission' in license);
@@ -54,6 +66,8 @@ const toMetadata = (record: StoredModelRecord): ModelMetadata => ({
   type: record.data?.type ?? '',
   size: record.data?.size ?? 0,
   thumbnail: record.data?.thumbnail,
+  thumbnailSource: record.data?.thumbnailSource,
+  hasFileThumbnail: record.data?.fileThumbnail === undefined ? undefined : !!record.data.fileThumbnail,
   license: record.data?.license,
   createdAt: record.createdAt,
   lastAccessed: record.lastAccessed,
@@ -87,6 +101,12 @@ class ModelStorageService {
   /** Runs once per session; later calls await the same pass rather than rescanning. */
   private migration: Promise<void> | null = null;
 
+  /** The running build's bundled default file hash, read once per session; a failed read clears it. */
+  private bundledDefaultHash: Promise<string | null> | null = null;
+
+  /** The latest pending thumbnail switch per Avatar id. */
+  private readonly thumbnailSwitches = new Map<string, Promise<ModelMetadata | null>>();
+
   /** Open the IndexedDB connection (idempotent). */
   initialize() {
     return this.store.initialize();
@@ -104,18 +124,18 @@ class ModelStorageService {
    * Persist `data` onto an existing record, but only if the record is still there — a delete that lands while
    * a thumbnail is being computed must not be undone by the backfill writing the row back. The get and put
    * share one readwrite transaction, which IndexedDB serializes against a concurrent delete, so the check and
-   * the write can't interleave.
+   * the write can't interleave. Resolves to whether the record was still there.
    */
-  private async updateDataIfPresent(id: string, data: VrmData): Promise<void> {
+  private async updateDataIfPresent(id: string, data: VrmData): Promise<boolean> {
     await this.store.ensureInitialized();
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<boolean>((resolve, reject) => {
       const store = this.store.db!.transaction(['models'], 'readwrite').objectStore('models');
       const get = store.get(id);
       get.onsuccess = () => {
         const existing = get.result as StoredModelRecord | undefined;
-        if (!existing) return resolve(); // deleted meanwhile — leave it gone
+        if (!existing) return resolve(false); // deleted meanwhile — leave it gone
         const put = store.put({ ...existing, data });
-        put.onsuccess = () => resolve();
+        put.onsuccess = () => resolve(true);
         put.onerror = () => reject(put.error);
       };
       get.onerror = () => reject(get.error);
@@ -201,7 +221,7 @@ class ModelStorageService {
         size: file.size,
         hash,
         license,
-        thumbnail: await shrinkThumbnail(thumbnail),
+        ...await fileThumbnailFields(thumbnail),
       },
     };
     await this.store.store(record);
@@ -238,7 +258,7 @@ class ModelStorageService {
           size: blob.size,
           hash,
           license,
-          thumbnail: await shrinkThumbnail(thumbnail),
+          ...await fileThumbnailFields(thumbnail),
         },
       });
       // Only mark seeded once the store has actually landed. A transient fetch/store failure leaves the flag
@@ -262,6 +282,26 @@ class ModelStorageService {
     return match ? toMetadata(match) : null;
   }
 
+  /**
+   * Hashes that mark a model as the default Avatar: the seeded library record's, and the running build's
+   * bundled file's. They differ when an older build seeded the library, and either can be missing.
+   */
+  async defaultAvatarHashes(): Promise<string[]> {
+    await this.ensureMigrated();
+    this.bundledDefaultHash ??= fetch(DEFAULT_AVATAR_URL)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Default Avatar fetch failed: ${response.status}`);
+        return response.blob();
+      })
+      .then(blobHash)
+      .catch(() => {
+        this.bundledDefaultHash = null;
+        return null;
+      });
+    const [seeded, bundled] = await Promise.all([this.getRecord(DEFAULT_AVATAR_ID), this.bundledDefaultHash]);
+    return [seeded?.data?.hash, bundled].filter((hash): hash is string => !!hash);
+  }
+
   /** List stored models as grid metadata, newest first. */
   async getModelMetadata(): Promise<ModelMetadata[]> {
     await this.ensureMigrated();
@@ -275,10 +315,10 @@ class ModelStorageService {
    * license that predates *those*; either way, this is the library's backfill, called on first view rather
    * than the whole library paying for every model up front.
    *
-   * Returns the thumbnail if there is one. A render that produces nothing is recorded, so a model that simply
-   * can't be drawn isn't re-attempted on every view — unless its license is stale, which forces one more pass
-   * regardless. Never throws: a card renders this, and a bad model must cost that card its picture, not the
-   * whole grid.
+   * Returns the shown thumbnail if there is one, honoring the record's thumbnail source. A render that produces
+   * nothing is recorded, so a model that simply can't be drawn isn't re-attempted on every view — unless its
+   * license is stale, which forces one more pass regardless. Never throws: a card renders this, and a bad model
+   * must cost that card its picture, not the whole grid.
    */
   async ensureThumbnail(id: string): Promise<string | undefined> {
     await this.ensureMigrated();
@@ -286,22 +326,38 @@ class ModelStorageService {
     if (!record?.data?.blob) return undefined;
     const data = record.data;
     const staleLicense = isLicenseStale(data.license);
-    if (data.thumbnail && !staleLicense) return data.thumbnail;
-    if (data.thumbnailFailed && !staleLicense) return undefined;
+    // A record stored before the file variant existed still has to learn whether its file carries an image.
+    const fileRead = data.fileThumbnail !== undefined;
+    if (fileRead && !staleLicense) {
+      if (data.thumbnail) return data.thumbnail;
+      if (data.thumbnailFailed) return undefined;
+    }
 
     try {
       const resolved: VrmData = { ...data };
-      if (!resolved.hash || staleLicense) {
+      if (!resolved.hash || staleLicense || !fileRead) {
         const [hash, meta] = await Promise.all([
           resolved.hash ? Promise.resolve(resolved.hash) : blobHash(data.blob),
           readVrmMeta(data.blob),
         ]);
         resolved.hash = hash;
         if (staleLicense) resolved.license = meta.license;
-        resolved.thumbnail ??= await shrinkThumbnail(meta.thumbnail);
+        if (!fileRead) {
+          // A stored thumbnail may be a render even when the file has an image, so only a file without one keeps it.
+          if (meta.thumbnail) {
+            resolved.fileThumbnail = (await shrinkThumbnail(meta.thumbnail)) ?? null;
+          } else {
+            resolved.fileThumbnail = null;
+            resolved.generatedThumbnail ??= data.thumbnail;
+          }
+        }
       }
-      // Only render when the file carried no thumbnail of its own.
-      resolved.thumbnail ??= await renderVrmThumbnail(data.blob, resolved.license?.metaVersion ?? null);
+      const needsRender = (resolved.thumbnailSource === 'generated' || !resolved.fileThumbnail)
+        && !resolved.generatedThumbnail;
+      if (needsRender && (!data.thumbnailFailed || staleLicense)) {
+        resolved.generatedThumbnail = await renderVrmThumbnail(data.blob, resolved.license?.metaVersion ?? null);
+      }
+      resolved.thumbnail = shownThumbnail(resolved);
       // A stale-license retry can land a thumbnail a prior attempt marked unproducible; clear that flag rather
       // than carrying it forward once there is something to show.
       resolved.thumbnailFailed = resolved.thumbnail ? undefined : true;
@@ -313,6 +369,44 @@ class ModelStorageService {
     } catch {
       return undefined;
     }
+  }
+
+  /** Backfill one Avatar's card through `ensureThumbnail` and return its metadata, or null when it is gone. */
+  async ensureCard(id: string): Promise<ModelMetadata | null> {
+    await this.ensureThumbnail(id);
+    const record = await this.getRecord(id);
+    return record ? toMetadata(record) : null;
+  }
+
+  /**
+   * Show the `source` variant on one Avatar's card and return its fresh metadata, or null once it is deleted.
+   * The first switch to `generated` renders the portrait and throws when that yields nothing, leaving the record
+   * as it was; later switches reuse the cached variants. The `.vrm` blob is never touched.
+   */
+  setThumbnailSource(id: string, source: AvatarThumbnailSource): Promise<ModelMetadata | null> {
+    // Queued per Avatar, so a pick made during a render lands after it.
+    const next = (this.thumbnailSwitches.get(id) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.applyThumbnailSource(id, source));
+    this.thumbnailSwitches.set(id, next);
+    const settled = () => { if (this.thumbnailSwitches.get(id) === next) this.thumbnailSwitches.delete(id); };
+    next.then(settled, settled);
+    return next;
+  }
+
+  private async applyThumbnailSource(id: string, source: AvatarThumbnailSource): Promise<ModelMetadata | null> {
+    // Resolves the file variant of a record stored before it existed.
+    await this.ensureThumbnail(id);
+    const record = await this.getRecord(id);
+    if (!record?.data?.blob) return null;
+    const data: VrmData = { ...record.data, thumbnailSource: source };
+    if (source === 'generated' && !data.generatedThumbnail) {
+      data.generatedThumbnail = await renderVrmThumbnail(data.blob, data.license?.metaVersion ?? null);
+      if (!data.generatedThumbnail) throw new Error(`The portrait of ${record.name} rendered no image.`);
+    }
+    data.thumbnail = shownThumbnail(data);
+    if (data.thumbnail) data.thumbnailFailed = undefined;
+    return (await this.updateDataIfPresent(id, data)) ? toMetadata({ ...record, data }) : null;
   }
 
   /** Load one model's payload; rejects if missing or malformed. */

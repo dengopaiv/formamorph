@@ -5,6 +5,8 @@ import { describePlaceholders } from '@/lib/placeholders';
 import { allPlaceholders } from '@/lib/placeholderHomes';
 import { entityPlacementLetters, labelPlaceholders } from '@/lib/placementLetters';
 import { primaryImage } from '@/lib/entityImages';
+import type { PresetOverview } from '@/lib/promptPresets';
+import type { SharedPreset } from '@/lib/promptPresetShare';
 
 /**
  * What a publish request carries, whatever kind it is. The server takes the same body for all three; only
@@ -32,8 +34,10 @@ export interface PublishPayload {
   visibility?: ListingVisibility;
   /** The listing ids a world requires. Replaces the world's whole required set. Worlds only. */
   requiredDependencies?: string[];
-  /** The world listing ids a component is offered for. Replaces the whole set. Components only. */
+  /** The world listing ids a component or a prompt is offered for. Replaces the whole set. */
   compatibleWorlds?: string[];
+  /** The models a prompt works with. Prompts only; the server refuses a prompt with none. */
+  models?: string[];
 }
 
 /**
@@ -66,26 +70,26 @@ export function worldPublishPayload(world: Omit<World, 'id'>): PublishPayload {
  * The blurb goes through {@link describePlaceholders} against the character's carried defs — a listing stores
  * only this string, so a chip left raw here would show as its id forever.
  */
-export function entityPublishPayload(entity: Entity): PublishPayload {
+export function entityPublishPayload(entity: Entity, libraryDetails?: { author?: string }): PublishPayload {
   return {
     kind: 'entity',
     name: labelPlaceholders(entity.name, entity.placeholders, { letters: entityPlacementLetters(entity) }) || 'Unnamed Character',
     description: describePlaceholders(entity.playerDescription || entity.aiSummary || '', entity.placeholders),
     thumbnail: primaryImage(entity), // optional; the server supplies stand-in art
-    contentData: entity,
+    contentData: libraryDetails?.author ? { ...entity, author: libraryDetails.author } : entity,
     tags: entity.tags ?? [],
   };
 }
 
 /** A dictionary has an optional note and no art at all; the server supplies the cover. The note goes through
  *  {@link describePlaceholders} for the same reason a character's does. */
-export function dictionaryPublishPayload(book: Dictionary): PublishPayload {
+export function dictionaryPublishPayload(book: Dictionary, libraryDetails?: { author?: string }): PublishPayload {
   return {
     kind: 'dictionary',
     name: book.name || 'Untitled Dictionary',
     description: describePlaceholders(book.description || '', book.placeholders),
     thumbnail: book.thumbnail || undefined, // optional; the server supplies stand-in art
-    contentData: book,
+    contentData: libraryDetails?.author ? { ...book, author: libraryDetails.author } : book,
     tags: book.tags ?? [],
   };
 }
@@ -103,7 +107,7 @@ export interface ModelPublishSource {
 }
 
 /** "By Alice.", "By Alice and Bob.", "By Alice, Bob, and Carol." — or nothing, for a file crediting nobody. */
-function creditLine(authors: string[] | undefined): string {
+export function creditLine(authors: string[] | undefined): string {
   const names = authors?.filter((name) => name.trim()) ?? [];
   if (names.length === 0) return '';
   if (names.length === 1) return `By ${names[0]}.`;
@@ -128,6 +132,28 @@ export function modelPublishPayload(model: ModelPublishSource): PublishPayload {
     contentData: { vrm: model.vrm, license: model.license, hash: model.hash },
     tags: [],
   };
+}
+
+/**
+ * A prompt publishes its share artifact unchanged, so one parser serves a file, a code, and a download. The
+ * listing fields come from the Overview. The artifact's explicit field list keeps routing and the community
+ * link out.
+ */
+export function promptPublishPayload(shared: SharedPreset): PublishPayload {
+  const overview = shared.overview;
+  return {
+    kind: 'prompt',
+    name: shared.name || 'Untitled Prompt',
+    description: overview?.description ?? '',
+    contentData: shared,
+    tags: overview?.tags ?? [],
+    models: overview?.models ?? [],
+  };
+}
+
+/** Why a preset can't be published yet: `models` while its Overview names no model, else null. */
+export function promptPublishBlock(overview: PresetOverview | null | undefined): 'models' | null {
+  return overview?.models.length ? null : 'models';
 }
 
 /**

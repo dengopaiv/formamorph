@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { toastTexts } from '@/test/toastText';
 import { markHelpSeen } from '@/lib/helpSeenStore';
+import { openingsEnabled } from '@/lib/openings';
 import type { Dictionary, Entity, World } from '@/types';
 
 /**
@@ -463,7 +465,7 @@ describe('Editing a copy of your own library item', () => {
     clickButton('Save');
 
     await waitFor(() => expect(ctx().isWorldDirty).toBe(false));
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('“Fen Lore”'));
+    expect(toastTexts(toast.error)).toContainEqual(expect.stringContaining('“Fen Lore”'));
     expect(library.dictionaries.get('lib-a')?.name).toBe('Fen Lore');
     // The copy did not write, so it still holds the revision it opened with and stays Linked.
     expect(ctx().dictionaries[0].link?.sourceRevision).toBe(REVISION);
@@ -561,6 +563,35 @@ describe('Opening a world after a library save', () => {
     expect(ctx().dictionaries[0].entries[0].value).toBe('Wetland.');
     expect(screen.queryByRole('button', { name: 'Open in Library' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Save to Library' })).toBeTruthy();
+    expect(toast.info).toHaveBeenCalledWith('Formamorph unlinked “Fen Lore” because its library item is gone.');
+  });
+
+  it('says it once when Exit Without Saving restores the link and the pass lets go again', async () => {
+    const { ctx } = renderWorldEditorBench(
+      worldHolding({ libraryId: 'lib-a', sourceName: 'Fen Lore', sourceRevision: '2026-01-01T00:00:00.000Z' }),
+      'advanced',
+    );
+    await waitFor(() => expect(ctx().dictionaries[0].link).toBeUndefined());
+
+    act(() => ctx().discardChanges());
+    expect(ctx().dictionaries[0].link?.libraryId).toBe('lib-a');
+    await waitFor(() => expect(ctx().dictionaries[0].link).toBeUndefined());
+    expect(toast.info).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts the copies instead of naming them when it unlinks more than one', async () => {
+    const link = { libraryId: 'lib-a', sourceName: 'Fen Lore', sourceRevision: '2026-01-01T00:00:00.000Z' };
+    const { ctx } = renderWorldEditorBench(benchEditorWorld({
+      entities: [],
+      dictionaries: [
+        { id: 'b1', name: 'Fen Lore', entries: [], link },
+        { id: 'b2', name: 'Reed Lore', entries: [], link: { ...link, libraryId: 'lib-b' } },
+      ],
+    } as unknown as Partial<World>), 'advanced');
+
+    await waitFor(() => expect(ctx().dictionaries.every((book) => !book.link)).toBe(true));
+    expect(toast.info).toHaveBeenCalledWith('Formamorph unlinked 2 copies whose library items are gone.');
+    expect(toast.info).toHaveBeenCalledTimes(1);
   });
 
   it('keeps every link when the library cannot be read, which is not the same as deleted', async () => {
@@ -576,6 +607,7 @@ describe('Opening a world after a library save', () => {
     focusLinkFace();
     expect(await screen.findByText('Linked · Fen Lore')).toBeTruthy();
     expect(ctx().dictionaries[0].link?.libraryId).toBe('lib-a');
+    expect(toast.info).not.toHaveBeenCalled();
   });
 
   it('keeps a copy of a deleted library item following the listing it also came from', async () => {
@@ -588,6 +620,7 @@ describe('Opening a world after a library save', () => {
 
     await waitFor(() => expect(ctx().dictionaries[0].link?.libraryId).toBeUndefined());
     expect(ctx().dictionaries[0].link?.sourceId).toBe('listing-9');
+    expect(toast.info).toHaveBeenCalledWith('Formamorph unlinked “Fen Lore” because its library item is gone.');
     focusLinkFace();
     expect(await screen.findByText('Linked · Fen Lore')).toBeTruthy();
   });
@@ -606,6 +639,71 @@ describe('Opening a world after a library save', () => {
     openTab(/Dictionary/);
     await screen.findByText('Fen Lore');
     expect(ctx().dictionaries[0].entries[0].value).toBe('Wetland.');
+  });
+});
+
+describe('Adding an entity that brings openings', () => {
+  const seedOpener = (openings: { id: string; text: string; kind: 'action' }[]) => library.entities.set('lib-o', {
+    id: 'lib-o', name: 'Tall Marn', createdAt: '2026-01-01T00:00:00.000Z',
+    data: { id: 'lib-o', name: 'Tall Marn', playerDescription: 'A pilot.', openings },
+  });
+
+  const OFF_WORLD = (): World => benchEditorWorld({
+    worldOverview: {
+      name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
+      systemPrompt: 'Narrate the fen.', readme: 'A fen primer.', use3DModel: true, tags: [],
+      openingsEnabled: false,
+    },
+  } as Partial<World>);
+
+  const addFromLibrary = async () => {
+    openTab(/Entities/);
+    clickButton(/Add Entity/);
+    fireEvent.click(await screen.findByText('Tall Marn'));
+    confirmPicker('Add Entity');
+  };
+
+  it('clears the author’s off and says so, since the copy would land benched', async () => {
+    seedOpener([{ id: 'o1', text: 'Marn hails you from the jetty.', kind: 'action' }]);
+    const { ctx } = renderWorldEditorBench(OFF_WORLD(), 'advanced');
+    await addFromLibrary();
+
+    await waitFor(() => expect(ctx().entities).toHaveLength(2));
+    expect(ctx().worldOverview.openingsEnabled).toBeUndefined();
+    expect(toast.info).toHaveBeenCalledWith('Tall Marn has openings, so Openings is switched on.');
+  });
+
+  it('leaves the switch alone for a copy with no row that could come up', async () => {
+    seedOpener([{ id: 'o1', text: '   ', kind: 'action' }]);
+    const { ctx } = renderWorldEditorBench(OFF_WORLD(), 'advanced');
+    await addFromLibrary();
+
+    await waitFor(() => expect(ctx().entities).toHaveLength(2));
+    expect(ctx().worldOverview.openingsEnabled).toBe(false);
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  it('says so for a world that has no opening yet, where the box also reads off', async () => {
+    seedOpener([{ id: 'o1', text: 'Marn hails you from the jetty.', kind: 'action' }]);
+    const { ctx } = renderWorldEditorBench(benchEditorWorld({}), 'advanced');
+    expect(openingsEnabled(ctx().worldOverview, ctx().entities)).toBe(false);
+    await addFromLibrary();
+
+    await waitFor(() => expect(ctx().entities).toHaveLength(2));
+    expect(openingsEnabled(ctx().worldOverview, ctx().entities)).toBe(true);
+    expect(toast.info).toHaveBeenCalledWith('Tall Marn has openings, so Openings is switched on.');
+  });
+
+  it('says nothing when the world already has an opening of its own', async () => {
+    seedOpener([{ id: 'o1', text: 'Marn hails you from the jetty.', kind: 'action' }]);
+    const world = benchEditorWorld({});
+    world.worldOverview.openings = [{ id: 'w1', text: 'The fen wakes.', kind: 'action' }];
+    const { ctx } = renderWorldEditorBench(world, 'advanced');
+    expect(openingsEnabled(ctx().worldOverview, ctx().entities)).toBe(true);
+    await addFromLibrary();
+
+    await waitFor(() => expect(ctx().entities).toHaveLength(2));
+    expect(toast.info).not.toHaveBeenCalled();
   });
 });
 

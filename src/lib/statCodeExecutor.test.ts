@@ -115,7 +115,7 @@ describe('executeStatCode stats map', () => {
 
   it('reads an unknown name as a blank entry: the entry shape, names empty, every number zero', async () => {
     const code = `const blank = stats.Nope;
-      const zeroed = (o) => Object.values(o).every(v => typeof v === 'object' ? zeroed(v) : v === 0 || v === '');
+      const zeroed = (o) => Object.values(o).every(v => typeof v === 'object' ? zeroed(v) : v === 0 || v === '' || v === false);
       return Object.keys(blank).join() === Object.keys(stats.Health).join() && zeroed(blank)
         && blank.max === 0 && !('Nope' in stats) && stats.toString.value === 0 ? 1 : 0;`;
     await expect(run(code)).resolves.toEqual({ value: 1, error: null });
@@ -134,9 +134,9 @@ describe('executeStatCode stats map', () => {
     await expect(run('return Object.values(stats).reduce((sum, s) => sum + s.value, 0);')).resolves.toEqual({ value: 140, error: null });
   });
 
-  it('ignores a write to another stat through the map, and still injects currentStatId', async () => {
-    await expect(run('stats.Health.value = 1; stats["Night Vision"] = 5;')).resolves.toEqual({ value: null, error: null });
-    await expect(run('return currentStatId === self.id ? 1 : 0;')).resolves.toEqual({ value: 1, error: null });
+  it('drops and reports a write to another stat through the map', async () => {
+    await expect(run('stats.Health.value = 1; stats["Night Vision"] = 5;')).resolves
+      .toEqual({ value: null, error: null, readOnlyWrites: ['stats.Health.value', 'stats["Night Vision"]'] });
   });
 });
 
@@ -246,8 +246,8 @@ describe('executeStatCode self and turn inputs', () => {
     expect(await run('self.value = 12; throw new Error("late");')).toMatchObject({ value: null, kind: 'throw' });
   });
 
-  it('ignores a write to another stat entry', async () => {
-    expect(await run('stats.Health.value = 1;')).toEqual({ value: null, error: null });
+  it('drops and reports a write to another stat entry', async () => {
+    expect(await run('stats.Health.value = 1; return stats.Health.value;')).toEqual({ value: 70, error: null, readOnlyWrites: ['stats.Health.value'] });
   });
 });
 
@@ -304,43 +304,43 @@ describe('executeStatCode on the bundled worlds', () => {
   });
 });
 
-describe('executeStatCode clock variables', () => {
+describe('executeStatCode clock', () => {
   const big = makeStat({ max: 100000 });
   const run = (code: string, clock?: StatCodeRunOptions['clock']) =>
     executeStatCode(code, [], big, { clock });
 
   it('exposes the turn duration, and defaults it to the flat hour when no clock is given', async () => {
-    expect((await run('return deltaHours;', { deltaHours: 8 })).value).toBe(8);
-    expect((await run('return deltaHours;')).value).toBe(1);
+    expect((await run('return clock.deltaHours;', { deltaHours: 8 })).value).toBe(8);
+    expect((await run('return clock.deltaHours;')).value).toBe(1);
   });
 
   it('exposes total elapsed hours, defaulting to one turn having closed', async () => {
-    expect((await run('return elapsedHours;', { elapsedHours: 30 })).value).toBe(30);
-    expect((await run('return elapsedHours;')).value).toBe(1);
+    expect((await run('return clock.elapsedHours;', { elapsedHours: 30 })).value).toBe(30);
+    expect((await run('return clock.elapsedHours;')).value).toBe(1);
   });
 
   it('reports day and daypart at the END of the turn', async () => {
     // Default calendar opens at 08:00, so 30 elapsed hours lands on day 2 at 14:00 — afternoon.
-    expect((await run('return day;', { elapsedHours: 30, deltaHours: 1 })).value).toBe(2);
-    expect((await run("return daypart === 'afternoon' ? 1 : 0;", { elapsedHours: 30, deltaHours: 1 })).value).toBe(1);
+    expect((await run('return clock.day;', { elapsedHours: 30, deltaHours: 1 })).value).toBe(2);
+    expect((await run("return clock.daypart === 'afternoon' ? 1 : 0;", { elapsedHours: 30, deltaHours: 1 })).value).toBe(1);
   });
 
   it('reports the start of the turn separately, so a long turn can cross dayparts', async () => {
     // Sleep beginning at 15:00 on day 1 (elapsed 7) and running 8 hours ends at 23:00 — night.
     const sleep = { elapsedHours: 15, deltaHours: 8 };
-    expect((await run("return startDaypart === 'afternoon' ? 1 : 0;", sleep)).value).toBe(1);
-    expect((await run("return daypart === 'night' ? 1 : 0;", sleep)).value).toBe(1);
+    expect((await run("return clock.previous.daypart === 'afternoon' ? 1 : 0;", sleep)).value).toBe(1);
+    expect((await run("return clock.daypart === 'night' ? 1 : 0;", sleep)).value).toBe(1);
   });
 
   it('honors the world calendar when resolving the readings', async () => {
     // Opening at 22:00 puts a 4-hour turn past midnight, on day 2.
     const clock = { elapsedHours: 4, deltaHours: 4, calendar: { startHour: 22 } };
-    expect((await run('return day;', clock)).value).toBe(2);
-    expect((await run('return startDay;', clock)).value).toBe(1);
+    expect((await run('return clock.day;', clock)).value).toBe(2);
+    expect((await run('return clock.previous.day;', clock)).value).toBe(1);
   });
 
   it('clamps a start reading at zero rather than going negative before the story began', async () => {
-    expect((await run('return startDay;', { elapsedHours: 1, deltaHours: 999 })).value).toBe(1);
+    expect((await run('return clock.previous.day;', { elapsedHours: 1, deltaHours: 999 })).value).toBe(1);
   });
 });
 
@@ -677,10 +677,9 @@ describe('executeStatCode placeholders as a tree', () => {
   });
 
   it('holds one pin state for an entry two keys reach, whichever one writes it', async () => {
-    // The world's `Shade` is owned by `Hair`, so `placeholders.Shade` and `placeholders.Hair.Shade` are
-    // one entry. A write through either has to be one row, against the one placeholder.
+    // One node under two keys, as `persona` and its `entities` entry share one owner node. A write through
+    // either has to be one row, against the one placeholder.
     const shared = phMap([{ name: 'Hair', value: 'grey', children: [{ name: 'Shade', value: 'ash' }] }]);
-    // The same node object under both keys, exactly as the resolver hands one over.
     const both: SandboxPlaceholderNode[] = [...shared, shared[0].children![0]];
     const result = await executeStatCode(
       'placeholders.Shade.pin("one"); placeholders.Hair.Shade.pin("two"); return 1;', [stat], stat,

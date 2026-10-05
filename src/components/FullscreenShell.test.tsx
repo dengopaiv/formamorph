@@ -52,7 +52,13 @@ describe('every full-screen surface goes through the shell', () => {
   const surfaces = [
     'src/components/prompt/CodeArea.tsx',
     'src/components/prompt/PromptField.tsx',
+    'src/components/PanelShell.tsx',
+  ];
+  /** Whole panels lift through the panel shell, which renders the shell above. */
+  const panels = [
     'src/components/modals/SettingsModal.tsx',
+    'src/components/formaquestion/FormaquestionPromptsTab.tsx',
+    'src/components/formaquestion/FormaquestionMascotTab.tsx',
   ];
 
   it.each(surfaces)('%s builds no full-screen overlay of its own', (file) => {
@@ -62,6 +68,12 @@ describe('every full-screen surface goes through the shell', () => {
     expect(src).toMatch(/<FullscreenShell[\s>]/);
     // `dialogFullHeight` is the shell's own business; a surface reaching for it is hand-rolling the window.
     expect(src).not.toMatch(/\bdialogFullHeight\b/);
+  });
+
+  it.each(panels)('%s lifts its panel through the panel shell', (file) => {
+    const src = read(file);
+    expect(src).toMatch(/<PanelShell[\s>]/);
+    expect(src).not.toMatch(/<FullscreenShell[\s>]|\bdialogFullHeight\b/);
   });
 
   it('lets the one window that grows in place keep doing so, but on the same animation', () => {

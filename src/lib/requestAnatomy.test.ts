@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { sentenceShapeViolation } from '@/test/copyShape';
 import {
   tilePieces,
   trimEndTiled,
+  trimTiled,
   runsTile,
   toAnatomyBlocks,
   CONTEXT_HINTS,
@@ -137,6 +139,26 @@ describe('trimEndTiled', () => {
   });
 });
 
+describe('trimTiled', () => {
+  it('trims both ends, shifting the runs and keeping an empty chip in place', () => {
+    const tiled = tilePieces([
+      { text: '', source: 'user-template', chip: '<A>', preserveWhenEmpty: true },
+      { text: '\n\n', source: 'user-template' },
+      { text: '  body', source: 'user-template', chip: '<B>' },
+      { text: '\n', source: 'user-template' },
+    ]);
+    const trimmed = trimTiled(tiled);
+    expect(trimmed.content).toBe('body');
+    expect(runsTile(trimmed.content, trimmed.runs)).toBe(true);
+    expect(trimmed.runs.map((r) => [r.chip, r.start, r.end])).toEqual([['<A>', 0, 0], ['<B>', 0, 4]]);
+  });
+
+  it('leaves content with nothing to trim untouched', () => {
+    const tiled = tilePieces([{ text: 'exact', source: 'recap' }]);
+    expect(trimTiled(tiled)).toBe(tiled);
+  });
+});
+
 describe('runsTile', () => {
   it('rejects a gap, an overlap, and a short tail', () => {
     expect(runsTile('abcdef', [{ start: 0, end: 2 }, { start: 3, end: 6 }])).toBe(false);
@@ -192,5 +214,13 @@ describe('label vocabulary', () => {
     for (const key of Object.keys(CONTEXT_LABELS) as (keyof typeof CONTEXT_LABELS)[]) {
       expect(CONTEXT_HINTS[key].length).toBeGreaterThan(CONTEXT_LABELS[key].length);
     }
+  });
+
+  it('keeps every hint to one unpunctuated sentence, so a jump tooltip can add its own after a period', () => {
+    const bad = Object.entries(CONTEXT_HINTS).flatMap(([key, hint]) => {
+      const why = sentenceShapeViolation(hint);
+      return why || /\.$/.test(hint) ? [`${key}: ${hint}`] : [];
+    });
+    expect(bad).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "@/lib/uuid";
 import type {
-  World, SaveObject, Stat, GameState, Trait, PlayerStat, Connection, GameLocation, Placeholder, PlaceholderValue,
+  World, SaveObject, Stat, GameState, Trait, TraitGroup, Entity, PlayerStat, Connection, ConnectionLeg, GameLocation, Placeholder, PlaceholderValue,
+  Opening,
 } from '@/types';
 import { implicitPairs, pairKey } from './locationGraph';
 import { normalizeCustomVRM } from './worldImport';
@@ -10,6 +11,10 @@ import { DEFAULT_AVATAR_ID, LEGACY_DEFAULT_AVATAR_ID, LEGACY_DEFAULT_AVATAR_SENT
 import { migrateEntityImages } from './entityImages';
 import { normalizeLinkedItem } from './contentLink';
 import { migrateStatLookups } from './statLookupMigration';
+import { migrateStatCodeRoutes } from './statCodeRoutes';
+import { CODE_FIELD } from './statCodeTiming';
+import { allPlaceholders, placeholderOwners, type PlaceholderHomesWorld } from './placeholderHomes';
+import { blueprintItemIds } from './traitTree';
 
 /** Current app version, derived from package.json (see vite.config.js `define`). User-managed. */
 export const APP_VERSION = __APP_VERSION__;
@@ -185,15 +190,36 @@ function migrateLocationConnections(world: Record<string, unknown>): void {
     const reciprocal = `${to}|${from}`;
     done.add(key);
     done.add(reciprocal);
-    records.push({
-      id: randomUUID(),
-      from,
-      to,
-      twoWay: declared.has(reciprocal) || implicit.has(pairKey(from, to)),
-    });
+    const twoWay = declared.has(reciprocal) || implicit.has(pairKey(from, to));
+    records.push({ id: randomUUID(), a: from, b: to, aToB: {}, ...(twoWay ? { bToA: {} } : {}) });
   }
   const existing = Array.isArray(world.connections) ? (world.connections as Connection[]) : [];
   world.connections = [...existing, ...records];
+}
+
+/**
+ * Convert each `{from, to, twoWay, aiHint}` Connection record to the leg shape: `from` becomes `a`, the old
+ * hint goes into `aToB`, and into `bToA` too when the record was two-way, so a shipped world plays the same.
+ * A blank hint becomes no hint. A record with no legs, or without two ends, is dropped: it allows no travel
+ * and the editor never makes one. Idempotent: a record in the leg shape passes through. Deliberately NOT version-gated, for the
+ * same reason as `foldDictionaryIntoBooks`: shipped worlds carry `version === APP_VERSION` in the old shape.
+ */
+function migrateConnectionLegs(world: Record<string, unknown>): void {
+  if (!Array.isArray(world.connections)) return;
+  const legWith = (hint: unknown): ConnectionLeg => (typeof hint === 'string' && hint.trim() ? { hint } : {});
+  /** A present leg in its one shape; anything that is not an object is no leg. */
+  const legOf = (raw: unknown): ConnectionLeg | undefined =>
+    raw && typeof raw === 'object' ? legWith((raw as { hint?: unknown }).hint) : undefined;
+  world.connections = world.connections.flatMap((raw: unknown): Connection[] => {
+    if (!raw || typeof raw !== 'object') return [];
+    const record = raw as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id : randomUUID();
+    const [a, b, aToB, bToA] = typeof record.a === 'string' || typeof record.b === 'string'
+      ? [record.a, record.b, legOf(record.aToB), legOf(record.bToA)]
+      : [record.from, record.to, legWith(record.aiHint), record.twoWay ? legWith(record.aiHint) : undefined];
+    if (typeof a !== 'string' || typeof b !== 'string' || (!aToB && !bToA)) return [];
+    return [{ id, a, b, ...(aToB ? { aToB } : {}), ...(bToA ? { bToA } : {}) }];
+  });
 }
 
 /**
@@ -319,6 +345,77 @@ function normalizeContentLinks(world: Record<string, unknown>): void {
 }
 
 /**
+ * Move the single `openingCue` into the openings list as one Opening Action, and drop the old fields. A cue
+ * switched off keeps its row and switches the list off. A blank cue opened on the default and adds no row;
+ * its switch still carries over.
+ * Idempotent: a world without the old fields passes through untouched.
+ */
+function migrateOpeningCue(world: Record<string, unknown>): void {
+  const ov = world.worldOverview as Record<string, unknown> | undefined;
+  if (!ov || typeof ov !== 'object' || !('openingCue' in ov || 'openingCueEnabled' in ov)) return;
+  const { openingCue: cue, openingCueEnabled: enabled, ...rest } = ov;
+  const next: Record<string, unknown> = { ...rest };
+  if (typeof cue === 'string' && cue.trim()) {
+    const row: Opening = { id: randomUUID(), text: cue, kind: 'action' };
+    next.openings = [...(Array.isArray(rest.openings) ? rest.openings : []), row];
+  }
+  if (enabled === false) next.openingsEnabled = false;
+  world.worldOverview = next;
+}
+
+/**
+ * Split the 3.0 `playerSetting` into `allowedPersonas` and `startPersona`. Fixed starts on None; Cast allows
+ * only the world's personas, and starts on None when no entity is playable, as Cast did then.
+ * Idempotent: a world without the old field passes through untouched.
+ */
+function migratePlayerSetting(world: Record<string, unknown>): void {
+  const ov = world.worldOverview as Record<string, unknown> | undefined;
+  if (!ov || typeof ov !== 'object' || !('playerSetting' in ov)) return;
+  const { playerSetting, ...next } = ov;
+  const playable = Array.isArray(world.entities) && world.entities.some((e) => (e as Record<string, unknown>)?.persona === true);
+  if (playerSetting === 'cast') next.allowedPersonas = 'world';
+  if (playerSetting === 'fixed' || (playerSetting === 'cast' && !playable)) next.startPersona = { source: 'none' };
+  world.worldOverview = next;
+}
+
+/**
+ * Turn the shipped `exclusive: true` into `maxPicks: 1` on world and entity-owned trait groups, and drop the
+ * old key. Not version-gated: 3.x worlds carry `version === APP_VERSION`. Idempotent.
+ */
+function migrateExclusiveGroups(world: Record<string, unknown>): void {
+  const groups = (list: unknown[]) => list.map((raw) => {
+    if (!raw || typeof raw !== 'object' || !('exclusive' in raw)) return raw;
+    const { exclusive, ...group } = raw as Record<string, unknown>;
+    return exclusive === true ? { ...group, maxPicks: 1 } : group;
+  });
+  if (Array.isArray(world.traitGroups)) world.traitGroups = groups(world.traitGroups);
+  if (Array.isArray(world.entities)) {
+    world.entities = world.entities.map((raw) => {
+      const owned = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).traitGroups : undefined;
+      return Array.isArray(owned) ? { ...(raw as object), traitGroups: groups(owned) } : raw;
+    });
+  }
+}
+
+/** Remove every entity link whose original sits outside Blueprints, overrides and all: only Blueprints items
+ *  are linked. Not version-gated, since 3.1.0 worlds carry such links under the current version. */
+function dropRootTraitLinks(world: Record<string, unknown>): void {
+  if (!Array.isArray(world.entities)) return;
+  const linkable = blueprintItemIds({
+    traits: Array.isArray(world.traits) ? world.traits as Trait[] : [],
+    traitGroups: Array.isArray(world.traitGroups) ? world.traitGroups as TraitGroup[] : [],
+  });
+  world.entities = world.entities.map((raw) => {
+    const links = raw && typeof raw === 'object' ? (raw as Entity).traitLinks : undefined;
+    if (!Array.isArray(links)) return raw;
+    const kept = links.filter((l) => linkable.has(l.originalId));
+    if (kept.length === links.length) return raw;
+    const { traitLinks: _l, ...rest } = raw as Entity;
+    return kept.length ? { ...rest, traitLinks: kept } : rest;
+  });
+}
+
+/**
  * Give every placeholder's values their stable ids. Deliberately NOT version-gated, for the same reason as
  * `foldDictionaryIntoBooks`: shipped 2.x worlds carry `version === APP_VERSION` yet predate the records.
  */
@@ -349,25 +446,33 @@ function coerceLegacyListStats(stats: readonly Stat[]): Stat[] {
   });
 }
 
-/** Rewrite the retired `stats.find` lookups in every stat's code to the map form (see
- *  `migrateStatLookups`). Idempotent; a stat whose code needs nothing keeps its reference. */
-function migrateStatCode(stats: readonly Stat[]): Stat[] {
-  return stats.map((stat) => {
-    if (typeof stat?.code !== 'string') return stat;
-    const code = migrateStatLookups(stat.code);
-    return code === stat.code ? stat : { ...stat, code };
+/** Rewrite the retired routes in both of every stat's boxes: the `stats.find` lookups to the map form, then
+ *  the rest against the world's placeholder tree (`migrateStatCodeRoutes`). The lookups go first, since they
+ *  match `currentStatId`. Idempotent; a stat whose code needs nothing keeps its reference. */
+function migrateStatCode(world: Record<string, unknown>): void {
+  if (!Array.isArray(world.stats)) return;
+  const slices = world as PlaceholderHomesWorld;
+  const source = { list: allPlaceholders(slices), owners: placeholderOwners(slices) };
+  world.stats = (world.stats as Stat[]).map((stat) => {
+    let next = stat;
+    for (const field of Object.values(CODE_FIELD)) {
+      const code = stat?.[field];
+      if (typeof code !== 'string') continue;
+      const migrated = migrateStatCodeRoutes(migrateStatLookups(code), source);
+      if (migrated !== code) next = { ...next, [field]: migrated };
+    }
+    return next;
   });
 }
 
 /**
  * Bring an imported world up to the current format and stamp it with `APP_VERSION`. The dictionary→books
  * fold, the keyword-array migration, the entity-gallery fold, the entity-location flip, the
- * connection-record pair-merge, the start-flag rename, the placeholder value-record conversion and the
- * content-link guard run unconditionally (they aren't version-gated — see `foldDictionaryIntoBooks`); the
+ * connection-record pair-merge, the Connection-leg conversion, the start-flag rename, the placeholder value-record conversion, the
+ * opening-cue move, the player-setting split, the content-link guard and the stat-code route rewrite run unconditionally (they aren't version-gated — see `foldDictionaryIntoBooks`); the
  * rest is skipped for a world already at `APP_VERSION`. Moves the legacy root `customPlayerVRM` bare
  * data-URL into `worldOverview.customPlayerVRM` as a `MediaAsset`, auto-binds legacy body stats to morphs,
- * rewrites stat code's `stats.find` lookups to the map form, and renames v1.2 description keys on
- * entities/locations/traits to the audience-based keys. Remaining field defaults are left to `loadWorldData`. Add further 2.0 → 2.x steps here when the shape changes — a version
+ * and renames v1.2 description keys on entities/locations/traits to the audience-based keys. Remaining field defaults are left to `loadWorldData`. Add further 2.0 → 2.x steps here when the shape changes — a version
  * bump is the user's call (see the export-shape-versioning note); shipped worlds are only reshaped through
  * this load-time path, never autonomously re-persisted.
  */
@@ -378,9 +483,15 @@ export function migrateWorld(raw: unknown): World {
   migrateEntityGalleries(world);
   flipEntityLocationMembership(world);
   migrateLocationConnections(world);
+  migrateConnectionLegs(world);
   migrateStartLocationFlag(world);
   migrateWorldPlaceholders(world);
+  migrateOpeningCue(world);
+  migratePlayerSetting(world);
+  migrateExclusiveGroups(world);
+  dropRootTraitLinks(world);
   normalizeContentLinks(world);
+  migrateStatCode(world);
   if (world.version === APP_VERSION) return world as unknown as World;
 
   const overview = { ...((world.worldOverview as Record<string, unknown>) ?? {}) };
@@ -389,7 +500,7 @@ export function migrateWorld(raw: unknown): World {
   delete world.customPlayerVRM; // drop the stray v1.2 root key
 
   if (Array.isArray(world.stats)) {
-    world.stats = migrateStatCode(autoBindLegacyBodyStats(coerceLegacyListStats(world.stats as Stat[])));
+    world.stats = autoBindLegacyBodyStats(coerceLegacyListStats(world.stats as Stat[]));
   }
 
   // v1.2 used `inGameDescription`/`detailedDescription`; rename to the audience-based keys.

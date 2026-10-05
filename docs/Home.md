@@ -1,4 +1,5 @@
 # 🧬 Formamorph Wiki
+<!-- keywords: what is this app, adults only, age restriction, nsfw content, privacy policy, try in browser, about the project -->
 
 > A browser-based, AI-driven text RPG framework — **play**, **create**, and **share** interactive worlds powered by your own LLM.
 
@@ -15,18 +16,56 @@ Formamorph runs entirely in the browser and talks to any **OpenAI-compatible** c
 
 ## 📖 Where to go
 
+### Playing
+
 | Page | What's inside |
 |---|---|
+| 🔌 **[Connect Your Own AI](Connect-Your-Own-AI)** | Moving from the Demo AI to a stronger model — a local server, a hosted API service, or the desktop app |
 | 📱 **[Install on Android](Install-on-Android)** | Getting the app on your phone — the download, Android's prompts, and how it updates itself |
+| 📚 **[Library](Library)** | The main menu's board — the four tabs, tile sizes, Groups, the card menu, and import and export of worlds, entities, dictionaries and avatars |
+| 🧍 **[Avatars](Avatars)** | Your 3D player model — importing a VRM file, Character Customization, the details and license, and how it differs from an entity's 3D model and your Profile Image |
+| 🚪 **[Starting a Game](Starting-a-Game)** | Everything before page one — Enter World, Quick Start, starting traits, the starting location and Library Additions |
+| 🎮 **[How to Play](How-to-Play)** | Taking a turn — actions, choices, `[bracket]` direction, images, re-generate, edit, rewind, the side panels and the game menu |
+| ❓ **[Formaquestion](Formaquestion)** | The help window in the app — the **Help** tab and F1, asking a question, searching this guide, reading a page, moving the window, and changing its settings |
+| 💾 **[Saves and Backup](Saves-and-Backup)** | Save, load, Autosave, save files, Backup & Restore of your worlds, saves, library entities and library dictionaries, where your data lives, and app updates |
 | 🧠 **[Story Memory](Memory)** | How a long story is remembered, and how to pin, edit or write its memories yourself |
-| 🎭 **[Entities in Play](Entities)** | Who the story tracks as present — including the characters it invents mid-scene, and how to remove one it got wrong |
+| 🎭 **[Entities in Play](Entities)** | Who the story tracks as present — including the entities it invents mid-scene, and how to remove one it got wrong |
+| 🪪 **[Personas](Personas)** | Who you are in the story — making a persona, picking one at Enter World, changing it in game, and the SillyTavern import |
+| 🌐 **[Community Creations](Community-Creations)** | Downloading, Likes, comments and follows, publishing each kind, contests, Reports, and your account |
+| ⚙️ **[Settings](Settings)** | Every setting in the Display, Output, Endpoints and Data tabs, and the Simple and Advanced modes |
+| 📜 **[Prompts](Prompts)** | Prompt presets, what each prompt does in a turn, the chip editor, per-prompt endpoints and reasoning, and a world's own prompts |
+| 🧰 **[Tools](Tools)** | The functions the AI can call, the built-in Tools, how to make and try your own, and endpoints with no Tool support |
+| 🎨 **[Image Generation](Image-Generation)** | Connecting ComfyUI, InvokeAI, Automatic1111 / Forge, NovelAI or an OpenAI-compatible service, Scene Images, image presets and ComfyUI workflows |
+
+### Reference
+
+| Page | What's inside |
+|---|---|
+| 🔤 **[Glossary](Glossary)** | Every Formamorph term in one place, each linked to the page that explains it |
 | ✍️ **[Text Formatting](TextFormatting)** | Every piece of Markdown the app renders, including `==highlights==` and their color keys |
-| 📐 **[World Format](WorldFormat)** | The full structure of a world `.json` — every field of stats, traits, locations, entities, stat-updates, and the dictionary |
+| 🛠️ **[World Editor](WorldEditor)** | The editor's modes, find and replace, the Authoring Tour, and saving your changes |
+| 🌍 **[World Editor: Overview](World-Editor-Overview)** | The world's name, card, avatar, music and AI-facing text, and uploaded or linked images |
+| 🎬 **[World Editor: Openings](World-Editor-Openings)** | The ways a game can start, their weights, and Self openings for personas |
+| 📊 **[World Editor: Stats](World-Editor-Stats)** | The player's numbers, their descriptors, and stat code |
+| 🎭 **[World Editor: Entities](World-Editor-Entities)** | The people, creatures and things in a world, their names and aliases, and SillyTavern cards |
+| 🗺️ **[World Editor: Locations](World-Editor-Locations)** | The places, nesting, Connections and Travel Hints, and starting locations |
+| 🧬 **[World Editor: Traits](World-Editor-Traits)** | Trait modes, Pick Counts, requirements, entity traits, Blueprints and links |
+| 📖 **[World Editor: Dictionary](World-Editor-Dictionary)** | Lore entries, what gets scanned, keyword matching, and books |
+| 🧩 **[World Editor: Placeholders](World-Editor-Placeholders)** | Wildcards, Objects and Variables, rolls, pins, copies and the built-in chips |
+| 🧪 **[Test Bench](Test-Bench)** | Checking a world before you play it — the World Doctor, which dictionary entries fire, what the AI gets at a location, and turn one of a new game |
+| 🪪 **[Personas for Authors](Persona-Authoring)** | Playable entities, the **Allowed Personas** and **Starts On** controls, and the Persona and Player Name chips |
+| 📐 **[World Format](WorldFormat)** | Every field of a world `.json` file, and how to add a stat, a trait or an entity by hand |
 | 🧮 **[Stat Code Guide](StatCodeGuide)** | Writing dynamic JS formulas that derive one stat from others |
 | 🔗 **[Linked Content](LinkedContent)** | How a world's entities and dictionaries follow a library item, take updates, publish, download, and repair a missing source |
+
+### Project
+
+| Page | What's inside |
+|---|---|
 | 📝 **[Changelog](Changelog)** | What's changed, release by release |
 
 ## 🚀 Getting started
+<!-- keywords: run from source, build it myself, developer setup, clone repository, compile -->
 
 Prerequisites: **Node.js 20.19+** and npm.
 
@@ -38,6 +77,7 @@ npm run dev      # serves at http://localhost:5173
 Open the app, go to **Settings**, and point it at your AI endpoint. Full setup, configuration, and the optional VRAM monitor are documented in the [repository README](https://github.com/JakeJamesDev/formamorph#readme).
 
 ## 🧱 Tech stack
+<!-- keywords: built with, framework, technology used, programming language, open source code -->
 
 **React 18** · **TypeScript** (strict) · **Vite 5** · **Tailwind CSS** + **shadcn/ui** (Radix) · **three.js** + **@pixiv/three-vrm** · **Kokoro** (TTS) · **QuickJS** (sandboxed stat code)
 

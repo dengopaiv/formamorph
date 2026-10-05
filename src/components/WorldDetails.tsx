@@ -46,14 +46,41 @@ export function splitColumnClasses(collapsed: boolean) {
   };
 }
 
+/** The labeled tag chips of a details view. */
+export function DetailTags({ tags }: { tags: string[] }) {
+  return (
+    <div>
+      <h3 className="text-helper font-semibold text-muted-foreground">Tags</h3>
+      <div className="flex flex-wrap gap-2 mt-1">
+        {tags.length > 0 ? (
+          tags.map((tag, index) => (
+            <span
+              key={index}
+              className={cn(CHIP_BASE, "bg-primary text-primary-foreground")}
+            >
+              {tag}
+            </span>
+          ))
+        ) : (
+          <span className="text-muted-foreground text-helper">No tags</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** The single-column world-details layout shared by the local-world modal and the community details
- *  modal (where it's the left column). Order: thumbnail → actions → description → meta → tags. */
-export function WorldDetailsColumn({ thumbnail, actions, description, tags, meta, split = false, collapsed = false }: {
+ *  modal (where it's the left column). Order: thumbnail → actions → description → meta → tags → after. */
+export function WorldDetailsColumn({ thumbnail, actions, description, omitEmptyDescription, tags, meta, after, split = false, collapsed = false }: {
   thumbnail: React.ReactNode;
   actions: React.ReactNode;
   description?: string;
+  // Draws no Description section for an empty description instead of the fallback line.
+  omitEmptyDescription?: boolean;
   tags?: string[];
   meta?: React.ReactNode;
+  // Drawn last in the info column, below the tags.
+  after?: React.ReactNode;
   // When set, thumbnail + actions sit in a left column and description/meta/tags in a right column.
   split?: boolean;
   // When set (with split), force the single-column layout regardless of viewport width.
@@ -61,32 +88,17 @@ export function WorldDetailsColumn({ thumbnail, actions, description, tags, meta
 }) {
   const info = (
     <div className="space-y-4">
-      <div>
-        <h3 className="text-title font-semibold">Description</h3>
-        <div className="text-muted-foreground mt-1">
-          <MarkdownRenderer text={description || "No description available."} />
-        </div>
-      </div>
-      {meta}
-      {tags && (
+      {(description || !omitEmptyDescription) && (
         <div>
-          <h3 className="text-helper font-semibold text-muted-foreground">Tags</h3>
-          <div className="flex flex-wrap gap-2 mt-1">
-            {tags.length > 0 ? (
-              tags.map((tag, index) => (
-                <span
-                  key={index}
-                  className={cn(CHIP_BASE, "bg-primary text-primary-foreground")}
-                >
-                  {tag}
-                </span>
-              ))
-            ) : (
-              <span className="text-muted-foreground text-helper">No tags</span>
-            )}
+          <h3 className="text-title font-semibold">Description</h3>
+          <div className="text-muted-foreground mt-1">
+            <MarkdownRenderer text={description || "No description available."} />
           </div>
         </div>
       )}
+      {meta}
+      {tags && <DetailTags tags={tags} />}
+      {after}
     </div>
   );
 
@@ -124,9 +136,9 @@ const MAX_MEASURED_CHIPS = 40;
  * Tag chips for a world card. Collapsed view shows as many chips as fit in ~4 rows with an inline
  * "(Show More)" link (overflow chips are hidden, never overlapped by the link); hovering reveals the
  * full set as an elevated overlay that floats over the layout without reflow. `onHide` makes each chip
- * clickable to hide that tag.
+ * clickable to hide that tag. `omitEmpty` draws nothing for an empty set instead of "No tags".
  */
-export function CardTags({ tags, onHide }: { tags: string[]; onHide?: (tag: string) => void }) {
+export function CardTags({ tags, onHide, omitEmpty }: { tags: string[]; onHide?: (tag: string) => void; omitEmpty?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const measuredFrom = Math.min(tags.length, MAX_MEASURED_CHIPS);
   const [count, setCount] = useState(measuredFrom); // visible chips before the link
@@ -157,7 +169,7 @@ export function CardTags({ tags, onHide }: { tags: string[]; onHide?: (tag: stri
   }, [count, tags]);
 
   if (!tags || tags.length === 0) {
-    return <span className="text-muted-foreground text-meta italic">No tags</span>;
+    return omitEmpty ? null : <span className="text-muted-foreground text-meta italic">No tags</span>;
   }
 
   const chip = (tag: string, i: number) => (

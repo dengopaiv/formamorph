@@ -3,15 +3,12 @@ import {
   checkDescriptions, composeCheckPrompt, buildCheckMessage, parseFindings,
   DEFAULT_DESC_CHECK_PROMPT, DEFAULT_CHECK_MAX_TOKENS,
 } from './descriptionCheck';
+import { sentBody, sseReply, stubStream, textSnapshot } from '@/test/aiTextFixtures';
 
-const opts = { endpointUrl: 'http://x/v1/chat/completions', apiToken: 't', modelName: 'm' };
+const opts = { snapshot: textSnapshot() };
 
-function mockFetch(impl: () => Response | Promise<Response>) {
-  vi.stubGlobal('fetch', vi.fn(impl));
-}
-
-const reply = (content: string) =>
-  new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+const systemOf = (spy: ReturnType<typeof stubStream>) => (sentBody(spy).messages as { content: string }[])[0].content;
+const userOf = (spy: ReturnType<typeof stubStream>) => (sentBody(spy).messages as { content: string }[])[1].content;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -154,50 +151,53 @@ describe('parseFindings', () => {
 });
 
 describe('checkDescriptions', () => {
-  it('sends both descriptions and the composed prompt', async () => {
-    mockFetch(() => reply('NONE'));
+  it('sends both descriptions, the composed prompt, its cap and its sampler pin', async () => {
+    const spy = stubStream(sseReply('NONE'));
     await checkDescriptions('a blurb', 'a note', 'location', opts);
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
-    expect(body.messages[0].content).toContain('this place');
-    expect(body.messages[1].content).toContain('a blurb');
-    expect(body.messages[1].content).toContain('a note');
-    expect(body.max_tokens).toBe(DEFAULT_CHECK_MAX_TOKENS);
-    expect(body.stream).toBe(false);
+    expect(systemOf(spy)).toContain('this place');
+    expect(userOf(spy)).toContain('a blurb');
+    expect(userOf(spy)).toContain('a note');
+    expect(sentBody(spy).max_tokens).toBe(DEFAULT_CHECK_MAX_TOKENS);
+    expect(sentBody(spy).temperature).toBe(0.2);
   });
 
   it('honours an author template and cap over the shipped ones', async () => {
-    mockFetch(() => reply('NONE'));
+    const spy = stubStream(sseReply('NONE'));
     await checkDescriptions('b', 'n', 'character', { ...opts, template: 'mine <SUBJECT>', maxTokens: 64 });
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
-    expect(body.messages[0].content).toBe('mine this character');
-    expect(body.max_tokens).toBe(64);
+    expect(systemOf(spy)).toBe('mine this character');
+    expect(sentBody(spy).max_tokens).toBe(64);
   });
 
   it('falls back to the shipped prompt when the stored template is blank', async () => {
-    mockFetch(() => reply('NONE'));
+    const spy = stubStream(sseReply('NONE'));
     await checkDescriptions('b', 'n', 'character', { ...opts, template: '   ' });
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
-    expect(body.messages[0].content).toContain('continuity editor');
+    expect(systemOf(spy)).toContain('continuity editor');
   });
 
   it('returns the findings it was given', async () => {
-    mockFetch(() => reply('- the blurb calls it ruined; the note calls it rebuilt'));
+    stubStream(sseReply('- the blurb calls it ruined; the note calls it rebuilt'));
     await expect(checkDescriptions('b', 'n', 'location', opts))
       .resolves.toEqual(['the blurb calls it ruined; the note calls it rebuilt']);
   });
 
   it('treats agreement as a result, not an error', async () => {
-    mockFetch(() => reply('NONE'));
+    stubStream(sseReply('NONE'));
     await expect(checkDescriptions('b', 'n', 'location', opts)).resolves.toEqual([]);
   });
 
-  it('treats an empty completion as agreement rather than throwing', async () => {
-    mockFetch(() => new Response(JSON.stringify({ choices: [{ message: {} }] }), { status: 200 }));
+  it('treats an empty answer the model finished on its own as agreement', async () => {
+    stubStream(sseReply('   '));
     await expect(checkDescriptions('b', 'n', 'location', opts)).resolves.toEqual([]);
+  });
+
+  it('does not read an answer cut off at the cap as agreement', async () => {
+    // Silence because the budget ran out says nothing about the two descriptions.
+    stubStream(sseReply('', 'length'));
+    await expect(checkDescriptions('b', 'n', 'location', opts)).rejects.toThrow();
   });
 
   it('throws on a non-OK response so the caller can say the check failed', async () => {
-    mockFetch(() => new Response('nope', { status: 500 }));
+    stubStream(() => new Response('nope', { status: 500 }));
     await expect(checkDescriptions('b', 'n', 'location', opts)).rejects.toThrow('HTTP 500');
   });
 });

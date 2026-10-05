@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ChipInput from './ChipInput';
+import TagChipField from './TagChipField';
 import { usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
 import { PlaceholderStoreProvider, placeholderStore } from '@/contexts/PlaceholderStoreContext';
 import { allPlaceholders, placeholderOwners } from '@/lib/placeholderHomes';
@@ -123,6 +124,47 @@ describe('ChipTypeahead — folders', () => {
     await open('Mol');
     expect(offered()).toEqual(['Molly']);
     expect(within(menu()!).queryByText('Looks')).not.toBeInTheDocument();
+  });
+});
+
+/** A prose field of a library entity: its store names the entity, so it offers both Built-ins. */
+function BuiltinHarness() {
+  const [value, setValue] = useState('.');
+  const store = useMemo(() => ({ ...placeholderStore(world, () => {}), owner: { kind: 'entity' as const, id: 'keeper' } }), []);
+  return (
+    <PlaceholderStoreProvider value={store}>
+      <BuiltinField value={value} onChange={setValue} />
+      <div data-testid="value">{value}</div>
+    </PlaceholderStoreProvider>
+  );
+}
+
+function BuiltinField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const vocabulary = usePlaceholderChipVocabulary(world, undefined, { builtins: true });
+  return <ChipInput value={value} onChange={onChange} vocabulary={vocabulary} ariaLabel="Name" />;
+}
+
+describe('ChipTypeahead — the Built-in section', () => {
+  it('lists the Built-ins first, under their heading', async () => {
+    render(<BuiltinHarness />);
+    await open();
+    expect(offered().slice(0, 3)).toEqual(['Player Name', 'Character Name', 'Molly']);
+    expect(within(menu()!).getByText('Built-in')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['player', 'Player Name'], ['user', 'Player Name'], ['Character', 'Character Name'], ['char', 'Character Name'],
+  ])('finds %s', async (query, label) => {
+    render(<BuiltinHarness />);
+    await open(query);
+    expect(offered()).toEqual([label]);
+  });
+
+  it('inserts the stored token', async () => {
+    render(<BuiltinHarness />);
+    const user = await open('char');
+    await user.keyboard('{Enter}');
+    expect(value()).toBe('{{char}}.');
   });
 });
 
@@ -319,7 +361,7 @@ describe('ChipTypeahead — making a placeholder that is not there yet', () => {
     await user.keyboard('Freckles');
     await waitFor(() => expect(offered()).toEqual([]));
     expect(screen.queryByText(/New Placeholder/)).not.toBeInTheDocument();
-    expect(screen.getByText('Nothing matches.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing matches')).toBeInTheDocument();
   });
 });
 
@@ -483,5 +525,48 @@ describe('ChipTypeahead — owner headings', () => {
     await open();
     expect(within(menu()!).getByText('Looks')).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: 'Entity' })).not.toBeInTheDocument();
+  });
+});
+
+describe('the { menu and blueprint chips', () => {
+  const garb: Placeholder = { id: 'garb', name: 'Garb', groupId: 'bp', values: phValues(['tabard', 'robe']) };
+  const town: Placeholder = { id: 'town', name: 'Town', values: phValues(['Harrow']) };
+  const lists = {
+    placeholders: [garb, town], entities: [], dictionaries: [],
+    placeholderGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' as const }],
+  };
+  const worldTrait = { owned: false };
+
+  /** A chip field under the world's store, which says which placeholders are blueprints. */
+  function Inner({ trait, tags }: { trait?: { owned: boolean }; tags: boolean }) {
+    const [value, setValue] = useState('.');
+    const vocabulary = usePlaceholderChipVocabulary(lists.placeholders, undefined, { trait });
+    return tags
+      ? <TagChipField value={value} onChange={setValue} placeholders={lists.placeholders} ariaLabel="Name" />
+      : <ChipInput value={value} onChange={setValue} vocabulary={vocabulary} ariaLabel="Name" />;
+  }
+  function BlueprintField({ trait, tags = false }: { trait?: { owned: boolean }; tags?: boolean }) {
+    return (
+      <PlaceholderStoreProvider value={{ ...placeholderStore(lists.placeholders, () => {}), lists }}>
+        <Inner trait={trait} tags={tags} />
+      </PlaceholderStoreProvider>
+    );
+  }
+
+  it('offers a blueprint in a world trait’s text', async () => {
+    render(<BlueprintField trait={worldTrait} />);
+    await open();
+    expect(offered()).toEqual(expect.arrayContaining(['Garb', 'Town']));
+  });
+
+  it.each([
+    ['an entity-owned trait', { trait: { owned: true } }],
+    ['any other field', {}],
+    ['an image tags field', { tags: true }],
+  ])('leaves blueprints out of %s', async (_name, props) => {
+    render(<BlueprintField {...props} />);
+    await open();
+    expect(offered()).toContain('Town');
+    expect(offered()).not.toContain('Garb');
   });
 });

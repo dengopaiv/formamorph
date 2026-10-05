@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ENTITY_PANEL_TABS, entityPanelTabsFor, entityTabForField } from './entityPanelTabs';
+import {
+  ENTITY_EDITOR_SUBTABS, ENTITY_EDITOR_TABS, ENTITY_PANEL_TABS, entityEditorTabForField, entityPanelTabsFor, entityTabForField,
+} from './entityPanelTabs';
+import { openingFieldKey } from '@/lib/openings';
 
 /**
  * The field-to-tab map behind Find's landing.
@@ -14,6 +17,7 @@ describe('entityTabForField', () => {
     expect(entityTabForField('name')).toBe('profile');
     expect(entityTabForField('type')).toBe('profile');
     expect(entityTabForField('imageTags')).toBe('profile');
+    expect(entityTabForField('pronouns')).toBe('profile');
   });
 
   it('puts any alias on Profile, whichever chip the hit is in', () => {
@@ -25,6 +29,11 @@ describe('entityTabForField', () => {
     expect(entityTabForField('playerDescription')).toBe('descriptions');
     expect(entityTabForField('aiDescription')).toBe('descriptions');
     expect(entityTabForField('aiSummary')).toBe('descriptions');
+  });
+
+  it('puts every opening row on Openings', () => {
+    expect(entityTabForField(openingFieldKey('o1'))).toBe('openings');
+    expect(entityTabForField(openingFieldKey('another-id'))).toBe('openings');
   });
 
   it("puts the Author's Brief on Descriptions, where it sits above the two it drafts", () => {
@@ -40,15 +49,45 @@ describe('entityTabForField', () => {
 
   it('only ever names a tab the panel actually has', () => {
     const values = new Set<string>(ENTITY_PANEL_TABS.map((t) => t.value));
-    for (const key of ['name', 'aliases[0]', 'type', 'imageTags', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
+    for (const key of ['name', 'aliases[0]', 'pronouns', 'type', 'imageTags', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
       expect(values.has(entityTabForField(key) as string)).toBe(true);
     }
   });
 
   it('names tabs Simple mode still shows, so a hit is never sent to a hidden tab', () => {
     const simple = new Set<string>(entityPanelTabsFor(false).map((t) => t.value));
-    for (const key of ['name', 'aliases[0]', 'type', 'imageTags', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
+    for (const key of ['name', 'aliases[0]', 'pronouns', 'type', 'imageTags', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
       expect(simple.has(entityTabForField(key) as string)).toBe(true);
     }
+  });
+
+  it('lists Openings last', () => {
+    expect(ENTITY_PANEL_TABS.at(-1)?.value).toBe('openings');
+    expect(ENTITY_EDITOR_SUBTABS.at(-1)?.value).toBe('openings');
+  });
+
+  it('shows Simple mode only Profile and Descriptions', () => {
+    expect(entityPanelTabsFor(false).map((t) => t.value)).toEqual(['profile', 'descriptions']);
+  });
+});
+
+describe('the library entity editor tabs', () => {
+  it('put Traits and Placeholders on the top strip and every other panel tab on the Entity sub-strip', () => {
+    expect(ENTITY_EDITOR_TABS.map((t) => t.value)).toEqual(['entity', 'traits', 'placeholders']);
+    expect(ENTITY_EDITOR_SUBTABS.map((t) => t.value)).toEqual(['profile', 'descriptions', 'openings']);
+    const both = [...ENTITY_EDITOR_SUBTABS, ...ENTITY_EDITOR_TABS.slice(1)].map((t) => t.value).sort();
+    expect(both).toEqual(ENTITY_PANEL_TABS.map((t) => t.value).sort());
+  });
+
+  it('send a field to the Entity tab and the sub-tab that holds it', () => {
+    expect(entityEditorTabForField('name')).toEqual({ tab: 'entity', subTab: 'profile' });
+    expect(entityEditorTabForField('aliases[3]')).toEqual({ tab: 'entity', subTab: 'profile' });
+    expect(entityEditorTabForField('aiSummary')).toEqual({ tab: 'entity', subTab: 'descriptions' });
+    expect(entityEditorTabForField(openingFieldKey('o1'))).toEqual({ tab: 'entity', subTab: 'openings' });
+  });
+
+  it('leave the editor where it is for a key no tab claims', () => {
+    expect(entityEditorTabForField('locations')).toBeNull();
+    expect(entityEditorTabForField('')).toBeNull();
   });
 });

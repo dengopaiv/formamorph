@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -151,15 +152,17 @@ export function ManageAddonsDialog({ open, onOpenChange, world }: ManageAddonsDi
     const sent = pending;
     setSaving(true);
     const failed: Record<string, ReviewState> = {};
-    const refused: string[] = [];
+    // Each error's message is the add-on's name, so the toast and its details name the same rows.
+    const refused: Error[] = [];
     for (const [componentId, state] of Object.entries(sent)) {
       try {
         await WorldStorageService.setAddonReview(worldId, componentId, state);
-      } catch {
+      } catch (error) {
         // A refused write stays staged and is named. Clearing it would report a decision the server never
         // recorded.
         failed[componentId] = state;
-        refused.push(rows.find((row) => row.id === componentId)?.name ?? componentId);
+        const name = rows.find((row) => row.id === componentId)?.name ?? componentId;
+        refused.push(new Error(name, { cause: error }));
       }
     }
 
@@ -178,7 +181,12 @@ export function ManageAddonsDialog({ open, onOpenChange, world }: ManageAddonsDi
 
     const saved = Object.keys(sent).length - refused.length;
     if (saved > 0) toast.success(`Saved ${saved} decision${saved === 1 ? '' : 's'}.`);
-    if (refused.length) toast.error(`Could not save: ${refused.join(', ')}. Try again.`);
+    if (refused.length) {
+      toastError(
+        new AggregateError(refused, 'Add-on reviews failed'),
+        { headline: `Could not save: ${refused.map((error) => error.message).join(', ')}. Try again.` },
+      );
+    }
   };
 
   // Closing discards the stage, so an unsaved review asks first. Discard Changes is the deliberate exit
@@ -193,7 +201,7 @@ export function ManageAddonsDialog({ open, onOpenChange, world }: ManageAddonsDi
 
   return (
     <Dialog open={open} onOpenChange={requestClose}>
-      <DialogContent className="flex h-[85dvh] flex-col sm:max-w-[640px]">
+      <DialogContent surface="manageAddons" className="flex h-[85dvh] flex-col sm:max-w-[640px]">
         <DialogHeader className="shrink-0">
           <DialogTitle>Manage Add-ons</DialogTitle>
           <DialogDescription>

@@ -1,126 +1,115 @@
+import { PromptNavigationRail } from './PromptNavigationRail';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useSettings, type ThinkingMode, type ParagraphLimit } from '@/contexts/SettingsContext';
-import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, THEME_COLORS, FONT_OPTIONS, NARRATION_FONT_OPTIONS, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, CONTINUE_CHOICE_MODES, type ContinueChoiceMode, type ThemeColor, type FontChoice, type NarrationFont } from '@/contexts/settingsDefaults';
+import { useSettings } from '@/contexts/SettingsContext';
 import { useTheme } from '../theme-provider';
-import { ThemePreviewButton } from '@/components/ThemePreviewDialog';
-import { LocalModelPanel } from '@/components/modals/LocalModelPanel';
 import LlmSetupGuide from '@/components/modals/LlmSetupGuide';
-import { settingsTabsFor, type SettingsTabId } from '@/components/modals/settingsTabs';
+import { endpointTabForRoute, endpointTabsFor, settingsTabsFor, type SettingsTabId } from '@/components/modals/settingsTabs';
+import { SETTINGS_DIALOG_SIZE } from '@/components/modals/settingsDialogSize';
+import { SurfaceTab } from '@/components/ui/surface';
+import { TARGET_ATTRIBUTE, targetAttribute } from '@/lib/surface/surfaceTargets';
+import { useLanding } from '@/lib/surface/useLanding';
+import { ToolsTab } from '@/components/modals/ToolsTab';
+import { EMPTY_TOOLS_VIEW, TOOL_EDIT_TABS, type ToolsView } from '@/components/modals/toolsView';
+import { blankTool } from '@/lib/tools/toolDraft';
+import { randomUUID } from '@/lib/uuid';
+import type { ToolSnapshot } from '@/lib/tools/toolSnapshot';
 import { readSettingsMode, writeSettingsMode, type SettingsMode } from '@/lib/settingsMode';
-import { settingsUseAdvancedValues } from '@/lib/settingsAdvancedData';
+import { settingsUseAdvancedValues, sectionHiddenFields } from '@/lib/settingsAdvancedData';
 import { TutorialPopover } from '@/components/TutorialPopover';
 import { useDevRoute } from '@/lib/devRouter';
-import { Row, CheckRow, Section, SubGroup, HintInfo, RecommendedMark, OptionSwitcher, CheckboxOptionGroup } from '@/components/SettingsRows';
-import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, ENDPOINT_CLEARTEXT_WARNING, type SettingOptionCopy } from '@/components/modals/settingsCopy';
-import { rowCopy, optionRowCopy } from '@/components/modals/settingsRowCopy';
+import { Row, CheckRow, Section, HintInfo } from '@/components/SettingsRows';
+import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_NOTES, ENDPOINT_CLEARTEXT_WARNING } from '@/components/modals/settingsCopy';
+import { endpointSendsInTheClear } from '@/lib/endpointUrl';
+import { rowCopy } from '@/components/modals/settingsRowCopy';
 import TagField from '@/components/prompt/TagField';
-import { reasoningLevelOptions, promptReasoningLevelOptions, reasoningRuledOut, defaultPromptReasoningSetting, defaultReasoningBudgetPct, nativeReasoningSuppressed, MIN_REASONING_BUDGET_PCT, type PromptReasoningSetting, type ReasoningSetting } from '@/lib/reasoningEffort';
+import { reasoningRuledOut, toolsSupported, defaultPromptReasoningSetting, resolveReasoningBudgetPct, nativeReasoningSuppressed, type PromptReasoningSetting } from '@/lib/reasoningEffort';
+import { MaxOutputControl, PromptReasoningField, type MaxOutputControlProps } from './PromptOptionFields';
+import { promptReasoningFieldProps, type PromptReasoningFieldProps } from './promptReasoningField';
+import { DisplaySettingsSection } from './DisplaySettingsSection';
+import { OutputSettingsSection } from './OutputSettingsSection';
+import type { SettingsSource } from './settingsSource';
+import { useEmbeddingDownload } from './useEmbeddingDownload';
+import { SettingsModeSwitch } from './SettingsModeSwitch';
 import { ExportPresetDialog, ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
+import { usePresetPublish } from '@/components/modals/usePresetPublish';
 import { type SharedPreset } from '@/lib/promptPresetShare';
 import { APP_VERSION } from '@/lib/version';
-import { normalizeEndpointUrl, endpointUrlWasCompleted, endpointSendsInTheClear } from '@/lib/endpointUrl';
 import { computePromptTabAvailability } from '@/lib/promptTabAvailability';
-import { visibleGroups, SURFACE_LABELS, HUB_LABEL, HUB_ROUTE, PROMPT_DESCRIPTIONS, PROMPT_LABELS, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
+import { PresetOverviewPanel } from './PresetOverviewPanel';
+import { useEndpointModelSuggestions } from './useEndpointModelSuggestions';
+import { usePromptCatalogSuggestions } from './usePromptCatalogSuggestions';
+import { mergeModelSuggestions } from '@/lib/promptCatalogSuggestions';
+import { visibleGroups, SURFACE_LABELS, HUB_LABEL, HUB_ROUTE, OVERVIEW_LABEL, OVERVIEW_ROUTE, PROMPT_DESCRIPTIONS, PROMPT_LABELS, PROMPT_TAB_REQUESTS, isPromptTab, isAuthoringTab, type PromptSurface } from '@/lib/promptGroups';
+import {
+  DEFAULT_BRIDGE_MAX_TOKENS, BRIDGE_MAX_TOKENS_MIN, BRIDGE_MAX_TOKENS_MAX, BRIDGE_SUBJECT, BRIDGE_FACETS,
+} from '@/lib/bridgeDescription';
+import { DEFAULT_SUMMARY_MAX_TOKENS, SUMMARY_MAX_TOKENS_MIN, SUMMARY_MAX_TOKENS_MAX } from '@/lib/summarize';
+import { DEFAULT_CHECK_MAX_TOKENS, CHECK_MAX_TOKENS_MIN, CHECK_MAX_TOKENS_MAX } from '@/lib/descriptionCheck';
 import type { MessageField, PromptJumpTarget } from '@/lib/promptJump';
-import { revealEditorChip } from '@/lib/editorFieldFocus';
+import { revealEditorChip, cancelEditorReveals } from '@/lib/editorFieldFocus';
 import type { AnatomyViewMode } from '@/components/game/RequestAnatomyView';
 import { RequestAnatomyPanel } from './RequestAnatomyPanel';
 import { Settings } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, dialogFullHeightMobile } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { FullscreenShell } from "@/components/FullscreenShell";
-import { useMorphFullscreen, type MorphFullscreen } from "@/lib/useMorphFullscreen";
+import { PanelShell } from "@/components/PanelShell";
+import { useMorphFullscreen } from "@/lib/useMorphFullscreen";
 import { composePreviewValues, languagePreviewValue } from "@/lib/previewValuePool";
 import { Button } from "@/components/ui/button";
-import { RevealAnimationDemoButton } from "@/components/RevealAnimationDemo";
-import { FontTuneButton } from "@/components/FontTuneDialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Tip } from "@/components/ui/tooltip";
-import { Progress } from "@/components/ui/progress";
-import { loadEmbeddingModel, disposeEmbeddingModel, type EmbeddingLoadProgress } from '@/lib/embeddingWorkerClient';
+import { loadEmbeddingModel, disposeEmbeddingModel } from '@/lib/embeddingWorkerClient';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectSeparator, SelectGroup, SelectLabel } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import PromptField from '../prompt/PromptField';
-import { PROMPT_KIND_VARIABLES, PROMPT_KIND_USER_VARIABLES, NOW_LINE_VARIABLES, SUBJECT } from '@/lib/promptVariables';
+import { PROMPT_KIND_VARIABLES, PROMPT_KIND_USER_VARIABLES, NOW_LINE_VARIABLES, SUBJECT, type PromptVariable } from '@/lib/promptVariables';
 import { defaultPromptSampler } from '@/lib/promptSamplers';
-import { useEndpointReachable } from '@/lib/useEndpointReachable';
+import { numInput } from '@/lib/numInput';
+import { FieldError } from '@/components/ui/typography';
+import { SamplerControl, type SamplerControlProps } from './SamplerControl';
+import { EndpointRouteField } from './EndpointRouteField';
+import { EndpointReachabilityBadge } from './EndpointReachabilityBadge';
+import { imageReachabilityTarget } from '@/lib/imageGen/probe';
+import { TextEndpointEditor } from './TextEndpointEditor';
+import { activePresetEditor } from './textEndpointEditorModel';
 import { ReadOnlyNotice } from '@/components/prompt/ReadOnlyNotice';
-import type { AIRequestType } from '@/types';
+import { PromptCompareDialog } from '@/components/prompt/PromptCompareDialog';
+import { PromptResetCompare } from '@/components/prompt/PromptResetCompare';
+import { promptVocabulary } from '@/lib/chipVocabulary';
+import { ATTACHMENT_PROMPTS, includesAttachments } from '@/lib/promptAttachments';
+import { useImageAttachments } from '@/lib/useImageAttachments';
+import { isMaxOutputKind, shippedMaxOutput } from '@/lib/promptMaxOutput';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { toast } from 'react-toastify';
+import { toastError } from '@/lib/linkToast';
 import WorldStorageService from '@/services/WorldStorageService';
 import { cachedImageBytes, clearCachedImages } from '@/lib/remoteImageCache';
 import { formatBytes } from '@/lib/imageOptim';
 import { DEFAULT_WORLDS, readDeletedDefaultWorlds, clearDeletedDefaultWorlds } from '@/lib/defaultWorlds';
 import { PresetNameDialog } from './PresetNameDialog';
-import { defaultSystemPrompt, defaultNarrationUserPrompt, defaultRecapUserPrompt, defaultRehydrateUserPrompt, defaultOocDirectivePrompt, defaultChoicesPrompt, defaultStatUpdatesPrompt, defaultLocationChangePrompt, defaultThinkingPrompt, defaultSummaryPrompt, defaultChoicesUserPrompt, defaultStatUpdatesUserPrompt, defaultLocationChangeUserPrompt, defaultSummaryUserPrompt, defaultDiaryPrompt, defaultDirectorPrompt, defaultDirectorUserPrompt, defaultCharacterPrompt, defaultStoryboardPrompt, defaultNowLinePrompt, defaultTimePassedPrompt, defaultTimePassedUserPrompt, defaultOpeningTimePrompt, defaultOpeningTimeUserPrompt, defaultSceneTagsPrompt, defaultSceneTagsUserPrompt, defaultDiscoverEntityPrompt, OPENING_SCENE_CUE } from '../game/GamePrompts';
+import { PresetHeader } from '@/components/presetHeader/PresetHeader';
+import { presetHeaderActions } from '@/lib/presetHeaderActions';
+import { OPENING_SCENE_CUE, PROMPT_TEXT_DEFAULTS } from '../game/GamePrompts';
+import { buildStyledValues } from '@/lib/sectionStyle';
 import { isDesktop } from '@/lib/imageGen/desktop';
 import { fetchComfyMeta, DEFAULT_COMFY_WORKFLOW, type ComfyMeta } from '@/lib/imageGen/comfyui';
 import { fetchInvokeMeta, invokeConnectionMessage, encodersFor, vaesFor, PREFIXED_BASES, type InvokeMeta } from '@/lib/imageGen/invokeai';
 import { NOVELAI_MODELS, NOVELAI_DEFAULTS } from '@/lib/imageGen/novelai';
 import { DEFAULT_ENDPOINT_BY_PROVIDER, resolveImageEndpoint } from '@/lib/imageGen';
 import { TokenAutocomplete } from '@/components/TokenAutocomplete';
-import { COMMON_LANGUAGES } from '@/lib/languages';
 import ImageSetupGuide from './ImageSetupGuide';
 import ComfyWorkflowGuide from './ComfyWorkflowGuide';
 import { DEFAULT_TAG_PROMPT, SUBJECT_GUIDANCE } from '@/lib/imagePrompt';
-import {
-  DEFAULT_PLAYER_DESC_PROMPT, DEFAULT_AI_DESC_PROMPT, DEFAULT_BRIDGE_MAX_TOKENS,
-  BRIDGE_MAX_TOKENS_MIN, BRIDGE_MAX_TOKENS_MAX, BRIDGE_SUBJECT, BRIDGE_FACETS,
-} from '@/lib/bridgeDescription';
-import {
-  DEFAULT_AI_SUMMARY_PROMPT, DEFAULT_SUMMARY_MAX_TOKENS, SUMMARY_MAX_TOKENS_MIN, SUMMARY_MAX_TOKENS_MAX,
-} from '@/lib/summarize';
-import {
-  DEFAULT_DESC_CHECK_PROMPT, DEFAULT_CHECK_MAX_TOKENS, CHECK_MAX_TOKENS_MIN, CHECK_MAX_TOKENS_MAX,
-} from '@/lib/descriptionCheck';
 import { resetTutorials, useSeenTutorialCount, useTutorial } from '@/lib/tutorials';
 
-/** What the Model trigger shows for a NovelAI preset with no model set — the id the provider falls back to. */
-const novelaiDefaultLabel = NOVELAI_MODELS.find((m) => m.id === NOVELAI_DEFAULTS.model)?.label ?? NOVELAI_DEFAULTS.model;
-
-// The segmented rows' options. Copy lives in `settingsCopy`; these bindings only narrow `value` to the
-// setting's own union, so an option that drifts from the setting fails to compile.
-const THEME_OPTIONS: readonly SettingOptionCopy<'light' | 'dark' | 'system'>[] = SETTINGS_OPTIONS.theme;
-const PARAGRAPH_LIMIT_OPTIONS: readonly SettingOptionCopy<ParagraphLimit>[] = SETTINGS_OPTIONS.paragraphLimit;
-const THINKING_OPTIONS: readonly SettingOptionCopy<ThinkingMode>[] = SETTINGS_OPTIONS.thinking;
-/** Sentinel for the InvokeAI "no board" choice — Radix Select rejects an empty-string item value, and the
- *  stored setting is '' (Uncategorized). */
-const UNCATEGORIZED_BOARD = '__uncategorized__';
-
-
-/** Parse a numeric `<input>` value, falling back to `min` when it's empty or invalid. Without this a cleared
- *  field yields `Number('') === 0`, which would persist a zero (a 0-token request, a 0px image) to settings. */
-const numInput = (raw: string, min: number): number => {
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= min ? n : min;
+/** One editable prompt template: its text, its shipped default, its setter and its chip palette. */
+type EditablePrompt = {
+  value: string; def: string; set: (s: string) => void; variables: PromptVariable[];
+  /** Runs beside the footer's Reset, for a prompt that was edited as a pair with something else. */
+  onReset?: () => void;
 };
-
-/** Per-prompt control: how many recent turns this prompt receives verbatim (the rest are summarized). */
-function VerbatimTurnsField({ id, value, onChange, disabled }: { id: string; value: number; onChange: (n: number) => void; disabled?: boolean }) {
-  const c = SETTINGS_COPY.verbatimTurns;
-  return (
-    <div className="flex items-center gap-2 flex-shrink-0">
-      <label htmlFor={id} className="text-label">{c.label}</label>
-      <Input
-        id={id}
-        type="number"
-        min={0}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Math.max(0, Math.floor(Number(e.target.value)) || 0))}
-        className="w-20"
-      />
-      <span className="hidden sm:inline text-helper text-muted-foreground">{c.description}</span>
-      <HintInfo>{c.info}</HintInfo>
-    </div>
-  );
-}
 
 /** Per-prompt control: the output cap for one authoring prompt. It rides the System view rather than
  *  Options because it is not tuning — a template edited to ask for more than the cap allows stops
@@ -148,268 +137,53 @@ function DescTokenCapField({ id, value, min, max, onChange, disabled }: {
   );
 }
 
-// The prompt sub-tab keys map to their `AIRequestType` for per-prompt temperature lookup. The authoring
-// prompts are deliberately absent: they run outside the turn pipeline and have no request type.
-const TAB_TO_REQUEST: Record<string, AIRequestType> = {
-  narration: 'narration', thinking: 'thinking', choices: 'choices', statupdates: 'statUpdates',
-  location: 'locationChange', summary: 'summary', diary: 'diary', director: 'director',
-  character: 'character', storyboard: 'storyboard', timepassed: 'timePassed', timeopening: 'openingTime',
-};
+/** The chip families of the Messages fields, for their compare views. */
+const NO_VARIABLES: PromptVariable[] = [];
+const NO_VARIABLES_VOCABULARY = promptVocabulary(NO_VARIABLES);
+const NOW_LINE_VOCABULARY = promptVocabulary(NOW_LINE_VARIABLES);
+const NARRATION_VOCABULARY = promptVocabulary(PROMPT_KIND_VARIABLES.narration);
 
-/** One custom-sampler override row: a checkbox that enables the override, a slider, and a value readout that
- *  shows the resolved endpoint state while off when the sampler is omitted (a non-pinned prompt on a custom endpoint).
- *  On reveals the stored custom value, which persists across toggling and is sent to any endpoint. */
-interface SamplerControlProps {
-  id: string;
-  label: string;
-  hint: string;
-  /** Markdown for the row's `ⓘ`, when the setting has a cost or mechanism worth stating. */
-  info?: string;
-  custom: boolean;
-  value: number;
-  /** The value shown when off, or undefined when the prompt omits the sampler (endpoint decides). */
-  defaultValue: number | undefined;
-  /** The endpoint state to show when an omitted sampler has no prompt or local-engine value. */
-  fallbackLabel?: 'Endpoint Default' | 'Endpoint Override';
-  min: number;
-  max: number;
-  step: number;
-  /** When true the whole control is read-only (a built-in prompt preset) — checkbox and slider both locked. */
-  disabled?: boolean;
-  onCustomChange: (custom: boolean) => void;
-  onValueChange: (value: number) => void;
-}
-function SamplerControl({ id, label, hint, info, custom, value, defaultValue, fallbackLabel = 'Endpoint Default', min, max, step, disabled, onCustomChange, onValueChange }: SamplerControlProps) {
-  const omitsWhenOff = defaultValue === undefined;
-  const shown = custom ? value : (defaultValue ?? value);
+/** What the Model trigger shows for a NovelAI preset with no model set — the id the provider falls back to. */
+const novelaiDefaultLabel = NOVELAI_MODELS.find((m) => m.id === NOVELAI_DEFAULTS.model)?.label ?? NOVELAI_DEFAULTS.model;
+
+/** Sentinel for the InvokeAI "no board" choice — Radix Select rejects an empty-string item value, and the
+ *  stored setting is '' (Uncategorized). */
+const UNCATEGORIZED_BOARD = '__uncategorized__';
+
+
+/** Per-prompt control: how many recent turns this prompt receives verbatim (the rest are summarized). */
+function VerbatimTurnsField({ id, value, onChange, disabled }: { id: string; value: number; onChange: (n: number) => void; disabled?: boolean }) {
+  const c = SETTINGS_COPY.verbatimTurns;
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <Checkbox id={id} checked={custom} disabled={disabled} onCheckedChange={(c) => onCustomChange(c === true)} />
-        <label htmlFor={id} className="text-label">{label}</label>
-        <span className="hidden sm:inline text-helper text-muted-foreground">{hint}</span>
-        {info && <HintInfo>{info}</HintInfo>}
-      </div>
-      {/* pl-2.5 is the thumb's own overhang: it centers on the value, so at `min` it reaches 10px left of
-          the track and would be clipped by the scroll frame. Only the left needs it — the readout and its
-          gap already clear the right — so everything else in the panel stays flush with the editor. */}
-      <div className="flex items-center gap-3 pl-2.5">
-        <Slider
-          className={`flex-grow${custom && !disabled ? '' : ' opacity-60'}`}
-          value={[shown]}
-          min={min}
-          max={max}
-          step={step}
-          disabled={disabled || !custom}
-          onValueChange={(v) => onValueChange(v[0])}
-        />
-        <span className="w-28 text-right text-label tabular-nums">
-          {custom || !omitsWhenOff ? shown.toFixed(2) : <span className="text-muted-foreground not-italic">{fallbackLabel}</span>}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/** Sentinel for the Use Active Endpoint row — Radix Select cannot hold an empty-string value, and "unpinned" is
- *  stored as an absent map entry rather than an id. */
-const FOLLOW_ACTIVE = '__follow__';
-
-/**
- * Which endpoint preset this prompt sends to. Use Active Endpoint (the default) means the prompt goes wherever the
- * globally-selected preset points, as it did before routing existed; any other choice pins this prompt alone.
- * Unlike the rest of this panel it is NOT preset-scoped — endpoint routing is global, so it stays editable
- * under a built-in prompt preset and is never carried by a shared one.
- */
-/**
- * Whether a routed prompt's endpoint is actually answering. Only rendered for a pinned prompt: an unpinned
- * one uses the active endpoint, whose reachability the setup gate already reports. `unknownModel` is a
- * reachable server that can't serve the configured model, so it reads as a warning rather than an outage.
- */
-function EndpointReachabilityBadge({ target }: { target: { url: string; apiToken: string; model: string; enabled: boolean } }) {
-  const { status, checking, recheck } = useEndpointReachable(target.url, target.apiToken, target.model, target.enabled);
-  if (!target.enabled) return null;
-
-  const state = checking
-    ? { dot: 'bg-muted-foreground animate-pulse', text: 'Checking…', tone: 'text-muted-foreground' }
-    : status === 'ok'
-      ? { dot: 'bg-success', text: 'Reachable', tone: 'text-muted-foreground' }
-      : status === 'unknownModel'
-        ? { dot: 'bg-warning', text: `Reachable, but no "${target.model}"`, tone: 'text-warning' }
-        : status === 'unreachable'
-          ? { dot: 'bg-destructive', text: "Didn't answer", tone: 'text-destructive' }
-          : { dot: 'bg-muted-foreground', text: 'Not checked', tone: 'text-muted-foreground' };
-
-  return (
-    <div className="flex items-center gap-2 text-meta">
-      <span aria-hidden className={cn('size-2 shrink-0 rounded-full', state.dot)} />
-      <span className={state.tone}>{state.text}</span>
-      <button
-        type="button"
-        onClick={recheck}
-        disabled={checking}
-        className="text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
-      >
-        Recheck
-      </button>
-    </div>
-  );
-}
-
-function PromptEndpointField({ value, activeName, presets, onChange, target, disabled }: {
-  value: string | null;
-  activeName: string;
-  presets: { id: string; name: string }[];
-  onChange: (id: string | null) => void;
-  /** The routed target to probe. `enabled` is false for an unpinned prompt, which shows no badge. */
-  target: { url: string; apiToken: string; model: string; enabled: boolean };
-  /** Read-only under a built-in prompt preset, which carries no routing (same rule as the tuning below). */
-  disabled?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5">
-        <label className="text-label">{SETTINGS_COPY.promptEndpoint.label}</label>
-        {/* Which endpoint this prompt is actually pinned to varies; the description above it does not. */}
-        <HintInfo>{value === null
-          ? 'Goes wherever AI Endpoints is pointed. Switch endpoints there and this prompt follows.'
-          : `Always goes to ${presets.find((p) => p.id === value)?.name ?? 'this endpoint'}, even when you switch endpoints elsewhere.`}</HintInfo>
-      </div>
-      <span className="text-helper text-muted-foreground">{SETTINGS_COPY.promptEndpoint.description}</span>
-      <Select
-        value={value ?? FOLLOW_ACTIVE}
-        onValueChange={(v) => onChange(v === FOLLOW_ACTIVE ? null : v)}
+    <div className="flex items-center gap-2 flex-shrink-0">
+      <label htmlFor={id} className="text-label">{c.label}</label>
+      <Input
+        id={id}
+        type="number"
+        min={0}
+        value={value}
         disabled={disabled}
-      >
-        <SelectTrigger><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value={FOLLOW_ACTIVE}>Use Active Endpoint ({activeName})</SelectItem>
-          {/* A bare divider rather than a group heading: the two halves still read apart, without a row
-              that looks selectable and isn't. */}
-          <SelectSeparator />
-          {presets.map((p) => (
-            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <EndpointReachabilityBadge target={target} />
-    </div>
-  );
-}
-
-/**
- * The strength half of a Native Reasoning control: a dropdown of the levels the endpoint accepts, or the
- * budget slider on a target that caps the thought segment by tokens — the built-in engine and LM Studio.
- * Inert while the switch beside it is off, but still showing the remembered value.
- */
-type ReasoningStrength<L extends string> =
-  | { kind: 'level'; value: L; options: { value: L; label: string }[]; onChange: (v: L) => void }
-  | { kind: 'budget'; value: number; onChange: (v: number) => void };
-
-/**
- * A Native Reasoning control: the on/off switch, then the strength. The switch is the one lever every prompt
- * and engine share; what sits beside it depends on the engine. `id` labels the switch for assistive tech.
- */
-function ReasoningSwitch<L extends string>({ id, enabled, onEnabledChange, strength, disabled }: {
-  id: string;
-  enabled: boolean;
-  onEnabledChange: (on: boolean) => void;
-  strength: ReasoningStrength<L>;
-  disabled?: boolean;
-}) {
-  const inert = disabled || !enabled;
-  return (
-    <div className="flex items-center gap-3">
-      <span className="flex h-9 shrink-0 items-center">
-        <Checkbox id={id} checked={enabled} disabled={disabled} onCheckedChange={(c) => onEnabledChange(c === true)} aria-label={SETTINGS_COPY.nativeReasoning.label} />
-      </span>
-      {strength.kind === 'level' ? (
-        <Select value={strength.value} onValueChange={(v) => strength.onChange(v as L)} disabled={inert}>
-          <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {strength.options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      ) : (
-        <>
-          {/* pl-2.5 for the thumb's overhang at the floor — see SamplerControl. */}
-          <Slider
-            className={`flex-grow pl-2.5${inert ? ' opacity-60' : ''}`}
-            value={[strength.value]}
-            min={MIN_REASONING_BUDGET_PCT}
-            max={100}
-            step={5}
-            disabled={inert}
-            onValueChange={(v) => strength.onChange(v[0])}
-          />
-          <span className="w-12 text-right text-label tabular-nums">{strength.value}%</span>
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * A prompt's Native Reasoning control: its switch, then Global or its own level, and on a target that takes a
- * token budget the Reasoning Budget slider under it. Both go out on the wire there, so both are shown; the one
- * switch governs both. Global follows Settings → Output → Native Reasoning, switch included. The built-in
- * engine ignores the effort field, so it shows the slider alone (`level` false).
- */
-function PromptReasoningField({ setting, onChange, options, budget, level, disabled }: {
-  setting: PromptReasoningSetting;
-  onChange: (v: PromptReasoningSetting) => void;
-  options: { value: PromptReasoningSetting['level']; label: string }[];
-  /** The budget percent and its setter when the prompt's target takes a token budget; absent otherwise. */
-  budget: { value: number; set: (v: number) => void } | null;
-  /** Whether the target honors the effort level, so the dropdown is worth showing. */
-  level: boolean;
-  disabled?: boolean;
-}) {
-  const inert = disabled || !setting.enabled;
-  const levelStrength: ReasoningStrength<PromptReasoningSetting['level']> = {
-    kind: 'level', value: setting.level, options, onChange: (next) => onChange({ ...setting, level: next }),
-  };
-  const budgetStrength: ReasoningStrength<PromptReasoningSetting['level']> | null = budget
-    ? { kind: 'budget', value: budget.value, onChange: budget.set }
-    : null;
-  const lead = level ? SETTINGS_COPY.promptNativeReasoning : SETTINGS_COPY.reasoningBudget;
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5">
-        <label htmlFor="promptReasoning" className="text-label">{lead.label}</label>
-        <HintInfo>{lead.info}</HintInfo>
-      </div>
-      <span className="text-helper text-muted-foreground">{lead.description}</span>
-      <ReasoningSwitch
-        id="promptReasoning"
-        enabled={setting.enabled}
-        onEnabledChange={(enabled) => onChange({ ...setting, enabled })}
-        disabled={disabled}
-        strength={level ? levelStrength : (budgetStrength ?? levelStrength)}
+        onChange={(e) => onChange(Math.max(0, Math.floor(Number(e.target.value)) || 0))}
+        className="w-20"
       />
-      {level && budgetStrength && (
-        <div className="mt-2 flex flex-col gap-1">
-          <div className="flex items-center gap-1.5">
-            <span className="text-label">{SETTINGS_COPY.reasoningBudget.label}</span>
-            <HintInfo>{SETTINGS_COPY.reasoningBudget.info}</HintInfo>
-          </div>
-          <span className="text-helper text-muted-foreground">{SETTINGS_COPY.reasoningBudget.description}</span>
-          {/* Same switch as above: the row only carries the slider, indented past the checkbox column. */}
-          <div className="flex items-center gap-3 pl-7">
-            <Slider
-              className={`flex-grow pl-2.5${inert ? ' opacity-60' : ''}`}
-              value={[budgetStrength.value]}
-              min={MIN_REASONING_BUDGET_PCT}
-              max={100}
-              step={5}
-              disabled={inert}
-              onValueChange={(v) => budgetStrength.onChange(v[0])}
-              aria-label={SETTINGS_COPY.reasoningBudget.label}
-            />
-            <span className="w-12 text-right text-label tabular-nums">{budgetStrength.value}%</span>
-          </div>
-        </div>
-      )}
+      <span className="hidden sm:inline text-helper text-muted-foreground">{c.description}</span>
+      <HintInfo>{c.info}</HintInfo>
+    </div>
+  );
+}
+
+/** A prompt's Include Attachments row. On sends the turn's attached images with this prompt's request. */
+interface AttachmentsControlProps {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (include: boolean) => void;
+}
+function AttachmentsControl({ checked, disabled, onChange }: AttachmentsControlProps) {
+  return (
+    <div className="flex items-center gap-2">
+      <Checkbox id="promptAttachments" checked={checked} disabled={disabled} onCheckedChange={(c) => onChange(c === true)} />
+      <label htmlFor="promptAttachments" className="text-label">{SETTINGS_COPY.promptAttachments.label}</label>
+      <span className="hidden sm:inline text-helper text-muted-foreground">{SETTINGS_COPY.promptAttachments.description}</span>
     </div>
   );
 }
@@ -418,10 +192,15 @@ function PromptReasoningField({ setting, onChange, options, budget, level, disab
  *  them), the per-prompt Native Reasoning override (the effort level on external endpoints, or the token budget
  *  on the local engine), plus one override row per tunable sampler.
  *  `disabled` locks every control when the active prompt preset is built-in (Default/Simple). */
-function PromptOptionsPanel({ endpoint, verbatim, reasoning, samplers, disabled, readOnlyReason, onRequestEdit }: {
-  endpoint: React.ComponentProps<typeof PromptEndpointField>;
+function PromptOptionsPanel({ endpoint, attachments, maxOutput, verbatim, reasoning, samplers, disabled, readOnlyReason, onRequestEdit }: {
+  /** Read-only under a built-in prompt preset, like the rest of the panel. */
+  endpoint: React.ComponentProps<typeof EndpointRouteField>;
+  /** Absent while Image Attachments is off. */
+  attachments: Omit<AttachmentsControlProps, 'disabled'> | null;
+  /** Absent on a prompt without a Max Output row. */
+  maxOutput: Omit<MaxOutputControlProps, 'disabled'> | null;
   verbatim: { value: number; set: (n: number) => void } | null;
-  reasoning: Omit<React.ComponentProps<typeof PromptReasoningField>, 'disabled'> | null;
+  reasoning: Omit<PromptReasoningFieldProps, 'disabled'> | null;
   samplers: SamplerControlProps[];
   disabled: boolean;
   /** What is read-only, named in the notice. Absent on an editable preset. */
@@ -440,7 +219,9 @@ function PromptOptionsPanel({ endpoint, verbatim, reasoning, samplers, disabled,
       {/* Flush with the editor beside it. The slider thumb's clearance is on the slider rows themselves, so
           it no longer narrows the whole panel; the scroll frame supplies the right-hand gutter. */}
       <div className="space-y-5 py-3">
-        <PromptEndpointField {...endpoint} disabled={disabled} />
+        <EndpointRouteField {...endpoint} disabled={disabled} />
+        {attachments && <AttachmentsControl {...attachments} disabled={disabled} />}
+        {maxOutput && <MaxOutputControl {...maxOutput} disabled={disabled} />}
         {verbatim && <VerbatimTurnsField id="promptVerbatim" value={verbatim.value} onChange={verbatim.set} disabled={disabled} />}
         {reasoning && <PromptReasoningField {...reasoning} disabled={disabled} />}
         {samplers.map((s) => <SamplerControl key={s.id} {...s} disabled={disabled} />)}
@@ -449,51 +230,17 @@ function PromptOptionsPanel({ endpoint, verbatim, reasoning, samplers, disabled,
   );
 }
 
-/**
- * The Prompts panel, either in place or filling the screen. Fullscreen belongs to the whole panel rather
- * than to PromptField so the rail comes with it — the editor alone in a full-screen window loses the very
- * navigation that makes a long prompt findable.
- *
- * The caller owns the morph and hands the fields `morph.mounted` as their fullscreen flag. That flag
- * stays up through the closing trip, so the panel keeps its full-screen form while the box shrinks —
- * driven from a separate boolean, the fields snapped to their windowed layout inside the still-shrinking
- * window the moment the toggle was pressed.
- *
- * Toggling re-parents the panel into the overlay, so the editor is rebuilt from its value: the text is
- * safe (it is controlled) but the undo stack starts fresh on either side of the toggle.
- */
-function PromptsShell({ morph, sourceRef, children }: {
-  morph: MorphFullscreen;
-  /** The tab panel the rail sits in — what the window grows out of. */
-  sourceRef: React.RefObject<HTMLElement | null>;
-  children: React.ReactNode;
-}) {
-  if (!morph.mounted) return <>{children}</>;
-  // A panel, not a field: nothing inside it carries a caption, so this is the one window that has to name
-  // itself. While closing, the children are already back in the tab panel and the shell above them is just
-  // the fading panel.
-  return (
-    <>
-      {!morph.contentInOverlay && children}
-      <FullscreenShell
-        morph={morph}
-        title="Prompts"
-        showTitle
-        returnFocus={() => sourceRef.current?.querySelector<HTMLElement>('button[aria-label="Edit full screen"]')}
-      >
-        {morph.contentInOverlay ? children : null}
-      </FullscreenShell>
-    </>
-  );
-}
-
-export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab, initialEndpointTab, initialPromptTab, initialPromptSurface, initialPromptField, onWorldsRestored, forcedMode }: {
+export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, initialTab, initialEndpointTab, initialPromptTab, initialPromptSurface, initialPromptField, initialTarget, requestKey, onWorldsRestored, onStartAuthoringTour, forcedMode }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called after Restore Default Worlds re-seeds, so a world list on screen can refresh. */
   onWorldsRestored?: () => void;
+  /** Starts the Authoring Tour on a new world. Only the main menu supplies it, so a running game hides the row. */
+  onStartAuthoringTour?: () => void;
   /** Live variable values for the prompt-editor Preview tab. Supplied only in-game; absent → no Preview. */
   previewValues?: Record<string, string>;
+  /** The open world as a Tool Snapshot, for Try It. Supplied only in-game; absent, Try It uses the sample world. */
+  toolWorld?: () => ToolSnapshot;
   /** DEV dev-router: open on this top-level tab instead of the default (see `devRouter.ts`). */
   initialTab?: SettingsTabId;
   /** Which AI Endpoints sub-tab to open ('text-endpoint' | 'img-endpoint' | 'img-tagprompt'). Used by the
@@ -505,18 +252,28 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   initialPromptSurface?: string;
   /** Which stacked field of the Messages view to scroll to and focus on arrival. */
   initialPromptField?: MessageField;
+  /** The route text of the row a Take Me There request lands on. */
+  initialTarget?: string;
+  /** Changes with each outside request, so a repeat request for the tab already set selects it again. */
+  requestKey?: string;
   /** Overrides the stored Simple/Advanced preference (the dev-router's `mode` param; tests set it directly). */
   forcedMode?: SettingsMode;
 }) => {
   const devRoute = useDevRoute();
+  // DEV dev-router: `#dev?modal=settingsCompare` opens the compare view on a canned Narration edit.
+  const [devCompare, setDevCompare] = useState(false);
+  useEffect(() => { if (import.meta.env.DEV && devRoute?.modal === 'settingsCompare') setDevCompare(true); }, [devRoute]);
   const routeMode = import.meta.env.DEV && (devRoute?.mode === 'simple' || devRoute?.mode === 'advanced')
     ? devRoute.mode
     : undefined;
   // Asking for a tab Simple hides is asking for Advanced: `goto('settings', { tab: 'prompts' })` and the
   // image dialog's jump to the Tag Prompt editor both name a destination, and landing somewhere else
   // instead is the dev-router failure that is hardest to notice.
+  // A dev-router `tab=endpoints&subtab=…` names an Endpoints tab, the same slot the Tools tab reads.
+  const requestedEndpointTab = initialEndpointTab
+    ?? (initialTab === 'endpoints' ? endpointTabForRoute(initialPromptTab) : undefined);
   const wantsAdvancedTab = (!!initialTab && settingsTabsFor(false).every((t) => t.value !== initialTab))
-    || initialEndpointTab === 'img-tagprompt';
+    || requestedEndpointTab === 'img-tagprompt';
   const [mode, setModeState] = useState<SettingsMode>(() =>
     forcedMode ?? routeMode ?? (wantsAdvancedTab ? 'advanced' : readSettingsMode()));
   const setMode = useCallback((next: SettingsMode) => { setModeState(next); writeSettingsMode(next); }, []);
@@ -531,11 +288,16 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     else if (wantsAdvancedTab) setModeState('advanced');
   }, [devRoute, routeMode, wantsAdvancedTab]);
   useEffect(() => { if (forcedMode) setModeState(forcedMode); }, [forcedMode]);
+  useEffect(() => {
+    if (requestKey && wantsAdvancedTab) setModeState('advanced');
+    // Only a new request switches the mode; the player's own switch afterwards stands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestKey]);
   const visibleTabs = useMemo(() => settingsTabsFor(advanced), [advanced]);
   const { active: tutorial, nav: tutorialNav, dismiss } = useTutorial('settings', { active: isOpen });
   const dismissTutorial = useCallback(() => { if (tutorial) dismiss(tutorial.id); }, [tutorial, dismiss]);
   const [activeTab, setActiveTab] = useState<string>(initialTab ?? visibleTabs[0].value);
-  const [endpointTab, setEndpointTab] = useState<string>(initialEndpointTab ?? 'text-endpoint');
+  const [endpointTab, setEndpointTab] = useState<string>(requestedEndpointTab ?? 'text-endpoint');
   // Switching to Simple while standing on a hidden tab would blank the panel with no way back to it.
   useEffect(() => {
     if (!visibleTabs.some((t) => t.value === activeTab)) setActiveTab(visibleTabs[0].value);
@@ -550,68 +312,60 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // Same reasoning for the linked-image cache: it grows during play, so re-measure on open rather than once.
   const [cachedBytes, setCachedBytes] = useState(0);
   const seenTutorialCount = useSeenTutorialCount();
-  useEffect(() => { if (isOpen) cachedImageBytes().then(setCachedBytes).catch(() => setCachedBytes(0)); }, [isOpen]);
+  // The read outlives a quick close, so the cleanup drops the late answer rather than writing to a gone modal.
+  useEffect(() => {
+    if (!isOpen) return;
+    let live = true;
+    cachedImageBytes()
+      .then((bytes) => { if (live) setCachedBytes(bytes); })
+      .catch(() => { if (live) setCachedBytes(0); });
+    return () => { live = false; };
+  }, [isOpen]);
 
   const clearImageCache = async () => {
     try {
       await clearCachedImages();
       setCachedBytes(0);
       toast.success('Cached images cleared');
-    } catch {
-      toast.error('Could not clear the cached images');
+    } catch (error) {
+      toastError(error, { headline: 'Could not clear the cached images' });
     }
   };
 
   const restoreDefaultWorlds = async () => {
     clearDeletedDefaultWorlds();
     try {
-      const { failed } = await WorldStorageService.loadDefaultWorlds(DEFAULT_WORLDS);
-      if (failed.length) toast.error(`Some default worlds failed to restore: ${failed.join(', ')}`);
-      else toast.success('Default worlds restored');
-    } catch {
-      toast.error('Could not restore the default worlds');
+      const { failed, errors } = await WorldStorageService.loadDefaultWorlds(DEFAULT_WORLDS);
+      if (failed.length) {
+        toastError(
+          new AggregateError(errors, 'Default worlds failed to restore'),
+          { headline: `Some default worlds failed to restore: ${failed.join(', ')}` },
+        );
+      } else toast.success('Default worlds restored');
+    } catch (error) {
+      toastError(error, { headline: 'Could not restore the default worlds' });
     }
     setDeletedDefaultCount(readDeletedDefaultWorlds().size);
     onWorldsRestored?.();
   };
   // Honor a later dev-router tab change while the modal stays open (a fresh __fmDev.goto).
-  useEffect(() => { if (initialTab) setActiveTab(initialTab); }, [initialTab]);
-  useEffect(() => { if (initialEndpointTab) setEndpointTab(initialEndpointTab); }, [initialEndpointTab]);
+  useEffect(() => { if (initialTab) setActiveTab(initialTab); }, [initialTab, requestKey]);
+  useEffect(() => { if (requestedEndpointTab) setEndpointTab(requestedEndpointTab); }, [requestedEndpointTab, requestKey]);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const landTarget = useLanding(
+    (route: string) => dialogRef.current?.querySelector<HTMLElement>(`[${TARGET_ATTRIBUTE}="${route}"]`) ?? null,
+    { pulse: true },
+  );
+  useEffect(() => { if (initialTarget) landTarget(initialTarget); }, [initialTarget, requestKey, landTarget]);
+  const settings = useSettings();
+  const imageAttachmentsOn = useImageAttachments();
   const {
-    bgmEnabled,
-    setBgmEnabled,
     language,
-    setLanguage,
     endpointUrl,
-    setEndpointUrl,
-    apiToken,
-    setApiToken,
-    modelName,
-    setModelName,
     maxTokens,
-    setMaxTokens,
-    maxOutputOverrideEnabled,
-    setMaxOutputOverrideEnabled,
-    endpointSamplerOverrides,
-    setEndpointSamplerEnabled,
-    setEndpointSamplerValue,
-    contextWindow,
-    contextWindowOverride,
-    setContextWindowOverride,
-    detectedContextWindow,
-    detectStatus,
-    detectContextWindow,
-    localModelActive,
     builtinTextEndpointPresets,
     textEndpointPresets,
-    activeTextEndpointPresetId,
-    activeTextEndpointPresetIsBuiltIn,
     activeTextEndpointPresetName,
-    selectTextEndpointPreset,
-    addTextEndpointPreset,
-    renameTextEndpointPreset,
-    deleteTextEndpointPreset,
-    resetTextEndpointPreset,
     systemPrompt,
     setSystemPrompt,
     choicesPrompt,
@@ -621,15 +375,9 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     locationChangePromptText,
     setLocationChangePromptText,
     choicesEnabled,
-    continueChoiceMode,
-    setContinueChoiceMode,
-    setChoicesEnabled,
     statUpdatesEnabled,
-    setStatUpdatesEnabled,
     locationChangeEnabled,
-    setLocationChangeEnabled,
     locationAutoApply,
-    setLocationAutoApply,
     narrationVerbatimTurns,
     setNarrationVerbatimTurns,
     thinkingVerbatimTurns,
@@ -643,19 +391,18 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     summaryVerbatimTurns,
     setSummaryVerbatimTurns,
     thinkingMode,
-    setThinkingMode,
     limitActiveCharacters,
-    setLimitActiveCharacters,
     activeCharacterLimit,
-    setActiveCharacterLimit,
-    reasoningEffort,
-    nativeReasoning,
-    setNativeReasoning,
     reasoningCapability,
     promptReasoningSettings,
     setPromptReasoning,
     promptReasoningBudget,
     setPromptReasoningBudget,
+    promptAttachments,
+    setPromptAttachments,
+    promptMaxOutput,
+    setPromptMaxOutputCustom,
+    setPromptMaxOutputValue,
     thinkingPrompt,
     setThinkingPrompt,
     summaryPrompt,
@@ -685,6 +432,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     locationChangeUserPrompt,
     setLocationChangeUserPrompt,
     summaryUserPrompt,
+    milestoneSelectPrompt,
+    setMilestoneSelectPrompt,
+    milestoneSelectUserPrompt,
+    setMilestoneSelectUserPrompt,
     nowLinePrompt,
     setNowLinePrompt,
     timePassedPrompt,
@@ -699,6 +450,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     setSceneTagsPrompt,
     sceneTagsUserPrompt,
     setSceneTagsUserPrompt,
+    discoverEntityPrompt,
+    setDiscoverEntityPrompt,
+    discoverEntityUserPrompt,
+    setDiscoverEntityUserPrompt,
     playerDescPrompt,
     setPlayerDescPrompt,
     aiDescPrompt,
@@ -709,8 +464,6 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     setDescCheckPrompt,
     descMaxTokens,
     setDescMaxTokens,
-    sceneImageAuto,
-    setSceneImageAuto,
     setSummaryUserPrompt,
     promptPresets,
     builtinPresets,
@@ -723,32 +476,26 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     renamePreset,
     deletePreset,
     resetPreset,
+    presetOverview,
+    setPresetOverview,
+    catalogTools,
+    userTools,
+    enabledTools,
+    saveTool,
+    deleteTool,
+    setToolEnabled,
     exportActivePreset,
     importPreset,
     memoryDigests,
-    setMemoryDigests,
     semanticMemory,
-    setSemanticMemory,
-    semanticLore,
-    setSemanticLore,
     semanticRehydration,
     timeContext,
-    setTimeContext,
     aiClock,
-    setAiClock,
-    setSemanticRehydration,
-    semanticDiaries,
-    setSemanticDiaries,
-    semanticBandCap,
-    setSemanticBandCap,
-    concurrentTurnRequests,
-    setConcurrentTurnRequests,
+    toolsEnabled,
     autosaveEnabled,
     setAutosaveEnabled,
     characterDiaries,
     describeCharacters,
-    setDescribeCharacters,
-    setCharacterDiaries,
     genTemperature,
     genRepetitionPenalty,
     promptSamplers,
@@ -757,18 +504,8 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     promptEndpoints,
     setPromptEndpoint,
     resolveEndpointForKind,
-    showSilentRequests,
-    setShowSilentRequests,
-    showReasoning,
-    setShowReasoning,
     paragraphLimit,
-    setParagraphLimit,
-    locationBackground,
-    setLocationBackground,
-    backgroundOverlay,
-    setBackgroundOverlay,
     markdownOutput,
-    setMarkdownOutput,
     imageProvider,
     setImageProvider,
     imageEndpoint,
@@ -817,107 +554,54 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     resetImageEndpointPreset,
     imageTagPrompt,
     setImageTagPrompt,
-    themeColor,
-    setThemeColor,
-    fontFamily,
-    setFontFamily,
-    narrationFont,
-    setNarrationFont,
-    narrationScale,
-    setNarrationScale,
-    narrationLineHeight,
-    setNarrationLineHeight
-  } = useSettings();
-  const sharedEndpointActive = activeTextEndpointPresetIsBuiltIn && !localModelActive;
-  const { theme, setTheme } = useTheme();
+  } = settings;
+  const themeState = useTheme();
   const desktop = isDesktop();
   const [connectionGuideOpen, setConnectionGuideOpen] = useState(false);
-  // Embedding-model download state for the semantic memory toggle. Local to the modal: the toggle
-  // stays on through a failed download (scoring fails open until the model arrives), so this state
-  // only drives the progress bar / error row.
-  const [embedLoading, setEmbedLoading] = useState(false);
-  const [embedProgress, setEmbedProgress] = useState<EmbeddingLoadProgress | null>(null);
-  const [embedError, setEmbedError] = useState<string | null>(null);
-  const startEmbeddingDownload = () => {
-    setEmbedLoading(true);
-    setEmbedError(null);
-    setEmbedProgress(null);
-    loadEmbeddingModel(setEmbedProgress)
-      .then(() => setEmbedError(null))
-      .catch((err) => setEmbedError((err as Error).message))
-      .finally(() => { setEmbedLoading(false); setEmbedProgress(null); });
-  };
-  const handleSemanticMemoryToggle = (on: boolean) => {
-    setSemanticMemory(on);
-    if (on) startEmbeddingDownload();
-    else if (!semanticLore) void disposeEmbeddingModel(); // model stays while any semantic feature needs it
-  };
-  const handleSemanticLoreToggle = (on: boolean) => {
-    setSemanticLore(on);
-    if (on) startEmbeddingDownload();
-    else if (!semanticMemory) void disposeEmbeddingModel();
-  };
-  const handleResetEndpointSettings = () => {
-    setEndpointUrl(DEFAULT_ENDPOINT);
-    setModelName(DEFAULT_MODEL_NAME);
-    setApiToken(DEFAULT_API_TOKEN);
-    setContextWindowOverride(null);
-    setMaxTokens(DEFAULT_MAX_TOKENS);
-  };
-
-  // Single status line under the Context Window field: red for over-limit or a failed manual detect,
-  // gray for detecting / detected / the idle helper.
-  const contextOverLimit =
-    contextWindowOverride != null && detectedContextWindow != null && contextWindowOverride > detectedContextWindow;
-  const contextStatus = activeTextEndpointPresetIsBuiltIn
-    ? { red: false, text: 'Using the shared endpoint — add or pick a preset to set or detect the context window.' }
-    : contextOverLimit
-    ? { red: true, text: `Above the detected limit (${detectedContextWindow?.toLocaleString()} tok) — the server may truncate requests.` }
-    : detectStatus === 'error'
-      ? { red: true, text: "Couldn't detect context length from this endpoint." }
-      : detectStatus === 'detecting'
-        ? { red: false, text: 'Detecting context length…' }
-        : detectStatus === 'success'
-          ? { red: false, text: `Detected ${(detectedContextWindow ?? contextWindow).toLocaleString()} tok from the endpoint.` }
-          : { red: false, text: 'Auto-detected from your endpoint; lower it if the model feels constantly full.' };
+  const embeddingModel = useEmbeddingDownload(loadEmbeddingModel, disposeEmbeddingModel);
+  const settingsSource: SettingsSource = { ...settings, ...themeState, embeddingModel };
 
   // Preset name dialog (Add / Rename); the "Add New Preset…" select option opens it in add mode.
   const [presetDialog, setPresetDialog] = useState<{ mode: 'add' | 'rename' } | null>(null);
   const ADD_PRESET_SENTINEL = '__add_preset__';
-  const IMPORT_PRESET_SENTINEL = '__import_preset__';
   const [exportShared, setExportShared] = useState<SharedPreset | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const activePresetName = [...builtinPresets, ...promptPresets].find((p) => p.id === activePresetId)?.name ?? '';
   const handlePresetSelect = (v: string) => {
     if (v === ADD_PRESET_SENTINEL) setPresetDialog({ mode: 'add' });
-    else if (v === IMPORT_PRESET_SENTINEL) setImportOpen(true);
     else selectPreset(v);
   };
+  // `addPreset` clones the active values and selects the result, so a copy needs no dialog.
+  const duplicatePreset = () => addPreset(`${activePresetName} (copy)`);
+  const presetPublish = usePresetPublish(() => {
+    setOverviewOpen(true);
+    setFocusModels((n) => n + 1);
+  });
+  const presetActions = presetHeaderActions(activePresetIsBuiltIn, {
+    duplicate: duplicatePreset,
+    rename: () => setPresetDialog({ mode: 'rename' }),
+    import: () => setImportOpen(true),
+    export: () => setExportShared(exportActivePreset(APP_VERSION)),
+    ...(presetPublish.canPublish ? { publish: presetPublish.start } : {}),
+    reset: {
+      run: () => resetPreset(activePresetId),
+      description: `Reset every prompt in the "${activePresetName}" preset to its default value? This can't be undone.`,
+    },
+    delete: {
+      run: () => deletePreset(activePresetId),
+      description: `Delete the "${activePresetName}" preset? This can't be undone.`,
+    },
+  });
   const handlePresetNameSubmit = (name: string) => {
     if (presetDialog?.mode === 'add') addPreset(name);
     else if (presetDialog?.mode === 'rename') renamePreset(activePresetId, name);
   };
-  // A built-in can't be edited, so the way forward is a copy of it. `addPreset` already clones the active
-  // values and selects the result, so this is the whole gesture — no dialog in the way.
-  const duplicateForEditing = () => addPreset(`${activePresetName} (copy)`);
   // Short enough for one line on mobile; the notice puts the whole sentence on hover.
   const readOnlyReason = activePresetIsBuiltIn ? `${activePresetName} is read-only` : undefined;
 
   // AI Endpoints → Image preset name dialog (mirrors the prompt preset one; all presets editable).
   const [imagePresetDialog, setImagePresetDialog] = useState<{ mode: 'add' | 'rename' } | null>(null);
   const IMG_ADD_PRESET_SENTINEL = '__add_image_preset__';
-
-  // AI Endpoints → Text preset name dialog (immutable Default + editable user presets, like the prompts tab).
-  const [textPresetDialog, setTextPresetDialog] = useState<{ mode: 'add' | 'rename' } | null>(null);
-  const TEXT_ADD_PRESET_SENTINEL = '__add_text_preset__';
-  const handleTextPresetSelect = (v: string) => {
-    if (v === TEXT_ADD_PRESET_SENTINEL) setTextPresetDialog({ mode: 'add' });
-    else selectTextEndpointPreset(v);
-  };
-  const handleTextPresetNameSubmit = (name: string) => {
-    if (textPresetDialog?.mode === 'add') addTextEndpointPreset(name);
-    else if (textPresetDialog?.mode === 'rename') renameTextEndpointPreset(activeTextEndpointPresetId, name);
-  };
 
   // ComfyUI checkpoint/sampler lists that back the Model/Sampler autocompletes. Auto-fetched from
   // /object_info whenever ComfyUI is the active provider (debounced on endpoint edits); fails silently
@@ -973,6 +657,22 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     if (v === IMG_ADD_PRESET_SENTINEL) setImagePresetDialog({ mode: 'add' });
     else selectImageEndpointPreset(v);
   };
+  // `addImageEndpointPreset` clones the active values and selects the result, so a copy needs no dialog.
+  // Every image preset is editable, so none is built in.
+  const imagePresetActions = presetHeaderActions(false, {
+    duplicate: () => addImageEndpointPreset(`${activeImageEndpointPresetName} (copy)`),
+    rename: () => setImagePresetDialog({ mode: 'rename' }),
+    reset: {
+      run: () => resetImageEndpointPreset(activeImageEndpointPresetId),
+      description: `Reset the "${activeImageEndpointPresetName}" preset to its default values? This can't be undone.`,
+    },
+    ...(imageEndpointPresets.length > 1 ? {
+      delete: {
+        run: () => deleteImageEndpointPreset(activeImageEndpointPresetId),
+        description: `Delete the "${activeImageEndpointPresetName}" preset? This can't be undone.`,
+      },
+    } : {}),
+  });
   const handleImagePresetNameSubmit = (name: string) => {
     if (imagePresetDialog?.mode === 'add') addImageEndpointPreset(name);
     else if (imagePresetDialog?.mode === 'rename') renameImageEndpointPreset(activeImageEndpointPresetId, name);
@@ -1002,62 +702,87 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // The selected prompt sub-tab, so the Reset button can target just that prompt.
   const [promptTab, setPromptTab] = useState(initialPromptTab ?? 'narration');
   // DEV dev-router: honor a requested prompt sub-tab (a `subtab=…` in the hash).
-  useEffect(() => { if (initialPromptTab) setPromptTab(initialPromptTab); }, [initialPromptTab]);
+  useEffect(() => { if (initialPromptTab) setPromptTab(initialPromptTab); }, [initialPromptTab, requestKey]);
+  // The preset's Overview stands in place of a prompt. A built-in has none, so it falls through to the prompt.
+  const [overviewOpen, setOverviewOpen] = useState(initialPromptTab === OVERVIEW_ROUTE);
+  useEffect(() => { if (initialPromptTab) setOverviewOpen(initialPromptTab === OVERVIEW_ROUTE); }, [initialPromptTab, requestKey]);
+  const showingOverview = overviewOpen && presetOverview !== null;
+  // Bumped to put focus on the Overview's Models field, the way out of the empty-Models publish block.
+  const [focusModels, setFocusModels] = useState(0);
+  const endpointModels = useEndpointModelSuggestions();
+  const catalogSuggestions = usePromptCatalogSuggestions(showingOverview);
+  const modelSuggestions = useMemo(
+    () => mergeModelSuggestions(catalogSuggestions.modelCounts, endpointModels.suggestions),
+    [catalogSuggestions.modelCounts, endpointModels.suggestions],
+  );
+  // The mobile selector's value for the Overview entry; prompt and surface entries use their own prefixes.
+  const overviewOption = `preset:${OVERVIEW_ROUTE}`;
+  // Each prompt's default in the preset's section style, the text the whole-preset Reset writes too.
+  const styledDefaults = useMemo(() => buildStyledValues(PROMPT_TEXT_DEFAULTS, activeSectionStyle), [activeSectionStyle]);
   // Names come from the shared map, so a jump that says where it goes and the rail row it lands on cannot
   // call the same prompt two different things.
-  const promptResets: Record<string, { label: string; reset: () => void }> = {
-    narration: { label: PROMPT_LABELS.narration, reset: () => setSystemPrompt(defaultSystemPrompt) },
-    thinking: { label: PROMPT_LABELS.thinking, reset: () => setThinkingPrompt(defaultThinkingPrompt) },
-    choices: { label: PROMPT_LABELS.choices, reset: () => setChoicesPrompt(defaultChoicesPrompt) },
-    statupdates: { label: PROMPT_LABELS.statupdates, reset: () => setStatUpdatesPrompt(defaultStatUpdatesPrompt) },
-    location: { label: PROMPT_LABELS.location, reset: () => setLocationChangePromptText(defaultLocationChangePrompt) },
-    summary: { label: PROMPT_LABELS.summary, reset: () => setSummaryPrompt(defaultSummaryPrompt) },
-    timepassed: { label: PROMPT_LABELS.timepassed, reset: () => setTimePassedPrompt(defaultTimePassedPrompt) },
-    timeopening: { label: PROMPT_LABELS.timeopening, reset: () => setOpeningTimePrompt(defaultOpeningTimePrompt) },
-    scenetags: { label: PROMPT_LABELS.scenetags, reset: () => setSceneTagsPrompt(defaultSceneTagsPrompt) },
-    diary: { label: PROMPT_LABELS.diary, reset: () => setDiaryPrompt(defaultDiaryPrompt) },
-    director: { label: PROMPT_LABELS.director, reset: () => setDirectorPrompt(defaultDirectorPrompt) },
-    character: { label: PROMPT_LABELS.character, reset: () => setCharacterPrompt(defaultCharacterPrompt) },
-    storyboard: { label: PROMPT_LABELS.storyboard, reset: () => setStoryboardPrompt(defaultStoryboardPrompt) },
+  const editablePrompts: Record<string, EditablePrompt & { label: string }> = {
+    narration: { label: PROMPT_LABELS.narration, value: systemPrompt, def: styledDefaults.systemPrompt, set: setSystemPrompt, variables: PROMPT_KIND_VARIABLES.narration },
+    thinking: { label: PROMPT_LABELS.thinking, value: thinkingPrompt, def: styledDefaults.thinkingPrompt, set: setThinkingPrompt, variables: PROMPT_KIND_VARIABLES.thinking },
+    choices: { label: PROMPT_LABELS.choices, value: choicesPrompt, def: styledDefaults.choicesPrompt, set: setChoicesPrompt, variables: PROMPT_KIND_VARIABLES.choices },
+    statupdates: { label: PROMPT_LABELS.statupdates, value: statUpdatesPrompt, def: styledDefaults.statUpdatesPrompt, set: setStatUpdatesPrompt, variables: PROMPT_KIND_VARIABLES.statupdates },
+    location: { label: PROMPT_LABELS.location, value: locationChangePromptText, def: styledDefaults.locationChangePromptText, set: setLocationChangePromptText, variables: PROMPT_KIND_VARIABLES.location },
+    summary: { label: PROMPT_LABELS.summary, value: summaryPrompt, def: styledDefaults.summaryPrompt, set: setSummaryPrompt, variables: PROMPT_KIND_VARIABLES.summary },
+    milestone: { label: PROMPT_LABELS.milestone, value: milestoneSelectPrompt, def: styledDefaults.milestoneSelectPrompt, set: setMilestoneSelectPrompt, variables: PROMPT_KIND_VARIABLES.milestone },
+    timepassed: { label: PROMPT_LABELS.timepassed, value: timePassedPrompt, def: styledDefaults.timePassedPrompt, set: setTimePassedPrompt, variables: PROMPT_KIND_VARIABLES.timepassed },
+    timeopening: { label: PROMPT_LABELS.timeopening, value: openingTimePrompt, def: styledDefaults.openingTimePrompt, set: setOpeningTimePrompt, variables: PROMPT_KIND_VARIABLES.timeopening },
+    scenetags: { label: PROMPT_LABELS.scenetags, value: sceneTagsPrompt, def: styledDefaults.sceneTagsPrompt, set: setSceneTagsPrompt, variables: PROMPT_KIND_VARIABLES.scenetags },
+    diary: { label: PROMPT_LABELS.diary, value: diaryPrompt, def: styledDefaults.diaryPrompt, set: setDiaryPrompt, variables: PROMPT_KIND_VARIABLES.diary },
+    director: { label: PROMPT_LABELS.director, value: directorPrompt, def: styledDefaults.directorPrompt, set: setDirectorPrompt, variables: PROMPT_KIND_VARIABLES.director },
+    character: { label: PROMPT_LABELS.character, value: characterPrompt, def: styledDefaults.characterPrompt, set: setCharacterPrompt, variables: PROMPT_KIND_VARIABLES.character },
+    discover: { label: PROMPT_LABELS.discover, value: discoverEntityPrompt, def: styledDefaults.discoverEntityPrompt, set: setDiscoverEntityPrompt, variables: PROMPT_KIND_VARIABLES.discover },
+    storyboard: { label: PROMPT_LABELS.storyboard, value: storyboardPrompt, def: styledDefaults.storyboardPrompt, set: setStoryboardPrompt, variables: PROMPT_KIND_VARIABLES.storyboard },
     // Reset restores the prompt AND its cap: the two were edited as a pair, so restoring only the text
     // would leave a default template running under a cap the author raised for a longer one.
     playerdesc: {
-      label: 'Player Description',
-      reset: () => { setPlayerDescPrompt(DEFAULT_PLAYER_DESC_PROMPT); setDescMaxTokens('playerdesc', DEFAULT_BRIDGE_MAX_TOKENS); },
+      label: 'Player Description', value: playerDescPrompt, def: styledDefaults.playerDescPrompt, set: setPlayerDescPrompt,
+      variables: PROMPT_KIND_VARIABLES.playerdesc, onReset: () => setDescMaxTokens('playerdesc', DEFAULT_BRIDGE_MAX_TOKENS),
     },
     aidesc: {
-      label: 'AI Description',
-      reset: () => { setAiDescPrompt(DEFAULT_AI_DESC_PROMPT); setDescMaxTokens('aidesc', DEFAULT_BRIDGE_MAX_TOKENS); },
+      label: 'AI Description', value: aiDescPrompt, def: styledDefaults.aiDescPrompt, set: setAiDescPrompt,
+      variables: PROMPT_KIND_VARIABLES.aidesc, onReset: () => setDescMaxTokens('aidesc', DEFAULT_BRIDGE_MAX_TOKENS),
     },
     aisummary: {
-      label: 'AI Summary',
-      reset: () => { setAiSummaryPrompt(DEFAULT_AI_SUMMARY_PROMPT); setDescMaxTokens('aisummary', DEFAULT_SUMMARY_MAX_TOKENS); },
+      label: 'AI Summary', value: aiSummaryPrompt, def: styledDefaults.aiSummaryPrompt, set: setAiSummaryPrompt,
+      variables: PROMPT_KIND_VARIABLES.aisummary, onReset: () => setDescMaxTokens('aisummary', DEFAULT_SUMMARY_MAX_TOKENS),
     },
     desccheck: {
-      label: 'Description Check',
-      reset: () => { setDescCheckPrompt(DEFAULT_DESC_CHECK_PROMPT); setDescMaxTokens('desccheck', DEFAULT_CHECK_MAX_TOKENS); },
+      label: 'Description Check', value: descCheckPrompt, def: styledDefaults.descCheckPrompt, set: setDescCheckPrompt,
+      variables: PROMPT_KIND_VARIABLES.desccheck, onReset: () => setDescMaxTokens('desccheck', DEFAULT_CHECK_MAX_TOKENS),
     },
   };
   // Each prompt tab only exists while its prompt is enabled (toggled in Generation → System Prompts, or
   // its governing setting for Thinking/Summary). If the open tab is no longer available (disabled since,
   // or on reopen), fall back to Narration so the panel isn't blank.
   const promptAvailable = computePromptTabAvailability({
-    thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, aiClock,
-    sceneImages: !imageGenDisabled,
-    advanced,
+    thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, describeCharacters, aiClock,
+    sceneImages: !imageGenDisabled, advanced,
   });
   const activePromptTab = promptAvailable[promptTab] ? promptTab : 'narration';
   // Tag Prompt only exists while image generation is on; fall back to Image so the panel is never blank.
   const activeEndpointTab = imageGenDisabled && endpointTab === 'img-tagprompt' ? 'img-endpoint' : endpointTab;
-  const selectedPrompt = promptResets[activePromptTab] ?? promptResets.narration;
+  const visibleEndpointTabs = endpointTabsFor(advanced, !imageGenDisabled);
+  const selectedPrompt = editablePrompts[activePromptTab] ?? editablePrompts.narration;
 
   // Each prompt has a System editor, an Options sub-tab, and — for the aux prompts — a User-message editor.
   // Narration additionally has a Messages view: the conditional user-slot lines that ride the narration
   // exchange (Recap, Recall, Direction), stacked with per-field resets, each hidden with its feature.
   // Null is the Anatomy hub — the prompt with no editor open, which is where selecting one lands.
   const [promptView, setPromptView] = useState<PromptSurface | null>(null);
-  // Which stacked field of the Messages view to scroll to and focus on arrival, set by a hub jump.
-  const [jumpField, setJumpField] = useState<MessageField | null>(null);
+  // The stacked Messages fields, by key, so a jump from the hub can land on the one it named.
+  const messageFieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Instant, not smooth: the field has to be under the cursor by the time focus lands on it. A built-in
+  // preset's editors are read-only, so there is nothing to put a caret in; the scroll is the whole jump.
+  const landField = useLanding((field: MessageField) => messageFieldRefs.current[field] ?? null, {
+    pulse: true,
+    block: 'start',
+    focus: (field) => field.querySelector<HTMLElement>('[data-lexical-editor][contenteditable="true"]'),
+  });
   // Which chip the arriving editor should scroll to and ring, set by a hub jump onto one.
   const [jumpChip, setJumpChip] = useState<string | null>(null);
   // How the hub draws a request. Held here rather than in the panel so a trip into an editor and back
@@ -1072,39 +797,52 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
         ? null
         : (initialPromptSurface as PromptSurface),
     );
-    setJumpField(initialPromptField ?? null);
-  }, [initialPromptSurface, initialPromptTab, initialPromptField]);
-  // Fullscreen for the whole Prompts panel (rail included), not for one field — see PromptsShell. The
+    if (initialPromptField) landField(initialPromptField);
+  }, [initialPromptSurface, initialPromptTab, initialPromptField, requestKey, landField]);
+  // Fullscreen for the whole Prompts panel (rail included), not for one field — see PanelShell. The
   // morph is the single source of truth: fields read `contentInOverlay`, so they return to their docked
   // form the moment the close starts — under the overlay, by then a fading solid panel.
   const promptsPanelRef = useRef<HTMLDivElement | null>(null);
   const promptsMorph = useMorphFullscreen(promptsPanelRef);
   const promptsFullscreen = promptsMorph.contentInOverlay;
+  // The Tools tab's own full screen, the same morph. Its view lives here so the remount keeps it.
+  const toolsPanelRef = useRef<HTMLDivElement | null>(null);
+  const toolsMorph = useMorphFullscreen(toolsPanelRef);
+  const [toolsView, setToolsView] = useState<ToolsView>(EMPTY_TOOLS_VIEW);
+  // DEV dev-router: `tab=tools&subtab=<edit tab>` opens a New Tool draft on that tab.
+  useEffect(() => {
+    const editTab = TOOL_EDIT_TABS.find((t) => t.value === initialPromptTab)?.value;
+    if (initialTab === 'tools' && editTab) setToolsView({ selectedId: null, draft: blankTool(randomUUID()), editTab, keptHandlers: {} });
+  }, [initialTab, initialPromptTab]);
   // Selecting a prompt — including re-selecting the open one — returns to its hub, so the map is always
   // one click away from any editor.
-  const selectPromptTab = (t: string) => { setPromptTab(t); setPromptView(null); setJumpField(null); };
+  const selectPromptTab = (t: string) => { setOverviewOpen(false); setPromptTab(t); setPromptView(null); };
+  const selectPromptView = (s: PromptSurface | null) => { setOverviewOpen(false); setPromptView(s); };
   /** A clicked run or chip in the anatomy: open the prompt, the editor that owns it, and — for a chip —
    *  the placement itself. A target with no surface is another prompt's hub. */
   const jumpToPrompt = (target: PromptJumpTarget) => {
+    setOverviewOpen(false);
     setPromptTab(target.tab);
     setPromptView(target.surface ?? null);
-    setJumpField(target.field ?? null);
+    if (target.field) landField(target.field);
     setJumpChip(target.chip ?? null);
   };
   // The rail's groups, with prompts whose feature is off already removed.
   const railGroups = visibleGroups(promptAvailable);
-  const userPrompts: Record<string, { value: string; set: (s: string) => void; reset: () => void; variables: typeof PROMPT_KIND_VARIABLES.choices }> = {
+  const userPrompts: Record<string, EditablePrompt> = {
     // Narration's user template applies only with thinking off (GameViewer guard); hide the editor
     // in other modes so a change there can't silently do nothing.
-    ...(thinkingMode === 'off' ? { narration: { value: narrationUserPrompt, set: setNarrationUserPrompt, reset: () => setNarrationUserPrompt(defaultNarrationUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.narration ?? [] } } : {}),
-    choices: { value: choicesUserPrompt, set: setChoicesUserPrompt, reset: () => setChoicesUserPrompt(defaultChoicesUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.choices ?? [] },
-    statupdates: { value: statUpdatesUserPrompt, set: setStatUpdatesUserPrompt, reset: () => setStatUpdatesUserPrompt(defaultStatUpdatesUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.statupdates ?? [] },
-    location: { value: locationChangeUserPrompt, set: setLocationChangeUserPrompt, reset: () => setLocationChangeUserPrompt(defaultLocationChangeUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.location ?? [] },
-    summary: { value: summaryUserPrompt, set: setSummaryUserPrompt, reset: () => setSummaryUserPrompt(defaultSummaryUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.summary ?? [] },
-    timepassed: { value: timePassedUserPrompt, set: setTimePassedUserPrompt, reset: () => setTimePassedUserPrompt(defaultTimePassedUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.timepassed ?? [] },
-    timeopening: { value: openingTimeUserPrompt, set: setOpeningTimeUserPrompt, reset: () => setOpeningTimeUserPrompt(defaultOpeningTimeUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.timeopening ?? [] },
-    director: { value: directorUserPrompt, set: setDirectorUserPrompt, reset: () => setDirectorUserPrompt(defaultDirectorUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.director ?? [] },
-    scenetags: { value: sceneTagsUserPrompt, set: setSceneTagsUserPrompt, reset: () => setSceneTagsUserPrompt(defaultSceneTagsUserPrompt), variables: PROMPT_KIND_USER_VARIABLES.scenetags ?? [] },
+    ...(thinkingMode === 'off' ? { narration: { value: narrationUserPrompt, set: setNarrationUserPrompt, def: styledDefaults.narrationUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.narration ?? NO_VARIABLES } } : {}),
+    choices: { value: choicesUserPrompt, set: setChoicesUserPrompt, def: styledDefaults.choicesUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.choices ?? NO_VARIABLES },
+    statupdates: { value: statUpdatesUserPrompt, set: setStatUpdatesUserPrompt, def: styledDefaults.statUpdatesUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.statupdates ?? NO_VARIABLES },
+    location: { value: locationChangeUserPrompt, set: setLocationChangeUserPrompt, def: styledDefaults.locationChangeUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.location ?? NO_VARIABLES },
+    summary: { value: summaryUserPrompt, set: setSummaryUserPrompt, def: styledDefaults.summaryUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.summary ?? NO_VARIABLES },
+    milestone: { value: milestoneSelectUserPrompt, set: setMilestoneSelectUserPrompt, def: styledDefaults.milestoneSelectUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.milestone ?? NO_VARIABLES },
+    timepassed: { value: timePassedUserPrompt, set: setTimePassedUserPrompt, def: styledDefaults.timePassedUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.timepassed ?? NO_VARIABLES },
+    timeopening: { value: openingTimeUserPrompt, set: setOpeningTimeUserPrompt, def: styledDefaults.openingTimeUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.timeopening ?? NO_VARIABLES },
+    director: { value: directorUserPrompt, set: setDirectorUserPrompt, def: styledDefaults.directorUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.director ?? NO_VARIABLES },
+    scenetags: { value: sceneTagsUserPrompt, set: setSceneTagsUserPrompt, def: styledDefaults.sceneTagsUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.scenetags ?? NO_VARIABLES },
+    discover: { value: discoverEntityUserPrompt, set: setDiscoverEntityUserPrompt, def: styledDefaults.discoverEntityUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.discover ?? NO_VARIABLES },
   };
   const activeUserPrompt = userPrompts[activePromptTab];
   const showingUser = promptView === 'user' && !!activeUserPrompt;
@@ -1124,42 +862,33 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   const messageFields = [
     ...(recapAvailable ? [{
       key: 'recap', ...SETTINGS_COPY.recapMessage,
-      value: recapUserPrompt, set: setRecapUserPrompt, def: defaultRecapUserPrompt,
-      variables: undefined,
+      value: recapUserPrompt, set: setRecapUserPrompt, def: styledDefaults.recapUserPrompt,
+      variables: undefined, vocabulary: NO_VARIABLES_VOCABULARY,
     }] : []),
     ...(nowAvailable ? [{
       key: 'now', ...SETTINGS_COPY.nowMessage,
-      value: nowLinePrompt, set: setNowLinePrompt, def: defaultNowLinePrompt,
-      variables: NOW_LINE_VARIABLES,
+      value: nowLinePrompt, set: setNowLinePrompt, def: styledDefaults.nowLinePrompt,
+      variables: NOW_LINE_VARIABLES, vocabulary: NOW_LINE_VOCABULARY,
     }] : []),
     ...(recallAvailable ? [{
       key: 'recall', ...SETTINGS_COPY.recallMessage,
-      value: rehydrateUserPrompt, set: setRehydrateUserPrompt, def: defaultRehydrateUserPrompt,
-      variables: undefined,
+      value: rehydrateUserPrompt, set: setRehydrateUserPrompt, def: styledDefaults.rehydrateUserPrompt,
+      variables: undefined, vocabulary: NO_VARIABLES_VOCABULARY,
     }] : []),
     ...(directionAvailable ? [{
       key: 'direction', ...SETTINGS_COPY.directionMessage,
-      value: oocDirectivePrompt, set: setOocDirectivePrompt, def: defaultOocDirectivePrompt,
-      variables: undefined,
+      value: oocDirectivePrompt, set: setOocDirectivePrompt, def: styledDefaults.oocDirectivePrompt,
+      variables: undefined, vocabulary: NO_VARIABLES_VOCABULARY,
     }] : []),
   ];
-  // The stacked Messages fields, by key, so a jump from the hub can land on the one it named.
-  const messageFieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  useEffect(() => {
-    if (!jumpField || !showingMessages) return;
-    const node = messageFieldRefs.current[jumpField];
-    // Instant, not smooth: the field has to be under the cursor by the time focus lands on it. A built-in
-    // preset's editors are read-only, so there is nothing to put a caret in — the scroll is the whole jump.
-    node?.scrollIntoView({ block: 'start' });
-    node?.querySelector<HTMLElement>('[data-lexical-editor][contenteditable="true"]')?.focus();
-    setJumpField(null);
-  }, [jumpField, showingMessages]);
   // A chip jump lands on the editor holding it; the reveal waits out that editor's mount on its own.
   useEffect(() => {
     if (!jumpChip || !promptView) return;
     revealEditorChip(jumpChip);
     setJumpChip(null);
   }, [jumpChip, promptView]);
+  // Its own effect: the jump effect re-runs as soon as it clears `jumpChip`, which would cancel the reveal.
+  useEffect(() => cancelEditorReveals, []);
 
   // The generation settings the Anatomy hub draws under. Memoized alongside its prompts and its value pool
   // so all three inputs are stable: a hub re-runs a turn's worth of assembly, and a fresh object on any of
@@ -1189,16 +918,18 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
       storyboard: storyboardPrompt,
       narrationUser: narrationUserPrompt,
       oocDirective: oocDirectivePrompt,
-      // The hub draws a mid-story turn, so the opening cue and the discovery prompt are along for the
-      // shape only — neither is an editor surface, and no hub renders either.
+      // The hub draws a mid-story turn, so the opening cue is along for the shape only.
       openingCue: OPENING_SCENE_CUE,
-      discoverEntity: defaultDiscoverEntityPrompt,
+      discoverEntity: discoverEntityPrompt,
+      discoverEntityUser: discoverEntityUserPrompt,
       choices: choicesPrompt,
       choicesUser: choicesUserPrompt,
       statUpdates: statUpdatesPrompt,
       statUpdatesUser: statUpdatesUserPrompt,
       summary: summaryPrompt,
       summaryUser: summaryUserPrompt,
+      milestoneSelect: milestoneSelectPrompt,
+      milestoneSelectUser: milestoneSelectUserPrompt,
       timePassed: timePassedPrompt,
       timePassedUser: timePassedUserPrompt,
       openingTime: openingTimePrompt,
@@ -1214,11 +945,12 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
     choicesPrompt, choicesUserPrompt, statUpdatesPrompt, statUpdatesUserPrompt,
     summaryPrompt, summaryUserPrompt, timePassedPrompt, timePassedUserPrompt,
     openingTimePrompt, openingTimeUserPrompt, diaryPrompt, sceneTagsPrompt, sceneTagsUserPrompt,
+    discoverEntityPrompt, discoverEntityUserPrompt, milestoneSelectPrompt, milestoneSelectUserPrompt,
   ]);
 
   // The authoring prompts have only their system template: no user message, no riders, and no per-request
-  // tuning to put under Options (they run outside the turn pipeline, so there is no AIRequestType to key
-  // samplers or endpoint routing by). Their output cap rides the System view instead.
+  // tuning to put under Options (their editor request kinds have no preset rows). Their output cap rides
+  // the System view instead.
   const authoringPrompt = isAuthoringTab(activePromptTab);
   // Which editors the open prompt actually has — the rail lists exactly these under it.
   const activeSurfaces: PromptSurface[] = authoringPrompt ? ['system'] : [
@@ -1231,18 +963,18 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // The hub: the prompt selected with no editor open. An editor the open prompt doesn't have lands here
   // too, rather than on a blank panel.
   //
-  // An authoring prompt is the exception: it runs outside the turn pipeline, so there is no request for a
-  // hub to draw and `buildAnatomyHub` returns nothing for it. Its System template is the only editor it
-  // has, so selecting one opens that template rather than landing on a hub that would render empty.
+  // An authoring prompt is the exception: it runs outside the turn, so there is no request for a hub to
+  // draw. Its System template is the only editor it has, so selecting one opens that template rather than
+  // landing on a hub that would render empty.
   const showingHub = !authoringPrompt && (promptView === null || !activeSurfaces.includes(promptView));
   /** The editor the surface controls point at — for an authoring prompt, never the hub it hasn't got. */
   const promptSurface: PromptSurface | null = authoringPrompt ? (promptView ?? 'system') : promptView;
-  // The Reset button targets whichever template is on screen. `label` is the full noun ("Narration Prompt"
-  // or just "Message" for the user-message template), so the button reads "Reset <label>". The Messages
-  // view carries its own per-field resets, so the footer button hides there (like Options).
-  const resetTarget = showingUser && activeUserPrompt
-    ? { label: `${selectedPrompt.label} Message`, reset: activeUserPrompt.reset }
-    : { label: `${selectedPrompt.label} Prompt`, reset: selectedPrompt.reset };
+  // The footer's Reset and Compare target whichever template is on screen, named by its full noun. The
+  // Messages view carries a pair per field, so the footer hides there (like Options).
+  const footerPrompt = showingUser && activeUserPrompt
+    ? { name: `${selectedPrompt.label} Message`, ...activeUserPrompt }
+    : { name: `${selectedPrompt.label} Prompt`, ...selectedPrompt };
+  const footerVocabulary = useMemo(() => promptVocabulary(footerPrompt.variables), [footerPrompt.variables]);
 
   // Verbatim-turns control for the active prompt, shown once in the footer (like Reset).
   const promptVerbatim: Record<string, { value: number; set: (n: number) => void }> = {
@@ -1259,7 +991,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // Per-prompt samplers for the active tab. Off shows the kind's default (read-only); on shows the stored
   // custom value (seeded to the default on first enable). A default of `undefined` means the prompt omits the
   // sampler (a non-pinned prompt on a custom endpoint) — the panel names its endpoint state.
-  const activeKind = TAB_TO_REQUEST[activePromptTab] ?? 'narration';
+  const activeKind = isPromptTab(activePromptTab) ? PROMPT_TAB_REQUESTS[activePromptTab] : 'narration';
   const activeSamplers = promptSamplers[activeKind];
   // Endpoint routing for this prompt. A pin naming a preset that no longer exists shows as Use Active Endpoint —
   // the same thing it actually resolves to at request time.
@@ -1270,9 +1002,15 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
   // controls even while the engine is running, and vice versa.
   const promptTarget = resolveEndpointForKind(activeKind);
   const promptLocalEngine = promptTarget.localEngine;
-  const promptReasoningCapability = promptTarget.reasoning;
+  const pinnedEndpoint = routableEndpoints.find((p) => p.id === pinnedEndpointId);
   const endpointControl = {
-    value: pinnedEndpointId && routableEndpoints.some((p) => p.id === pinnedEndpointId) ? pinnedEndpointId : null,
+    label: SETTINGS_COPY.promptEndpoint.label,
+    description: SETTINGS_COPY.promptEndpoint.description,
+    // The ⓘ names the current target; the fixed description does not.
+    info: pinnedEndpoint
+      ? `Always goes to ${pinnedEndpoint.name}, even when you switch endpoints elsewhere`
+      : 'Follows the endpoint picked on the **AI Endpoints** tab. Switch endpoints there and this prompt follows.',
+    value: pinnedEndpoint ? pinnedEndpoint.id : null,
     activeName: activeTextEndpointPresetName,
     presets: routableEndpoints,
     onChange: (id: string | null) => setPromptEndpoint(activeKind, id),
@@ -1284,6 +1022,20 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
       enabled: promptTarget.presetId !== null,
     },
   };
+  // Hidden while Image Attachments is off, and on prompts that never send the action; the stored flags stay.
+  const attachmentsControl = imageAttachmentsOn && ATTACHMENT_PROMPTS.has(activeKind)
+    ? { checked: includesAttachments(promptAttachments, activeKind), onChange: (include: boolean) => setPromptAttachments(activeKind, include) }
+    : null;
+  // The cap this prompt sends, which the Max Output row reads.
+  const maxOutputControl = isMaxOutputKind(activeKind)
+    ? {
+        custom: promptMaxOutput[activeKind]?.custom ?? false,
+        value: promptMaxOutput[activeKind]?.value ?? shippedMaxOutput(activeKind),
+        shipped: shippedMaxOutput(activeKind),
+        onCustomChange: (c: boolean) => setPromptMaxOutputCustom(activeKind, c),
+        onValueChange: (v: number) => setPromptMaxOutputValue(activeKind, v),
+      }
+    : null;
   const samplerControls: SamplerControlProps[] = [
     {
       id: 'customTemp',
@@ -1310,60 +1062,29 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
       onValueChange: (v) => setPromptSamplerValue(activeKind, 'repetitionPenalty', v),
     },
   ];
-  const endpointSamplerControls: SamplerControlProps[] = ([
-    ['Temperature', 'endpointTemperature', 'temperature', 0, 2, 0.05],
-    ['Repetition Penalty', 'endpointRepetitionPenalty', 'repetitionPenalty', 1, 1.5, 0.02],
-    ['Top-p', 'endpointTopP', 'topP', 0, 1, 0.05],
-    ['Top-k', 'endpointTopK', 'topK', 0, 100, 1],
-    ['Min-p', 'endpointMinP', 'minP', 0, 0.5, 0.01],
-  ] as const).map(([_label, id, sampler, min, max, step]) => {
-    const key = sampler as keyof typeof endpointSamplerOverrides;
-    const copy = SETTINGS_COPY[id as keyof typeof SETTINGS_COPY];
-    return {
-      id,
-      label: copy.label,
-      hint: copy.description ?? '',
-      min,
-      max,
-      step,
-      custom: endpointSamplerOverrides[key].enabled,
-      value: endpointSamplerOverrides[key].value,
-      defaultValue: undefined,
-      onCustomChange: (enabled: boolean) => setEndpointSamplerEnabled(key, enabled),
-      onValueChange: (value: number) => setEndpointSamplerValue(key, value),
-    };
+  // The Output row reads the ACTIVE endpoint's record, not the selected prompt's routed target. It is the
+  // endpoint-wide strength every Global prompt follows, routed ones included, so it gives way only where
+  // the active model is ruled out entirely.
+  const activeNoNativeReasoning = reasoningRuledOut(reasoningCapability);
+  const activeToolsSupported = toolsSupported(reasoningCapability);
+  // Beside a budget, the stored level still goes out; the Output row is its visible control.
+  const reasoningControl = promptReasoningFieldProps({
+    target: promptTarget,
+    kind: activeKind,
+    setting: promptReasoningSettings[activeKind] ?? defaultPromptReasoningSetting(activeKind),
+    budgetPct: resolveReasoningBudgetPct(activeKind, promptReasoningBudget),
+    suppressed: nativeReasoningSuppressed(thinkingMode, activeKind),
+    onChange: (v: PromptReasoningSetting) => setPromptReasoning(activeKind, v),
+    onBudgetChange: (v: number) => setPromptReasoningBudget(activeKind, v),
   });
-  // Per-prompt Native Reasoning control, hidden where the call is force-suppressed (Inline narration) and on
-  // an endpoint probed as non-reasoning. Its switch is shared by every target; the strength beside it is the
-  // token budget wherever the record says the target takes one, and the coarse effort level elsewhere. The
-  // effort still goes out beside a budget, from the stored level — the Output row is its visible control.
-  // A record rules reasoning out when the model is known not to reason, or when the endpoint accepts no
-  // reasoning_effort literal at all (not even `none`). An unanswered record keeps the controls showing.
-  const noNativeReasoning = reasoningRuledOut(promptReasoningCapability);
-  const reasoningApplicable = !nativeReasoningSuppressed(thinkingMode, activeKind) && (promptLocalEngine || !noNativeReasoning);
-  const reasoningControl = reasoningApplicable
-    ? {
-        setting: promptReasoningSettings[activeKind] ?? defaultPromptReasoningSetting(activeKind),
-        onChange: (v: PromptReasoningSetting) => setPromptReasoning(activeKind, v),
-        options: promptReasoningLevelOptions(promptReasoningCapability, (promptReasoningSettings[activeKind] ?? defaultPromptReasoningSetting(activeKind)).level),
-        budget: promptReasoningCapability.budget
-          ? { value: promptReasoningBudget[activeKind] ?? defaultReasoningBudgetPct(activeKind), set: (v: number) => setPromptReasoningBudget(activeKind, v) }
-          : null,
-        // The built-in engine ignores reasoning_effort, so its dropdown would be inert; every other target sends it.
-        level: !promptLocalEngine,
-      }
-    : null;
 
   // Only meaningful in Simple mode, where the settings it reports on are the ones out of sight. Most hidden
   // rows sit behind a switch Simple still shows (Thinking, the image Provider), so Advanced can always reach
   // them. Native Reasoning is the exception: an endpoint that rejects every effort level has no such row to
   // reach, so a stored level there is left out rather than promising one.
   const hasHiddenValues = !advanced && settingsUseAdvancedValues({
-    paragraphLimit, markdownOutput, limitActiveCharacters, activeCharacterLimit,
-    ...(noNativeReasoning ? {} : { reasoningEffort }),
-    memoryDigests, semanticMemory, semanticBandCap, semanticRehydration, timeContext, aiClock,
-    semanticLore, describeCharacters, characterDiaries, semanticDiaries,
-    concurrentTurnRequests, showReasoning, showSilentRequests, maxTokens,
+    ...sectionHiddenFields(settings),
+    maxTokens,
     imagePortraitWidth, imagePortraitHeight, imageLandscapeWidth, imageLandscapeHeight,
     imageWorkflowCustom: imageWorkflow !== DEFAULT_COMFY_WORKFLOW,
     imageInvokeBoard, imageInvokeEncoder, imageInvokeVae,
@@ -1377,51 +1098,31 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
           rather than a list of controls, and the extra width is what lets the editor show edit and
           preview side by side instead of one at a time. */}
       <DialogContent
+        ref={dialogRef}
+        surface="settings"
         aria-describedby={undefined}
         // One width for every tab, matching the Feedback hub — Prompts wanted a wider window only to fit
         // the side-by-side panes, and those now belong to full screen.
-        className={cn(
-          'flex flex-col overflow-hidden sm:max-w-[900px]',
-          // Mobile has no room to spend on the frame around a settings panel — fill the screen.
-          dialogFullHeightMobile,
-          'max-sm:w-screen max-sm:max-w-none max-sm:rounded-none max-sm:border-0 sm:h-[90dvh]',
-        )}
+        className={SETTINGS_DIALOG_SIZE}
       >
         <DialogHeader className="flex-shrink-0">
           {/* The close cross is absolutely placed over this row, so the switch is kept clear of it. */}
           <div className="flex items-center gap-4 pr-8">
             <DialogTitle className="flex items-center gap-2"><Settings className="h-4 w-4" /> Settings</DialogTitle>
             <TutorialPopover entry={tutorial} nav={tutorialNav}>
-              <ToggleGroup
-                type="single"
-                value={mode}
+              <SettingsModeSwitch
+                mode={mode}
                 // Using the switch is itself the lesson, so it retires the tutorial as surely as the button does.
-                onValueChange={(v) => { if (v) { dismissTutorial(); setMode(v as SettingsMode); } }}
-                aria-label="Settings mode"
-                className="ml-auto h-8"
-              >
-                <ToggleGroupItem value="simple" className="px-2 py-1">Simple</ToggleGroupItem>
-                {/* The marker rides the switch that acts on it: it says "there is more through here",
-                    which is exactly what this control does. */}
-                <Tip
-                  tip={hasHiddenValues ? 'Some hidden settings are off their defaults. Switch to Advanced to see them.' : undefined}
-                  labelsChild={false}
-                >
-                  <ToggleGroupItem value="advanced" className="relative px-2 py-1">
-                    Advanced
-                    {hasHiddenValues && (
-                      <span
-                        aria-label="Hidden settings are off their defaults"
-                        className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
-                      />
-                    )}
-                  </ToggleGroupItem>
-                </Tip>
-              </ToggleGroup>
+                onModeChange={(next) => { dismissTutorial(); setMode(next); }}
+                hasHiddenValues={hasHiddenValues}
+                className="ml-auto"
+                // The Data tab's guide sections need Advanced, so they land on this switch.
+                {...targetAttribute('settings.data', 'settings-mode')}
+              />
             </TutorialPopover>
           </div>
         </DialogHeader>
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex flex-col flex-1 min-h-0">
+        <Tabs surfaceTabs="settings" value={activeTab} onValueChange={setActiveTab} className="w-full flex flex-col flex-1 min-h-0">
           {/* The tab labels don't fit narrow mobile, so below sm the tab strip becomes a dropdown of the
               active tab; sm+ keeps the full row. Both drive the same activeTab state. */}
           <Select value={activeTab} onValueChange={setActiveTab}>
@@ -1435,7 +1136,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
             </SelectContent>
           </Select>
           <TabsList
-            className={cn('hidden w-full flex-shrink-0 sm:grid', advanced ? 'grid-cols-5' : 'grid-cols-4')}
+            className={cn('hidden w-full flex-shrink-0 sm:grid', advanced ? 'grid-cols-6' : 'grid-cols-4')}
           >
             {visibleTabs.map((t) => (
               <TabsTrigger key={t.value} value={t.value}>{t.label}</TabsTrigger>
@@ -1443,727 +1144,36 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
           </TabsList>
 
           <TabsContent value="display" className="px-2 flex-1 min-h-0 data-[state=active]:flex flex-col">
-            <ScrollArea className="flex-1 min-h-0">
-            <div className="grid gap-6 py-4">
-              <Section title="Appearance">
-              <Row top {...optionRowCopy('theme', THEME_OPTIONS.find((o) => o.value === theme))}>
-                <div>
-                  <ToggleGroup
-                    type="single"
-                    value={theme}
-                    // A single ToggleGroup clears its value when the active item is clicked again; a theme
-                    // is always set, so an empty result is ignored rather than stored.
-                    onValueChange={(v) => { if (v) setTheme(v as 'light' | 'dark' | 'system'); }}
-                    className="grid w-full grid-cols-3"
-                  >
-                    {THEME_OPTIONS.map((o) => (
-                      <ToggleGroupItem key={o.value} value={o.value}>{o.label}{o.recommended && <RecommendedMark />}</ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                  {/* Help texts stacked in one cell so switching options doesn't reflow the layout. */}
-                  <div className="grid mt-2">
-                    {THEME_OPTIONS.map((o) => (
-                      <p
-                        key={o.value}
-                        className={`col-start-1 row-start-1 text-helper text-muted-foreground${o.value === theme ? '' : ' invisible'}`}
-                      >
-                        {o.help}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              </Row>
-              <Row htmlFor="themeColor" {...rowCopy('themeColor')}>
-                <div className="flex items-center gap-3">
-                  <Select value={themeColor} onValueChange={(v) => setThemeColor(v as ThemeColor)}>
-                    <SelectTrigger id="themeColor" className="w-48">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {THEME_COLORS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <ThemePreviewButton />
-                </div>
-              </Row>
-              <Row htmlFor="fontFamily" {...rowCopy('font')}>
-                <div className="flex items-center gap-3">
-                  <Select value={fontFamily} onValueChange={(v) => setFontFamily(v as FontChoice)}>
-                    <SelectTrigger id="fontFamily" className="w-48">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {FONT_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value} style={{ fontFamily: o.stack || undefined }}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FontTuneButton font={fontFamily} />
-                </div>
-              </Row>
-              </Section>
-
-              <Section title="Scene">
-              <CheckRow
-                htmlFor="bgmEnabled"
-                checked={bgmEnabled}
-                onChange={setBgmEnabled}
-                {...rowCopy('backgroundMusic')}
-              />
-              <CheckRow
-                htmlFor="locationBackground"
-                checked={locationBackground}
-                onChange={setLocationBackground}
-                {...rowCopy('locationBackground')}
-              />
-              {locationBackground && (
-                <SubGroup>
-                <Row {...rowCopy('backgroundFade')}>
-                  <div className="flex items-center gap-3">
-                    <Slider
-                      value={[backgroundOverlay]}
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      onValueChange={(v) => setBackgroundOverlay(v[0])}
-                      className="max-w-[220px]"
-                    />
-                    <span className="text-meta text-muted-foreground tabular-nums w-9 shrink-0">
-                      {Math.round(backgroundOverlay * 100)}%
-                    </span>
-                  </div>
-                </Row>
-                </SubGroup>
-              )}
-              {/* Whether every turn gets a picture is a scene setting; the server that draws it stays on
-                  Endpoints. Hidden with image generation itself, which is the switch it depends on. */}
-              {!imageGenDisabled && (
-                <CheckRow
-                  htmlFor="sceneImageAuto"
-                  checked={sceneImageAuto}
-                  onChange={setSceneImageAuto}
-                  {...rowCopy('sceneImages')}
-                />
-              )}
-              </Section>
-
-              <Section title="Narration">
-              <Row {...rowCopy('narrationReveal')}>
-                <RevealAnimationDemoButton />
-              </Row>
-              <Row {...rowCopy('aiLanguage')}>
-                <TokenAutocomplete
-                  single
-                  openOnFocus
-                  values={language ? [language] : []}
-                  onChange={(vals) => setLanguage(vals[0] ?? '')}
-                  options={COMMON_LANGUAGES}
-                  placeholder="Language or style…"
-                />
-              </Row>
-              {advanced && (
-              <Row top {...optionRowCopy('paragraphLimit', PARAGRAPH_LIMIT_OPTIONS.find((o) => o.value === paragraphLimit))}>
-                <div>
-                  <ToggleGroup
-                    type="single"
-                    value={paragraphLimit}
-                    // A single ToggleGroup clears its value when the active item is clicked again; the limit
-                    // always has a setting, so an empty result is ignored rather than stored.
-                    onValueChange={(v) => { if (v) setParagraphLimit(v as ParagraphLimit); }}
-                    className="grid w-full grid-cols-3"
-                  >
-                    {PARAGRAPH_LIMIT_OPTIONS.map((o) => (
-                      <ToggleGroupItem key={o.value} value={o.value}>{o.label}{o.recommended && <RecommendedMark />}</ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                  {/* All option texts stacked in one grid cell so the block is always as tall as the
-                      longest — switching options shows the active one without reflowing the layout. */}
-                  <div className="grid mt-2">
-                    {PARAGRAPH_LIMIT_OPTIONS.map((o) => (
-                      <p
-                        key={o.value}
-                        className={`col-start-1 row-start-1 text-helper text-muted-foreground${o.value === paragraphLimit ? '' : ' invisible'}`}
-                      >
-                        {o.help}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              </Row>
-              )}
-              {advanced && (
-              <CheckRow
-                htmlFor="markdownOutput"
-                checked={markdownOutput}
-                onChange={setMarkdownOutput}
-                {...rowCopy('markdownFormatting')}
-              />
-              )}
-              </Section>
-
-              {/* These rows sit with the rest of what the story looks like; the section keeps the word
-                  "Accessibility" so the term stays findable. */}
-              <Section title="Accessibility" hint="Applies to the story text only, not the rest of the app.">
-              <Row htmlFor="narrationFont" {...rowCopy('narrationFont')}>
-                <div className="flex items-center gap-3">
-                  <Select value={narrationFont} onValueChange={(v) => setNarrationFont(v as NarrationFont)}>
-                    <SelectTrigger id="narrationFont" className="w-56">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {NARRATION_FONT_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value} style={{ fontFamily: o.stack || undefined }}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {/* `global` ⇒ this pane runs on the app font, so Customize tunes that same font. */}
-                  <FontTuneButton font={narrationFont === 'global' ? fontFamily : narrationFont} />
-                </div>
-              </Row>
-              <Row {...rowCopy('narrationTextSize')}>
-                <div className="flex items-center gap-3">
-                  <Slider
-                    value={[narrationScale]}
-                    min={0.85}
-                    max={1.6}
-                    step={0.05}
-                    onValueChange={(v) => setNarrationScale(v[0])}
-                    className="max-w-[220px]"
-                  />
-                  <span className="text-meta text-muted-foreground tabular-nums w-10 shrink-0">
-                    {Math.round(narrationScale * 100)}%
-                  </span>
-                </div>
-              </Row>
-              <Row {...rowCopy('lineSpacing')}>
-                <div className="flex items-center gap-3">
-                  <Slider
-                    value={[narrationLineHeight]}
-                    min={1.2}
-                    max={2.2}
-                    step={0.05}
-                    onValueChange={(v) => setNarrationLineHeight(v[0])}
-                    className="max-w-[220px]"
-                  />
-                  <span className="text-meta text-muted-foreground tabular-nums w-10 shrink-0">
-                    {narrationLineHeight.toFixed(2)}
-                  </span>
-                </div>
-              </Row>
-              <Row>
-                <div>
-                  <ConfirmDialog
-                    {...SETTINGS_CONFIRMS.resetSizeSpacing}
-                    onConfirm={() => { setNarrationScale(DEFAULT_NARRATION_SCALE); setNarrationLineHeight(DEFAULT_NARRATION_LINE_HEIGHT); }}
-                  >
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={narrationScale === DEFAULT_NARRATION_SCALE && narrationLineHeight === DEFAULT_NARRATION_LINE_HEIGHT}
-                    >
-                      {SETTINGS_BUTTONS.resetSizeSpacing}
-                    </Button>
-                  </ConfirmDialog>
-                </div>
-              </Row>
-              </Section>
-
-              {/* Both rows only decide whether a panel appears on screen — nothing about them changes what
-                  the AI produces, which is what keeps the Output tab honest. */}
-              {advanced && (
-              <Section title="Inspection" hint="Surfaces work that normally happens out of sight.">
-              <CheckRow
-                htmlFor="showReasoning"
-                checked={showReasoning}
-                onChange={setShowReasoning}
-                {...rowCopy('showReasoning')}
-              />
-              <CheckRow
-                htmlFor="showSilentRequests"
-                checked={showSilentRequests}
-                onChange={setShowSilentRequests}
-                {...rowCopy('showSilentRequests')}
-              />
-              </Section>
-              )}
-            </div>
+            <ScrollArea landingRoom className="flex-1 min-h-0">
+              <DisplaySettingsSection source={settingsSource} mode={mode} />
             </ScrollArea>
           </TabsContent>
 
           <TabsContent value="output" className="px-2 flex-1 min-h-0 data-[state=active]:flex flex-col">
-            <ScrollArea className="flex-1 min-h-0">
-            <div className="grid gap-6 py-4">
-              <Section title="Turn Extras" hint="Optional passes that run alongside each turn's narration.">
-              {/* Enable/disable the optional per-turn requests. Synced with the System Prompts tab, which
-                  shows a prompt's editor tab only while it's enabled here. */}
-              <Row {...rowCopy('systemPrompts')}>
-                <CheckboxOptionGroup options={[
-                  { id: 'choicesEnabled', label: 'Choices', checked: choicesEnabled, onChange: setChoicesEnabled },
-                  { id: 'statUpdatesEnabled', label: 'Stat Updates', checked: statUpdatesEnabled, onChange: setStatUpdatesEnabled },
-                  { id: 'locationChangeEnabled', label: 'Location Change', checked: locationChangeEnabled, onChange: setLocationChangeEnabled },
-                ]} />
-              </Row>
-              {/* Auto-apply detected location changes — its own row, only shown while Location Change is on. */}
-              {locationChangeEnabled && (
-                <SubGroup>
-                <CheckRow
-                  htmlFor="locationAutoApply"
-                  checked={locationAutoApply}
-                  onChange={setLocationAutoApply}
-                  {...rowCopy('moveAutomatically')}
-                />
-                </SubGroup>
-              )}
-              </Section>
-
-              <Section title="Reasoning">
-              <Row top {...optionRowCopy('thinking', THINKING_OPTIONS.find((o) => o.value === thinkingMode))}>
-                <div>
-                  <OptionSwitcher value={thinkingMode} onChange={(v) => setThinkingMode(v as ThinkingMode)} options={THINKING_OPTIONS} />
-                  {/* Stacked like Paragraph Limit so switching thinking modes doesn't reflow the layout. */}
-                  <div className="grid mt-2">
-                    {THINKING_OPTIONS.map((o) => (
-                      <p
-                        key={o.value}
-                        className={`col-start-1 row-start-1 text-helper text-muted-foreground${o.value === thinkingMode ? '' : ' invisible'}`}
-                      >
-                        {o.help}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              </Row>
-              {/* Staged only: cap how many characters the director stages per turn (each is its own pass). Off =
-                  unbounded. Feeds both the hard cap and the <ACTIVE CHARACTER GUIDANCE> chip in the director prompt. */}
-              {advanced && thinkingMode === 'staged' && (
-                <SubGroup>
-                <Row {...rowCopy('limitActiveCharacters')}>
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      checked={limitActiveCharacters}
-                      onCheckedChange={(v) => setLimitActiveCharacters(v === true)}
-                    />
-                    <Input
-                      type="number"
-                      min={1}
-                      value={activeCharacterLimit}
-                      disabled={!limitActiveCharacters}
-                      onChange={(e) => setActiveCharacterLimit(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-20"
-                    />
-                  </div>
-                </Row>
-                </SubGroup>
-              )}
-              {/* The endpoint-wide effort every prompt set to Global follows, in every Thinking mode. The levels
-                  are whichever the active endpoint accepts (detected on connect). */}
-              {advanced && noNativeReasoning && (
-                <SubGroup>
-                <Row muted label={SETTINGS_COPY.nativeReasoning.label}>
-                  <p className="pt-2 text-helper text-muted-foreground">This model doesn&apos;t support reasoning, so there&apos;s nothing to configure.</p>
-                </Row>
-                </SubGroup>
-              )}
-              {advanced && !noNativeReasoning && (
-                <SubGroup>
-                <Row top htmlFor="nativeReasoning" {...optionRowCopy('nativeReasoning')}>
-                  {/* Stacks the selected level's help under the control, so the label pins to the first line. */}
-                  <div data-row-stacked>
-                    <ReasoningSwitch
-                      id="nativeReasoning"
-                      enabled={nativeReasoning.enabled}
-                      onEnabledChange={(enabled) => setNativeReasoning({ ...nativeReasoning, enabled })}
-                      strength={{
-                        kind: 'level',
-                        value: nativeReasoning.level,
-                        options: reasoningLevelOptions(reasoningCapability, nativeReasoning.level),
-                        onChange: (level: ReasoningSetting['level']) => setNativeReasoning({ ...nativeReasoning, level }),
-                      }}
-                    />
-                    <p className="mt-2 text-helper text-muted-foreground">{REASONING_EFFORT_HELP[reasoningEffort]}</p>
-                  </div>
-                </Row>
-                </SubGroup>
-              )}
-              </Section>
-
-              {advanced && (<>
-              <Section title="Memory" hint="What the AI carries forward from earlier turns.">
-              <CheckRow
-                htmlFor="memoryDigests"
-                checked={memoryDigests}
-                onChange={setMemoryDigests}
-                {...rowCopy('memorySummaries')}
-              />
-              {memoryDigests && (
-                <SubGroup>
-                <CheckRow
-                  htmlFor="semanticMemory"
-                  checked={semanticMemory}
-                  onChange={handleSemanticMemoryToggle}
-                  {...rowCopy('semanticMemory')}
-                />
-                {semanticMemory && (
-                  <SubGroup>
-                  {/* Always-on top-K cap: derived checkbox (cap > 0), enabling seeds a sensible default. */}
-                  <Row {...rowCopy('memoryCap')}>
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        checked={semanticBandCap > 0}
-                        onCheckedChange={(v) => setSemanticBandCap(v === true ? 12 : 0)}
-                      />
-                      <Input
-                        type="number"
-                        min={3}
-                        value={semanticBandCap > 0 ? semanticBandCap : 12}
-                        disabled={semanticBandCap === 0}
-                        onChange={(e) => setSemanticBandCap(Math.max(3, parseInt(e.target.value) || 3))}
-                        className="w-20"
-                      />
-                    </div>
-                  </Row>
-                  <CheckRow
-                    htmlFor="semanticRehydration"
-                    checked={semanticRehydration}
-                    onChange={setSemanticRehydration}
-                    {...rowCopy('sceneRecall')}
-                  />
-                  </SubGroup>
-                )}
-                </SubGroup>
-              )}
-              {embedLoading && (
-                <Row>
-                  <div className="flex items-center gap-2">
-                    <Progress
-                      className="h-2 flex-1"
-                      value={embedProgress && embedProgress.total > 0 ? (embedProgress.loaded / embedProgress.total) * 100 : 0}
-                    />
-                    <span className="text-meta text-muted-foreground whitespace-nowrap">
-                      {embedProgress && embedProgress.total > 0
-                        ? `${Math.round(embedProgress.loaded / 1048576)} / ${Math.round(embedProgress.total / 1048576)} MB`
-                        : 'Preparing…'}
-                    </span>
-                  </div>
-                </Row>
-              )}
-              {embedError && !embedLoading && (semanticMemory || semanticLore) && (
-                <Row>
-                  <div className="flex items-center gap-2">
-                    <span className="text-helper text-destructive">Model download failed: {embedError}</span>
-                    <Button variant="outline" size="sm" onClick={startEmbeddingDownload}>Retry</Button>
-                  </div>
-                </Row>
-              )}
-              </Section>
-
-              {/* Both rows are about the story's clock rather than what the AI remembers, so they get their
-                  own section — gated on Memory Summaries, which is what they already depended on as rows. */}
-              {memoryDigests && (
-              <Section title="Time" hint="How long each turn takes, and when things happened.">
-              <CheckRow
-                htmlFor="timeContext"
-                checked={timeContext}
-                onChange={setTimeContext}
-                {...rowCopy('timeInMemory')}
-              />
-              <CheckRow
-                htmlFor="aiClock"
-                checked={aiClock}
-                onChange={setAiClock}
-                {...rowCopy('measuredClock')}
-              />
-              </Section>
-              )}
-
-              {/* Semantic Lore acts on the dictionary, not on memories — it sat under Memory only because it
-                  shares Semantic Memory's on-device model, whose download progress stays up there. */}
-              <Section title="Lore" hint="How dictionary entries reach the AI.">
-              <CheckRow
-                htmlFor="semanticLore"
-                checked={semanticLore}
-                onChange={handleSemanticLoreToggle}
-                {...rowCopy('semanticLore')}
-              />
-              </Section>
-
-              {/* Split out of Memory: these three are about the cast, and only sat under Memory because
-                  that is where the code for them happens to live. */}
-              <Section title="Characters">
-              {/* Descriptions work from the narration alone, so unlike diaries this is offered in every mode. */}
-              <CheckRow
-                htmlFor="describeCharacters"
-                checked={describeCharacters}
-                onChange={setDescribeCharacters}
-                {...rowCopy('describeNewCharacters')}
-              />
-              {/* Diaries are only read by the staged character pass, so the option only appears in that mode. */}
-              {thinkingMode === 'staged' && (
-                <>
-                <CheckRow
-                  htmlFor="characterDiaries"
-                  checked={characterDiaries}
-                  onChange={setCharacterDiaries}
-                  {...rowCopy('characterDiaries')}
-                />
-                {characterDiaries && semanticMemory && (
-                  <SubGroup>
-                  <CheckRow
-                    htmlFor="semanticDiaries"
-                    checked={semanticDiaries}
-                    onChange={setSemanticDiaries}
-                    {...rowCopy('diaryRecall')}
-                  />
-                  </SubGroup>
-                )}
-                </>
-              )}
-              </Section>
-              </>)}
-
-              <Section title="Choices">
-              <Row {...rowCopy('continueTheStory')}>
-                <OptionSwitcher
-                  value={continueChoiceMode}
-                  onChange={(v) => setContinueChoiceMode(v as ContinueChoiceMode)}
-                  options={CONTINUE_CHOICE_MODES}
-                />
-              </Row>
-              </Section>
-
-              {advanced && (
-              <Section title="Performance">
-              <CheckRow
-                htmlFor="concurrentTurnRequests"
-                checked={concurrentTurnRequests}
-                onChange={setConcurrentTurnRequests}
-                {...rowCopy('concurrentRequests')}
-              />
-              </Section>
-              )}
-            </div>
+            <ScrollArea landingRoom className="flex-1 min-h-0">
+              <OutputSettingsSection source={settingsSource} mode={mode} nativeReasoningRuledOut={activeNoNativeReasoning} />
             </ScrollArea>
           </TabsContent>
 
           <TabsContent value="endpoints" className="py-4 px-2 flex-1 min-h-0 data-[state=active]:flex flex-col">
             <Tabs value={activeEndpointTab} onValueChange={setEndpointTab} className="flex flex-col flex-1 min-h-0">
-              <TabsList className={`grid w-full flex-shrink-0 ${imageGenDisabled || !advanced ? 'grid-cols-2' : 'grid-cols-3'}`}>
-                <TabsTrigger value="text-endpoint">Text</TabsTrigger>
-                <TabsTrigger value="img-endpoint">Image</TabsTrigger>
-                {!imageGenDisabled && advanced && <TabsTrigger value="img-tagprompt">Tag Prompt</TabsTrigger>}
+              <SurfaceTab ledger="settingsEndpoints" tab={visibleEndpointTabs.find((t) => t.value === activeEndpointTab)?.route} />
+              <TabsList className={`grid w-full flex-shrink-0 ${visibleEndpointTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                {visibleEndpointTabs.map((t) => <TabsTrigger key={t.value} value={t.value}>{t.label}</TabsTrigger>)}
               </TabsList>
               <TabsContent value="text-endpoint" className="flex-1 min-h-0 data-[state=active]:flex flex-col">
-              {/* Preset selector: swaps the whole endpoint field set. The read-only built-ins are the shared
-                  endpoint ("Default") and, on desktop, the bundled engine — which is a preset rather than a
-                  mode precisely so a single prompt can be routed to it while the rest go elsewhere. The
-                  selector stays visible for every preset, including the engine, or there'd be no way back. */}
-              <div className="flex items-center gap-2 flex-shrink-0 pt-4">
-                <span className="text-helper text-muted-foreground">{SETTINGS_COPY.textPreset.label}</span>
-                {!activeTextEndpointPresetIsBuiltIn && (
-                  <ConfirmDialog
-                    title="Delete Preset"
-                    description={`Delete the "${activeTextEndpointPresetName}" preset? This can't be undone.`}
-                    onConfirm={() => deleteTextEndpointPreset(activeTextEndpointPresetId)}
-                  >
-                    <Button variant="outline" size="sm">Delete</Button>
-                  </ConfirmDialog>
-                )}
-                {!activeTextEndpointPresetIsBuiltIn && (
-                  <ConfirmDialog
-                    title="Reset Preset"
-                    description={`Reset the "${activeTextEndpointPresetName}" preset to its default values? This can't be undone.`}
-                    onConfirm={() => resetTextEndpointPreset(activeTextEndpointPresetId)}
-                  >
-                    <Button variant="outline" size="sm">Reset</Button>
-                  </ConfirmDialog>
-                )}
-                <Select value={activeTextEndpointPresetId} onValueChange={handleTextPresetSelect}>
-                  <SelectTrigger className="flex-1 min-w-0">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {builtinTextEndpointPresets.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                    ))}
-                    {textEndpointPresets.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                    ))}
-                    <SelectSeparator />
-                    <SelectItem value={TEXT_ADD_PRESET_SENTINEL}>Add New Preset…</SelectItem>
-                  </SelectContent>
-                </Select>
-                {!activeTextEndpointPresetIsBuiltIn && (
-                  <Button variant="outline" size="sm" onClick={() => setTextPresetDialog({ mode: 'rename' })}>Rename</Button>
-                )}
-              </div>
-              <p className="flex-shrink-0 pt-1 text-helper text-muted-foreground">{SETTINGS_COPY.textPreset.description}</p>
-              {/* The engine has no URL or token to edit — its runtime panel stands in for the field set. */}
-              {localModelActive ? <LocalModelPanel /> : (
-              <>
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="grid gap-4 py-4">
-              <Row top htmlFor="endpointUrl" {...rowCopy('endpointUrl')}>
-                <div className="grid gap-1" data-row-stacked>
-                  <Input
-                    id="endpointUrl"
-                    value={endpointUrl}
-                    onChange={(e) => setEndpointUrl(e.target.value)}
-                    readOnly={activeTextEndpointPresetIsBuiltIn}
-                    className={activeTextEndpointPresetIsBuiltIn ? 'opacity-60 cursor-not-allowed' : undefined}
-                    /* Both hints are named here so focusing the field reads them, in the order they render.
-                       Without this a screen-reader user meets the warning only by chance, if at all. */
-                    aria-describedby={[
-                      endpointSendsInTheClear(endpointUrl) && 'endpointUrl-cleartext',
-                      endpointUrlWasCompleted(endpointUrl) && 'endpointUrl-completed',
-                    ].filter(Boolean).join(' ') || undefined}
-                  />
-                  {endpointSendsInTheClear(endpointUrl) && (
-                    <p id="endpointUrl-cleartext" className="text-helper text-destructive">
-                      {ENDPOINT_CLEARTEXT_WARNING}
-                    </p>
-                  )}
-                  {endpointUrlWasCompleted(endpointUrl) && (
-                    <p id="endpointUrl-completed" className="text-helper text-muted-foreground">
-                      Requests go to <span className="font-mono break-all">{normalizeEndpointUrl(endpointUrl)}</span>
-                    </p>
-                  )}
-                </div>
-              </Row>
-              <Row>
-                <button
-                  type="button"
-                  className="justify-self-start text-helper text-muted-foreground underline hover:text-foreground"
-                  onClick={() => setConnectionGuideOpen(true)}
-                >
-                  {SETTINGS_BUTTONS.troubleConnecting}
-                </button>
-              </Row>
-              <Row htmlFor="apiToken" {...rowCopy('apiToken')}>
-                <Input
-                  id="apiToken"
-                  type="password"
-                  value={apiToken}
-                  onChange={(e) => setApiToken(e.target.value)}
-                  readOnly={activeTextEndpointPresetIsBuiltIn}
-                  className={activeTextEndpointPresetIsBuiltIn ? 'opacity-60 cursor-not-allowed' : undefined}
-                />
-              </Row>
-              <Row htmlFor="modelName" {...rowCopy('modelName')}>
-                <Input
-                  id="modelName"
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  readOnly={activeTextEndpointPresetIsBuiltIn}
-                  className={activeTextEndpointPresetIsBuiltIn ? 'opacity-60 cursor-not-allowed' : undefined}
-                />
-              </Row>
-              {advanced && (<>
-              <Row htmlFor="contextWindow" {...rowCopy('contextWindow')}>
-                <div className="flex items-start gap-2">
-                  <Input
-                    id="contextWindow"
-                    type="number"
-                    className={activeTextEndpointPresetIsBuiltIn ? 'flex-grow opacity-60 cursor-not-allowed' : 'flex-grow'}
-                    value={contextWindow}
-                    onChange={(e) => setContextWindowOverride(e.target.value === '' ? null : Number(e.target.value))}
-                    readOnly={activeTextEndpointPresetIsBuiltIn}
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => detectContextWindow(true)}
-                    disabled={activeTextEndpointPresetIsBuiltIn || detectStatus === 'detecting'}
-                  >
-                    Detect
-                  </Button>
-                </div>
-              </Row>
-              <Row>
-                <div className={contextStatus.red ? 'text-helper text-destructive' : 'text-helper text-muted-foreground'}>
-                  {contextStatus.text}
-                </div>
-              </Row>
-              <Row htmlFor="maxTokens" {...rowCopy('maxOutputTokens')}>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="maxTokensEnabled"
-                      checked={maxOutputOverrideEnabled}
-                      disabled={sharedEndpointActive}
-                      onCheckedChange={(checked) => setMaxOutputOverrideEnabled(checked === true)}
-                    />
-                    <label htmlFor="maxTokensEnabled" className="text-label">Override endpoint limit</label>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Input
-                      id="maxTokens"
-                      type="number"
-                      value={maxTokens}
-                      onChange={(e) => setMaxTokens(numInput(e.target.value, 1))}
-                      disabled={sharedEndpointActive || !maxOutputOverrideEnabled}
-                    />
-                    {!maxOutputOverrideEnabled && <span className="text-helper text-muted-foreground">No Limit</span>}
-                  </div>
-                </div>
-              </Row>
-              <Section title="Sampling">
-                <p className="text-helper text-muted-foreground">
-                  Per-prompt settings and built-in prompt values take priority over Temperature and Repetition Penalty. Leave a switch off to send no endpoint override.
-                </p>
-                <div className="grid gap-4 pt-3">
-                  {endpointSamplerControls.map((control) => <SamplerControl key={control.id} {...control} />)}
-                </div>
-              </Section>
-              </>)}
-              <div className="flex justify-start">
-                <ConfirmDialog
-                  {...SETTINGS_CONFIRMS.resetAiEndpoint}
-                  onConfirm={handleResetEndpointSettings}
-                >
-                  <Button variant="outline" className="flex items-center gap-2" disabled={activeTextEndpointPresetIsBuiltIn}>
-                    {SETTINGS_BUTTONS.resetAiEndpoint}
-                  </Button>
-                </ConfirmDialog>
-              </div>
-                </div>
-              </ScrollArea>
-              </>
-            )}
-            <PresetNameDialog
-              open={textPresetDialog !== null}
-              mode={textPresetDialog?.mode ?? 'add'}
-              initialName={textPresetDialog?.mode === 'rename' ? activeTextEndpointPresetName : ''}
-              onOpenChange={(o) => { if (!o) setTextPresetDialog(null); }}
-              onSubmit={handleTextPresetNameSubmit}
-            />
+                <TextEndpointEditor model={activePresetEditor(settings)} advanced={advanced} onOpenConnectionGuide={() => setConnectionGuideOpen(true)} />
               </TabsContent>
               <TabsContent value="img-endpoint" className="pt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-3">
             {/* Preset selector: swaps the whole endpoint field set. Every preset (incl. Default) is editable. */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className="text-helper text-muted-foreground">Preset</span>
-              {imageEndpointPresets.length > 1 && (
-                <ConfirmDialog
-                  title="Delete Preset"
-                  description={`Delete the "${activeImageEndpointPresetName}" preset? This can't be undone.`}
-                  onConfirm={() => deleteImageEndpointPreset(activeImageEndpointPresetId)}
-                >
-                  <Button variant="outline" size="sm">Delete</Button>
-                </ConfirmDialog>
-              )}
-              <ConfirmDialog
-                title="Reset Preset"
-                description={`Reset the "${activeImageEndpointPresetName}" preset to its default values? This can't be undone.`}
-                onConfirm={() => resetImageEndpointPreset(activeImageEndpointPresetId)}
-              >
-                <Button variant="outline" size="sm">Reset</Button>
-              </ConfirmDialog>
-              <Select value={activeImageEndpointPresetId} onValueChange={handleImagePresetSelect}>
-                <SelectTrigger className="flex-1 min-w-0">
+            <PresetHeader
+              label="Preset"
+              actions={imagePresetActions}
+              testId="image-preset-header"
+              disabled={imageGenDisabled}
+              select={
+              <Select value={activeImageEndpointPresetId} onValueChange={handleImagePresetSelect} disabled={imageGenDisabled}>
+                <SelectTrigger aria-label="Preset" className="flex-1 min-w-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2174,9 +1184,13 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   <SelectItem value={IMG_ADD_PRESET_SENTINEL}>Add New Preset…</SelectItem>
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="sm" onClick={() => setImagePresetDialog({ mode: 'rename' })}>Rename</Button>
+              }
+            />
+            {/* One `text-meta` line tall in every state (same line-height as the badge), so a probe never moves the rows below. */}
+            <div data-testid="image-reachability-slot" className="flex-shrink-0 min-w-0 h-[calc(1rem*var(--fm-line-height,1))]">
+              <EndpointReachabilityBadge target={imageReachabilityTarget(settings)} />
             </div>
-            {/* Global kill switch: hides every "Generate with AI" image button, and everything below it here.
+            {/* Global kill switch: hides every "Generate with AI" image button and disables everything below it here.
                 On the same row grid as Face Fix further down, so all three checkboxes share a label column. */}
             <div className="flex-shrink-0">
               <CheckRow
@@ -2186,8 +1200,16 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 {...rowCopy('enableImageGeneration')}
               />
             </div>
-            {!imageGenDisabled && (<>
-            <ScrollArea className="flex-1 min-h-0">
+            {/* The frame keeps its size, so the off label takes the rows' place and nothing moves. The rows stay
+                mounted, hidden and disabled, so their state and any detected server data survive a toggle.
+                The status region is always mounted, so a screen reader announces the label when it fills in. */}
+            <div data-testid="image-scroll-frame" className="flex min-h-0 flex-1 flex-col">
+            <div role="status" className={cn('flex items-center justify-center px-6 text-center', imageGenDisabled && 'min-h-0 flex-1')}>
+              {imageGenDisabled && <p className="text-helper text-muted-foreground">{SETTINGS_NOTES.imageGenerationOff}</p>}
+            </div>
+            {/* A class, not the `hidden` attribute: the root's `flex` utility overrides `[hidden]`. */}
+            <ScrollArea className={cn('flex-1 min-h-0', imageGenDisabled && 'hidden')}>
+            <fieldset disabled={imageGenDisabled} className="m-0 min-w-0 border-0 p-0">
             <div className="grid gap-6">
               <Section title="Connection">
               <Row htmlFor="imageProvider" {...rowCopy('imageProvider')}>
@@ -2201,7 +1223,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     <SelectItem value="a1111">Automatic1111 / Forge (local)</SelectItem>
                     <SelectItem value="novelai">NovelAI (cloud)</SelectItem>
                     <SelectItem value="openai" disabled={!desktop}>
-                      OpenAI-compatible (cloud){desktop ? '' : ' — desktop app only'}
+                      {desktop ? 'OpenAI-compatible (cloud)' : 'OpenAI-compatible (cloud, desktop app only)'}
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -2272,7 +1294,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                       placeholder="Pick an installed model"
                     />
                     {invokeMetaError && (
-                      <p className="text-helper text-destructive">{invokeMetaError}</p>
+                      <FieldError>{invokeMetaError}</FieldError>
                     )}
                   </div>
                 ) : (
@@ -2295,29 +1317,29 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   value={imageNegativePrompt}
                   onChange={setImageNegativePrompt}
                   ariaLabel="Negative Prompt"
-                  placeholder="tags to avoid…"
+                  placeholder="e.g. lowres, blurry"
                 />
               </Row>
               {advanced && (<>
               <Row {...rowCopy('portraitSize')}>
                 <div className="flex items-center gap-2">
-                  <Input aria-label="Portrait width" type="number" min={64} step={64} value={imagePortraitWidth} onChange={(e) => setImagePortraitWidth(numInput(e.target.value, 64))} className="w-28" />
+                  <Input aria-label="Portrait Width" type="number" min={64} step={64} value={imagePortraitWidth} onChange={(e) => setImagePortraitWidth(numInput(e.target.value, 64))} className="w-28" />
                   <span className="text-muted-foreground">×</span>
-                  <Input aria-label="Portrait height" type="number" min={64} step={64} value={imagePortraitHeight} onChange={(e) => setImagePortraitHeight(numInput(e.target.value, 64))} className="w-28" />
+                  <Input aria-label="Portrait Height" type="number" min={64} step={64} value={imagePortraitHeight} onChange={(e) => setImagePortraitHeight(numInput(e.target.value, 64))} className="w-28" />
                 </div>
               </Row>
               <Row {...rowCopy('landscapeSize')}>
                 <div className="flex items-center gap-2">
-                  <Input aria-label="Landscape width" type="number" min={64} step={64} value={imageLandscapeWidth} onChange={(e) => setImageLandscapeWidth(numInput(e.target.value, 64))} className="w-28" />
+                  <Input aria-label="Landscape Width" type="number" min={64} step={64} value={imageLandscapeWidth} onChange={(e) => setImageLandscapeWidth(numInput(e.target.value, 64))} className="w-28" />
                   <span className="text-muted-foreground">×</span>
-                  <Input aria-label="Landscape height" type="number" min={64} step={64} value={imageLandscapeHeight} onChange={(e) => setImageLandscapeHeight(numInput(e.target.value, 64))} className="w-28" />
+                  <Input aria-label="Landscape Height" type="number" min={64} step={64} value={imageLandscapeHeight} onChange={(e) => setImageLandscapeHeight(numInput(e.target.value, 64))} className="w-28" />
                 </div>
               </Row>
               </>)}
               <Row {...rowCopy('stepsCfg')}>
                 <div className="flex items-center gap-2">
                   <Input aria-label="Steps" type="number" min={1} value={imageSteps} onChange={(e) => setImageSteps(numInput(e.target.value, 1))} className="w-28" />
-                  <Input aria-label="CFG scale" type="number" min={0} step={0.5} value={imageCfg} onChange={(e) => setImageCfg(numInput(e.target.value, 0))} className="w-28" />
+                  <Input aria-label="CFG Scale" type="number" min={0} step={0.5} value={imageCfg} onChange={(e) => setImageCfg(numInput(e.target.value, 0))} className="w-28" />
                 </div>
               </Row>
               <Row htmlFor="imageSampler" {...rowCopy('imageSampler')}>
@@ -2343,7 +1365,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   // The description holds still across providers; only what it costs you differs.
                   info={<HintInfo>{imageProvider === 'a1111'
                     ? 'Fixes faces and hands. Requires the **ADetailer** extension installed on your A1111/Forge server.'
-                    : 'Re-renders the face at full resolution. Roughly **doubles** generation time; SDXL and SD1.5 only.'}</HintInfo>}
+                    : 'Re-renders the face at full resolution. Roughly **doubles** generation time. Works with SDXL and SD1.5 only.'}</HintInfo>}
                 />
               )}
               {advanced && imageProvider === 'comfyui' && (
@@ -2351,7 +1373,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   top
                   htmlFor="imageWorkflow"
                   {...rowCopy('imageWorkflow')}
-                  info={<HintInfo>{`Tokens Formamorph fills in:
+                  info={<HintInfo>{`Tokens filled in for you:
 
 \`%prompt%\` \`%negative%\` \`%ckpt%\` \`%width%\` \`%height%\` \`%steps%\` \`%cfg%\` \`%seed%\` \`%sampler%\``}</HintInfo>}
                 >
@@ -2426,7 +1448,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     htmlFor="imageInvokeVae"
                     {...rowCopy(invokeSubmodelBase === 'anima' ? 'invokeVaeAnima' : 'invokeVaeZImage')}
                     info={<HintInfo>{invokeSubmodelBase === 'anima'
-                      ? 'Anima needs a **QwenImage/Wan 2.1** VAE — a FLUX VAE also works. Leave blank to auto-pick.'
+                      ? 'Anima needs a **QwenImage/Wan 2.1** VAE. A FLUX VAE also works. Leave blank to auto-pick.'
                       : 'Z-Image needs a **FLUX-type** VAE, such as the FLUX.1-schnell VAE. Leave blank to auto-pick.'}</HintInfo>}
                   >
                     <TokenAutocomplete
@@ -2442,8 +1464,9 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
               )}
               </Section>
             </div>
+            </fieldset>
             </ScrollArea>
-            </>)}
+            </div>
               </TabsContent>
               {!imageGenDisabled && advanced && (
               <TabsContent value="img-tagprompt" className="pt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-2">
@@ -2476,29 +1499,13 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
 
           {advanced && (
           <TabsContent ref={promptsPanelRef} value="prompts" className="pt-4 px-2 pb-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-4">
-            <PromptsShell morph={promptsMorph} sourceRef={promptsPanelRef}>
-            {/* Preset selector: the whole prompt set switches together. Built-in presets (Default, Simple)
-                are read-only and differ only in section-header style. */}
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className="text-helper text-muted-foreground">Preset</span>
-              {!activePresetIsBuiltIn && (
-                <ConfirmDialog
-                  title="Delete Preset"
-                  description={`Delete the "${activePresetName}" preset? This can't be undone.`}
-                  onConfirm={() => deletePreset(activePresetId)}
-                >
-                  <Button variant="outline" size="sm">Delete</Button>
-                </ConfirmDialog>
-              )}
-              {!activePresetIsBuiltIn && (
-                <ConfirmDialog
-                  title="Reset Preset"
-                  description={`Reset every prompt in the "${activePresetName}" preset to its default value? This can't be undone.`}
-                  onConfirm={() => resetPreset(activePresetId)}
-                >
-                  <Button variant="outline" size="sm">Reset</Button>
-                </ConfirmDialog>
-              )}
+            <PanelShell morph={promptsMorph} sourceRef={promptsPanelRef} title="Prompts">
+            {/* Built-in presets are read-only; selecting one switches the whole prompt set. */}
+            <PresetHeader
+              label="Preset"
+              actions={presetActions}
+              testId="preset-header-row"
+              select={
               <Select value={activePresetId} onValueChange={handlePresetSelect}>
                 <SelectTrigger aria-label="Preset" className="flex-1 min-w-0">
                   <SelectValue />
@@ -2512,14 +1519,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   ))}
                   <SelectSeparator />
                   <SelectItem value={ADD_PRESET_SENTINEL}>Add New Preset…</SelectItem>
-                  <SelectItem value={IMPORT_PRESET_SENTINEL}>Import Preset…</SelectItem>
                 </SelectContent>
               </Select>
-              {!activePresetIsBuiltIn && (
-                <Button variant="outline" size="sm" onClick={() => setPresetDialog({ mode: 'rename' })}>Rename</Button>
-              )}
-              <Button variant="outline" size="sm" onClick={() => setExportShared(exportActivePreset(APP_VERSION))}>Export</Button>
-            </div>
+              }
+            />
             {/* While a pinned world is open the selector edits that world's pin, not the global choice —
                 say so, or picking a preset here looks like it silently did nothing to the rest of the app. */}
             {presetPinnedToWorld && (
@@ -2532,30 +1535,46 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 System/User/Messages/Options row: two rows of chrome the editor gets back, and a list that
                 says what each prompt is for. `Tabs` still owns the panel switching — only its list is gone. */}
             <Tabs value={activePromptTab} onValueChange={selectPromptTab} className="w-full flex flex-1 min-h-0 gap-4 flex-col md:flex-row">
+              {/* The rail has no tab strip, so the open prompt and its surface report by hand. */}
+              {showingOverview ? <SurfaceTab ledger="settingsPromptPreset" tab={OVERVIEW_ROUTE} /> : (
+                <>
+                  <SurfaceTab ledger="settingsPrompts" tab={activePromptTab} />
+                  <SurfaceTab ledger="settingsPromptSurfaces" tab={showingHub ? HUB_ROUTE : promptView} />
+                </>
+              )}
               {/* Narrow: one dropdown carrying prompt + surface, since a rail and an editor can't share
                   mobile width. Same collapse the top-level Settings tabs already do. */}
               <div className="md:hidden flex-shrink-0">
                 {/* Prompt and surface entries live in one list but must not share a value string, or
                     Radix matches both and renders their labels concatenated. */}
                 <Select
-                  value={`surface:${promptSurface ?? HUB_ROUTE}`}
+                  value={showingOverview ? overviewOption : `surface:${promptSurface ?? HUB_ROUTE}`}
                   onValueChange={(v) => {
                     const [kind, id] = v.split(':');
-                    if (kind === 'prompt') selectPromptTab(id);
-                    else setPromptView(id === HUB_ROUTE ? null : (id as PromptSurface));
+                    if (kind === 'preset') setOverviewOpen(true);
+                    else if (kind === 'prompt') selectPromptTab(id);
+                    else selectPromptView(id === HUB_ROUTE ? null : (id as PromptSurface));
                   }}
                 >
                   {/* Named outright rather than via SelectValue: the value tracks only the surface, and
                       the reader needs to see which prompt they're in. */}
                   <SelectTrigger>
-                    <span className="truncate leading-normal">{selectedPrompt.label} &middot; {promptSurface ? SURFACE_LABELS[promptSurface] : HUB_LABEL}</span>
+                    <span className="truncate leading-normal">
+                      {showingOverview ? OVERVIEW_LABEL : <>{selectedPrompt.label} &middot; {promptSurface ? SURFACE_LABELS[promptSurface] : HUB_LABEL}</>}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
+                    {presetOverview && (
+                      <>
+                        <SelectItem value={overviewOption}>{OVERVIEW_LABEL}</SelectItem>
+                        <SelectSeparator />
+                      </>
+                    )}
                     {railGroups.map((g) => (
                       <SelectGroup key={g.label}>
                         <SelectLabel>{g.label}</SelectLabel>
                         {g.tabs.map((t) => (
-                          <SelectItem key={t} value={`prompt:${t}`}>{promptResets[t]?.label ?? t}</SelectItem>
+                          <SelectItem key={t} value={`prompt:${t}`}>{editablePrompts[t]?.label ?? t}</SelectItem>
                         ))}
                       </SelectGroup>
                     ))}
@@ -2574,63 +1593,38 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 </Select>
               </div>
 
-              <ScrollArea className="hidden md:block w-[190px] flex-shrink-0 border-r pr-2">
-                <div className="flex flex-col gap-0.5 pb-2">
-                  {railGroups.map((g) => (
-                    <div key={g.label} className="flex flex-col gap-0.5">
-                      {/* A divider, not an entry: styled like the items it heads, it invited clicks and
-                          ignored them. The rule is what says "structure" without adding a control. */}
-                      <div className="flex items-center gap-2 px-2 pb-1 pt-4 first:pt-1">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                          {g.label}
-                        </span>
-                        <span className="h-hairline flex-1 bg-border" aria-hidden />
-                      </div>
-                      {g.tabs.map((t) => {
-                        const selected = t === activePromptTab;
-                        return (
-                          <div key={t} className="flex flex-col">
-                            <button
-                              type="button"
-                              onClick={() => selectPromptTab(t)}
-                              aria-current={selected ? 'true' : undefined}
-                              className={cn(
-                                'rounded px-2 py-1 text-left text-label',
-                                selected ? 'bg-accent font-medium text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50',
-                              )}
-                            >
-                              {promptResets[t]?.label ?? t}
-                            </button>
-                            {/* Only the open prompt lists its parts — expanding all of them would just be
-                                the old flat wall of buttons with extra steps. */}
-                            {selected && activeSurfaces.map((s) => (
-                              <button
-                                key={s}
-                                type="button"
-                                onClick={() => setPromptView(s)}
-                                aria-current={promptView === s ? 'true' : undefined}
-                                className={cn(
-                                  'ml-2 rounded px-2 py-0.5 text-left text-meta',
-                                  promptView === s ? 'text-primary font-medium' : 'text-muted-foreground hover:bg-accent/50',
-                                )}
-                              >
-                                {SURFACE_LABELS[s]}
-                              </button>
-                            ))}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
+              <PromptNavigationRail
+                groups={railGroups}
+                labels={Object.fromEntries(Object.entries(editablePrompts).map(([id, prompt]) => [id, prompt.label]))}
+                activePrompt={activePromptTab}
+                surface={showingHub ? null : promptSurface}
+                surfaces={activeSurfaces}
+                showingOverview={showingOverview}
+                hasOverview={!!presetOverview}
+                onOverview={() => setOverviewOpen(true)}
+                onPrompt={selectPromptTab}
+                onSurface={selectPromptView}
+              />
 
               <div className="flex flex-1 min-w-0 min-h-0 flex-col gap-2">
 
-              {/* What this prompt is for — only over the System editor, which is the prompt it describes;
-                  the other surfaces have their own content and get the row back. Above rather than beneath:
-                  at the bottom of a full-height editor it sat below the fold. */}
-              {promptView === 'system' && (
+              {showingOverview && presetOverview ? (
+                <ScrollArea className="flex-1 min-h-0">
+                  <PresetOverviewPanel
+                    overview={presetOverview}
+                    onChange={setPresetOverview}
+                    tagSuggestions={catalogSuggestions.tags}
+                    modelSuggestions={modelSuggestions}
+                    onModelsOpen={endpointModels.load}
+                    focusModels={focusModels}
+                  />
+                </ScrollArea>
+              ) : (
+              <>
+              {/* What this prompt is for, over every surface, so the first thing seen names the prompt's job.
+                  The hub draws the same line itself, beside its own controls. Above rather than beneath: at
+                  the bottom of a full-height editor it sat below the fold. */}
+              {!showingHub && (
                 <p className="flex-shrink-0 text-helper text-muted-foreground">
                   {PROMPT_DESCRIPTIONS[activePromptTab]}
                 </p>
@@ -2640,12 +1634,14 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 <ScrollArea className="mt-4 flex-1 min-h-0">
                   <PromptOptionsPanel
                     endpoint={endpointControl}
+                    attachments={attachmentsControl}
+                    maxOutput={maxOutputControl}
                     verbatim={verbatimApplicable ? activeVerbatimEntry : null}
                     reasoning={reasoningControl}
                     samplers={samplerControls}
                     disabled={activePresetIsBuiltIn}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                   />
                 </ScrollArea>
               )}
@@ -2653,6 +1649,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
               {showingHub && (
                 <RequestAnatomyPanel
                   tab={activePromptTab}
+                  description={PROMPT_DESCRIPTIONS[activePromptTab]}
                   prompts={hubPrompts}
                   values={effectivePreviewValues}
                   settings={hubSettings}
@@ -2668,27 +1665,32 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
               <>
               <TabsContent value="narration" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col">
                 {showingMessages ? (
-                  <ScrollArea className="flex-1 min-h-0">
-                    <div className="flex flex-col gap-5 pr-3">
+                  // The padding is the Landing Pulse's room; the negative margin keeps the fields in place.
+                  <ScrollArea landingRoom className="-my-3 flex-1 min-h-0">
+                    <div className="flex flex-col gap-5 pr-3 py-3">
                       {messageFields.map((f) => (
                         <div
                           key={f.key}
                           ref={(node) => { messageFieldRefs.current[f.key] = node; }}
-                          className="flex flex-col gap-1 scroll-mt-2"
+                          className="flex flex-col gap-1 scroll-my-3"
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="flex items-center gap-1.5 text-label font-medium">
+                          {/* Wraps rather than squeezes: on mobile the pair drops under the label, still right-aligned. */}
+                          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                            <span className="flex shrink-0 items-center gap-1.5 text-label font-medium">
                               {f.label}
                               <HintInfo>{f.info}</HintInfo>
                             </span>
                             {!activePresetIsBuiltIn && (
-                              <ConfirmDialog
-                                title={`Reset ${f.label}`}
-                                description={`Are you sure you want to reset the ${f.label} to its default value?`}
-                                onConfirm={() => f.set(f.def)}
-                              >
-                                <Button variant="outline" size="sm" disabled={f.value === f.def}>Reset</Button>
-                              </ConfirmDialog>
+                              <PromptResetCompare
+                                className="ml-auto"
+                                size="sm"
+                                name={f.label}
+                                value={f.value}
+                                defaultValue={f.def}
+                                onReset={() => f.set(f.def)}
+                                vocabulary={f.vocabulary}
+                                surface="settingsCompare"
+                              />
                             )}
                           </div>
                           {/* Read before the template: when this message is sent is runtime-conditional,
@@ -2701,7 +1703,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                             previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                             readOnly={activePresetIsBuiltIn}
@@ -2719,7 +1721,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2736,7 +1738,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2753,7 +1755,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={choicesPreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2770,7 +1772,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2787,7 +1789,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2804,7 +1806,24 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
+                    fullscreen={promptsFullscreen}
+                    onRequestFullscreen={promptsMorph.toggle}
+                    readOnly={activePresetIsBuiltIn}
+                  />
+                </TabsContent>
+              )}
+
+              {memoryDigests && (
+                <TabsContent value="milestone" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-1">
+                  <PromptField
+                    value={showingUser ? milestoneSelectUserPrompt : milestoneSelectPrompt}
+                    onChange={showingUser ? setMilestoneSelectUserPrompt : setMilestoneSelectPrompt}
+                    variables={showingUser ? (PROMPT_KIND_USER_VARIABLES.milestone ?? []) : PROMPT_KIND_VARIABLES.milestone}
+                    previewValues={effectivePreviewValues}
+                    sampleData={usingSampleValues}
+                    readOnlyReason={readOnlyReason}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2821,7 +1840,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2838,7 +1857,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2855,7 +1874,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2872,7 +1891,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2889,7 +1908,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2906,7 +1925,24 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
+                    fullscreen={promptsFullscreen}
+                    onRequestFullscreen={promptsMorph.toggle}
+                    readOnly={activePresetIsBuiltIn}
+                  />
+                </TabsContent>
+              )}
+
+              {describeCharacters && (
+                <TabsContent value="discover" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-1">
+                  <PromptField
+                    value={showingUser ? discoverEntityUserPrompt : discoverEntityPrompt}
+                    onChange={showingUser ? setDiscoverEntityUserPrompt : setDiscoverEntityPrompt}
+                    variables={showingUser ? (PROMPT_KIND_USER_VARIABLES.discover ?? []) : PROMPT_KIND_VARIABLES.discover}
+                    previewValues={effectivePreviewValues}
+                    sampleData={usingSampleValues}
+                    readOnlyReason={readOnlyReason}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
@@ -2923,17 +1959,15 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
-                    onRequestEdit={duplicateForEditing}
+                    onRequestEdit={duplicatePreset}
                     fullscreen={promptsFullscreen}
                     onRequestFullscreen={promptsMorph.toggle}
                     readOnly={activePresetIsBuiltIn}
                   />
                 </TabsContent>
               )}
-              </>
-              )}
 
-              {/* Authoring prompts — the world editor's ✨ buttons. System template only, each with the
+              {/* Authoring prompts — the world editor's ✨ and 🔍 buttons. System template only, each with the
                   output cap that has to move with it. Advanced mode gates them into the rail. */}
               {advanced && (<>
               <TabsContent value="playerdesc" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-2">
@@ -2948,7 +1982,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   onChange={setPlayerDescPrompt}
                   variables={PROMPT_KIND_VARIABLES.playerdesc}
                   readOnlyReason={readOnlyReason}
-                  onRequestEdit={duplicateForEditing}
+                  onRequestEdit={duplicatePreset}
                   fullscreen={promptsFullscreen}
                   onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
@@ -2974,7 +2008,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   onChange={setAiDescPrompt}
                   variables={PROMPT_KIND_VARIABLES.aidesc}
                   readOnlyReason={readOnlyReason}
-                  onRequestEdit={duplicateForEditing}
+                  onRequestEdit={duplicatePreset}
                   fullscreen={promptsFullscreen}
                   onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
@@ -2999,7 +2033,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   onChange={setAiSummaryPrompt}
                   variables={PROMPT_KIND_VARIABLES.aisummary}
                   readOnlyReason={readOnlyReason}
-                  onRequestEdit={duplicateForEditing}
+                  onRequestEdit={duplicatePreset}
                   fullscreen={promptsFullscreen}
                   onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
@@ -3025,7 +2059,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                   onChange={setDescCheckPrompt}
                   variables={PROMPT_KIND_VARIABLES.desccheck}
                   readOnlyReason={readOnlyReason}
-                  onRequestEdit={duplicateForEditing}
+                  onRequestEdit={duplicatePreset}
                   fullscreen={promptsFullscreen}
                   onRequestFullscreen={promptsMorph.toggle}
                   readOnly={activePresetIsBuiltIn}
@@ -3040,24 +2074,26 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 />
               </TabsContent>
               </>)}
+              </>
+              )}
+              </>
+              )}
               </div>
             </Tabs>
 
-            {/* Reset targets the on-screen template; hidden on the Options sub-tab (edits no template)
-                and the Messages view (per-field resets). */}
-            <div className="flex flex-wrap justify-end items-center gap-2 flex-shrink-0">
-              {!activePresetIsBuiltIn && !showingOptions && !showingMessages && !showingHub && (
-                <ConfirmDialog
-                  title={`Reset ${resetTarget.label}`}
-                  description={`Are you sure you want to reset the ${resetTarget.label} to its default value?`}
-                  onConfirm={resetTarget.reset}
-                >
-                  <Button variant="outline" className="flex items-center gap-2">
-                    Reset {resetTarget.label}
-                  </Button>
-                </ConfirmDialog>
-              )}
-            </div>
+            {/* The pair targets the on-screen template; hidden on the Options sub-tab (edits no template)
+                and the Messages view (a pair per field). */}
+            {!activePresetIsBuiltIn && !showingOverview && !showingOptions && !showingMessages && !showingHub && (
+              <PromptResetCompare
+                className="flex-shrink-0"
+                name={footerPrompt.name}
+                value={footerPrompt.value}
+                defaultValue={footerPrompt.def}
+                onReset={() => { footerPrompt.set(footerPrompt.def); footerPrompt.onReset?.(); }}
+                vocabulary={footerVocabulary}
+                surface="settingsCompare"
+              />
+            )}
             <PresetNameDialog
               open={presetDialog !== null}
               mode={presetDialog?.mode ?? 'add'}
@@ -3070,19 +2106,57 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
               onOpenChange={(o) => { if (!o) setExportShared(null); }}
               shared={exportShared}
             />
+            {presetPublish.dialogs}
             <ImportPresetDialog
               open={importOpen}
               onOpenChange={setImportOpen}
               currentAppVersion={APP_VERSION}
+              userTools={userTools}
               existingUserNames={promptPresets}
               onImport={(imported, opts) => { const id = importPreset(imported, opts); selectPreset(id); }}
             />
-            </PromptsShell>
+            </PanelShell>
+          </TabsContent>
+          )}
+
+          {advanced && (
+          <TabsContent ref={toolsPanelRef} value="tools" className="pt-4 px-2 pb-4 flex-1 min-h-0 data-[state=active]:flex flex-col">
+            <PanelShell morph={toolsMorph} sourceRef={toolsPanelRef} title="Tools">
+            <ToolsTab
+              catalogTools={catalogTools}
+              userTools={userTools}
+              enabledTools={enabledTools}
+              toolsSupported={activeToolsSupported}
+              toolsEnabled={toolsEnabled}
+              onSaveTool={saveTool}
+              onDeleteTool={deleteTool}
+              onSetEnabled={setToolEnabled}
+              view={toolsView}
+              onViewChange={setToolsView}
+              fullscreen={toolsMorph.contentInOverlay}
+              onToggleFullscreen={toolsMorph.toggle}
+              appVersion={APP_VERSION}
+              openWorld={toolWorld}
+              // Selection only: Add opens a dialog that lives in the Prompts tab.
+              presetSelector={(
+                <div className="flex items-center gap-2">
+                  <span className="text-helper text-muted-foreground">Preset</span>
+                  <Select value={activePresetId} onValueChange={selectPreset}>
+                    <SelectTrigger aria-label="Preset" className="flex-1 min-w-0"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {builtinPresets.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                      {promptPresets.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            />
+            </PanelShell>
           </TabsContent>
           )}
 
           <TabsContent value="data" className="px-2 flex-1 min-h-0 data-[state=active]:flex flex-col">
-            <ScrollArea className="flex-1 min-h-0">
+            <ScrollArea landingRoom className="flex-1 min-h-0">
             <div className="grid gap-6 py-4">
               <Section title="Saves">
               <CheckRow
@@ -3092,6 +2166,16 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
                 {...rowCopy('autosave')}
               />
               </Section>
+
+              {onStartAuthoringTour && (
+              <Section title="Authoring">
+              <Row {...rowCopy('authoringTour')}>
+                <Button variant="outline" size="sm" onClick={onStartAuthoringTour} {...targetAttribute('settings.data', 'start-authoring-tour')}>
+                  {SETTINGS_BUTTONS.startAuthoringTour}
+                </Button>
+              </Row>
+              </Section>
+              )}
 
               {/* Housekeeping rather than settings — every one is a "put it back" a normal player never
                   needs, so Simple keeps the whole section out of the way. */}
@@ -3163,6 +2247,17 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, initialTab,
       onOpenChange={setConnectionGuideOpen}
       endpointUrl={endpointUrl}
     />
+    {import.meta.env.DEV && (
+      <PromptCompareDialog
+        open={devCompare && isOpen}
+        onOpenChange={setDevCompare}
+        name={`${PROMPT_LABELS.narration} Prompt`}
+        defaultText={styledDefaults.systemPrompt}
+        text={`Write in present tense.\n${styledDefaults.systemPrompt.slice(0, Math.floor(styledDefaults.systemPrompt.length * 0.8))}`}
+        vocabulary={NARRATION_VOCABULARY}
+        surface="settingsCompare"
+      />
+    )}
     </>
   );
 };

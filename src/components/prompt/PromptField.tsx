@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
-  $getRoot, $getSelection, $isRangeSelection, $createParagraphNode,
-  $isElementNode,
   COMMAND_PRIORITY_LOW, SELECTION_CHANGE_COMMAND,
   UNDO_COMMAND, REDO_COMMAND, CAN_UNDO_COMMAND, CAN_REDO_COMMAND,
+  type NodeKey,
 } from 'lexical';
 import { mergeRegister } from '@lexical/utils';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
@@ -30,7 +29,7 @@ import { CHIP_BASE } from '@/components/Chip';
 import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
 import { type MarkdownAction, HIGHLIGHT_COLORS } from '@/lib/markdownToolbar';
 import { type PromptVariable } from '@/lib/promptVariables';
-import { resolveToken } from '@/lib/promptTemplate';
+import { resolvePromptSegments } from '@/lib/promptTemplate';
 import {
   tintValue, emptyMarker, stripTintSentinels, tintMarkStyle, emptyMarkStyle,
   TINT_MARK_CLASS, EMPTY_MARK_CLASS, EMPTY_MARK_LABEL,
@@ -39,11 +38,20 @@ import { ChipVocabularyContext, promptVocabulary, type ChipVocabulary } from '@/
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { resolveLayout, splitAvailable, usePromptSplitMode, useContainerWidth } from '@/lib/promptLayout';
-import { VariableNode, $createVariableNode, PromptDragContext } from './VariableNode';
-import { buildEditorState, serializeRoot, $applyMarkdownAction } from './promptFieldState';
+import { VariableNode, ValueBoxNode, PromptDragContext } from './VariableNode';
+import { OpenValuesPlugin } from './OpenValuesPlugin';
+import { ValueEdgesPlugin } from './ValueEdgesPlugin';
+import { OpenValueLayoutPlugin } from './OpenValueLayoutPlugin';
+import { ActiveValuePlugin } from './ActiveValuePlugin';
+import {
+  ActiveValueContext, EditValueContext, OpenValuesContext,
+  type ActiveValueRelay, type EditValueRelay, type OpenValueView,
+} from './openValueContext';
+import { buildEditorState, createEchoLedger, serializeRoot, $applyMarkdownAction } from './promptFieldState';
 import { ChipTypeaheadPlugin } from './ChipTypeahead';
-import { ChipInsertTargetPlugin } from './ChipInsertTarget';
+import { ChipInsertTargetPlugin, useChipInsertRegistration } from './ChipInsertTarget';
 import { ChipDragPlugin } from './ChipDrag';
+import { PromptTokenPastePlugin, RefusedChipPastePlugin } from './PromptTokenPastePlugin';
 import { TOOLBAR_BTN } from './toolbarStyles';
 import { anchorAt, applyAnchor, captureAnchor, caretOffset, PROMPT_ANCHORS, type ScrollAnchor } from './previewScrollSync';
 
@@ -273,8 +281,8 @@ function MarkdownToolbar({ parse, disabled }: { parse: ChipVocabulary['parse']; 
 
 // --- plugins ---
 
-/** Two-way sync between the controlled `value` string and the Lexical editor state. Our own edits set
- *  `expected` first so the external-value effect never rebuilds (and jolts the caret) on an echo. */
+/** Two-way sync between the controlled `value` string and the Lexical editor state. Our own edits go through
+ *  the echo ledger, so the external-value effect never rebuilds (and jolts the caret) on an echo. */
 function ValueSyncPlugin({ value, onChange, parse, onExternalValue }: {
   value: string;
   onChange: (v: string) => void;
@@ -283,7 +291,7 @@ function ValueSyncPlugin({ value, onChange, parse, onExternalValue }: {
   onExternalValue?: () => void;
 }) {
   const [editor] = useLexicalComposerContext();
-  const expected = useRef(value);
+  const [echoes] = useState(() => createEchoLedger(value));
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const parseRef = useRef(parse);
@@ -308,26 +316,23 @@ function ValueSyncPlugin({ value, onChange, parse, onExternalValue }: {
   }, [editor]);
 
   useEffect(() => {
-    if (value === expected.current) return;
-    expected.current = value;
+    if (echoes.receive(value)) return;
     // `history-merge` folds the rebuild into the current history entry instead of pushing one.
     editor.update(
       () => buildEditorState(value, parseRef.current),
       userActed.current ? undefined : { tag: 'history-merge' },
     );
     onExternalRef.current?.();
-  }, [value, editor]);
+  }, [value, editor, echoes]);
 
   useEffect(
     () => editor.registerUpdateListener(({ editorState }) => {
       editorState.read(() => {
         const next = serializeRoot();
-        if (next === expected.current) return;
-        expected.current = next;
-        onChangeRef.current(next);
+        if (echoes.send(next)) onChangeRef.current(next);
       });
     }),
-    [editor],
+    [editor, echoes],
   );
   return null;
 }
@@ -388,29 +393,9 @@ function VariableToolbar({ vocab, interactive }: {
   vocab: ChipVocabulary;
   interactive: boolean;
 }) {
-  const [editor] = useLexicalComposerContext();
-  const items = vocab.palette();
+  const items = vocab.toolbar?.() ?? vocab.palette();
+  const { insert, startDrag } = useChipInsertRegistration(vocab);
   if (!items.length) return null;
-
-  const insert = (paletteToken: string) => {
-    editor.update(() => {
-      const node = $createVariableNode(vocab.freshInsertToken(paletteToken));
-      const selection = $getSelection();
-      if ($isRangeSelection(selection)) {
-        selection.insertNodes([node]);
-        return;
-      }
-      const root = $getRoot();
-      const last = root.getLastChild();
-      if ($isElementNode(last)) last.append(node);
-      else {
-        const para = $createParagraphNode();
-        para.append(node);
-        root.append(para);
-      }
-    });
-    editor.focus();
-  };
 
   return (
     // Narrow: one row that scrolls sideways rather than three that stack — the palette is reference
@@ -426,6 +411,8 @@ function VariableToolbar({ vocab, interactive }: {
           <button
             type="button"
             disabled={!interactive}
+            draggable={interactive}
+            onDragStart={interactive ? (event) => startDrag(event, v.token) : undefined}
             onClick={interactive ? () => insert(v.token) : undefined}
             className={cn(CHIP_BASE, 'border flex-shrink-0', interactive ? 'cursor-pointer hover:brightness-95' : 'cursor-default')}
             style={{ backgroundColor: v.color, color: '#000' }}
@@ -439,6 +426,10 @@ function VariableToolbar({ vocab, interactive }: {
 }
 
 // --- editor + field ---
+
+const NO_OPEN_VALUES: Record<string, OpenValueView> = {};
+
+type FieldTab = 'edit' | 'values' | 'preview';
 
 const EDITOR_CLASS =
   'h-full min-h-[160px] w-full overflow-auto rounded-md border border-input bg-background px-3 py-2 ' +
@@ -455,13 +446,9 @@ function PreviewPane({ value, previewValues, vocab, scrollRef, onScroll }: {
 }) {
   return (
     <div ref={scrollRef} onScroll={onScroll} data-testid="prompt-preview" className="h-full min-h-[160px] overflow-auto rounded-md border border-input bg-muted/40 px-3 py-2 text-label whitespace-pre-wrap">
-      {vocab.parse(value).map((seg, i) => {
+      {resolvePromptSegments(vocab.parse(value), previewValues).map(({ segment: seg, text: rendered }, i) => {
         if (seg.type === 'text') return <span key={i}>{seg.value}</span>;
         const color = vocab.color(seg.token);
-        // resolveToken applies the placement's affixes and the vanish-when-empty rule, so the preview
-        // matches what the model receives. It returns undefined for another family's token (placeholders),
-        // which then falls back to that family's own by-token lookup. `??` — '' is a real result.
-        const rendered = resolveToken(seg.token, previewValues) ?? previewValues[seg.token] ?? seg.token;
         // A chip with nothing to show — an absent value, or an affixed placement whose whole phrase drops
         // out — leaves a marker rather than vanishing, so an empty resolution reads differently from a
         // placeholder the author never inserted. The model still receives nothing.
@@ -498,11 +485,9 @@ function MarkdownPreviewPane({ value, previewValues, vocab, scrollRef, onScroll 
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: React.UIEventHandler<HTMLDivElement>;
 }) {
-  const resolved = vocab
-    .parse(value)
-    .map((seg) => {
+  const resolved = resolvePromptSegments(vocab.parse(value), previewValues ?? {})
+    .map(({ segment: seg, text: rendered }) => {
       if (seg.type === 'text') return stripTintSentinels(seg.value);
-      const rendered = resolveToken(seg.token, previewValues ?? {}) ?? previewValues?.[seg.token] ?? seg.token;
       const color = vocab.color(seg.token);
       return rendered === '' ? emptyMarker(color) : tintValue(stripTintSentinels(rendered), color);
     })
@@ -523,7 +508,7 @@ function MarkdownPreviewPane({ value, previewValues, vocab, scrollRef, onScroll 
  * With `markdown`, it also gains a formatting toolbar and its Preview renders markdown instead of tinting
  * chips — for author-facing prose fields (world description, readme) that the player reads as markdown.
  */
-const PromptField = ({ value, onChange, variables = [], vocabulary, previewValues, onReroll, insertOwnerId, markdown = false, resizable = false, placeholder, className, readOnly = false, ariaLabel, sampleData = false, onRequestEdit, readOnlyReason, onRequestFullscreen, fullscreen: fullscreenProp, insertTrigger, label, labelAside, hint }: {
+const PromptField = ({ value, onChange, variables = [], vocabulary, previewValues, openValues, onReroll, insertOwnerId, markdown = false, resizable = false, placeholder, className, readOnly = false, ariaLabel, sampleData = false, onRequestEdit, readOnlyReason, onRequestFullscreen, fullscreen: fullscreenProp, insertTrigger, label, info, labelAside, hint, tourAnchor }: {
   value: string;
   onChange: (v: string) => void;
   /** Prompt-variable palette (used when no explicit `vocabulary` is given — the default prompt family). */
@@ -531,6 +516,9 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   /** Override the token family (e.g. world placeholders). Defaults to the prompt vocabulary from `variables`. */
   vocabulary?: ChipVocabulary;
   previewValues?: Record<string, string>;
+  /** Token → the value each chip opens on. Given with `previewValues`, the field offers a Values tab that
+   *  shows every chip open on its value. */
+  openValues?: Record<string, OpenValueView>;
   /** Draw the chips in this field again. Given one, the chrome offers a Reroll button while the text holds
    *  a chip — placeholder fields pass it, prompt fields have nothing to redraw. */
   onReroll?: () => void;
@@ -541,6 +529,8 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
    *  markdown field keeps it on its own line and puts the formatting buttons on the button row instead —
    *  either way one row shorter than a caption stacked above the chrome. */
   label?: ReactNode;
+  /** Sits right after the caption (a `HintInfo`, say). Needs `label`. */
+  info?: ReactNode;
   /** Rendered at the end of the caption's row (an AI generate/undo toolbar, say). Needs `label`. */
   labelAside?: ReactNode;
   /** One line under the caption saying what the field does. Above the editor, so the reader meets it before
@@ -564,7 +554,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   readOnlyReason?: string;
   /**
    * Hand fullscreen to the caller. Given this, the field stops rendering its own overlay and just reports
-   * the request — which is how Settings gets the prompt rail into the full screen alongside the editor,
+   * the request — which is how a prompts panel gets its rail into the full screen alongside the editor,
    * since the rail lives a level above this component and could never be pulled down into its overlay.
    * Call sites with no chrome of their own (world editor, dictionary entries) omit it and keep the
    * self-managed overlay.
@@ -580,10 +570,12 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
    * Placeholder fields pass `{`; prompt fields omit it and keep their per-field row.
    */
   insertTrigger?: string;
+  /** The Authoring Tour step that points at this field, set on the field's own wrapper. */
+  tourAnchor?: string;
 }) => {
   const vocab = useMemo(() => vocabulary ?? promptVocabulary(variables), [vocabulary, variables]);
   const dragKey = useRef<string | null>(null);
-  const [tab, setTab] = useState('edit');
+  const [tab, setTab] = useState<FieldTab>('edit');
   // A markdown field always has something to preview (the rendered prose); a plain chip field only earns
   // the toggle once there are values to swap in.
   const showTabs = markdown || !!previewValues;
@@ -592,11 +584,40 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   // first chip is a reflow around the caret, worse than the strip idling.
   const hasChips = useMemo(() => vocab.parse(value).some((seg) => seg.type === 'variable'), [vocab, value]);
   const previewEnabled = markdown || hasChips;
-  // The value can change under an open Preview (a preset switch, a find-bar replace). If that disables
-  // Preview, land back on Edit — a disabled tab must not stay the active one.
+  // Values opens the chips in place, so it needs chips to open whatever the field's kind.
+  const valuesOffered = showTabs && !!previewValues && !!openValues;
+  const valuesEnabled = valuesOffered && hasChips;
+  // The value can change under an open tab (a preset switch, a find-bar replace). If that disables the tab,
+  // land back on Edit — a disabled tab must not stay the active one.
   useEffect(() => {
-    if (!previewEnabled && tab !== 'edit') setTab('edit');
-  }, [previewEnabled, tab]);
+    if ((tab === 'preview' && !previewEnabled) || (tab === 'values' && !valuesEnabled)) setTab('edit');
+  }, [previewEnabled, valuesEnabled, tab]);
+  const valuesOpen = tab === 'values' && valuesEnabled;
+  // Radix hands back a plain string; every trigger here carries a FieldTab value.
+  const selectTab = (next: string) => setTab(next as FieldTab);
+
+  // "Edit Value" in a chip's flyout: the tab switches here, and the chip's own value answers once it opens.
+  // Only the Edit tab offers it, where every chip is a closed pill of the field's own. On the Values tab the
+  // field's chips are open and carry no flyout, and the only chips left with one sit inside an open value,
+  // where the item would point at a value that never opens. The tab closing drops a pending ask with it.
+  const [askedChip, setAskedChip] = useState<NodeKey | null>(null);
+  const settleEditValue = useCallback(() => setAskedChip(null), []);
+  const editValue = useMemo<EditValueRelay>(() => ({
+    ask: valuesEnabled && !valuesOpen && !readOnly ? (chip) => { setTab('values'); setAskedChip(chip); } : null,
+    asked: askedChip,
+    settle: settleEditValue,
+  }), [valuesEnabled, valuesOpen, readOnly, askedChip, settleEditValue]);
+  useEffect(() => { if (!valuesOpen) setAskedChip(null); }, [valuesOpen]);
+
+  // Which open value shows its active header: the one whose header was pressed last, until a caret decides
+  // for itself. Held here so one field never shows two.
+  const [pressedValue, setPressedValue] = useState<NodeKey | null>(null);
+  const clearPressedValue = useCallback(() => setPressedValue(null), []);
+  const activeValue = useMemo<ActiveValueRelay>(
+    () => ({ pressed: pressedValue, press: setPressedValue, clear: clearPressedValue }),
+    [pressedValue, clearPressedValue],
+  );
+  useEffect(() => { if (!valuesOpen) setPressedValue(null); }, [valuesOpen]);
 
   // Layout: the field measures itself rather than asking the device, so a shrunken desktop window falls
   // back to tabs and mobile never reaches the split threshold — no breakpoint to keep in sync.
@@ -707,9 +728,9 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
     let prevHeight = -1;
     let tries = 0;
     const run = () => {
-      const el = tab === 'edit' ? editScrollRef.current : previewScrollRef.current;
+      const el = tab === 'preview' ? previewScrollRef.current : editScrollRef.current;
       if (!el) { applying.current = false; return; }
-      applyAnchor(el, tab === 'edit' ? PROMPT_ANCHORS.edit : PROMPT_ANCHORS.preview, anchor);
+      applyAnchor(el, tab === 'preview' ? PROMPT_ANCHORS.preview : PROMPT_ANCHORS.edit, anchor);
       if (el.scrollHeight !== prevHeight && tries < 10) {
         prevHeight = el.scrollHeight;
         tries++;
@@ -727,7 +748,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   const initialConfig = useMemo(
     () => ({
       namespace: 'PromptField',
-      nodes: [VariableNode],
+      nodes: [VariableNode, ValueBoxNode],
       onError: (error: Error) => { throw error; },
       editable: !readOnly,
       editorState: () => buildEditorState(value, vocab.parse),
@@ -791,6 +812,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   // mobile expression of the split, landing on the same content position via the shared anchor. With
   // Preview disabled the tab bar shows instead: dots would offer a position the gesture can't reach.
   const swipeable = isMobile && fullscreen && !split && showTabs && previewEnabled;
+  const swipeOrder: FieldTab[] = valuesEnabled ? ['edit', 'values', 'preview'] : ['edit', 'preview'];
   const touchX = useRef<number | null>(null);
   const swipeHandlers = swipeable ? {
     onTouchStart: (e: React.TouchEvent) => { touchX.current = e.touches[0].clientX; },
@@ -799,24 +821,31 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
       const dx = e.changedTouches[0].clientX - touchX.current;
       touchX.current = null;
       if (Math.abs(dx) < 60) return;
-      const next = dx < 0 ? 'preview' : 'edit';
+      const at = swipeOrder.indexOf(tab);
+      const next = swipeOrder[Math.min(swipeOrder.length - 1, Math.max(0, at + (dx < 0 ? 1 : -1)))];
       if (next !== tab) setTab(next);
     },
   } : {};
 
   // Nothing to type into: read-only, or the preview pane is the one showing.
-  const editingDisabled = readOnly || (!split && showTabs && tab !== 'edit');
+  const editingDisabled = readOnly || (!split && showTabs && tab === 'preview');
+
+  const caption = info
+    ? <span className="flex items-center gap-1.5"><Label className="leading-none">{label}</Label>{info}</span>
+    : <Label className="leading-none">{label}</Label>;
 
   const chrome = (
     // The chip palette is many chips wide and wraps; it must be allowed to shrink (`min-w-0`) or its
     // intrinsic width shoves the buttons off the side of a mobile screen instead of wrapping.
     <div className="flex items-center gap-1 flex-shrink-0">
       <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-        {label && !markdown && <Label className="leading-none">{label}</Label>}
-        {markdown && <MarkdownToolbar parse={vocab.parse} disabled={editingDisabled} />}
+        {label && !markdown && caption}
+        {/* Markdown actions address the field's flat text, which a caret inside an open value is not in. */}
+        {markdown && <MarkdownToolbar parse={vocab.parse} disabled={editingDisabled || valuesOpen} />}
         {/* With a shared palette the per-field row would repeat the same chips above every field on the
-            panel — the whole reason the palette was hoisted out. */}
-        {!insertTrigger && <VariableToolbar vocab={vocab} interactive={!readOnly && (split || !showTabs || tab === 'edit')} />}
+            panel — the whole reason the palette was hoisted out. A family with a toolbar of its own keeps
+            it: those chips are in no shared palette. */}
+        {(!insertTrigger || vocab.toolbar) && <VariableToolbar vocab={vocab} interactive={!editingDisabled} />}
       </div>
       <div className="flex flex-shrink-0 items-center gap-1">
         {/* Contributed buttons (an AI generate, say) lead, divided from the field's own history the same
@@ -870,28 +899,45 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
 
   const panes = split ? (
     <div className="flex flex-1 min-h-0 gap-3">
-      <div className="flex-1 min-w-0 flex flex-col">{editorSurface}</div>
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Values takes Edit's seat beside the Preview. */}
+        {valuesOffered && (
+          <Tabs value={valuesOpen ? 'values' : 'edit'} onValueChange={selectTab} className="mb-2 flex-shrink-0">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="edit">Edit</TabsTrigger>
+              <TabsTrigger value="values" disabled={!valuesEnabled}>Values</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
+        {editorSurface}
+      </div>
       <div className="flex-1 min-w-0 flex flex-col">{previewSurface}</div>
     </div>
   ) : showTabs ? (
-    <Tabs value={tab} onValueChange={setTab} className={cn('flex flex-col flex-1 min-h-0', resizeClass)}>
+    <Tabs value={tab} onValueChange={selectTab} className={cn('flex flex-col flex-1 min-h-0', resizeClass)}>
       {swipeable ? (
         // Dots, not tab buttons: the gesture is the control, and a full-width tab bar on mobile spends
         // height the editor just got back.
         <div className="flex justify-center gap-1.5 py-1 flex-shrink-0" aria-hidden>
-          {['edit', 'preview'].map((t) => (
-            <span key={t} className={cn('h-1.5 w-1.5 rounded-full', tab === t ? 'bg-primary' : 'bg-muted-foreground/40')} />
+          {swipeOrder.map((t) => (
+            <span key={t} data-swipe-dot className={cn('h-1.5 w-1.5 rounded-full', tab === t ? 'bg-primary' : 'bg-muted-foreground/40')} />
           ))}
         </div>
       ) : (
-        <TabsList className="grid w-full grid-cols-2 flex-shrink-0">
+        <TabsList className={cn('grid w-full flex-shrink-0', valuesOffered ? 'grid-cols-3' : 'grid-cols-2')}>
           <TabsTrigger value="edit">Edit</TabsTrigger>
+          {valuesOffered && <TabsTrigger value="values" disabled={!valuesEnabled}>Values</TabsTrigger>}
           <TabsTrigger value="preview" disabled={!previewEnabled}>Preview</TabsTrigger>
         </TabsList>
       )}
       <TabsContent value="edit" className="mt-2 flex-1 min-h-0 data-[state=active]:flex flex-col" {...swipeHandlers}>
         {editorSurface}
       </TabsContent>
+      {valuesOffered && (
+        <TabsContent value="values" className="mt-2 flex-1 min-h-0 data-[state=active]:flex flex-col" {...swipeHandlers}>
+          {editorSurface}
+        </TabsContent>
+      )}
       <TabsContent value="preview" className="mt-2 flex-1 min-h-0 data-[state=active]:flex flex-col" {...swipeHandlers}>
         {previewSurface}
       </TabsContent>
@@ -912,6 +958,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
     <div
       ref={(element) => { measureRef(element); bodyRef.current = element; }}
       data-find-field={typeof label === 'string' ? label : undefined}
+      data-tour-anchor={tourAnchor}
       className={cn('flex flex-col flex-1 min-h-0 gap-2', className)}
     >
       {/* Above the chrome, not below it: the Options panel shows the same notice with nothing above it, so
@@ -925,7 +972,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
           'flex items-center justify-between gap-2 flex-shrink-0',
           fullscreen && 'max-sm:justify-center',
         )}>
-          <Label className="leading-none">{label}</Label>
+          {caption}
           {labelAside}
         </div>
       )}
@@ -941,6 +988,9 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   return (
     <LexicalComposer initialConfig={initialConfig}>
       <ChipVocabularyContext.Provider value={vocab}>
+      <OpenValuesContext.Provider value={openValues ?? NO_OPEN_VALUES}>
+      <EditValueContext.Provider value={editValue}>
+      <ActiveValueContext.Provider value={activeValue}>
       <PromptDragContext.Provider value={dragKey}>
         {/* A real (nested) dialog rather than a hand-rolled overlay: most of these fields live inside the
             Settings dialog, and Radix parks `pointer-events: none` on the body while one is open — a
@@ -965,9 +1015,15 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
           body
         )}
         <SeededHistoryPlugin />
+        {vocab.header && <PromptTokenPastePlugin vocab={vocab} />}
+        {vocab.refuses && <RefusedChipPastePlugin vocab={vocab} />}
         <ValueSyncPlugin value={value} onChange={onChange} parse={vocab.parse} onExternalValue={resetScroll} />
         <EditablePlugin readOnly={readOnly} />
-        <ChipDragPlugin dragKey={dragKey} vocab={insertTrigger ? vocab : undefined} />
+        <OpenValuesPlugin active={valuesOpen} values={openValues ?? NO_OPEN_VALUES} parse={vocab.parse} pressed={pressedValue} />
+        <ValueEdgesPlugin active={valuesOpen} />
+        {valuesOpen && <OpenValueLayoutPlugin />}
+        {valuesOpen && <ActiveValuePlugin relay={activeValue} />}
+        <ChipDragPlugin dragKey={dragKey} vocab={vocab} paletteScope={insertTrigger ? 'shared' : 'editor'} />
         <CaretFollowPlugin onCaret={followCaret} />
         {insertTrigger && !readOnly && (
           <>
@@ -976,6 +1032,9 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
           </>
         )}
       </PromptDragContext.Provider>
+      </ActiveValueContext.Provider>
+      </EditValueContext.Provider>
+      </OpenValuesContext.Provider>
       </ChipVocabularyContext.Provider>
     </LexicalComposer>
   );
