@@ -16,7 +16,8 @@ export const HOME_PAGE = 'Home';
 export const SIDEBAR_PAGE = '_Sidebar';
 
 /** Pages in `docs/` that are not part of the player guide, so nothing in the app points at them. */
-export const NON_GUIDE_PAGES: readonly string[] = [SIDEBAR_PAGE, 'Design-System', 'Writing-Guide'];
+// `Changelog.Fork` is this fork's record, kept beside upstream's changelog and never a guide page.
+export const NON_GUIDE_PAGES: readonly string[] = [SIDEBAR_PAGE, 'Design-System', 'Writing-Guide', 'Changelog.Fork'];
 
 type AnchorIndex = Map<string, Set<string>>;
 

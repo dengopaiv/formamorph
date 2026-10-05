@@ -238,6 +238,8 @@ Give a location the two or three entities the scene genuinely depends on. Everyt
 **The brief belongs to this world.** A library update does not change it, and Save to Library does not copy it.
 
 **An empty brief changes nothing.** The buttons draft as before: Player-Facing from AI-Facing, and AI-Facing from Player-Facing.`,
+    wikiPage: 'World-Editor-Entities',
+    wikiAnchor: 'the-authors-brief',
   },
   'worldEditor.aliases': {
     title: 'Aliases',

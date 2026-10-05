@@ -6,9 +6,11 @@ import sidebar from '../../../docs/_Sidebar.md?raw';
 import { createDocsIndex, type DocsIndex } from './docsIndex';
 import { pageNameOf, type DocsPages } from './docsChecks';
 
-// Glob patterns must be literals; `NON_GUIDE_PAGES` lists the same three pages and a test keeps them equal.
+// Glob patterns must be literals; `NON_GUIDE_PAGES` lists the same four pages and a test keeps them equal.
 const FILES = import.meta.glob<string>(
-  ['../../../docs/*.md', '!**/_Sidebar.md', '!**/Design-System.md', '!**/Writing-Guide.md'],
+  ['../../../docs/*.md', '!**/_Sidebar.md', '!**/Design-System.md', '!**/Writing-Guide.md',
+    // This fork's own changelog is a record for its maintainers, not a guide page, and not upstream's.
+    '!**/Changelog.Fork.md'],
   { query: '?docs-index', import: 'default', eager: true },
 );
 

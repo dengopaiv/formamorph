@@ -195,6 +195,7 @@ export const DEV_MODAL_TABS = {
   settingsPrompts: [
     'narration', 'thinking', 'director', 'character', 'discover', 'storyboard', 'choices',
     'statupdates', 'location', 'timepassed', 'timeopening', 'summary', 'milestone', 'diary', 'scenetags',
+    'playerdesc', 'aidesc', 'aisummary', 'desccheck',
   ],
   // Settings → Prompts has a THIRD level: which surface of the open prompt is on show, reached with
   // `surface=…` (`#dev?modal=settings&tab=prompts&subtab=narration&surface=anatomy`). `anatomy` is the

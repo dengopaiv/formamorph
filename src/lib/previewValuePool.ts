@@ -69,6 +69,8 @@ const TURN_VALUES: Record<string, string> = {
   // Headed and numbered the way the milestone selector sends them.
   ...milestoneMomentValues(SAMPLE_MOMENTS.kept, SAMPLE_MOMENTS.fresh),
   '<SUBJECT>': 'a weathered lamp-keeper on a stone shore',
+  // The bridge prompts' per-kind facet list, as a character's reads.
+  '<FACETS>': 'appearance, manner, and how they carry themselves',
 };
 
 /**

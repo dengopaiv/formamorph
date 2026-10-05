@@ -108,7 +108,8 @@ describe('current built-in Headers through production request builders', () => {
       turn,
     };
     for (const thinkingMode of MODES) {
-      for (const tab of allGroupedTabs()) {
+      // An authoring prompt runs outside the turn, so it has no request for a hub to tile.
+      for (const tab of allGroupedTabs().filter((t) => !isAuthoringTab(t))) {
         const requests = hub(tab, {}, prompts, { sectionStyle, thinkingMode });
         expect(requests.length, tab).toBeGreaterThan(0);
         for (const request of requests) {

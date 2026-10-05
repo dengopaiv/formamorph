@@ -8,6 +8,7 @@ import { placeholderOwners } from '@/lib/placeholderHomes';
 import type { Entity } from '@/types';
 
 vi.mock('@/components/AiGenerateButton', () => ({ default: () => null }));
+vi.mock('@/components/DescriptionCheckButton', () => ({ default: () => null }));
 
 const entity = (name: string) => ({ id: 'e1', name, playerDescription: '{{char}} waits.' }) as Entity;
 
