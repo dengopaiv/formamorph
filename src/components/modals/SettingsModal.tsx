@@ -6,7 +6,7 @@ import LlmSetupGuide from '@/components/modals/LlmSetupGuide';
 import { endpointTabForRoute, endpointTabsFor, settingsTabsFor, type SettingsTabId } from '@/components/modals/settingsTabs';
 import { SETTINGS_DIALOG_SIZE } from '@/components/modals/settingsDialogSize';
 import { SurfaceTab } from '@/components/ui/surface';
-import { TARGET_ATTRIBUTE, targetAttribute } from '@/lib/surface/surfaceTargets';
+import { findTargetRow, targetAttribute, type TargetAttribute } from '@/lib/surface/surfaceTargets';
 import { useLanding } from '@/lib/surface/useLanding';
 import { ToolsTab } from '@/components/modals/ToolsTab';
 import { EMPTY_TOOLS_VIEW, TOOL_EDIT_TABS, type ToolsView } from '@/components/modals/toolsView';
@@ -219,7 +219,9 @@ function PromptOptionsPanel({ endpoint, attachments, maxOutput, verbatim, reason
       {/* Flush with the editor beside it. The slider thumb's clearance is on the slider rows themselves, so
           it no longer narrows the whole panel; the scroll frame supplies the right-hand gutter. */}
       <div className="space-y-5 py-3">
-        <EndpointRouteField {...endpoint} disabled={disabled} />
+        <div {...targetAttribute('settingsPromptSurfaces.options', 'prompt-endpoint')}>
+          <EndpointRouteField {...endpoint} disabled={disabled} />
+        </div>
         {attachments && <AttachmentsControl {...attachments} disabled={disabled} />}
         {maxOutput && <MaxOutputControl {...maxOutput} disabled={disabled} />}
         {verbatim && <VerbatimTurnsField id="promptVerbatim" value={verbatim.value} onChange={verbatim.set} disabled={disabled} />}
@@ -229,6 +231,12 @@ function PromptOptionsPanel({ endpoint, attachments, maxOutput, verbatim, reason
     </>
   );
 }
+
+/** The mode switch is the target of the tab it sits over; the other tabs use Data's. */
+const MODE_SWITCH_TARGETS: Record<string, TargetAttribute> & { data: TargetAttribute } = {
+  output: targetAttribute('settings.output', 'settings-mode'),
+  data: targetAttribute('settings.data', 'settings-mode'),
+};
 
 export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, initialTab, initialEndpointTab, initialPromptTab, initialPromptSurface, initialPromptField, initialTarget, requestKey, onWorldsRestored, onStartAuthoringTour, forcedMode }: {
   isOpen: boolean;
@@ -353,8 +361,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   useEffect(() => { if (requestedEndpointTab) setEndpointTab(requestedEndpointTab); }, [requestedEndpointTab, requestKey]);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const landTarget = useLanding(
-    (route: string) => dialogRef.current?.querySelector<HTMLElement>(`[${TARGET_ATTRIBUTE}="${route}"]`) ?? null,
-    { pulse: true },
+    (route: string) => (dialogRef.current ? findTargetRow(dialogRef.current, route) : null),
   );
   useEffect(() => { if (initialTarget) landTarget(initialTarget); }, [initialTarget, requestKey, landTarget]);
   const settings = useSettings();
@@ -779,7 +786,6 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   // Instant, not smooth: the field has to be under the cursor by the time focus lands on it. A built-in
   // preset's editors are read-only, so there is nothing to put a caret in; the scroll is the whole jump.
   const landField = useLanding((field: MessageField) => messageFieldRefs.current[field] ?? null, {
-    pulse: true,
     block: 'start',
     focus: (field) => field.querySelector<HTMLElement>('[data-lexical-editor][contenteditable="true"]'),
   });
@@ -1015,7 +1021,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     presets: routableEndpoints,
     onChange: (id: string | null) => setPromptEndpoint(activeKind, id),
     // Probed only while pinned — an unpinned prompt uses the active endpoint, which the setup gate covers.
-    target: {
+    reachability: {
       url: promptTarget.url,
       apiToken: promptTarget.apiToken,
       model: promptTarget.model,
@@ -1116,8 +1122,8 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                 onModeChange={(next) => { dismissTutorial(); setMode(next); }}
                 hasHiddenValues={hasHiddenValues}
                 className="ml-auto"
-                // The Data tab's guide sections need Advanced, so they land on this switch.
-                {...targetAttribute('settings.data', 'settings-mode')}
+                // The Data and Output tabs' guide sections need Advanced, so they land on this switch.
+                {...(MODE_SWITCH_TARGETS[activeTab] ?? MODE_SWITCH_TARGETS.data)}
               />
             </TutorialPopover>
           </div>
@@ -1195,6 +1201,8 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
             <div className="flex-shrink-0">
               <CheckRow
                 htmlFor="imageGenEnabled"
+                // The rows below hide while it is off, so a landing on any of them points here.
+                target={targetAttribute('settingsEndpoints.image', 'enable-image-generation')}
                 checked={!imageGenDisabled}
                 onChange={(v) => setImageGenDisabled(!v)}
                 {...rowCopy('enableImageGeneration')}
@@ -1631,7 +1639,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
               )}
 
               {showingOptions && (
-                <ScrollArea className="mt-4 flex-1 min-h-0">
+                <ScrollArea landingRoom className="mt-4 flex-1 min-h-0">
                   <PromptOptionsPanel
                     endpoint={endpointControl}
                     attachments={attachmentsControl}
@@ -2137,6 +2145,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
               onToggleFullscreen={toolsMorph.toggle}
               appVersion={APP_VERSION}
               openWorld={toolWorld}
+              targets={{ shareTools: targetAttribute('settings.tools', 'share-tools') }}
               // Selection only: Add opens a dialog that lives in the Prompts tab.
               presetSelector={(
                 <div className="flex items-center gap-2">

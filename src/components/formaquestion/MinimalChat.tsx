@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { GripHorizontal, PersonStanding, ScanFace, SendHorizontal, Square, X } from 'lucide-react';
+import { GripVertical, PersonStanding, ScanFace, SendHorizontal, Square, X } from 'lucide-react';
 import { AttachImagesButton } from '@/components/AttachImagesButton';
 import { AttachmentThumbs } from '@/components/game/AttachmentThumbs';
 import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tip } from '@/components/ui/tooltip';
 import { Hint } from '@/components/ui/typography';
 import { withoutAttachment } from '@/lib/actionAttachments';
@@ -11,23 +12,19 @@ import type { Guide } from '@/lib/formaquestion/guide';
 import type { HelpSettings, HelpSettingsChange } from '@/lib/formaquestion/helpSettings';
 import type { MascotSide } from '@/lib/formaquestion/windowBox';
 import { useAttachmentIntake } from '@/lib/useAttachmentIntake';
+import { ASSISTANT_BUBBLE, BUBBLE, FLOATING, PILL_BUTTON, TOP_FADE } from './floatingPieces';
 import { cn } from '@/lib/utils';
 import { Answer } from './AskParts';
 import { HELD_LINE, useAskSend, useFollowEnd } from './useAskParts';
 import { ResizeGrip } from './FormaquestionFrame';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { ScrollArrow } from './ScrollArrow';
+import type { PillFade } from './usePillFade';
 import { FormaquestionMenu, type MenuActions } from './FormaquestionMenu';
 import type { HelpChat } from './useHelpChat';
 import type { DragHandlers } from './usePointerDrag';
 
-/** Every floating piece takes presses and lifts off the app with the same shadow. The gaps belong to the app. */
-const FLOATING = 'pointer-events-auto shadow-md';
-const BUBBLE = cn(FLOATING, 'rounded-2xl px-3 py-2 text-label');
-const ASSISTANT_BUBBLE = cn(BUBBLE, 'mr-6 self-start rounded-bl-sm border bg-popover text-popover-foreground');
-const PILL_BUTTON = 'inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring';
-
-type MenuProps = MenuActions & { container?: HTMLElement };
+export type MenuProps = MenuActions & { container?: HTMLElement };
 
 /** The desktop pill's switch between the whole Mascot and its head. */
 export interface HeadToggle {
@@ -36,15 +33,25 @@ export interface HeadToggle {
 }
 
 /** The only chrome: it moves the window, swaps the Mascot's view, holds the ⋮ menu, and closes the window. */
-function Pill({ move, large, headToggle, menu, onClose }: { move?: DragHandlers; large: boolean; headToggle?: HeadToggle; menu: MenuProps; onClose: () => void }) {
+export function Pill({ move, large, headToggle, menu, onClose, fade }: {
+  move?: DragHandlers;
+  large: boolean;
+  headToggle?: HeadToggle;
+  menu: MenuProps;
+  onClose: () => void;
+  /** Fades the pill out when idle. Null keeps it up. */
+  fade?: PillFade | null;
+}) {
   const headLabel = headToggle?.showingHead ? 'Show Full Mascot' : 'Show Head Only';
+  const { className: fadeClass, ...fading } = fade?.props ?? {};
   return (
     <div
       data-fq-drag=""
       {...move}
-      className={cn(FLOATING, 'flex shrink-0 select-none items-center self-end rounded-full border bg-background p-0.5', move && 'cursor-move touch-none')}
+      {...fading}
+      className={cn(FLOATING, 'flex shrink-0 select-none items-center self-end rounded-full border bg-background p-0.5', move && 'cursor-move touch-none', fadeClass)}
     >
-      {move && <GripHorizontal aria-hidden className="mx-1.5 h-4 w-4 text-muted-foreground" />}
+      {move && <GripVertical aria-hidden className="mx-0.5 h-4 w-4 text-muted-foreground" />}
       {headToggle && (
         <Tip tip={headLabel}>
           <button type="button" aria-label={headLabel} onClick={headToggle.onToggle} className={cn(PILL_BUTTON, large ? 'h-12 w-12' : 'h-8 w-8')}>
@@ -52,7 +59,7 @@ function Pill({ move, large, headToggle, menu, onClose }: { move?: DragHandlers;
           </button>
         </Tip>
       )}
-      <FormaquestionMenu {...menu} large={large} round />
+      <FormaquestionMenu {...menu} onOpenChange={fade?.onMenuOpenChange} large={large} round />
       <Tip tip={large ? 'Close' : 'Close (F1)'}>
         <button type="button" aria-label="Close Formaquestion" onClick={onClose} className={cn(PILL_BUTTON, large ? 'h-12 w-12' : 'h-8 w-8')}>
           <X aria-hidden className="h-4 w-4" />
@@ -62,7 +69,7 @@ function Pill({ move, large, headToggle, menu, onClose }: { move?: DragHandlers;
   );
 }
 
-function AskPill({ draft, onDraftChange, chat }: { draft: string; onDraftChange: (text: string) => void; chat: HelpChat }) {
+export function AskPill({ draft, onDraftChange, chat }: { draft: string; onDraftChange: (text: string) => void; chat: HelpChat }) {
   const { busy, held, readsImages, pending, setPending, stop } = chat;
   const { attaching, dragOver, attachFiles, intakeProps } = useAttachmentIntake({ enabled: readsImages, pending, setPending });
   const { canSend, send, onKeyDown } = useAskSend(draft, onDraftChange, chat);
@@ -160,11 +167,11 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
         {headSide === 'right' && head}
       </div>
       <div className="relative min-h-0 flex-1">
-      <div
-        ref={viewportRef}
-        onScroll={onScroll}
-        data-fq-scroll="conversation"
-        className="h-full overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,black_2rem)] [scrollbar-width:none]"
+      {/* A grid content wrapper lets the log fill a short column, so the bubbles sit at its foot. */}
+      <ScrollArea
+        className={cn('h-full', TOP_FADE)}
+        viewportRef={viewportRef}
+        viewportProps={{ 'data-fq-scroll': 'conversation', onScroll, className: '[&>div]:!grid [&>div]:min-h-full' }}
       >
         <div role="log" aria-label="Conversation" aria-busy={chat.busy} className="flex min-h-full flex-col justify-end gap-2 px-1 pb-1 pt-8">
           {!guide && (failed ? (
@@ -188,7 +195,7 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
             </div>
           ))}
         </div>
-      </div>
+      </ScrollArea>
       <ScrollArrow shown={away} onClick={toEnd} />
       </div>
       <AskPill draft={draft} onDraftChange={onDraftChange} chat={chat} />

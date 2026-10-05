@@ -1,14 +1,17 @@
 // Storage is real (in-memory): SettingsProvider and the modal both read it on mount.
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { ThemeProvider } from '@/components/theme-provider';
 import { LANDING_PULSE_CLASS, LANDING_RING_CLASS } from '@/lib/landingPulse';
+import { resolveSurface } from '@/lib/surface/surfaceRoute';
 import { routeText, SURFACE_TARGETS } from '@/lib/surface/surfaceTargets';
+import { settingsLanding } from '@/lib/surface/useSurfaceOpenRequest';
 import { stubReducedMotion } from '@/test/reducedMotion';
+import { frames, recordScrolls, rowOf } from '@/test/landing';
 import { SettingsModal } from './SettingsModal';
-import { endpointTabForRoute, type SettingsTabId } from './settingsTabs';
+import { endpointTabForRoute } from './settingsTabs';
 
 /** Take Me There landing in Settings: the row a request names is scrolled to, focused, and pulsed once. */
 
@@ -40,22 +43,11 @@ const tree = (props: Props) => (
   </ThemeProvider>
 );
 
-const rowOf = (route: string) => document.querySelector<HTMLElement>(`[data-surface-target="${route}"]`);
-
-/** Lets the landing's frames run out. */
-const frames = (count: number) => act(async () => {
-  for (let i = 0; i < count; i++) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-});
-
-let scrolled: Element[];
-const realScroll = Element.prototype.scrollIntoView;
+const scrolled = recordScrolls();
 beforeEach(() => {
-  scrolled = [];
   toasts.calls = [];
-  Element.prototype.scrollIntoView = function scrollIntoView(this: Element) { scrolled.push(this); };
 });
 afterEach(() => {
-  Element.prototype.scrollIntoView = realScroll;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -108,16 +100,28 @@ describe('Settings Take Me There landing', () => {
     expect(row.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
   });
 
-  it.each(Object.entries(SURFACE_TARGETS).filter(([surface]) => surface.startsWith('settings.'))
-    .flatMap(([surface, targets]) => targets.map((target) => [surface, target] as const)))(
-    'lands %s#%s on its row and control',
-    async (surface, target) => {
-      const route = routeText(surface, target);
-      render(tree({ initialTab: surface.slice('settings.'.length) as SettingsTabId, initialTarget: route, requestKey: 'a' }));
-      await waitFor(() => expect(scrolled).toContain(rowOf(route)));
-      expect(rowOf(route)!.contains(document.activeElement)).toBe(true);
-    },
-  );
+  // The endpoint list is disabled under a built-in preset, which every fresh install has active.
+  const TAKES_NO_FOCUS = new Set(['settingsPromptSurfaces.options#prompt-endpoint']);
+  const inSettings = Object.entries(SURFACE_TARGETS).flatMap(([surface, targets]) => targets
+    .filter((target) => resolveSurface(surface, target)?.dialog === 'settings')
+    .map((target) => [surface, target] as const));
+
+  it.each(inSettings)('lands %s#%s on its row', async (surface, target) => {
+    const route = routeText(surface, target);
+    // The props a request gives the modal, as the game screen and the main menu derive them.
+    const landing = settingsLanding(resolveSurface(surface, target)!);
+    render(tree({
+      initialTab: landing.tab,
+      initialEndpointTab: landing.endpointTab,
+      initialPromptTab: landing.promptTab,
+      initialPromptSurface: landing.promptSurface,
+      initialTarget: route,
+      requestKey: 'a',
+    }));
+    await waitFor(() => expect(scrolled).toContain(rowOf(route)));
+    expect(rowOf(route)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+    if (!TAKES_NO_FOCUS.has(route)) expect(rowOf(route)!.contains(document.activeElement)).toBe(true);
+  });
 
   it.each(SURFACE_TARGETS['settingsEndpoints.text'])('lands settingsEndpoints.text#%s on its row and control', async (target) => {
     const route = routeText('settingsEndpoints.text', target);

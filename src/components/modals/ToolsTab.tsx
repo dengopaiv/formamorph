@@ -161,8 +161,8 @@ interface ToolsTabProps {
   onToggleFullscreen?: () => void;
   /** The Tool Snapshot of the world the player has open. Absent, Try It runs on the sample world. */
   openWorld?: () => ToolSnapshot;
-  /** Marks the New Tool button as a Take Me There target. */
-  newToolTarget?: TargetAttribute;
+  /** Marks the My Tools header and the New Tool button as Take Me There targets. */
+  targets?: { shareTools?: TargetAttribute; newTool?: TargetAttribute };
 }
 
 const TEXT_ENDPOINT_NOTE = "Your text endpoint won't receive Tools. Its model doesn't support them, or support isn't confirmed yet.";
@@ -174,7 +174,7 @@ const TEXT_ENDPOINT_NOTE = "Your text endpoint won't receive Tools. Its model do
  */
 export function ToolsTab({
   catalogTools, fixed, userTools, enabledTools, toolsSupported, unsupportedNote = TEXT_ENDPOINT_NOTE, toolsEnabled, onSaveTool, onDeleteTool,
-  onSetEnabled, view, onViewChange, presetSelector, fullscreen = false, onToggleFullscreen, appVersion, fileTransfer, singleRequest = false, openWorld, newToolTarget,
+  onSetEnabled, view, onViewChange, presetSelector, fullscreen = false, onToggleFullscreen, appVersion, fileTransfer, singleRequest = false, openWorld, targets,
 }: ToolsTabProps & (MyToolsProps | { [K in keyof MyToolsProps]?: undefined })) {
   const [confirmDelete, setConfirmDelete] = useState<Tool | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -326,13 +326,14 @@ export function ToolsTab({
 
       <div className="grid flex-1 min-h-0 gap-4 grid-rows-[minmax(0,10rem)_minmax(0,1fr)] sm:grid-rows-1 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
         <ScrollArea className="h-full min-h-0 rounded-md border">
-          <nav aria-label="Tools" className="p-2 flex flex-col gap-1">
+          {/* The side padding is the Landing Pulse's room around the Share Tools row. */}
+          <nav aria-label="Tools" className="px-3 py-2 flex flex-col gap-1">
             <p className="text-meta text-muted-foreground px-1 pt-1">Built-In</p>
             {fixedFunctions.map(toolButton)}
             {catalogTools.map(toolButton)}
 
             {my && (<>
-            <div className="flex items-center justify-between gap-1 px-1 pt-3">
+            <div className="flex items-center justify-between gap-1 px-1 pt-3" {...targets?.shareTools}>
               <p className="text-meta text-muted-foreground">My Tools</p>
               <span className="flex items-center">
                 <Tip tip="Import Tools">
@@ -353,7 +354,7 @@ export function ToolsTab({
               type="button"
               onClick={() => onViewChange({ ...view, draft: blankTool(randomUUID(), my.singleRequest ? [] : undefined), editTab: 'definition', keptHandlers: {} })}
               className="flex items-center gap-1 rounded border border-dashed px-2 py-1.5 text-label text-muted-foreground hover:bg-muted hover:text-foreground"
-              {...newToolTarget}
+              {...targets?.newTool}
             >
               <Plus className="h-4 w-4" />New Tool
             </button>
