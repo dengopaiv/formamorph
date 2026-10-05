@@ -177,8 +177,12 @@ before anything was measured.)*
 - **How often does it refuse in play?** One session found refusals (2026-08-22); later Q6 GGUF sessions found
   none (2026-10-05). What made the difference is unknown — see the update under *What the model is*.
 - **Why does the Q6 GGUF slow down late in a session?** On 3× A40 under KoboldCpp it gets slow once
-  KoboldCpp shows roughly **90k of ~148k**. Unconfirmed: whether those figures are tokens or something else,
-  and how they relate to the 32k context the preset was believed to use. Two likely causes, not yet told apart:
+  KoboldAI Lite shows roughly **90k of 147,444**. Those are **characters, not tokens**. Lite has no tokenizer;
+  `getMaxAllowedCharacters` in its `index.html` budgets `(context − max output) × chars_per_token − 12`, and
+  with KoboldCpp it uses 6 characters per token: (32,768 − 8,192) × 6 − 12 = 147,444. The real window is
+  32k tokens, and the 8,192-token output cap reserves a quarter of it, so 24,576 tokens are left for the prompt.
+  At ~4 characters per token of English prose, 90k characters is ~22k tokens, so the slowdown starts as the
+  window fills. Two likely causes, not yet told apart:
   (a) KoboldCpp re-reading the whole prompt every turn because something near its start changed, which shows
   in its console as `Processing Prompt` counting up before any text appears; and (b) each new token getting
   slower as the context grows. Check the console during a slow turn.
