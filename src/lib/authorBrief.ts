@@ -8,7 +8,7 @@
 //
 // Detecting that after the fact was tried first and does not work. Across five models from 24B to frontier,
 // four prompt variants and roughly 1,400 calls, a laundered description was named in one run out of
-// ninety-six; the full measurement is in `snowpanther's notes/description-consistency-design.md` §11. A model
+// ninety-six; the full measurement is in `description-consistency-design.md` (in dengopaiv's private model-lab notes) §11. A model
 // cannot reliably notice that something private is *absent*.
 //
 // A field that is only ever a source removes the question. The graph becomes a star — brief to player-facing,

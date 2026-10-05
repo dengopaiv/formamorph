@@ -1,5 +1,5 @@
 // Brief-check probe — reads an author's brief against the AI-facing description the narrator is actually
-// handed, which §12 of `snowpanther's notes/description-consistency-design.md` argues is the pair the 🔍
+// handed, which §12 of `description-consistency-design.md` (in dengopaiv's private model-lab notes) argues is the pair the 🔍
 // check should have been reading all along.
 //
 // Why this is a second probe and not a flag on `desccheck-probe.mjs`: that probe measures the *shipped*

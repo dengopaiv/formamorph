@@ -73,7 +73,7 @@ const FAIL_VERDICT = /\b(?:does not|doesn'?t|never|fails? to|no mention|missing|
  * function exists: on a 24B finetune the format is what made the model do the work at all — it stopped
  * pasting the input back and started reaching every planted fault — and measured line by line the same
  * output would have put **eight times** as many lines in this dialog as the model actually reported. The
- * measurement is in `snowpanther's notes/description-consistency-design.md` §14.
+ * measurement is in `description-consistency-design.md` (in dengopaiv's private model-lab notes) §14.
  *
  * Deliberately conservative in three ways, because a parser that guesses wrong here hides a real fault:
  * it needs at least two numbered items carrying verdict text *and* one verdict it can actually read, so a

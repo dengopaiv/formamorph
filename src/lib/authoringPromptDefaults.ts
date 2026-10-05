@@ -56,7 +56,7 @@ export const DEFAULT_AI_SUMMARY_PROMPT =
  * how much the model says — with true and false positives rising and falling together. Asking a model to
  * notice that something private is *absent* does not work, and asking cost output tokens on every call for a
  * finding that never arrived. `lib/authorBrief` answers it instead, by making the round trip unrepresentable
- * rather than detectable. The measurement is in `snowpanther's notes/description-consistency-design.md` §11.
+ * rather than detectable. The measurement is in `description-consistency-design.md` (in dengopaiv's private model-lab notes) §11.
  *
  * What remains is the half that does work: contradictions were found in 100% of runs on every model tested.
  *

@@ -19,7 +19,7 @@ describe('DEFAULT_DESC_CHECK_PROMPT', () => {
 
   it('does not ask after the round trip, which was measured and does not work', () => {
     // Named in 1 run out of 96 across five models and four wordings; see the module's own note and
-    // `snowpanther's notes/description-consistency-design.md` §11. `lib/authorBrief` makes the round trip
+    // `description-consistency-design.md` (in dengopaiv's private model-lab notes) §11. `lib/authorBrief` makes the round trip
     // unrepresentable instead of asking a model to spot an absence. Re-adding this bullet costs output
     // tokens on every call for a finding that does not arrive, so it should not come back without new
     // evidence — which is what this test is here to insist on.
