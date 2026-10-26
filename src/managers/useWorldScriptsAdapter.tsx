@@ -178,7 +178,7 @@ export function useWorldScriptsAdapter({ selectedId, onSelect, active = false }:
       const writes = overTiming === timing ? reorderWrites(byTiming[timing], activeId, groupTiming(overId) ? 'top' : overId) : null;
       if (!writes) {
         setRefused(active);
-        return;
+        return false;
       }
       setRefused(null);
       if (writes.length) write(orderEdits(writes));

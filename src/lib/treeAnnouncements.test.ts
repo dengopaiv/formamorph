@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { arrayMove } from '@dnd-kit/sortable';
 import {
-  announceLift, announceMove, announceDrop, announceCancel, describeDrop,
+  announceLift, announceMove, announceDrop, announceCancel, announceRefusedDrop, describeDrop,
   type TreeDropDescription,
 } from './treeAnnouncements';
 import { buildLocationTree, flattenLocationTree, getLocationDropProjection } from './locationTree';
@@ -68,6 +68,12 @@ describe('announceDrop', () => {
 
   it('falls back to the bare name when the drop had no projection', () => {
     expect(announceDrop('Kitchen', null)).toBe('Dropped Kitchen.');
+  });
+});
+
+describe('announceRefusedDrop', () => {
+  it('says the row did not move, and where the reason is', () => {
+    expect(announceRefusedDrop('Kitchen')).toBe('Could not drop Kitchen there. It is back where it began, and the reason is above the list.');
   });
 });
 

@@ -79,3 +79,11 @@ export const announceDrop = (name: string, at: TreeDropDescription | null): stri
   at ? `Dropped ${name}, ${place(at)}.` : `Dropped ${name}.`;
 
 export const announceCancel = (name: string): string => `Cancelled. ${name} is back where it began.`;
+
+/**
+ * A drop the tree turned down after it was made — a trait or stat whose readers would break, a script moved
+ * into another timing. The tree shows why in a notice above the list; this points there, because a notice
+ * that appears is not reliably read by a screen reader on its own.
+ */
+export const announceRefusedDrop = (name: string): string =>
+  `Could not drop ${name} there. It is back where it began, and the reason is above the list.`;

@@ -128,7 +128,7 @@ const WorldStatTree = ({ tree, selectedId, onSelect, world, emptyHint }: {
       if (!next) return;
       if (next.kind === 'refused') {
         setRefusal(next.refusal);
-        return;
+        return false;
       }
       setRefusal(null);
       if (next.world) {

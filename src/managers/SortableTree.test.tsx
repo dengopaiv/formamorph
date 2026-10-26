@@ -309,7 +309,7 @@ describe('a keyboard drag', () => {
   type Node = { id: string; depth: number };
   const nodes: Node[] = [{ id: 'a', depth: 0 }, { id: 'b', depth: 0 }, { id: 'c', depth: 0 }];
 
-  function Host({ onDrop }: { onDrop: (activeId: string, overId: string, offsetLeft: number) => void }) {
+  function Host({ onDrop }: { onDrop: (activeId: string, overId: string, offsetLeft: number) => boolean | void }) {
     const adapter: SortableTreeAdapter<Node> = {
       visibleDeps: [],
       rowDeps: [],
@@ -357,5 +357,14 @@ describe('a keyboard drag', () => {
     // The drop reads the offset after the tree's own end handler has run, so it must still say level 2.
     expect(onDrop).toHaveBeenCalledWith('b', expect.any(String), 24, expect.any(Set));
     expect(spoken()).toBe('Dropped Row b, level 2, inside Row a, first.');
+  });
+
+  it('says a drop the tree turned down did not happen', async () => {
+    const user = userEvent.setup();
+    render(<Host onDrop={() => false} />);
+    screen.getAllByRole('button', { name: 'Drag to reorder or nest' })[1].focus();
+
+    await user.keyboard(' {ArrowRight} ');
+    expect(spoken()).toBe('Could not drop Row b there. It is back where it began, and the reason is above the list.');
   });
 });

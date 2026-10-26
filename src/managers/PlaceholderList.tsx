@@ -50,12 +50,13 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
   // The last move across the Blueprints edge that was refused, and whether it was the group's removal.
   const [refusal, setRefusal] = useState<{ refusal: BlueprintRefusal; removing: boolean } | null>(null);
   /** Write every list, unless the change carries a placeholder across the Blueprints edge that something
-   *  still holds on its side. */
+   *  still holds on its side. True when it was refused. */
   const commitLists = (next: PlaceholderSlices, removing = false) => {
-    if (!setLists) return;
+    if (!setLists) return false;
     const refused = world ? blueprintMoveRefusal(world.getWorldData(), next) : null;
     setRefusal(refused && { refusal: refused, removing });
     if (!refused) setLists(next);
+    return !!refused;
   };
   const { rowRules, dialog } = usePlaceholderRowActions({ selectedId, onSelect, openDuplicate });
 
@@ -77,7 +78,7 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
     const context = { placedIds: placedIds?.() };
     if (lists && setLists && !scope) {
       const next = applyScopedPlaceholderDrop(lists, collapsed, activeId, overId, offsetLeft, TREE_INDENT, context);
-      if (next) commitLists(next);
+      if (next && commitLists(next)) return false;
       return;
     }
     if (lists && setLists && scope) {

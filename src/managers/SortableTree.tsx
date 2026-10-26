@@ -23,7 +23,7 @@ import { EditorDndContext, StableSortableContext } from '@/components/dnd/Editor
 import { restrictYToScrollAncestor } from '@/components/dnd/dragInvariants';
 import { depthStepOffset } from '@/lib/treeDepthStep';
 import {
-  announceLift, announceMove, announceDrop, announceCancel, describeDrop,
+  announceLift, announceMove, announceDrop, announceCancel, announceRefusedDrop, describeDrop,
   type TreeDropDescription,
 } from '@/lib/treeAnnouncements';
 import { PlaceholderVocabularyProvider } from '@/components/prompt/PlaceholderText';
@@ -117,7 +117,8 @@ export interface SortableTreeAdapter<N extends { id: string; depth: number }> {
   project: (visible: N[], activeId: string, overId: string, offsetLeft: number)
     => { depth: number; parentId: string | null } | null;
   /** Commit a drop. */
-  onDrop: (activeId: string, overId: string, offsetLeft: number, collapsed: Set<string>) => void;
+  /** Commit a drop. Returns false when the tree turns the drop down, so it is not announced as made. */
+  onDrop: (activeId: string, overId: string, offsetLeft: number, collapsed: Set<string>) => boolean | void;
   /** What `selectedId` and `onSelect` speak in, where a row is not itself the thing being selected — a
    *  placeholder draws a row under every parent placeholder that shares it, and all of them are that one placeholder.
    *  Defaults to the row's own id. */
@@ -387,6 +388,8 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
   }, [rowsFor, nameOf]);
 
   const spokenPlace = useRef<string | null>(null);
+  // Whether the adapter turned the last drop down. Set in `handleDragEnd`, which runs before dnd-kit speaks.
+  const dropRefused = useRef(false);
   const announcements = useMemo<Announcements>(() => {
     const nameOfId = (id: string) => {
       const node = rowsFor(id).find((n) => n.id === id);
@@ -410,8 +413,9 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
       },
       onDragMove: ({ active, over }) => moved(String(active.id), over && String(over.id)),
       onDragOver: ({ active, over }) => moved(String(active.id), over && String(over.id)),
-      onDragEnd: ({ active, over }) =>
-        announceDrop(nameOfId(String(active.id)), here(String(active.id), over && String(over.id))),
+      onDragEnd: ({ active, over }) => (dropRefused.current
+        ? announceRefusedDrop(nameOfId(String(active.id)))
+        : announceDrop(nameOfId(String(active.id)), here(String(active.id), over && String(over.id)))),
       onDragCancel: ({ active }) => announceCancel(nameOfId(String(active.id))),
     };
   }, [describeAt, rowsFor, nameOf]);
@@ -448,7 +452,8 @@ export function SortableTree<N extends { id: string; depth: number }>({ adapter,
     setProjectedDepth(project(activeRef.current, overRef.current, offsetRef.current));
   }, [project]);
   const handleDragEnd = useCallback(({ active, over }: DragEndEvent) => {
-    if (over) adapterRef.current.onDrop(String(active.id), String(over.id), offsetRef.current, collapsedRef.current);
+    dropRefused.current = !!over
+      && adapterRef.current.onDrop(String(active.id), String(over.id), offsetRef.current, collapsedRef.current) === false;
     reset();
   }, [reset]);
 
