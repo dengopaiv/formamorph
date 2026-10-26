@@ -6,8 +6,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import LocationMap from "@/components/game/LocationMap";
 import { UNNAMED_LOCATION } from "@/lib/locationCanvas";
 import { defaultCollapsedLocations, locationRows, removeCollapsedChildren } from "@/lib/locationTree";
+import { ancestors, parentLookup } from "@/lib/ancestors";
 import { useTravelView, type TravelView } from "@/lib/travelPrefs";
 import { cn } from "@/lib/utils";
+import type { MetRoster } from "@/lib/metEntities";
+import type { MapBackdrop } from "@/lib/useLocationBackdrop";
 import type { Connection, GameLocation } from "@/types";
 
 /**
@@ -22,13 +25,17 @@ const INDENT_REM = 1.25;
 const ROW_INSET_REM = 0.75;
 
 export const LocationModal = ({
-  isOpen, onOpenChange, locations, connections, currentLocationId, changeLocation, resolveText,
+  isOpen, onOpenChange, locations, connections, currentLocationId, entitiesAt, mapBackground, changeLocation, resolveText,
 }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   locations: GameLocation[];
   connections: Connection[];
   currentLocationId: string | null;
+  /** The met entities the Map shows. */
+  entitiesAt?: MetRoster;
+  /** The Map Background image the Map draws behind its boxes. */
+  mapBackground?: MapBackdrop;
   changeLocation: (location: GameLocation) => void;
   resolveText: (text: string) => string;
 }) => {
@@ -50,11 +57,9 @@ export const LocationModal = ({
   // How many places each branch holds all the way down, so a folded row can say what it hides.
   const descendantCount = useMemo(() => {
     const counts = new Map<string, number>();
-    const parentOf = new Map(allRows.map((r) => [r.id, r.parentId]));
+    const parentOf = parentLookup(allRows, (r) => r.parentId);
     for (const row of allRows) {
-      for (let cur = row.parentId; cur; cur = parentOf.get(cur) ?? null) {
-        counts.set(cur, (counts.get(cur) ?? 0) + 1);
-      }
+      for (const above of ancestors(row.id, parentOf)) counts.set(above, (counts.get(above) ?? 0) + 1);
     }
     return counts;
   }, [allRows]);
@@ -175,6 +180,8 @@ export const LocationModal = ({
                 locations={locations}
                 connections={connections}
                 currentLocationId={currentLocationId}
+                entitiesAt={entitiesAt}
+                background={mapBackground}
                 onTravel={travel}
               />
             </div>

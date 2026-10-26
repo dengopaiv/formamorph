@@ -70,14 +70,14 @@ const USER_TOKEN = '{{user}}';
  */
 export const PLAYER_NAME: BuiltinPlaceholder = {
   id: 'player-name',
-  label: 'Player Name',
+  label: 'Persona Name',
   token: USER_TOKEN,
   source: String.raw`\{\{\s*[Uu][Ss][Ee][Rr]\s*\}\}`,
   suffixSource: String.raw`['’]s\b`,
-  searchTerms: ['user'],
+  searchTerms: ['user', 'player name'],
   accent: placeholderAccent(USER_TOKEN),
   visible: ({ offered }) => offered,
-  hint: 'Shows your persona’s name in play. With no persona, it reads “you” in an opening and “the player” elsewhere.',
+  hint: 'Shows your persona’s name during the game. With no persona, it reads “you” in an opening and “the player” elsewhere.',
   resolve: ({ before, suffix }, { name, kind = 'opening' }) => {
     const persona = name?.trim();
     if (persona) return persona + (suffix ?? '');
@@ -148,8 +148,19 @@ export function labelBuiltins(text: string): string {
 
 const CHARACTER_RE = new RegExp(CHARACTER_NAME.source, 'g');
 
-/** Write every Character Name as the Player Name, for text the player bears. */
+/** Write every Character Name as the Persona Name, for text the player has. */
 export const characterAsPlayer = (text: string): string => text.replace(CHARACTER_RE, PLAYER_NAME.token);
+
+/** Write every Character Name in the text as `name`. */
+export const withCharacterName = (text: string, name: string): string => text.replace(CHARACTER_RE, () => name);
+
+const PLAYER_NAME_RE = new RegExp(PLAYER_NAME.source, 'g');
+
+/** The values-map key a chip Header reads the Persona Name from. Prompt text never looks it up. */
+export const PLAYER_NAME_HEADER_KEY = `header:${PLAYER_NAME.token}`;
+
+/** Write every Persona Name in the text as `name`. */
+export const withPlayerName = (text: string, name: string): string => text.replace(PLAYER_NAME_RE, () => name);
 
 /** Render every Built-in in the text from the playthrough. */
 export function renderBuiltins(text: string, render: BuiltinRender = {}): string {

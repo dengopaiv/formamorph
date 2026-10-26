@@ -2,14 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { TURN_PASSES, TURN_PASS_CAPS, sceneTagsPass, SCENE_TAGS_EMPTY_CAST, milestoneSelectPass } from './turnPasses';
 import { defaultMilestoneSelectUserPrompt } from '@/components/game/GamePrompts';
 import { renderPromptTemplate } from '@/lib/promptTemplate';
+import { layerValues } from '@/lib/promptValues';
 import { planTurn } from './planTurn';
-import type { ChatMessage, Entity } from '@/types';
-import type { TurnMaterial, TurnPassId, TurnPassRecord, TurnPlanInput, TurnSettings } from './turnPlan';
+import type { ChatMessage, Entity, GameLocation, PlayerStat } from '@/types';
+import type { TurnMaterial, TurnPassId, TurnPassRecord, TurnPassSubject, TurnPlanInput, TurnPrompts, TurnSettings } from './turnPlan';
+import type { SectionStyle } from '@/lib/promptPresets';
 import { runsTile } from '@/lib/requestAnatomy';
 import { TEST_PROMPTS, testInput } from './turnTestInputs';
 import {
   INLINE_THINKING_DIRECTIVE, OPENING_SCENE_CUE, planDirective, defaultChoicesPrompt,
+  defaultStatUpdatesPrompt, defaultStatUpdatesUserPrompt,
 } from '@/components/game/GamePrompts';
+import { builtinStatTextPrompts, statTextFor } from '@/lib/statTextPrompts';
+import { createStatRequest, statRequestSchema } from '@/lib/statRequest';
 
 // Each pass assembles its own request. These tests call the records directly, with templates whose tokens
 // are recognizable, so a token rendered from the wrong context (or a cap that drifts) is visible.
@@ -61,6 +66,91 @@ const lastMessage = (id: TurnPassId, over: Partial<TurnMaterial> = {}, planOver:
   return messages[messages.length - 1].content;
 };
 
+const playerStat = (id: string, name: string): PlayerStat => ({
+  id, name, type: 'number', description: '', min: 0, max: 100, value: 80, regen: 0, descriptors: [],
+});
+
+describe('the stat request', () => {
+  const health = createStatRequest([playerStat('health', 'Health')]);
+  const builtin = (style: SectionStyle) => statTextFor(builtinStatTextPrompts(style), { worldPrompt: false });
+  const shipped = (over: Partial<TurnMaterial>, prompts: Partial<TurnPrompts> = {}) =>
+    pass('statUpdates').buildRequest(
+      input({
+        prompts: {
+          ...TEST_PROMPTS, statUpdates: defaultStatUpdatesPrompt, statUpdatesUser: defaultStatUpdatesUserPrompt,
+          statText: builtin('markdown'), ...prompts,
+        },
+      }, { statCount: 1 }),
+      material(over),
+    );
+
+  it('sends the shipped prompts with the schema, and the built-in text pass as the fallback', () => {
+    const request = shipped({ statRequest: health });
+    const text = builtinStatTextPrompts('markdown');
+    expect(request.responseSchema).toEqual(statRequestSchema(health));
+    expect(request.systemPrompt).toContain('Your entire output is one JSON object');
+    expect(request.systemPrompt).toContain('## Global Stats\n- **Health:** 80/100');
+    expect(request.messages[0].content).toContain('0 for every value and maximum it did not move');
+    expect(request.textFallback?.systemPrompt).toBe(renderPromptTemplate(text.system, layerValues(material().ctx, health.context)));
+    expect(request.textFallback?.messages[0].content)
+      .toBe(renderPromptTemplate(text.user, { '<NARRATION>': material().narration }));
+    expect(request.textFallback?.maxTokens).toBe(32);
+    expect(runsTile(request.textFallback!.systemPrompt, request.textFallback!.anatomy!.system)).toBe(true);
+  });
+
+  it.each([
+    ['labels', 'STATS:', '## Stats'],
+    ['xml', '<stats>', '## Stats'],
+  ] as const)('runs the text pair of a %s built-in in that style on a schema refusal', (style, marker, markdown) => {
+    const request = shipped({ statRequest: health }, { statText: builtin(style) });
+    const text = builtinStatTextPrompts(style);
+    expect(request.textFallback?.systemPrompt).toBe(renderPromptTemplate(text.system, layerValues(material().ctx, health.context)));
+    expect(request.textFallback?.systemPrompt).toContain('Your entire output is stat-change lines');
+    expect(request.textFallback?.systemPrompt).toContain(marker);
+    expect(request.textFallback?.systemPrompt).not.toContain(markdown);
+    expect(request.textFallback?.messages[0].content)
+      .toBe(renderPromptTemplate(text.user, { '<NARRATION>': material().narration }));
+  });
+
+  it('renders every chip from the stat pass context, with the snapshot’s stats over it', () => {
+    const prompts = { statUpdates: 'WORLD <WORLD DESCRIPTION> ENTITIES <ENTITIES|inscene> STATS <STATS DESCRIPTION>', statUpdatesUser: 'USER' };
+    const statCtx = { '<WORLD DESCRIPTION>': 'KEYED WORLD', '<ENTITIES|inscene>': 'KEYED CAST' };
+    const request = shipped({ statRequest: health, statCtx }, prompts);
+    expect(request.systemPrompt).toBe('WORLD KEYED WORLD ENTITIES KEYED CAST STATS Health');
+    // A turn with no stat context reads the turn's own.
+    expect(shipped({ statRequest: health }, prompts).systemPrompt).toContain('WORLD TURN-LOCATION');
+  });
+
+  it('sends a user preset as written on both paths, the schema still riding the first', () => {
+    const custom = { statUpdates: 'MY STATS <STATS DESCRIPTION>', statUpdatesUser: 'MY USER <NARRATION>', statText: { system: null, user: null } };
+    const request = shipped({ statRequest: health }, custom);
+    expect(request.responseSchema).toEqual(statRequestSchema(health));
+    expect(request.systemPrompt).toBe(request.textFallback?.systemPrompt);
+    expect(request.messages).toEqual(request.textFallback?.messages);
+    expect(request.systemPrompt.startsWith('MY STATS')).toBe(true);
+  });
+
+  it('sends a world’s own Stats prompt as written on the fallback, with the built-in preset’s text user message', () => {
+    const text = builtinStatTextPrompts('markdown');
+    const request = shipped({ statRequest: health }, {
+      statUpdates: 'WORLD STATS <STATS DESCRIPTION>', statText: statTextFor(text, { worldPrompt: true }),
+    });
+    expect(request.textFallback?.systemPrompt).toBe(request.systemPrompt);
+    expect(request.textFallback?.systemPrompt.startsWith('WORLD STATS')).toBe(true);
+    expect(request.textFallback?.messages[0].content)
+      .toBe(renderPromptTemplate(text.user, { '<NARRATION>': material().narration }));
+  });
+
+  it('sends the text pass alone for an endpoint that refused the schema', () => {
+    const refused = createStatRequest([playerStat('health', 'Health')], { textPass: true });
+    const request = shipped({ statRequest: refused });
+    expect(request).not.toHaveProperty('responseSchema');
+    expect(request).not.toHaveProperty('textFallback');
+    expect(request.systemPrompt).toContain('Your entire output is stat-change lines');
+    expect(request.maxTokens).toBe(32);
+  });
+});
+
 describe('turn pass requests', () => {
   describe('the location router', () => {
     it('resolves the move from the pre-move context and the action alone', () => {
@@ -81,6 +171,84 @@ describe('turn pass requests', () => {
       expect(pass('locationAuto').parseResponse('The Far Bank', material())).toBe('The Far Bank');
       expect(pass('locationAuto').parseResponse('NONE', material())).toBeNull();
       expect(pass('locationAuto').parseResponse('Atlantis', material())).toBeNull();
+    });
+  });
+
+  describe('the entity location request', () => {
+    const sylvie: Entity = { id: 'e2', name: 'Sylvie', movement: 'follow' } as Entity;
+    const asking = (moves: TurnPassSubject['moves']) => ({ subject: { name: 'Sylvie', entity: sylvie, moves } });
+
+    it('asks one entity, before the move, from the action alone', () => {
+      const request = build('entityLocationAuto', asking(['stay', 'comeAlong']));
+      expect(request.type).toBe('entityLocation');
+      expect(request.systemPrompt).toBe('MOVER CURRENT-LOCATION for Sylvie');
+      expect(request.messages).toEqual([{ role: 'user', content: 'Move: Sylvie | I read the notices. |  | Sylvie is not with the player character. | - Stay\n- Come along' }]);
+    });
+
+    it('asks after the narration in suggest mode, from the turn context and the narration', () => {
+      const request = build('entityLocationSuggest', asking(['stay', 'comeAlong']));
+      expect(request.systemPrompt).toBe('MOVER TURN-LOCATION for Sylvie');
+      expect(request.messages[0].content).toContain('| The notices are damp and half-illegible. |');
+    });
+
+    it('offers a follower keep following or stay here', () => {
+      expect(lastMessage('entityLocationAuto', asking(['keepFollowing', 'stayHere'])))
+        .toMatch(/\| Sylvie is following the player character\. \| - Keep following\n- Stay here$/);
+    });
+
+    it('caps the reply at the longest option plus slack', () => {
+      const cap = (moves: TurnPassSubject['moves']) => build('entityLocationAuto', asking(moves)).maxTokens!;
+      expect(cap(['keepFollowing', 'stayHere'])).toBeGreaterThan(cap(['stay', 'comeAlong']));
+      expect(cap(['keepFollowing', 'stayHere'])).toBeLessThan(16);
+    });
+
+    it('rides the batch without a status label of its own, and shows in the request capture', () => {
+      const request = build('entityLocationAuto', asking(['stay', 'comeAlong']));
+      expect(request.quiet).toBe(true);
+      expect(request.silent).toBe(false);
+    });
+
+    it('reads the reply against its own options only', () => {
+      const read = (raw: string, moves: TurnPassSubject['moves']) =>
+        pass('entityLocationAuto').parseResponse(raw, material(asking(moves)));
+      expect(read('Come along', ['stay', 'comeAlong'])).toBe('comeAlong');
+      expect(read('Stay.', ['stay', 'comeAlong'])).toBe('stay');
+      expect(read('Stay here', ['keepFollowing', 'stayHere'])).toBe('stayHere');
+      expect(read('keep following', ['keepFollowing', 'stayHere'])).toBe('keepFollowing');
+      // A follower is never offered "come along", so the word means nothing from one.
+      expect(read('Come along', ['keepFollowing', 'stayHere'])).toBeNull();
+      expect(read('NONE', ['stay', 'comeAlong'])).toBeNull();
+    });
+
+    describe('for a Moves Between entity', () => {
+      const blackwell: Entity = { id: 'e3', name: 'Blackwell', movement: 'between', locations: ['keep', 'wall', 'tower'] } as Entity;
+      const walking = {
+        subject: {
+          name: 'Blackwell',
+          entity: blackwell,
+          moves: ['stay', 'comeAlong'],
+          destinations: [{ id: 'keep', name: 'The Keep' }, { id: 'tower', name: 'The Watchtower' }],
+        } as TurnPassSubject,
+      };
+
+      it('offers stay, come along, then each of its places', () => {
+        expect(lastMessage('entityLocationAuto', walking)).toMatch(/\| - Stay\n- Come along\n- The Keep\n- The Watchtower$/);
+      });
+
+      it('reads a place name as a walk there', () => {
+        const read = (raw: string) => pass('entityLocationAuto').parseResponse(raw, material(walking));
+        expect(read('The Watchtower')).toEqual({ goTo: 'tower' });
+        expect(read('Come along')).toBe('comeAlong');
+        // A place it isn't offered means nothing.
+        expect(read('The Barrow')).toBeNull();
+      });
+
+      it('caps the reply at its longest place', () => {
+        const cap = (destinations: GameLocation[]) =>
+          build('entityLocationAuto', { subject: { ...walking.subject, destinations } }).maxTokens!;
+        expect(cap([{ id: 'x', name: 'The Long Watchtower Above the Northern Gate' } as GameLocation]))
+          .toBeGreaterThan(cap([]));
+      });
     });
   });
 
@@ -168,6 +336,14 @@ describe('turn pass requests', () => {
       expect(request.messages[0].content).toContain('The one-armed ferryman.');
       expect(request.messages[0].content).toContain('Where I am now: at the stern');
       expect(request.maxTokens).toBe(TURN_PASS_CAPS.character);
+    });
+
+    it("sends the character's own stats in its identity block, and the diary pass none", () => {
+      const stats = '  - **stats:**\n    - **Vigor:** 12/100 (Spent)\n';
+      const subject = { name: 'Bram', entity: BRAM, stats };
+      expect(build('character', { subject }).messages[0].content)
+        .toContain('The one-armed ferryman.\n  - **stats:**\n    - **Vigor:** 12/100 (Spent)\n\n');
+      expect(lastMessage('diary', { subject })).not.toContain('Vigor');
     });
 
     it('refuses to build a fan-out request with no subject', () => {
@@ -308,6 +484,12 @@ describe('turn pass requests', () => {
       expect(build('statUpdates', {}, {}, { statCount: 6 }).maxTokens).toBe(112);
     });
 
+    it('sizes the schema request’s cap from its stat count', () => {
+      const stats = (n: number) => createStatRequest(Array.from({ length: n }, (_, i) => playerStat(`s${i}`, `Stat ${i}`)));
+      expect(build('statUpdates', { statRequest: stats(1) }, {}, { statCount: 1 }).maxTokens).toBe(64);
+      expect(build('statUpdates', { statRequest: stats(6) }, {}, { statCount: 6 }).maxTokens).toBe(224);
+    });
+
     it('sizes the location cap from the longest destination name', () => {
       for (const id of ['locationAuto', 'locationSuggest'] as const) {
         // 'Pier' estimates to 1 token; the long name is 44 characters, so 11.
@@ -339,9 +521,9 @@ describe('turn pass requests', () => {
     it('skips the storyboard when the director cast nobody — there is nothing to reconcile', () => {
       expect(pass('storyboard').isReady?.(material({ npcCastSize: 0 }))).toBe(false);
       expect(pass('storyboard').isReady?.(material())).toBe(true);
-      // Every other pass is ready the moment it is due.
+      // Every other pass but the stat request, which waits for its owners, is ready the moment it is due.
       for (const record of TURN_PASSES) {
-        if (record.id !== 'storyboard') expect([record.id, record.isReady]).toEqual([record.id, undefined]);
+        if (record.id !== 'storyboard' && record.id !== 'statUpdates') expect([record.id, record.isReady]).toEqual([record.id, undefined]);
       }
     });
 
@@ -504,6 +686,8 @@ describe('every pass request anatomy', () => {
   const SOURCES: Record<string, { system: boolean; user: boolean }> = {
     locationAuto: { system: true, user: true },
     locationSuggest: { system: true, user: true },
+    entityLocationAuto: { system: true, user: true },
+    entityLocationSuggest: { system: true, user: true },
     thinking: { system: true, user: false },
     director: { system: true, user: true },
     character: { system: true, user: false },
@@ -710,5 +894,53 @@ describe('the milestone selector pass', () => {
 
   it('refuses to build without the two lists', () => {
     expect(() => milestoneSelectPass.buildRequest(input(), material())).toThrow(/milestone/);
+  });
+});
+
+describe('Strip Links And Images at the request', () => {
+  const diary = ['I saw the [gate](https://a.test/g) ![crest](https://a.test/c.png) today.', 'Nothing to report.'];
+  const STRIPPED = '- I saw the gate today.\n- Nothing to report.';
+  const subject = { name: 'Bram', entity: BRAM, diary };
+
+  it("sends a character's diary entries as plain text, and as written with the rule off", () => {
+    expect(build('character', { subject }, {}, { stripLinksAndImages: true }).messages[0].content).toContain(STRIPPED);
+    expect(build('character', { subject }, {}, { stripLinksAndImages: true }).messages[0].content).not.toContain('](');
+    expect(build('character', { subject }, {}, { stripLinksAndImages: false }).messages[0].content)
+      .toContain('- I saw the [gate](https://a.test/g) ![crest](https://a.test/c.png) today.');
+  });
+
+  it('sends the milestone selector plain digests, and the same digests as written with the rule off', () => {
+    const linked = ['Met [Bram](https://a.test/b).'];
+    const fresh = ['Found ![map](https://a.test/m.png) it.'];
+    const sent = (stripLinksAndImages: boolean) => milestoneSelectPass.buildRequest(
+      input({}, { stripLinksAndImages }),
+      material({ milestone: { kept: linked, fresh } }),
+    ).messages[0].content;
+    expect(sent(true)).toContain('1. Met Bram.');
+    expect(sent(true)).toContain('2. Found it.');
+    expect(sent(false)).toContain('1. Met [Bram](https://a.test/b).');
+  });
+
+  it('sends the character note its first passage and later material as plain text, and as written with the rule off', () => {
+    const subject = {
+      name: 'Bram',
+      laterMaterial: ['Bram showed [the gate](https://a.test/g).', 'Bram wrote ![sigil](https://a.test/s.png) it down.'],
+    };
+    const passage = 'Bram stood by the [ferry](https://a.test/f) ![crest](https://a.test/c.png).';
+    const note = (stripLinksAndImages: boolean) =>
+      build('discoverEntity', { subject, narration: passage }, {}, { stripLinksAndImages }).messages[0].content;
+    expect(note(true)).toContain('Bram stood by the ferry.');
+    expect(note(true)).toContain('Bram showed the gate.\n\nBram wrote it down.');
+    expect(note(true)).not.toContain('](');
+    expect(note(false)).toContain('[ferry](https://a.test/f) ![crest](https://a.test/c.png)');
+    expect(note(false)).toContain('[the gate](https://a.test/g)');
+  });
+
+  it('leaves the player action and the authored character text as written', () => {
+    const action = 'I open [the book](https://a.test/book).';
+    const entity = { ...BRAM, aiSummary: 'Sells [maps](https://a.test/maps).' } as Entity;
+    const content = build('character', { subject: { ...subject, entity }, effectiveAction: action }, {}, { stripLinksAndImages: true }).messages[0].content;
+    expect(content).toContain(action);
+    expect(content).toContain('Sells [maps](https://a.test/maps).');
   });
 });

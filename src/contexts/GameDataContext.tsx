@@ -1,17 +1,25 @@
 import { randomUUID } from "@/lib/uuid";
-import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, type ReactNode, type SetStateAction } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import WorldStorageService from '../services/WorldStorageService';
-import { canonicalStringify } from '@/lib/canonicalStringify';
+import { canonicalEqual } from '@/lib/canonicalStringify';
 import { dirtyDiff } from '@/lib/dirtyDiff';
+import { mapImages } from '@/lib/mapBackground';
 import { registerDevHook } from '@/lib/devRouter';
+import { holdUnsavedWorld } from '@/lib/unsavedWorld';
+import { onWorldChangedElsewhere, type WorldChange } from '@/lib/worldChangeSignal';
 import { migrateWorld, APP_VERSION } from '@/lib/version';
 import { dropLocationFromEntities } from '@/lib/entityPresence';
+import { dropRelationshipsTo } from '@/lib/entityRelationships';
 import { dropLinksTo, removeBlueprints } from '@/lib/traitLinks';
+import { dropStatLinksTo, playStatWorld, removeStatBlueprints } from '@/lib/statLinks';
 import { neededCopies, syncBlueprintCopies } from '@/lib/blueprintCopies';
+import { withoutSpentFallback } from '@/lib/legacyVrm';
 import { dropLocationFromConnections } from '@/lib/locationGraph';
 import { removeLocationPromotingChildren } from '@/lib/locationTree';
 import { newLocationPosition } from '@/lib/locationCanvas';
 import { withDefaultDescriptors } from '@/lib/blankWorld';
+import { removeStatGroup as removeStatGroupFrom } from '@/lib/statGroupTree';
+import { removeGroupPromotingChildren } from '@/lib/groupTree';
 import { followRename } from '@/lib/statDescriptors';
 import { renamedPlaceholderValues, repinRenamedValues } from '@/lib/traitEffects';
 import { directChipTargets } from '@/lib/placeholders';
@@ -21,8 +29,8 @@ import {
 } from '@/lib/placeholderHomes';
 import { releasePlaceholderOwners, removePlaceholderCascade } from '@/lib/placeholderTree';
 import { chipBearingTexts } from '@/lib/testBench/rules';
-import { markEdited, stampLinks } from '@/lib/linkedContent';
-import { writeBackOwnedCopies } from '@/lib/libraryWriteBack';
+import { markEdited, stampLinks, type LinkStamp } from '@/lib/linkedContent';
+import { planOwnedWriteBack } from '@/lib/libraryWriteBack';
 import { followedLibraryId } from '@/lib/publishLinks';
 import { useDictionaryStoreState, DictionaryStoreProvider } from '@/contexts/DictionaryStoreContext';
 import { PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
@@ -30,10 +38,16 @@ import { PlacementLettersProvider, useStablePlacementLetters } from '@/contexts/
 import { EMPTY_LETTERS, worldPlacementLetters } from '@/lib/placementLetters';
 import { worldAllowedPersonas, worldStartPersona } from '@/lib/personaPick';
 import { CodeRenameContext } from '@/lib/useCodeRename';
+import { CodeCardNavigationContext } from '@/lib/codeCardNavigation';
+import { parseWorldTools } from '@/lib/tools/worldTools';
+import { useWorldRecorder, WorldHistoryContext } from '@/contexts/worldRecorder';
+import { GestureGroupContext, type GestureGroups } from '@/components/ui/gesture-group';
+import type { SliceName } from '@/lib/editorHistory';
 import type {
   WorldMetadata,
   WorldOverview,
   Stat,
+  StatGroup,
   GameLocation,
   Entity,
   EntityGroup,
@@ -44,8 +58,15 @@ import type {
   Dictionary,
   Placeholder,
   PlaceholderGroup,
+  Script,
+  Tool,
   World,
 } from '@/types';
+
+/** What a world save answers: done, or the error that stopped it with the world it could not store. */
+export type SaveResult = { ok: true } | { ok: false; error: unknown; world: World };
+
+type WorldData = Omit<World, 'id' | 'version'>;
 
 /** A fresh, empty "Default" book — the ≥1-book invariant's seed. */
 const makeDefaultBook = (): Dictionary => ({ id: randomUUID(), name: 'Default', enabled: true, entries: [] });
@@ -55,6 +76,7 @@ const makeDefaultBook = (): Dictionary => ({ id: randomUUID(), name: 'Default', 
 function buildWorldData(
   overview: WorldOverview,
   stats: Stat[],
+  statGroups: StatGroup[],
   locations: GameLocation[],
   connections: Connection[],
   entities: Entity[],
@@ -65,9 +87,13 @@ function buildWorldData(
   dictionaries: Dictionary[],
   placeholders: Placeholder[],
   placeholderGroups: PlaceholderGroup[],
-): Omit<World, 'id' | 'version'> {
+  scripts: Script[],
+  tools: Tool[],
+): WorldData {
   return {
-    worldOverview: overview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders, placeholderGroups,
+    worldOverview: overview, stats, statGroups, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, placeholders, placeholderGroups,
+    ...(scripts.length ? { scripts } : {}),
+    ...(tools.length ? { tools } : {}),
   };
 }
 
@@ -80,11 +106,10 @@ function useProvideGameData() {
     thumbnail: null, // Base64 encoded string of the image file
     bgm: null, // Base64 encoded string of the audio file
     systemPrompt: '',
-    use3DModel: true,
     tags: [],
-    customPlayerVRM: null // { data, type } of an optional custom player VRM model
   });
   const [stats, setStats] = useState<Stat[]>([]);
+  const [statGroups, setStatGroups] = useState<StatGroup[]>([]);
   const [locations, setLocations] = useState<GameLocation[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -94,18 +119,22 @@ function useProvideGameData() {
   const [traits, setTraits] = useState<Trait[]>([]);
   const [traitGroups, setTraitGroups] = useState<TraitGroup[]>([]);
   const [statUpdates, setStatUpdates] = useState<StatUpdate[]>([]);
+  // Scripts no stat or trait owns, carried through load and save.
+  const [worldScripts, setWorldScripts] = useState<Script[]>([]);
+  // The world's own Tools, in Tools-tab order.
+  const [worldTools, setWorldTools] = useState<Tool[]>([]);
   // The world's own shared placeholders. Entities and books carry lists of their own; `placeholders` below
   // is the combined view every reader takes.
   const [worldPlaceholders, setWorldPlaceholders] = useState<Placeholder[]>([]);
   // The world's books live in a scoped dictionary store (shared, unchanged CRUD) so the same editing
   // widgets can be reused elsewhere against an isolated store.
-  const dictStore = useDictionaryStoreState([]);
+  const bookStore = useDictionaryStoreState([]);
   const {
     dictionaries, setDictionaries,
-    addDictionary, updateDictionary, removeDictionary,
-    addDictionaryEntry, updateDictionaryEntry, removeDictionaryEntry,
+    addDictionary, updateDictionary: updateBookUnkeyed, removeDictionary,
+    addDictionaryEntry, updateDictionaryEntry: updateEntryUnkeyed, removeDictionaryEntry,
     setOwnedLibraryIds: setOwnedBookIds,
-  } = dictStore;
+  } = bookStore;
   // Which library items the author owns, so an edit to a copy of one stays Linked and the world save
   // writes it back. A ref, not state: read inside the edit callbacks and never rendered. Empty until the
   // editor's library lookup answers, so an unreadable library still marks every edit.
@@ -115,24 +144,132 @@ function useProvideGameData() {
     setOwnedBookIds(ownedLibraryIds.current);
   }, [setOwnedBookIds]);
   const [worldId, setWorldId] = useState<string | null>(null);
-  // Serialized last-saved world; compared against current data to flag pending edits.
-  const [savedSnapshot, setSavedSnapshot] = useState<string>('');
+  // The last saved or loaded world, compared against current data to flag pending edits. It shares every
+  // record no edit has replaced, so it costs only the records edited since.
+  const [savedWorld, setSavedWorld] = useState<WorldData | null>(null);
+  // The world on screen has a copy in world storage. A new world has a baseline but no copy until its first save.
+  const [worldStored, setWorldStored] = useState(false);
+  // The open world's id, set by its load, and the other tabs' changes to it: heard, answered, latest kind.
+  const elsewhere = useRef<{ worldId: string | null; heard: number; settled: number; last: WorldChange }>(
+    { worldId: null, heard: 0, settled: 0, last: 'saved' },
+  );
+  const [worldChangedElsewhere, setWorldChangedElsewhere] = useState<WorldChange | null>(null);
+  const settleElsewhere = useCallback((upTo: number) => {
+    const counts = elsewhere.current;
+    counts.settled = Math.max(counts.settled, upTo);
+    setWorldChangedElsewhere(counts.heard > counts.settled ? counts.last : null);
+  }, []);
+  // For the provider's life, so a change heard in play or on the Main Menu still holds when the editor opens.
+  useEffect(() => onWorldChangedElsewhere((id, change) => {
+    const counts = elsewhere.current;
+    if (id !== counts.worldId) return;
+    counts.heard += 1;
+    counts.last = change;
+    setWorldChangedElsewhere(change);
+  }), []);
+
+  const slices = useMemo(() => ({
+    worldOverview, stats, statGroups, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries,
+    placeholders: worldPlaceholders, placeholderGroups, scripts: worldScripts, tools: worldTools,
+  }), [worldOverview, stats, statGroups, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups, worldScripts, worldTools]);
+  const sliceSetters = useMemo(() => ({
+    worldOverview: setWorldOverview, stats: setStats, statGroups: setStatGroups, locations: setLocations, connections: setConnections,
+    entities: setEntities, entityGroups: setEntityGroups, traits: setTraits, traitGroups: setTraitGroups,
+    statUpdates: setStatUpdates, dictionaries: setDictionaries, placeholders: setWorldPlaceholders,
+    placeholderGroups: setPlaceholderGroups, scripts: setWorldScripts, tools: setWorldTools,
+  }), [setDictionaries]);
+  const { intent: writeIntent, controls: history, disarm: disarmHistory, beginSave: beginHistorySave } = useWorldRecorder(
+    slices, worldId, sliceSetters, savedWorld,
+  );
+  const { keyNext } = history;
+  // A per-record write names its record first, so a typed run merges into one Step; the commit settles the field.
+  const keyed = useMemo(() => {
+    // The first argument is the record, or its id; the overview's updates carry none.
+    const keyedTo = <A extends unknown[]>(slice: SliceName, write: (...args: A) => void) => (...args: A) => {
+      const [first] = args;
+      const id = typeof first === 'string' ? first
+        : first && typeof first === 'object' && 'id' in first && typeof first.id === 'string' ? first.id : undefined;
+      keyNext({ slice, id });
+      write(...args);
+    };
+    const replaceIn = <T extends { id: string }>(set: Dispatch<SetStateAction<T[]>>) =>
+      (next: T) => set((prev) => prev.map((record) => (record.id === next.id ? next : record)));
+    // An edit to an entity that follows a source makes it a local replacement, unless the author owns the source.
+    const contentEdit = (entity: Entity, edited: Entity) =>
+      markEdited(edited, ownedLibraryIds.current.has(followedLibraryId(entity) ?? ''));
+    return {
+      keyedTo,
+      updateDictionary: keyedTo('dictionaries', updateBookUnkeyed),
+      // An entry is keyed by its own id, so its label names the entry rather than its book.
+      updateDictionaryEntry: keyedTo('dictionaries', updateEntryUnkeyed),
+      // A default descriptor follows the stat's name, so a rename never leaves "New Stat is low" behind.
+      updateStat: keyedTo('stats', (next: Stat) => setStats((prev) => prev.map((stat) => {
+        if (stat.id !== next.id) return stat;
+        const descriptors = followRename(stat, next);
+        return descriptors === next.descriptors ? next : { ...next, descriptors };
+      }))),
+      updateStatGroup: keyedTo('statGroups', replaceIn(setStatGroups)),
+      updateLocation: keyedTo('locations', replaceIn(setLocations)),
+      updateConnection: keyedTo('connections', replaceIn(setConnections)),
+      // A caller that hands over a different `link` is managing the link itself (linking, unlinking, taking a
+      // source update), so its record stands: only a content edit, which carries the link through, marks it.
+      updateEntity: keyedTo('entities', (next: Entity) => setEntities((prev) => prev.map((entity) => (
+        entity.id !== next.id ? entity : entity.link === next.link ? contentEdit(next, next) : next
+      )))),
+      // Read off the entity as it stands at write time, so two edits in one tick both land.
+      editEntity: keyedTo('entities', (id: string, edit: (entity: Entity) => Entity) =>
+        setEntities((prev) => prev.map((entity) => (entity.id === id ? contentEdit(entity, edit(entity)) : entity)))),
+      updateEntityGroup: keyedTo('entityGroups', replaceIn(setEntityGroups)),
+      updateTrait: keyedTo('traits', replaceIn(setTraits)),
+      updateTraitGroup: keyedTo('traitGroups', replaceIn(setTraitGroups)),
+      // A folder's delete goes through the placeholder store (`setLists`), beside the drops that move folders.
+      updatePlaceholderGroup: keyedTo('placeholderGroups', replaceIn(setPlaceholderGroups)),
+      updateWorldScript: keyedTo('scripts', replaceIn(setWorldScripts)),
+      updateWorldOverview: keyedTo('worldOverview', (updates: Partial<WorldOverview>) =>
+        setWorldOverview((prev) => ({ ...prev, ...updates }))),
+    };
+  }, [keyNext, updateBookUnkeyed, updateEntryUnkeyed]);
+  const {
+    keyedTo, updateDictionary, updateDictionaryEntry, updateStat, updateStatGroup, updateLocation, updateConnection, updateEntity, editEntity,
+    updateEntityGroup, updateTrait, updateTraitGroup, updatePlaceholderGroup, updateWorldOverview, updateWorldScript,
+  } = keyed;
+  const dictStore = useMemo(() => ({
+    dictionaries, setDictionaries, addDictionary, updateDictionary, removeDictionary,
+    addDictionaryEntry, updateDictionaryEntry, removeDictionaryEntry, setOwnedLibraryIds: setOwnedBookIds,
+  }), [
+    dictionaries, setDictionaries, addDictionary, updateDictionary, removeDictionary,
+    addDictionaryEntry, updateDictionaryEntry, removeDictionaryEntry, setOwnedBookIds,
+  ]);
 
   const addStat = useCallback((newStat: Omit<Stat, 'descriptors'>) => {
     setStats(prevStats => [...prevStats, withDefaultDescriptors(newStat)]);
   }, []);
 
-  // A default descriptor follows the stat's name, so a rename never leaves "New Stat is low" behind.
-  const updateStat = useCallback((updatedStat: Stat) => {
-    setStats(prevStats => prevStats.map(stat => {
-      if (stat.id !== updatedStat.id) return stat;
-      const descriptors = followRename(stat, updatedStat);
-      return descriptors === updatedStat.descriptors ? updatedStat : { ...updatedStat, descriptors };
-    }));
-  }, []);
-
+  // A Blueprint stat takes its links with it.
   const removeStat = useCallback((statId: string) => {
     setStats(prevStats => prevStats.filter(stat => stat.id !== statId));
+    setEntities(prevEntities => dropStatLinksTo(prevEntities, new Set([statId])));
+  }, []);
+
+  const addStatGroup = useCallback((newGroup: StatGroup) => {
+    setStatGroups(prev => [...prev, newGroup]);
+  }, []);
+
+  // A deleted group's contents move up to its parent, and its links go. Blueprints detaches its links instead.
+  const removeStatGroup = useCallback((groupId: string) => {
+    const { statGroups: groups, stats: held, entities } = latest.current;
+    if (groups.find(g => g.id === groupId)?.system === 'blueprints') {
+      const removed = removeStatBlueprints({ stats: held, statGroups: groups }, entities);
+      if (!removed) return;
+      setStatGroups(removed.statGroups);
+      setStats(removed.stats);
+      setEntities(removed.entities);
+      return;
+    }
+    const next = removeStatGroupFrom(groups, held, groupId);
+    if (next.groups !== groups) setStatGroups(next.groups);
+    if (next.stats !== held) setStats(next.stats);
+    setEntities(prevEntities => dropStatLinksTo(prevEntities, new Set([groupId])));
   }, []);
 
   // A new location is given a place on the canvas as it is created, wherever it was created from: the map is
@@ -143,12 +280,6 @@ function useProvideGameData() {
       canvasPosition: newLocation.canvasPosition
         ?? newLocationPosition(prevLocations, newLocation.parentId ?? null),
     }]);
-  }, []);
-
-  const updateLocation = useCallback((updatedLocation: GameLocation) => {
-    setLocations(prevLocations => prevLocations.map(location =>
-      location.id === updatedLocation.id ? updatedLocation : location
-    ));
   }, []);
 
   const removeLocation = useCallback((locationId: string) => {
@@ -166,12 +297,6 @@ function useProvideGameData() {
     setConnections(prevConnections => [...prevConnections, newConnection]);
   }, []);
 
-  const updateConnection = useCallback((updatedConnection: Connection) => {
-    setConnections(prevConnections => prevConnections.map(connection =>
-      connection.id === updatedConnection.id ? updatedConnection : connection
-    ));
-  }, []);
-
   const removeConnection = useCallback((connectionId: string) => {
     setConnections(prevConnections => prevConnections.filter(connection => connection.id !== connectionId));
   }, []);
@@ -180,68 +305,26 @@ function useProvideGameData() {
     setEntities(prevEntities => [...prevEntities, newEntity]);
   }, []);
 
-  // An edit to an entity that follows a source makes it a local replacement, unless the author owns the
-  // source. A caller that hands over a different `link` is managing the link itself (linking, unlinking,
-  // taking a source update), so its record stands: only a content edit, which carries the entity's own
-  // link through untouched, marks it.
-  const updateEntity = useCallback((updatedEntity: Entity) => {
-    setEntities(prevEntities => prevEntities.map(entity =>
-      entity.id === updatedEntity.id
-        ? (entity.link === updatedEntity.link
-          ? markEdited(updatedEntity, ownedLibraryIds.current.has(followedLibraryId(updatedEntity) ?? ''))
-          : updatedEntity)
-        : entity
-    ));
-  }, []);
-
-  // A content edit read off the entity as it stands at write time, so two edits in one tick both land.
-  const editEntity = useCallback((entityId: string, edit: (entity: Entity) => Entity) => {
-    setEntities(prevEntities => prevEntities.map(entity =>
-      entity.id === entityId
-        ? markEdited(edit(entity), ownedLibraryIds.current.has(followedLibraryId(entity) ?? ''))
-        : entity
-    ));
-  }, []);
-
-  // Membership rides on the entity itself, so deleting it takes every location link with it — no
-  // location-side cleanup to do.
+  // Membership rides on the entity itself, so deleting it takes every location link with it. Relationships
+  // that target it ride on other entities, so they go in the same pass.
   const removeEntity = useCallback((entityId: string) => {
-    setEntities(prevEntities => prevEntities.filter(entity => entity.id !== entityId));
+    setEntities(prevEntities => dropRelationshipsTo(entityId, prevEntities.filter(entity => entity.id !== entityId)));
   }, []);
 
   const addEntityGroup = useCallback((newGroup: EntityGroup) => {
     setEntityGroups(prev => [...prev, newGroup]);
   }, []);
 
-  const updateEntityGroup = useCallback((updatedGroup: EntityGroup) => {
-    setEntityGroups(prev => prev.map(group =>
-      group.id === updatedGroup.id ? updatedGroup : group
-    ));
-  }, []);
-
-  // Removing a group reparents its direct children (subgroups + entities) to the group's own parent,
-  // rather than orphaning them under a deleted id.
+  // The group's subgroups and entities take its slot in the parent, and sibling order closes up around them.
   const removeEntityGroup = useCallback((groupId: string) => {
-    setEntityGroups(prev => {
-      const parentId = prev.find(g => g.id === groupId)?.parentId ?? null;
-      return prev
-        .filter(g => g.id !== groupId)
-        .map(g => (g.parentId === groupId ? { ...g, parentId } : g));
-    });
-    setEntities(prev => {
-      const parentId = entityGroups.find(g => g.id === groupId)?.parentId ?? null;
-      return prev.map(e => (e.groupId === groupId ? { ...e, groupId: parentId } : e));
-    });
-  }, [entityGroups]);
+    const { entityGroups: groups, entities: held } = latest.current;
+    const next = removeGroupPromotingChildren(groups, held, groupId);
+    if (next.groups !== groups) setEntityGroups(next.groups);
+    if (next.leaves !== held) setEntities(next.leaves);
+  }, []);
 
   const addTrait = useCallback((newTrait: Trait) => {
     setTraits(prevTraits => [...prevTraits, newTrait]);
-  }, []);
-
-  const updateTrait = useCallback((updatedTrait: Trait) => {
-    setTraits(prevTraits => prevTraits.map(trait =>
-      trait.id === updatedTrait.id ? updatedTrait : trait
-    ));
   }, []);
 
   // A link to a gone original resolves to nothing, so its links go with it.
@@ -254,15 +337,9 @@ function useProvideGameData() {
     setTraitGroups(prev => [...prev, newGroup]);
   }, []);
 
-  const updateTraitGroup = useCallback((updatedGroup: TraitGroup) => {
-    setTraitGroups(prev => prev.map(group =>
-      group.id === updatedGroup.id ? updatedGroup : group
-    ));
-  }, []);
-
-  // Removing a group reparents its direct children (subgroups + traits) to the group's own parent,
-  // rather than orphaning them under a deleted id. Blueprints detaches its linked items and moves the rest up.
+  // The group's subgroups and traits take its slot in the parent. Blueprints detaches its linked items and moves the rest up.
   const removeTraitGroup = useCallback((groupId: string) => {
+    const { traits, traitGroups, entities } = latest.current;
     if (traitGroups.find(g => g.id === groupId)?.system === 'blueprints') {
       const removed = removeBlueprints({ traits, traitGroups }, entities);
       if (!removed) return;
@@ -271,21 +348,10 @@ function useProvideGameData() {
       setEntities(removed.entities);
       return;
     }
-    setTraitGroups(prev => {
-      const parentId = prev.find(g => g.id === groupId)?.parentId ?? null;
-      return prev
-        .filter(g => g.id !== groupId)
-        .map(g => (g.parentId === groupId ? { ...g, parentId } : g));
-    });
-    setTraits(prev => {
-      const parentId = traitGroups.find(g => g.id === groupId)?.parentId ?? null;
-      return prev.map(t => (t.groupId === groupId ? { ...t, groupId: parentId } : t));
-    });
+    const next = removeGroupPromotingChildren(traitGroups, traits, groupId);
+    if (next.groups !== traitGroups) setTraitGroups(next.groups);
+    if (next.leaves !== traits) setTraits(next.leaves);
     setEntities(prevEntities => dropLinksTo(prevEntities, groupId));
-  }, [traits, traitGroups, entities]);
-
-  const updateWorldOverview = useCallback((updates: Partial<WorldOverview>) => {
-    setWorldOverview(prev => ({ ...prev, ...updates }));
   }, []);
 
   const loadWorldMetadata = useCallback(async () => {
@@ -300,7 +366,11 @@ function useProvideGameData() {
   // Returns the migrated world so a caller that also needs the loaded data (e.g. to seed a cross-world save
   // load, or to cache it for later reuse) uses the current-shape version rather than the raw input — which
   // would otherwise bypass the migration this function just applied.
-  const loadWorldData = useCallback((rawWorldData: World, isDefault = false): { world: World; isDefault: boolean } => {
+  // `stored` says the world came from world storage. Left out, the world reads as never stored. `answers`
+  // false keeps the other tabs' writes unanswered: a rollback to this tab's own baseline holds none of them.
+  const loadWorldData = useCallback((
+    rawWorldData: World, isDefault = false, { stored = false, answers = true }: { stored?: boolean; answers?: boolean } = {},
+  ): { world: World; isDefault: boolean } => {
     // Central sanitation net: normalize any legacy import shape to the current version (idempotent),
     // so worlds reaching the editor are always current regardless of which entry point loaded them.
     const worldData = migrateWorld(rawWorldData);
@@ -311,25 +381,21 @@ function useProvideGameData() {
       thumbnail: null,
       bgm: null,
       systemPrompt: '',
-      use3DModel: true,
       tags: [],
-      customPlayerVRM: null
     };
 
-    // Handle world overview with validation (migrateWorld already moved any legacy VRM into worldOverview).
+    // Handle world overview with validation (migrateWorld already moved any legacy VRM into the store).
     const overview = worldData.worldOverview || defaultOverview;
     const allowedPersonas = worldAllowedPersonas(overview);
     const startPersona = worldStartPersona(overview);
-    const normalizedOverview: WorldOverview = {
+    const normalizedOverview: WorldOverview = withoutSpentFallback({
       name: overview.name || defaultOverview.name,
       description: overview.description || defaultOverview.description,
       author: overview.author || defaultOverview.author,
       thumbnail: overview.thumbnail || defaultOverview.thumbnail,
       bgm: overview.bgm || defaultOverview.bgm,
       systemPrompt: overview.systemPrompt || defaultOverview.systemPrompt,
-      use3DModel: typeof overview.use3DModel === 'boolean' ? overview.use3DModel : defaultOverview.use3DModel,
       tags: Array.isArray(overview.tags) ? overview.tags : defaultOverview.tags,
-      customPlayerVRM: overview.customPlayerVRM || defaultOverview.customPlayerVRM,
       readme: overview.readme || defaultOverview.readme,
       introReadme: overview.introReadme || defaultOverview.introReadme,
       // Allowlisted like everything above — omitting it here would silently drop a world's authored
@@ -338,17 +404,21 @@ function useProvideGameData() {
       // Same allowlist rule. The switch is spread only when it is actually a boolean: absent means on.
       ...(Array.isArray(overview.openings) ? { openings: overview.openings } : {}),
       ...(overview.openingWeights ? { openingWeights: overview.openingWeights } : {}),
+      ...(overview.vrmStore ? { vrmStore: overview.vrmStore } : {}),
+      ...(overview.legacyVrmFallback ? { legacyVrmFallback: overview.legacyVrmFallback } : {}),
       ...(typeof overview.openingsEnabled === 'boolean' ? { openingsEnabled: overview.openingsEnabled } : {}),
+      ...(mapImages(overview).length && overview.mapBackground ? { mapBackground: overview.mapBackground } : {}),
       // Any and the player's default are the absent values.
       ...(allowedPersonas !== 'any' ? { allowedPersonas } : {}),
       ...(startPersona ? { startPersona } : {})
-    };
+    }, Array.isArray(worldData.entities) ? worldData.entities : []);
     // Replace, never merge: a merge lets a field the normalizer doesn't set survive from the previously
     // loaded world, leaking it into this one and into the next saveWorld.
     setWorldOverview(normalizedOverview);
 
     // Load other data with array validation
     const nextStats = Array.isArray(worldData.stats) ? worldData.stats : [];
+    const nextStatGroups = Array.isArray(worldData.statGroups) ? worldData.statGroups : [];
     const nextLocations = Array.isArray(worldData.locations) ? worldData.locations : [];
     const nextConnections = Array.isArray(worldData.connections) ? worldData.connections : [];
     const loadedEntities = Array.isArray(worldData.entities) ? worldData.entities : [];
@@ -361,13 +431,25 @@ function useProvideGameData() {
       ? worldData.dictionaries : [makeDefaultBook()];
     const nextPlaceholders = Array.isArray(worldData.placeholders) ? worldData.placeholders : [];
     const nextPlaceholderGroups = Array.isArray(worldData.placeholderGroups) ? worldData.placeholderGroups : [];
-    // Every bearer holds the copies its traits need before the baseline is taken, so a world that arrives
+    const nextScripts = Array.isArray(worldData.scripts) ? worldData.scripts : [];
+    const nextTools = parseWorldTools(worldData.tools);
+    // Every owner holds the copies its traits need before the baseline is taken, so a world that arrives
     // without them opens clean.
     const nextEntities = syncBlueprintCopies({
       traits: nextTraits, traitGroups: nextTraitGroups, entities: loadedEntities, placeholders: nextPlaceholders, placeholderGroups: nextPlaceholderGroups,
     });
-    setWorldId(worldData.id ?? null);
+    // The load sets the baseline, so none of its writes is a Step; the commit that carries it re-arms.
+    disarmHistory();
+    const nextId = worldData.id ?? null;
+    if (nextId !== elsewhere.current.worldId) {
+      elsewhere.current = { worldId: nextId, heard: 0, settled: 0, last: 'saved' };
+      setWorldChangedElsewhere(null);
+    } else if (answers) {
+      settleElsewhere(elsewhere.current.heard);
+    }
+    setWorldId(nextId);
     setStats(nextStats);
+    setStatGroups(nextStatGroups);
     setLocations(nextLocations);
     setConnections(nextConnections);
     setEntities(nextEntities);
@@ -378,21 +460,26 @@ function useProvideGameData() {
     setDictionaries(nextDictionaries);
     setWorldPlaceholders(nextPlaceholders);
     setPlaceholderGroups(nextPlaceholderGroups);
+    setWorldScripts(nextScripts);
+    setWorldTools(nextTools);
 
     // Baseline for dirty detection: a freshly loaded world has no pending changes.
-    setSavedSnapshot(JSON.stringify(buildWorldData(
-      normalizedOverview, nextStats, nextLocations, nextConnections, nextEntities, nextEntityGroups, nextTraits, nextTraitGroups, nextStatUpdates, nextDictionaries, nextPlaceholders, nextPlaceholderGroups,
-    )));
+    setSavedWorld(buildWorldData(
+      normalizedOverview, nextStats, nextStatGroups, nextLocations, nextConnections, nextEntities, nextEntityGroups, nextTraits, nextTraitGroups, nextStatUpdates, nextDictionaries, nextPlaceholders, nextPlaceholderGroups, nextScripts, nextTools,
+    ));
+    setWorldStored(stored);
 
     return { world: worldData, isDefault };
-  }, [setWorldOverview, setStats, setLocations, setEntities, setTraits, setStatUpdates, setDictionaries]);
+  }, [setWorldOverview, setStats, setStatGroups, setLocations, setEntities, setTraits, setStatUpdates, setDictionaries, disarmHistory, settleElsewhere]);
 
   // Copies follow the traits after every write. The slices are separate states, so the pass reads the
   // committed world rather than one setter's view of it.
   useEffect(() => {
     const next = syncBlueprintCopies({ traits, traitGroups, entities, placeholders: worldPlaceholders, placeholderGroups });
-    if (next !== entities) setEntities(next);
-  }, [traits, traitGroups, entities, worldPlaceholders, placeholderGroups]);
+    if (next === entities) return;
+    writeIntent.current.follow = true;
+    setEntities(next);
+  }, [traits, traitGroups, entities, worldPlaceholders, placeholderGroups, writeIntent]);
   // What each entity's copies are kept for, so the Placeholders tab can refuse a delete the sync would undo.
   const copiesInUse = useMemo(
     () => neededCopies({ traits, traitGroups, entities, placeholders: worldPlaceholders, placeholderGroups }),
@@ -401,8 +488,8 @@ function useProvideGameData() {
 
   // The current editor state as a canonical world payload; the one source consumers serialize/save/export from.
   const getWorldData = useCallback(
-    () => buildWorldData(worldOverview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups),
-    [worldOverview, stats, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups],
+    () => buildWorldData(worldOverview, stats, statGroups, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups, worldScripts, worldTools),
+    [worldOverview, stats, statGroups, locations, connections, entities, entityGroups, traits, traitGroups, statUpdates, dictionaries, worldPlaceholders, placeholderGroups, worldScripts, worldTools],
   );
 
   // Every reader takes one list: the world's shared placeholders, then each entity's own in tree order,
@@ -422,15 +509,15 @@ function useProvideGameData() {
   if (!sameOwners(ownersRef.current, owners)) ownersRef.current = owners;
   const placeholderOwnerIndex = ownersRef.current;
 
-  // The current world through a ref, so a write can route by the lists as they stand without the
-  // callbacks below rebuilding on every edit and, with them, every chip field's vocabulary.
-  const worldRef = useRef(getWorldData);
-  worldRef.current = getWorldData;
+  // The committed state, which every action reads at call time so it keeps one identity.
+  const committed = { stats, statGroups, entities, entityGroups, traits, traitGroups, locations, placeholders, worldOverview, worldId, savedWorld, worldStored, getWorldData };
+  const latest = useRef(committed);
+  useLayoutEffect(() => { latest.current = committed; });
 
   // The home is decided once, purely; the append itself is a functional update on that one slice, so a
   // burst of creates (an import absorbing several placeholders) never reads a stale world.
   const addPlaceholder = useCallback((newPlaceholder: Placeholder, home?: PlaceholderHome) => {
-    const target = placeholderHomeFor(worldRef.current(), newPlaceholder, home);
+    const target = placeholderHomeFor(latest.current.getWorldData(), newPlaceholder, home);
     if (target.kind === 'world') {
       setWorldPlaceholders(prev => [...prev, newPlaceholder]);
       return;
@@ -449,15 +536,16 @@ function useProvideGameData() {
 
   // Renaming a value carries the trait pins written before value ids existed, so vocabulary cleanup is one
   // field edit rather than a hunt through every trait. A pin naming its value by id needs nothing.
-  const updatePlaceholder = useCallback((updated: Placeholder) => {
-    const before = placeholders.find(p => p.id === updated.id);
+  // Keyed to the placeholder wherever it lives, so a Copy's edit labels as the placeholder, not its owner.
+  const updatePlaceholder = useMemo(() => keyedTo('placeholders', (updated: Placeholder) => {
+    const before = latest.current.placeholders.find(p => p.id === updated.id);
     // An edit that drops a chip value releases what it pointed at — see the scoped store, whose generic
     // update path this replaces so the world's own pin sweep runs beside it.
     writeListHolding(updated.id, list => releasePlaceholderOwners(list.map(p => (p.id === updated.id ? updated : p))));
     if (!before) return;
     const renames = renamedPlaceholderValues(before.values ?? [], updated.values ?? []);
     if (renames.length) setTraits(prev => repinRenamedValues(prev, updated.id, renames));
-  }, [placeholders, writeListHolding]);
+  }), [keyedTo, writeListHolding]);
 
   const removePlaceholder = useCallback((id: string) => {
     writeListHolding(id, list => removePlaceholderCascade(list, id));
@@ -466,7 +554,7 @@ function useProvideGameData() {
   // Every list at once — a drop on the Placeholders tab that moves a record between owners. Only the
   // slices that changed are written.
   const setPlaceholderLists = useCallback((next: PlaceholderSlices) => {
-    const world = worldRef.current();
+    const world = latest.current.getWorldData();
     if (next.placeholders !== world.placeholders) setWorldPlaceholders(next.placeholders);
     if (next.entities !== world.entities) setEntities(next.entities);
     if (next.dictionaries !== world.dictionaries) setDictionaries(next.dictionaries);
@@ -477,18 +565,12 @@ function useProvideGameData() {
     setPlaceholderGroups(prev => [...prev, group]);
   }, []);
 
-  // A folder's delete goes through the placeholder store (`setLists`), beside the drops that move folders,
-  // so there is no separate context path for it.
-  const updatePlaceholderGroup = useCallback((updated: PlaceholderGroup) => {
-    setPlaceholderGroups(prev => prev.map(group => (group.id === updated.id ? updated : group)));
-  }, []);
-
   // A whole-list write (a drag, a promote) is scattered back to the lists that hold each id.
   const setPlaceholders = useCallback((action: SetStateAction<Placeholder[]>) => {
-    const world = worldRef.current();
-    const current = allPlaceholders(world);
-    const next = typeof action === 'function' ? action(current) : action;
-    if (next === current) return;
+    const world = latest.current.getWorldData();
+    const list = allPlaceholders(world);
+    const next = typeof action === 'function' ? action(list) : action;
+    if (next === list) return;
     setPlaceholderLists(scatterPlaceholders(world, next));
   }, [setPlaceholderLists]);
 
@@ -500,7 +582,7 @@ function useProvideGameData() {
   const phStore = useMemo(
     () => ({
       placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder,
-      placedIds: () => directChipTargets(chipBearingTexts(worldRef.current())),
+      placedIds: () => directChipTargets(chipBearingTexts(latest.current.getWorldData())),
       owners: placeholderOwnerIndex, lists, setLists: setPlaceholderLists, copiesInUse,
     }),
     [placeholders, setPlaceholders, addPlaceholder, updatePlaceholder, removePlaceholder, placeholderOwnerIndex, lists, setPlaceholderLists, copiesInUse],
@@ -509,62 +591,63 @@ function useProvideGameData() {
   // The document's placement letters, rewalked on every edit and kept by identity while nothing changed,
   // so a keystroke that adds no chip leaves every chip field's vocabulary alone.
   const placementLetters = useStablePlacementLetters(useMemo(
-    () => worldPlacementLetters({ entities, entityGroups, locations, traits, traitGroups, stats, dictionaries, worldOverview, placeholders: worldPlaceholders }),
-    [entities, entityGroups, locations, traits, traitGroups, stats, dictionaries, worldOverview, worldPlaceholders],
+    () => worldPlacementLetters({ entities, entityGroups, locations, connections, traits, traitGroups, stats, dictionaries, worldOverview, placeholders: worldPlaceholders }),
+    [entities, entityGroups, locations, connections, traits, traitGroups, stats, dictionaries, worldOverview, worldPlaceholders],
   ));
 
-  // Per-keystroke dirty check over image-heavy world data: canonicalStringify caches by identity, so an
-  // edit re-serializes only that record and its ancestors and the base64 elsewhere is left alone.
-  //
-  // Both sides go through the same canonical form rather than raw JSON, because raw JSON called a world
-  // changed over things no author did: a record rebuilt with its keys in another order, and an optional
-  // field that keeps an empty `[]` once it has been filled in and cleared again.
-  const stringifyCache = useRef(new WeakMap<object, string>());
-  // Derived from the stored snapshot rather than captured beside it, so the baseline cannot be built by a
-  // different route than the value it is compared against. Recomputed only on load and save.
-  const savedCanonical = useMemo(
-    () => (savedSnapshot ? canonicalStringify(JSON.parse(savedSnapshot), new WeakMap()) : ''),
-    [savedSnapshot],
-  );
+  // Per-keystroke and canonical: unedited records match by identity, and key order or emptied fields don't count.
   const isWorldDirty = useMemo(
-    () => !!savedSnapshot && canonicalStringify(getWorldData(), stringifyCache.current) !== savedCanonical,
-    [getWorldData, savedCanonical, savedSnapshot],
+    () => savedWorld !== null && !canonicalEqual(getWorldData(), savedWorld),
+    [getWorldData, savedWorld],
   );
-  // DEV: names what `isWorldDirty` is reacting to. Parses the stored snapshot, as the baseline above does.
+  // The crash screen sits above this provider and exports from here. A reader of the committed world, held
+  // only while it has unsaved edits, so nothing is built per commit and nothing is copied. Never released on
+  // unmount: the crash unmounts this provider, and the screen reads the reference afterward.
+  useEffect(() => {
+    holdUnsavedWorld(isWorldDirty ? () => ({ id: worldId ?? '', version: APP_VERSION, ...getWorldData() }) : null);
+  }, [isWorldDirty, worldId, getWorldData]);
+  // DEV: names what `isWorldDirty` is reacting to.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    return registerDevHook('dirtyDiff', () => (savedSnapshot ? dirtyDiff(JSON.parse(savedSnapshot), getWorldData()) : []));
-  }, [savedSnapshot, getWorldData]);
+    return registerDevHook('dirtyDiff', () => (savedWorld ? dirtyDiff(savedWorld, getWorldData()) : []));
+  }, [savedWorld, getWorldData]);
 
   /**
    * Drop every pending edit and restore the last saved (or freshly loaded) world.
    *
    * The editor's managers write straight through to this store as you type, so "exit without saving" has
-   * nothing of its own to roll back — the only record of the pre-edit world is `savedSnapshot`, and reloading
-   * from it is the revert. `loadWorldData` re-baselines the snapshot, so `isWorldDirty` clears as a side effect.
+   * nothing of its own to roll back — the only record of the pre-edit world is `savedWorld`, and reloading
+   * from it is the revert. `loadWorldData` re-baselines, so `isWorldDirty` clears as a side effect.
    */
   const discardChanges = useCallback(() => {
+    const { savedWorld, worldId, worldStored } = latest.current;
     // No baseline means nothing has been loaded yet; there is no state worth restoring.
-    if (!savedSnapshot) return;
-    // The snapshot is `buildWorldData` output — `Omit<World, 'id' | 'version'>` — so the id has to go back on.
-    loadWorldData({ ...JSON.parse(savedSnapshot), id: worldId ?? '' } as World);
-  }, [savedSnapshot, worldId, loadWorldData]);
+    if (!savedWorld) return;
+    // The baseline is current, so the migration steps for older versions don't run on it.
+    loadWorldData({ ...savedWorld, id: worldId ?? '', version: APP_VERSION }, false, { stored: worldStored, answers: false });
+  }, [loadWorldData]);
 
-  // Persist the current world and re-baseline so isWorldDirty clears. Returns success. Edited copies of
-  // owned library items go to the library first; the stamps they produce go into the stored world and
-  // onto the live copies, so each holds the revision it wrote. Here rather than in the editor, so every
-  // world save writes back, whichever surface asked for it.
-  const saveWorld = useCallback(async (): Promise<boolean> => {
+  // Persist the current world and re-baseline so isWorldDirty clears. Edited copies of owned library items
+  // go to the library only after the world is stored, so a failed save changes neither. The stamps they
+  // produce go into the stored world and onto the live copies, so each holds the revision it wrote. Here
+  // rather than in the editor, so every world save writes back, whichever surface asked for it.
+  const writeWorld = useCallback(async (markSaved: boolean): Promise<SaveResult> => {
+    const { worldId, worldOverview, placeholders, locations } = latest.current;
+    const data = latest.current.getWorldData();
+    const placeSavedMarker = markSaved ? beginHistorySave() : () => {};
+    // A write heard while this one runs may have landed after it, so only the ones heard before count as answered.
+    const heardBefore = elsewhere.current.heard;
     try {
-      const data = getWorldData();
-      const stamps = await writeBackOwnedCopies({
+      const writeBack = await planOwnedWriteBack({
         entities: data.entities, dictionaries: data.dictionaries, placeholders, locations,
-        traits: data.traits, traitGroups: data.traitGroups ?? [],
+        traits: data.traits, traitGroups: data.traitGroups ?? [], stats: data.stats, statGroups: data.statGroups ?? [],
+        vrmStore: worldOverview.vrmStore,
       });
-      const world = stamps.length
+      const stamped = (stamps: LinkStamp[]) => (stamps.length
         ? { ...data, entities: stampLinks(data.entities, stamps), dictionaries: stampLinks(data.dictionaries, stamps) }
-        : data;
-      await WorldStorageService.storeWorld({
+        : data);
+      const editedAt = new Date().toISOString();
+      const store = (world: typeof data) => WorldStorageService.storeWorld({
         id: worldId ?? '',
         name: worldOverview.name,
         description: worldOverview.description,
@@ -573,97 +656,142 @@ function useProvideGameData() {
         // A save means the local copy was edited; flag it dirty and stamp the edit time (sourceId and
         // other sticky fields are preserved by storeWorld).
         dirty: true,
-        editedAt: new Date().toISOString(),
+        editedAt,
         data: { version: APP_VERSION, ...world },
       });
-      if (stamps.length) {
-        setEntities((prev) => stampLinks(prev, stamps));
-        setDictionaries((prev) => stampLinks(prev, stamps));
+      // Stamps are stored only after their writes land; a stamp ahead of its item pulls the old item over the copy.
+      await store(data);
+      const written = await writeBack();
+      const world = stamped(written);
+      if (written.length) await store(world);
+      // The world open now is another one, so none of this save's state is its state.
+      if (elsewhere.current.worldId !== worldId) return { ok: true };
+      if (written.length) {
+        // Stamps are not edits. The flag goes only on a write that changes a slice, so none waits for a later one.
+        const live = latest.current.getWorldData();
+        if (stampLinks(live.entities, written) !== live.entities || stampLinks(live.dictionaries, written) !== live.dictionaries) {
+          writeIntent.current.stamp = true;
+        }
+        setEntities((prev) => stampLinks(prev, written));
+        setDictionaries((prev) => stampLinks(prev, written));
       }
-      setSavedSnapshot(JSON.stringify(world));
-      return true;
+      placeSavedMarker();
+      setSavedWorld(world);
+      setWorldStored(true);
+      // A discard before the commit rolls back to this save, not the one before it.
+      latest.current = { ...latest.current, savedWorld: world, worldStored: true };
+      // Only a save by hand is Keep Mine (Q35).
+      if (markSaved) settleElsewhere(heardBefore);
+      return { ok: true };
     } catch (error) {
       console.error('Error saving world:', error);
-      return false;
+      return { ok: false, error, world: { id: worldId ?? '', version: APP_VERSION, ...data } };
     }
-  }, [worldId, worldOverview, getWorldData, placeholders, locations, setDictionaries]);
+  }, [setDictionaries, writeIntent, beginHistorySave, settleElsewhere]);
+  // One write at a time, in the order asked, so an older world never lands over a newer one.
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  /** `markSaved` false is an autosave: it leaves History's Saved marker and its Steps alone. */
+  const saveWorld = useCallback((options: { markSaved?: boolean } = {}): Promise<SaveResult> => {
+    const run = saveQueue.current.then(() => writeWorld(options.markSaved ?? true));
+    // A save that throws still frees the queue for the next one.
+    saveQueue.current = run.catch(() => undefined);
+    return run;
+  }, [writeWorld]);
+  /**
+   * Replace the open world with its stored copy, through the same load that opens it. Runs after any queued
+   * save, so that save's baseline never lands over the copy. Answers the other tabs' writes heard before the read.
+   */
+  const reloadWorld = useCallback((): Promise<boolean> => {
+    const run = saveQueue.current.then(async () => {
+      const { worldId } = latest.current;
+      if (!worldId) return false;
+      const heardBefore = elsewhere.current.heard;
+      const world = await WorldStorageService.getWorldData(worldId) as World;
+      loadWorldData(world, false, { stored: true, answers: false });
+      settleElsewhere(heardBefore);
+      return true;
+    });
+    saveQueue.current = run.catch(() => undefined);
+    return run;
+  }, [loadWorldData, settleElsewhere]);
+  /** Keep Mine: this copy stands, and the next save overwrites the other tabs' writes. */
+  const keepWorldCopy = useCallback(() => settleElsewhere(elsewhere.current.heard), [settleElsewhere]);
 
   useEffect(() => {
     WorldStorageService.initialize();
     loadWorldMetadata();
   }, [loadWorldMetadata]);
 
-  const value = {
+  // One identity for the provider's life, so a component that only writes never re-renders on an edit.
+  const actions = useMemo(() => ({
+    updateWorldOverview, loadWorldMetadata,
+    addStat, updateStat, removeStat,
+    addStatGroup, updateStatGroup, removeStatGroup,
+    addLocation, updateLocation, removeLocation,
+    addConnection, updateConnection, removeConnection,
+    addEntity, updateEntity, editEntity, removeEntity,
+    addEntityGroup, updateEntityGroup, removeEntityGroup,
+    addTrait, updateTrait, removeTrait,
+    addTraitGroup, updateTraitGroup, removeTraitGroup,
+    addDictionary, updateDictionary, removeDictionary,
+    addDictionaryEntry, updateDictionaryEntry, removeDictionaryEntry,
+    addPlaceholder, updatePlaceholder, removePlaceholder,
+    addPlaceholderGroup, updatePlaceholderGroup, setPlaceholderGroups,
+    setStats, setStatGroups, setLocations, setConnections, setEntities, setEntityGroups, setTraits, setTraitGroups, setStatUpdates,
+    setDictionaries, setWorldPlaceholders, setWorldScripts, updateWorldScript, setWorldTools,
+    loadWorldData, setWorldId, saveWorld, discardChanges, setOwnedLibraryIds, reloadWorld, keepWorldCopy,
+  }), [
+    updateWorldOverview, loadWorldMetadata,
+    addStat, updateStat, removeStat,
+    addStatGroup, updateStatGroup, removeStatGroup,
+    addLocation, updateLocation, removeLocation,
+    addConnection, updateConnection, removeConnection,
+    addEntity, updateEntity, editEntity, removeEntity,
+    addEntityGroup, updateEntityGroup, removeEntityGroup,
+    addTrait, updateTrait, removeTrait,
+    addTraitGroup, updateTraitGroup, removeTraitGroup,
+    addDictionary, updateDictionary, removeDictionary,
+    addDictionaryEntry, updateDictionaryEntry, removeDictionaryEntry,
+    addPlaceholder, updatePlaceholder, removePlaceholder,
+    addPlaceholderGroup, updatePlaceholderGroup, updateWorldScript,
+    setDictionaries, loadWorldData, saveWorld, discardChanges, setOwnedLibraryIds, reloadWorld, keepWorldCopy,
+  ]);
+
+  const worldLoaded = savedWorld !== null;
+  const playWorld = useMemo(() => playStatWorld({ stats, statGroups, entities }), [stats, statGroups, entities]);
+  const value = useMemo(() => ({
+    ...actions,
     worldMetadata,
     worldOverview,
-    updateWorldOverview,
-    loadWorldMetadata,
     stats,
+    statGroups,
     locations,
     connections,
     entities,
     entityGroups,
+    // The world as play reads it: the player's stats without Blueprints, and each entity's stats with its
+    // links read through their Blueprints. The editor reads `stats` and `entities`.
+    playStats: playWorld.stats,
+    playEntities: playWorld.entities,
     traits,
     traitGroups,
     statUpdates,
     dictionaries,
+    worldScripts,
+    worldTools,
     // The combined view: shared placeholders, then every entity's and book's own.
     placeholders,
     worldPlaceholders,
-    getWorldData,
-    addStat,
-    updateStat,
-    removeStat,
-    addLocation,
-    updateLocation,
-    removeLocation,
-    addConnection,
-    updateConnection,
-    removeConnection,
-    addEntity,
-    updateEntity,
-    editEntity,
-    removeEntity,
-    addEntityGroup,
-    updateEntityGroup,
-    removeEntityGroup,
-    addTrait,
-    updateTrait,
-    removeTrait,
-    addTraitGroup,
-    updateTraitGroup,
-    removeTraitGroup,
-    addDictionary,
-    updateDictionary,
-    removeDictionary,
-    addDictionaryEntry,
-    updateDictionaryEntry,
-    removeDictionaryEntry,
-    addPlaceholder,
-    updatePlaceholder,
-    removePlaceholder,
     placeholderGroups,
-    addPlaceholderGroup,
-    updatePlaceholderGroup,
-    setPlaceholderGroups,
-    setStats,
-    setLocations,
-    setConnections,
-    setEntities,
-    setEntityGroups,
-    setTraits,
-    setTraitGroups,
-    setStatUpdates,
-    setDictionaries,
-    setWorldPlaceholders,
-    loadWorldData,
-    worldId, setWorldId,
+    getWorldData,
+    worldId,
     // True once loadWorldData has run. A world file may have no id, so worldId can't signal this.
-    worldLoaded: savedSnapshot !== '',
+    worldLoaded,
     isWorldDirty,
-    saveWorld,
-    discardChanges,
-    setOwnedLibraryIds,
+    // True once the world on screen has a copy in world storage: loaded from there, or saved.
+    isWorldStored: worldStored,
+    // Another tab saved or deleted the open world, and this copy has not answered it.
+    worldChangedElsewhere,
     // The scoped dictionary store, forwarded so the provider can bind the editing widgets to the world's books.
     dictStore,
     // Likewise for placeholders, so the same editing widgets bind to the world's placeholders.
@@ -672,14 +800,21 @@ function useProvideGameData() {
     placementLetters,
     // Placeholder id → the entity or book that owns it, for the surfaces that read a chip as `Molly › Eyes`.
     placeholderOwners: placeholderOwnerIndex,
-  };
+  }), [
+    actions, worldMetadata, worldOverview, stats, statGroups, locations, connections, entities, entityGroups, playWorld, traits, traitGroups,
+    statUpdates, dictionaries, worldScripts, worldTools, placeholders, worldPlaceholders, placeholderGroups, getWorldData, worldId, worldLoaded,
+    isWorldDirty, worldStored, worldChangedElsewhere, dictStore, phStore, placementLetters, placeholderOwnerIndex,
+  ]);
 
-  return value;
+  return { value, actions, history };
 }
 
-type GameDataContextValue = ReturnType<typeof useProvideGameData>;
+type GameDataContextValue = ReturnType<typeof useProvideGameData>['value'];
+/** The data context's actions: every one keeps its identity while the world changes. */
+export type GameDataActions = ReturnType<typeof useProvideGameData>['actions'];
 
 const GameDataContext = createContext<GameDataContextValue | null>(null);
+const GameDataActionsContext = createContext<GameDataActions | null>(null);
 
 /** Access the editor's world-definition store (overview, stats, locations, entities, traits, trait groups,
  *  stat updates, dictionary) plus their CRUD callbacks, load/save, and the `isWorldDirty` flag. Throws
@@ -698,35 +833,63 @@ export const useGameData = () => {
 // eslint-disable-next-line react-refresh/only-export-components
 export const useGameDataOptional = () => useContext(GameDataContext);
 
+/** Only the store's actions. A component that reads nothing else does not re-render when the world changes.
+ *  Throws if called outside a `GameDataProvider`. */
+// eslint-disable-next-line react-refresh/only-export-components
+export const useGameDataActions = (): GameDataActions => {
+  const actions = useContext(GameDataActionsContext);
+  if (!actions) throw new Error('useGameDataActions must be used within a GameDataProvider');
+  return actions;
+};
+
 /** Hides the loaded world from everything under it: optional reads get null, required reads throw, chips
- *  letter from nothing, and a rename asks no offer. A library editor wraps its body in it and provides its
- *  own stores inside. */
+ *  letter from nothing, a rename asks no offer, and a code card has no Open or Find All Uses. A library editor
+ *  wraps its body in it and provides its own stores inside. */
 export const NoWorld = ({ children }: { children: ReactNode }) => (
   <GameDataContext.Provider value={null}>
-    <DictionaryStoreProvider value={null}>
-      <PlaceholderStoreProvider value={null}>
-        <PlacementLettersProvider letters={EMPTY_LETTERS}>
-          <CodeRenameContext.Provider value={null}>{children}</CodeRenameContext.Provider>
-        </PlacementLettersProvider>
-      </PlaceholderStoreProvider>
-    </DictionaryStoreProvider>
+    <GameDataActionsContext.Provider value={null}>
+      <WorldHistoryContext.Provider value={null}>
+        <GestureGroupContext.Provider value={null}>
+          <DictionaryStoreProvider value={null}>
+            <PlaceholderStoreProvider value={null}>
+              <PlacementLettersProvider letters={EMPTY_LETTERS}>
+                <CodeRenameContext.Provider value={null}>
+                  <CodeCardNavigationContext.Provider value={null}>{children}</CodeCardNavigationContext.Provider>
+                </CodeRenameContext.Provider>
+              </PlacementLettersProvider>
+            </PlaceholderStoreProvider>
+          </DictionaryStoreProvider>
+        </GestureGroupContext.Provider>
+      </WorldHistoryContext.Provider>
+    </GameDataActionsContext.Provider>
   </GameDataContext.Provider>
 );
 
 /** Provides the world-editor data store (see `useGameData`); on mount it initializes storage and loads
  *  the world-metadata list. */
 export const GameDataProvider = ({ children }: { children: ReactNode }) => {
-  const value = useProvideGameData();
+  const { value, actions, history } = useProvideGameData();
+  // A drag on a slider or color picker is one Step, once a world is open.
+  const gestures = useMemo<GestureGroups>(
+    () => ({ begin: () => history.beginGroup(), end: () => { void history.endGroup(); } }),
+    [history],
+  );
 
   return (
     <GameDataContext.Provider value={value}>
-      <DictionaryStoreProvider value={value.dictStore}>
-        <PlaceholderStoreProvider value={value.phStore}>
-          <PlacementLettersProvider letters={value.placementLetters}>
-            {children}
-          </PlacementLettersProvider>
-        </PlaceholderStoreProvider>
-      </DictionaryStoreProvider>
+      <GameDataActionsContext.Provider value={actions}>
+        <WorldHistoryContext.Provider value={history}>
+          <GestureGroupContext.Provider value={value.worldLoaded ? gestures : null}>
+            <DictionaryStoreProvider value={value.dictStore}>
+              <PlaceholderStoreProvider value={value.phStore}>
+                <PlacementLettersProvider letters={value.placementLetters}>
+                  {children}
+                </PlacementLettersProvider>
+              </PlaceholderStoreProvider>
+            </DictionaryStoreProvider>
+          </GestureGroupContext.Provider>
+        </WorldHistoryContext.Provider>
+      </GameDataActionsContext.Provider>
     </GameDataContext.Provider>
   );
 };

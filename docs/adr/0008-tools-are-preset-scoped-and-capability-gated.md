@@ -1,10 +1,10 @@
 # ADR-0008 — Tools are defined in settings, enabled per prompt preset, and go only to endpoints known to support them
 
-**Status:** Accepted · **Date:** 2026-09-25
+**Status:** Accepted · **Date:** 2026-09-25 · "A world author cannot ship a Tool" is superseded by [ADR-0013](0013-world-tools-ship-in-worlds.md)
 
 ## Context
 
-The AI can call a Tool during a request to get information it lacks, such as an entity's full entry. Our probes showed tool calling works on some models (MeroMero) and not others. One hosted endpoint rejects any request that carries tools with an HTTP 400.
+The AI can call a Tool during a request to get information it lacks, such as an entity's full entry. Our probes showed tool calling works on some models (MeroMero) and not others. A hosted endpoint rejects any request that carries tools with an HTTP 400 when its server runs without tool calling.
 
 ## Decision
 

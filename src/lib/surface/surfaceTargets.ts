@@ -21,8 +21,9 @@ export const SURFACE_TARGETS = {
   menu: ['import-save'],
   backup: ['start-backup', 'start-restore'],
   avatar: ['finalize-character'],
-  worldEditor: ['editor-mode', 'find-button'],
+  worldEditor: ['editor-mode', 'find-button', 'history'],
   'worldEditor.overview': ['thumbnail', 'background-music', 'custom-prompts'],
+  'worldEditor.media': ['list-toolbar'],
   'worldEditor.stats': ['list-toolbar'],
   'worldEditor.entities': ['list-toolbar'],
   'worldEditor.locations': ['list-toolbar'],
@@ -34,12 +35,12 @@ export const SURFACE_TARGETS = {
   'formaquestion.ask': ['question-field', 'scroll-to-end'],
   'formaquestion.search': ['search-field'],
   'formaquestionSettings.general': [
-    'mascot-switch', 'chat-style', 'mascot-position', 'backdrop', 'reasoning', 'keyword-search', 'semantic-search',
+    'mascot-switch', 'chat-style', 'mascot-position', 'mascot-scale', 'backdrop', 'reasoning', 'keyword-search', 'semantic-search',
   ],
   'formaquestionSettings.endpoint': ['answer-endpoint'],
   'formaquestionSettings.prompts': ['preset'],
   'formaquestionSettings.tools': ['new-tool'],
-  'formaquestionSettings.mascot': ['scale', 'mask'],
+  'formaquestionSettings.mascot': ['mask'],
   'settings.tools': ['share-tools'],
   'settingsEndpoints.image': ['enable-image-generation'],
   'settingsPromptSurfaces.options': ['prompt-endpoint'],
@@ -47,7 +48,7 @@ export const SURFACE_TARGETS = {
 
 /** Targets inside an open item's panel, which only an in-app action such as Insert lands on; never a route. */
 export const PANEL_TARGETS = {
-  'worldEditorStat.code': ['before-code', 'after-code'],
+  'worldEditorStat.code': ['add-script'],
 } as const satisfies Partial<Record<SurfaceId, readonly string[]>>;
 
 type AttributeTargets = typeof SURFACE_TARGETS & typeof PANEL_TARGETS;

@@ -36,9 +36,9 @@ A **Default** badge marks it. To remove it, right-click the tile and select **Cl
 3. Open the **Persona** category. It shows when at least one persona is available.
 4. Select **None**, an entity under **From This World**, or one under **Your Personas**.
 5. If the world shows a **Custom Persona** in **None**'s place, type your **Name** and, if you like, a **Description**.
-6. Select **Start game**. In a world with a 3D model, the button reads **Continue to Avatar**.
+6. Select **Start Game**. When the persona you play has an Avatar, the button reads **Continue to Avatar**.
 
-## How to Change Persona During Play
+## How to Change Persona in Game
 <!-- keywords: switch, swap, mid-game, different character, edit name, rename, already started, ongoing story, become someone else, wrong name fix, replace protagonist, halfway through, body swap -->
 <!-- route: persona -->
 
@@ -110,7 +110,7 @@ Pick an entity under **From This World**, and you play it:
 
 - It leaves the cast for that game, so you never meet yourself.
 - The AI reads that everyone in the world already knows you.
-- Its first starting location is selected for you. You can pick another.
+- Its locations join the **Starting Location** list, and its first starting location is selected for you. You can pick another.
 - Its Others openings leave the draw, so page one never greets you as yourself.
 - If it has Self openings, the game draws only from those. See [Self Openings](World-Editor-Openings#self-openings).
 
@@ -126,7 +126,7 @@ Some worlds have a **Custom Persona**. It takes **None**'s place in the list, wi
 - **The world can give you traits**, such as a race and a class. They stay when you switch between it and a persona from your library.
 - **A world persona you pick shows in its slot.** It leaves its own group while you play it.
 
-**Change Persona** during play has the same entry.
+**Change Persona** during the game has the same entry.
 
 ## Change It in Game
 <!-- keywords: memories use wrong name, legacy save identity, deleted identity warning, edits reach old saves, returns next turn, side panel row -->
@@ -177,5 +177,5 @@ A report lists each persona with no image, each skipped entry, each persona that
 
 ## Related
 
-- [🎭 Entities in Play](Entities): the cast you meet, and how a game opens
+- [🎭 Entities in Game](Entities): the cast you meet, and how a game opens
 - [🪪 Personas for Authors](Persona-Authoring): playable entities, **Allowed Personas** and **Starts On**, and the prompt chips

@@ -1,5 +1,5 @@
 /**
- * Detects whether anything Settings' Simple mode hides is holding a non-default value, so the mode switch
+ * Detects whether anything Settings' Simple mode hides is holding a non-default value, so the mode select
  * can say so. Its field list is the enumeration of what Simple hides; the gates themselves live at the
  * rows' call sites in `SettingsModal`.
  *
@@ -20,11 +20,13 @@ import {
 } from '@/contexts/settingsDefaults';
 import type { ParagraphLimit, ReasoningEffort } from '@/contexts/SettingsContext';
 import { reasoningRuledOut, toolsSupported, type ReasoningCapability } from '@/lib/reasoningEffort';
+import { FLAT_HOURS_PER_TURN } from '@/lib/gameClock';
 
 export interface SettingsAdvancedInput {
   // Display → Narration
   paragraphLimit: ParagraphLimit;
   markdownOutput: boolean;
+  stripLinksAndImages: boolean;
   // Output → Reasoning
   reasoningEffort: ReasoningEffort;
   limitActiveCharacters: boolean;
@@ -38,6 +40,7 @@ export interface SettingsAdvancedInput {
   semanticRehydration: boolean;
   timeContext: boolean;
   aiClock: boolean;
+  fixedTurnHours: number;
   semanticLore: boolean;
   // Output → Characters
   characterDiaries: boolean;
@@ -69,6 +72,7 @@ export interface SettingsAdvancedInput {
 export const HIDDEN_SETTING_DEFAULTS = {
   paragraphLimit: 'auto',
   markdownOutput: true,
+  stripLinksAndImages: true,
   reasoningEffort: 'auto',
   limitActiveCharacters: true,
   activeCharacterLimit: 5,
@@ -79,6 +83,7 @@ export const HIDDEN_SETTING_DEFAULTS = {
   semanticRehydration: false,
   timeContext: false,
   aiClock: false,
+  fixedTurnHours: FLAT_HOURS_PER_TURN,
   semanticLore: false,
   characterDiaries: false,
   semanticDiaries: false,
@@ -108,9 +113,9 @@ export function settingsUseAdvancedValues(s: Partial<SettingsAdvancedInput>): bo
 }
 
 type SectionField =
-  | 'paragraphLimit' | 'markdownOutput' | 'showReasoning' | 'showSilentRequests'
+  | 'paragraphLimit' | 'markdownOutput' | 'stripLinksAndImages' | 'showReasoning' | 'showSilentRequests'
   | 'reasoningEffort' | 'limitActiveCharacters' | 'activeCharacterLimit' | 'toolsEnabled'
-  | 'memoryDigests' | 'semanticMemory' | 'semanticBandCap' | 'semanticRehydration' | 'timeContext' | 'aiClock'
+  | 'memoryDigests' | 'semanticMemory' | 'semanticBandCap' | 'semanticRehydration' | 'timeContext' | 'aiClock' | 'fixedTurnHours'
   | 'semanticLore' | 'describeCharacters' | 'characterDiaries' | 'semanticDiaries' | 'concurrentTurnRequests';
 
 /**
@@ -121,13 +126,15 @@ export function sectionHiddenFields(
   s: Pick<SettingsAdvancedInput, SectionField> & { reasoningCapability: ReasoningCapability | null },
 ): Partial<SettingsAdvancedInput> {
   return {
-    paragraphLimit: s.paragraphLimit, markdownOutput: s.markdownOutput,
+    paragraphLimit: s.paragraphLimit, markdownOutput: s.markdownOutput, stripLinksAndImages: s.stripLinksAndImages,
     showReasoning: s.showReasoning, showSilentRequests: s.showSilentRequests,
     ...(reasoningRuledOut(s.reasoningCapability) ? {} : { reasoningEffort: s.reasoningEffort }),
     limitActiveCharacters: s.limitActiveCharacters, activeCharacterLimit: s.activeCharacterLimit,
     ...(toolsSupported(s.reasoningCapability) ? { toolsEnabled: s.toolsEnabled } : {}),
     memoryDigests: s.memoryDigests, semanticMemory: s.semanticMemory, semanticBandCap: s.semanticBandCap,
     semanticRehydration: s.semanticRehydration, timeContext: s.timeContext, aiClock: s.aiClock,
+    // Time Per Turn has a row only while Measured Clock is off.
+    ...(s.aiClock ? {} : { fixedTurnHours: s.fixedTurnHours }),
     semanticLore: s.semanticLore, describeCharacters: s.describeCharacters,
     characterDiaries: s.characterDiaries, semanticDiaries: s.semanticDiaries,
     concurrentTurnRequests: s.concurrentTurnRequests,

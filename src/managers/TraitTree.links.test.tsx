@@ -4,6 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { TraitStoreContext, type TraitStore } from '@/contexts/TraitStoreContext';
 import TraitTree from './TraitTree';
 import type { Entity, Trait, TraitGroup } from '@/types';
+import { NO_ACTIVE } from '@/lib/traitGates';
 
 const trait = (id: string, extra: Partial<Trait> = {}): Trait => ({ id, name: id, statChanges: [], ...extra });
 const traits = [
@@ -33,7 +34,7 @@ function setup(start: Entity[] = [ash, bob]) {
     entities = current;
     const store = {
       traits, traitGroups, entities: current, placeholders: [], stats: [],
-      gateInput: { owners: [], active: {}, entities: [], persona: { source: 'none' } },
+      gateInput: { global: { traits: [], groups: [] }, owners: [], active: NO_ACTIVE, entities: [], persona: { source: 'none' } },
       setTraits: vi.fn(), setTraitGroups: vi.fn(), removeTrait, removeTraitGroup,
       editEntity: (id: string, edit: (e: Entity) => Entity) => setCurrent((es) => es.map((e) => (e.id === id ? edit(e) : e))),
     } as unknown as TraitStore;
@@ -108,15 +109,11 @@ describe('TraitTree link rows', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('confirms before a Detach that leaves stat effects behind', () => {
+  it('detaches a link with stat effects at once, the copy keeping them', () => {
     const { entity } = setup();
     fireEvent.click(action('Brave', 1, 'Detach')!);
-    const dialog = screen.getByRole('alertdialog');
-    expect(dialog).toHaveTextContent('Detach Brave?');
-    expect(dialog).toHaveTextContent("The copy won't keep its stat changes and stat toggles");
-    expect(entity('ash').traitLinks?.some((l) => l.id === 'l-brave')).toBe(true);
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-    expect(entity('ash').traits?.find((t) => t.name === 'Brave')).toMatchObject({ statChanges: [] });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(entity('ash').traits?.find((t) => t.name === 'Brave')?.statChanges).not.toEqual([]);
     expect(entity('ash').traitLinks?.some((l) => l.id === 'l-brave')).toBe(false);
   });
 

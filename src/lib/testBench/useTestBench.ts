@@ -1,13 +1,13 @@
 /**
  * The whole Test Bench orchestration behind the World Editor: open/close, the per-world Instrument tab, the
- * debounced rule pass and the on-demand stat-code check, the lens, the trigger report, the two view-models,
+ * debounced rule pass and the on-demand script check, the lens, the trigger report, the two view-models,
  * seen-state, and quick-fix write-through. The editor keeps only wiring — where its own selection stands and
  * how to land on an item — so the view stops changing for Bench reasons.
  *
  * Reads and writes the authored world through GameDataContext directly; the panel itself stays presentational
  * and receives everything as `panelProps`.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import { useGameData } from '@/contexts/GameDataContext';
 import { asBenchTab } from './benchTabs';
@@ -22,8 +22,8 @@ import { buildAiContext, EMPTY_AI_CONTEXT } from './aiContext';
 import { buildOpening, EMPTY_OPENING, type OpeningChoice } from './opening';
 import { useOpeningRolls } from './useOpeningRolls';
 import { loadLastTurn, type LastTurn } from './lastTurn';
-import { checkStatCode } from './statCodeCheck';
-import { noBoxes } from '@/lib/statCodeTiming';
+import { checkedScriptCount, checkScripts } from './scriptCheck';
+import { useEditorPromptRun } from '@/lib/useEditorPromptRun';
 import { lensStatOverrides } from './lens';
 import { useBenchFindings } from './useBenchFindings';
 import { useBenchLens } from './useBenchLens';
@@ -32,9 +32,8 @@ import { useDebouncedTriggerReport } from './useTriggerReport';
 import { useTriggerSemantics } from './useTriggerSemantics';
 import { joinHistory } from './triggers';
 import { hasSeenDownloadNote, markDownloadNoteSeen } from './downloadNote';
-import { useDebouncedFindings } from './useFindings';
+import { useBenchPass } from './useBenchPass';
 import { useLatestRun } from './useLatestRun';
-import { usePublishSize } from './usePublishSize';
 import { checkWorldSize } from './worldTooLarge';
 import { useSourceChecks } from './useSourceChecks';
 import { applyRepair, type MissingSource, type RepairAction, type ReplacementPick } from '@/lib/sourceChecks';
@@ -70,6 +69,8 @@ export interface TestBenchHandle {
   docked: boolean;
   /** The flask's one-button semantics: nothing showing opens the popover, anything showing closes. */
   toggleFlask: () => void;
+  /** The world's publish size from the worker measure, or null until the first one lands. */
+  publishBytes: number | null;
   /** Whether any Bench surface is showing — what the flask reads as pressed from. */
   active: boolean;
   /** How many rows the Issues list shows — the header badge's muted total. */
@@ -87,12 +88,21 @@ export interface TestBenchHandle {
   panelProps: TestBenchProps;
 }
 
+const NO_FINDINGS: Finding[] = [];
+
+/** `next`, or the last list while it says the same thing. */
+function useSameFindings(next: Finding[]): Finding[] {
+  const last = useRef(next);
+  if (last.current !== next && JSON.stringify(last.current) !== JSON.stringify(next)) last.current = next;
+  return last.current;
+}
+
 export function useTestBench({
   selectedLocationId, isMobile, advanced, routedTab, requestedTab, requestKey, navigateToItem, panelSuspended = false,
 }: TestBenchWiring): TestBenchHandle {
   const {
     worldId, worldOverview, getWorldData, worldMetadata, updateWorldOverview,
-    setStats, setLocations, setConnections, setEntities, setEntityGroups,
+    setStats, setStatGroups, setLocations, setConnections, setEntities, setEntityGroups,
     setTraits, setTraitGroups, setStatUpdates, setDictionaries, setWorldPlaceholders, setPlaceholderGroups,
   } = useGameData();
 
@@ -108,50 +118,57 @@ export function useTestBench({
   // `getWorldData` is memoized on the world arrays, so this payload's identity is the "world changed"
   // signal the rule pass debounces on.
   const benchWorld = useMemo(getWorldData, [getWorldData]);
-  const staticFindings = useDebouncedFindings(benchWorld);
-  const publishBytes = usePublishSize(benchWorld);
-  // Stat-code execution is the one check the live pass can't carry — each stat costs a sandbox VM. Its
-  // findings are held from the last explicit run and dropped the moment the world moves, so a repaired stat
+  // Null until the first pass lands: the list holds every row till then, so it never reads as clean.
+  const pass = useBenchPass(benchWorld);
+  const publishBytes = pass.bytes;
+  // Script execution is the one check the live pass can't carry — each script costs a sandbox VM. Its
+  // findings are held from the last explicit run and dropped the moment the world moves, so a repaired script
   // can never keep showing its old failure.
   const [codeFindings, setCodeFindings] = useState<Finding[]>([]);
   const [codeCheckStatus, setCodeCheckStatus] = useState<CheckStatus>('idle');
+  // The running check's prompts. Closing them fails an open prompt's script as canceled.
+  const { store: codePrompts, open: openCodePrompts, close: closeCodePrompts, isCurrent: isCurrentCodeRun } = useEditorPromptRun();
   const beginCodeRun = useLatestRun(benchWorld);
   useEffect(() => {
     // Guarded so an ordinary keystroke doesn't re-render the panel to replace nothing with nothing.
     setCodeFindings((prev) => (prev.length === 0 ? prev : []));
     setCodeCheckStatus((prev) => (prev === 'idle' ? prev : 'idle'));
-  }, [benchWorld]);
-  const runStatCodeCheck = useCallback(async () => {
+    closeCodePrompts();
+  }, [benchWorld, closeCodePrompts]);
+  const runScriptCheck = useCallback(async () => {
     const stillCurrent = beginCodeRun();
+    const prompts = openCodePrompts();
     setCodeCheckStatus('running');
     try {
-      const found = await checkStatCode(getWorldData());
+      const found = await checkScripts(getWorldData(), prompts.host);
       if (!stillCurrent()) return;
       setCodeFindings(found);
       setCodeCheckStatus('done');
     } catch (error) {
       // The executor reports its own failures as results, so reaching here means the check itself broke —
       // leaving the button spinning would strand the author with no way to try again.
-      console.error('Stat code check failed:', error);
+      console.error('Script check failed:', error);
       if (stillCurrent()) setCodeCheckStatus('idle');
+    } finally {
+      if (isCurrentCodeRun(prompts)) closeCodePrompts();
     }
-  }, [getWorldData, beginCodeRun]);
-  const codedStatCount = useMemo(
-    () => benchWorld.stats.filter((s) => !noBoxes(s)).length,
-    [benchWorld],
-  );
-  // Out of band like the stat-code findings: the byte count comes from the debounced worker measure, not
-  // the pure pass, so it's checked and merged in here rather than living in the rule catalog.
-  const sizeFindings = useMemo(() => checkWorldSize(benchWorld, publishBytes), [benchWorld, publishBytes]);
+  }, [getWorldData, beginCodeRun, openCodePrompts, closeCodePrompts, isCurrentCodeRun]);
+  const scriptCount = useMemo(() => checkedScriptCount(benchWorld), [benchWorld]);
+  // Out of the rule catalog, since its input is the measured byte count rather than the world.
+  // Kept while it says the same thing: a keystroke in an over-limit world must not re-mark every finding.
+  const sizeFindings = useSameFindings(useMemo(() => checkWorldSize(benchWorld, publishBytes), [benchWorld, publishBytes]));
   const benchWorldMeta = worldMetadata.find((m) => m.id === worldId);
   // Out of band for a third reason: the answers come from the server, and only when the author asks. The
   // record outlives the session, so these rows come back with the world rather than with the request.
   const sources = useSourceChecks(benchWorld, worldId, benchWorldMeta?.sourceId);
-  const findings = useMemo(() => (
-    codeFindings.length === 0 && sizeFindings.length === 0 && sources.findings.length === 0
+  const sourceFindings = useSameFindings(sources.findings);
+  const findings = useMemo(() => {
+    const staticFindings = pass.findings;
+    if (staticFindings === null) return NO_FINDINGS;
+    return codeFindings.length === 0 && sizeFindings.length === 0 && sourceFindings.length === 0
       ? staticFindings
-      : [...staticFindings, ...codeFindings, ...sizeFindings, ...sources.findings]
-  ), [staticFindings, codeFindings, sizeFindings, sources.findings]);
+      : [...staticFindings, ...codeFindings, ...sizeFindings, ...sourceFindings];
+  }, [pass.findings, codeFindings, sizeFindings, sourceFindings]);
   // Semantic scoring is opt-in per session and never remembered: a toggle that came back on by itself would
   // let an author read a semantic firing as proof their keywords work.
   const [semanticOn, setSemanticOn] = useState(false);
@@ -289,6 +306,7 @@ export function useTestBench({
     // than this line; none does today, and the rest of the payload is replaced wholesale.
     if (after.worldOverview !== before.worldOverview) updateWorldOverview(after.worldOverview);
     if (after.stats !== before.stats) setStats(after.stats);
+    if (after.statGroups !== before.statGroups) setStatGroups(after.statGroups ?? []);
     if (after.locations !== before.locations) setLocations(after.locations);
     if (after.connections !== before.connections) setConnections(after.connections ?? []);
     if (after.entities !== before.entities) setEntities(after.entities);
@@ -300,11 +318,11 @@ export function useTestBench({
     if (after.placeholders !== before.placeholders) setWorldPlaceholders(after.placeholders ?? []);
     if (after.placeholderGroups !== before.placeholderGroups) setPlaceholderGroups(after.placeholderGroups ?? []);
     noteFirstDownloadEdit();
-  }, [updateWorldOverview, setStats, setLocations, setConnections, setEntities,
+  }, [updateWorldOverview, setStats, setStatGroups, setLocations, setConnections, setEntities,
       setEntityGroups, setTraits, setTraitGroups, setStatUpdates, setDictionaries, setWorldPlaceholders,
       setPlaceholderGroups, noteFirstDownloadEdit]);
   // The image conversion is the one repair the pure pass can't carry — it decodes and re-encodes every
-  // convertible picture. So it runs like the stat-code check: one at a time, and a result about a world the
+  // convertible picture. So it runs like the script check: one at a time, and a result about a world the
   // author has since edited is dropped rather than written over the world they now have.
   const [fixingRuleId, setFixingRuleId] = useState<string | null>(null);
   const beginImageRun = useLatestRun(benchWorld);
@@ -375,15 +393,17 @@ export function useTestBench({
     newCount: bench.newCount,
     advancedOnlyCount: bench.advancedOnlyCount,
     advanced,
-    codedStatCount,
+    scriptCount,
+    codePrompts,
     codeCheckStatus,
     fixingRuleId,
     publishBytes,
+    checking: pass.findings === null,
     onOpenItem: openFindingItem,
     onDismissRule: bench.dismissRule,
     onRestoreRule: bench.restoreRule,
     onMarkAllSeen: bench.markAllSeen,
-    onCheckStatCode: runStatCodeCheck,
+    onCheckScripts: runScriptCheck,
     sources: {
       sourceCount: sources.copies.length,
       status: sources.status,
@@ -399,6 +419,7 @@ export function useTestBench({
     embedded: !isMobile && panelShown && placement === 'embedded',
     docked: !isMobile && panelShown && placement === 'docked',
     toggleFlask,
+    publishBytes,
     active: panelShown || popoverOpen,
     count: bench.groups.length,
     newCount: bench.newCount,

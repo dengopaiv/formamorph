@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from 'react';
-import { FilePlus, FolderPlus, LayoutTemplate } from 'lucide-react';
+import { FilePlus, FolderPlus } from 'lucide-react';
+import { BlueprintIcon } from '@/lib/elementIcons';
 import type { ListEditorAdapter } from '@/components/listEditorHooks';
 import { ListMenuRow } from '@/components/ListToolbar';
 import { useGameData } from '@/contexts/GameDataContext';
@@ -10,6 +11,7 @@ import { placeholderOwnerRef, type PlaceholderOwnerRef } from '@/lib/placeholder
 import { newPlaceholder } from '@/lib/placeholders';
 import { ownerIdOfNode, placeholderTreeNodes } from '@/lib/placeholderScopes';
 import { randomUUID } from '@/lib/uuid';
+import type { PlaceholderPanelTab } from '@/views/placeholderPanelTabs';
 import PlaceholderList from './PlaceholderList';
 import { usePlaceholderDetail } from './PlaceholderDetail';
 import { placeholderSearchRows } from './placeholderSearchRows';
@@ -20,15 +22,17 @@ import { usePlaceholderRowActions } from './usePlaceholderRowActions';
  * each placeholder's own row, and the detail router's pane. `ownerId` is whose placeholder is open, for the
  * palette; `dialog` is the delete confirmation the search rows open, which the host renders.
  */
-export function useWorldPlaceholdersAdapter({ selectedId, onSelect, onOpenOwner }: {
+export function useWorldPlaceholdersAdapter({ selectedId, onSelect, onOpenOwner, tab, onTabChange }: {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onOpenOwner: (owner: PlaceholderOwnerRef) => void;
+  tab: PlaceholderPanelTab;
+  onTabChange: (tab: PlaceholderPanelTab) => void;
 }): { adapter: ListEditorAdapter; ownerId?: string; dialog: ReactNode } {
   const { placementLetters, placeholderOwners, placeholderGroups, addPlaceholder, addPlaceholderGroup } = useGameData();
   const { placeholders, lists } = usePlaceholderStore();
   const { advanced } = useEditorMode();
-  const { detail, footer, ownerId } = usePlaceholderDetail({ selectedId, onSelect, onOpenOwner });
+  const { detail, footer, ownerId, fills } = usePlaceholderDetail({ selectedId, onSelect, onOpenOwner, tab, onTabChange });
   const { rowRules, dialog } = usePlaceholderRowActions({ selectedId, onSelect });
 
   const nodes = useMemo(() => (lists ? placeholderTreeNodes(lists) : []), [lists]);
@@ -60,20 +64,21 @@ export function useWorldPlaceholdersAdapter({ selectedId, onSelect, onOpenOwner 
     noun: 'placeholders',
     detail: (id) => id && detail,
     footer: () => footer,
+    // The tabbed panel keeps its strip above a body that scrolls itself.
+    fills: (id) => id === selectedId && fills,
     add: advanced ? {
       label: 'Add to Placeholders',
-      menuClassName: 'w-56',
       menu: (
         <>
           <ListMenuRow icon={<FolderPlus className="h-4 w-4" />} label="Add Group" onAdd={handleAddGroup} />
           <ListMenuRow icon={<FilePlus className="h-4 w-4" />} label="Add Placeholder" onAdd={handleAddPlaceholder} />
           {!blueprintsPlaceholderGroup(placeholderGroups) && (
-            <ListMenuRow icon={<LayoutTemplate className="h-4 w-4" />} label="Add Blueprints Group" onAdd={handleAddBlueprints} />
+            <ListMenuRow icon={<BlueprintIcon className="h-4 w-4" />} label="Add Blueprints Group" onAdd={handleAddBlueprints} />
           )}
         </>
       ),
     } : { label: 'Add to Placeholders', onAdd: handleAddPlaceholder },
-    placeholder: 'Search or add new placeholders',
+    placeholder: 'Filter Placeholders',
     // What the detail router resolves: a drawn row or folder, an owner, or a bare placeholder id.
     holds: (id) => {
       if (nodeIds.has(id) || placeholders.some((p) => p.id === id)) return true;

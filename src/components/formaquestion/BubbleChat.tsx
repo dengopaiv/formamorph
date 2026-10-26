@@ -19,11 +19,16 @@ import type { BubblePage } from './useBubblePage';
 import { usePillFade, type PillFadeProps } from './usePillFade';
 import { ScrollArrow } from './ScrollArrow';
 import { useFollowEnd } from './useAskParts';
+import { SemanticOfferCard } from './SemanticOfferCard';
+import type { SemanticSearch } from './useSemanticSearch';
+import { speakerName } from '@/lib/formaquestion/helpSpeaker';
 import type { HelpChat, HelpExchange } from './useHelpChat';
 import type { DragHandlers } from './usePointerDrag';
 
 /** The assistant bubble's surface, with no tail corner: the tail is its own piece. */
-const ANSWER_SURFACE = cn(FLOATING, 'rounded-2xl border bg-popover text-label text-popover-foreground');
+const ANSWER_SURFACE = cn(FLOATING, 'rounded-2xl border bg-popover');
+/** The bubble's content layer, over the tail: a clear border keeps the text inset as the surface's border does. */
+const ANSWER_CONTENT = cn(FLOATING, 'rounded-2xl border border-transparent shadow-none text-label text-popover-foreground');
 /** The pill's surface, for the strip's controls. */
 const STRIP_SURFACE = cn(FLOATING, 'flex items-center rounded-full border bg-background');
 /** A paging chevron: a round button that takes no press while disabled. */
@@ -67,7 +72,7 @@ type Place = (box: WindowBox, sized?: boolean) => CSSProperties;
  * answer's Thinking toggle, its Sources popover and Take Me There (Q14, Q22). The bubble and the strip share the folds. Without
  * an exchange the bubble shows only the guide's load state, and no strip draws.
  */
-function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, settings, onSettingsChange, onOpen, onGo, resize, contentRef }: {
+function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, semantic, settings, onSettingsChange, onOpen, onGo, contentRef }: {
   layout: BubbleLayout;
   place: Place;
   page: BubblePage;
@@ -76,12 +81,12 @@ function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, s
   failed: boolean;
   onRetry: () => void;
   chat: HelpChat;
+  semantic: SemanticSearch;
   settings: HelpSettings;
   onSettingsChange: (change: HelpSettingsChange) => void;
   onOpen: (id: string) => void;
   onGo: (route: SurfaceRoute) => void;
-  resize: DragHandlers;
-  contentRef: RefObject<HTMLDivElement>;
+  contentRef: RefObject<HTMLDivElement | null>;
 }) {
   const folds = useAnswerFolds(exchange, settings, onSettingsChange);
   // The bubble follows an answer as it streams, and opens a finished answer at its top.
@@ -92,24 +97,28 @@ function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, s
     if (!writing.current && viewportRef.current) viewportRef.current.scrollTop = 0;
   }, [viewportRef]);
   const waitingId = useId();
-  const { group, tail, grip } = layout;
+  const { group, tail } = layout;
   return (
-    <>
-      {/* Drawn before the bubble, so the bubble covers its inner half and it never covers the text or the scroll bar. */}
+    // A `contents` wrapper carries the fade's share to both layers, since the surface is no ancestor of the scroller.
+    <div data-fq-fade="" className="contents">
+      {/* The bubble is two layers with the tail between them: the tail covers the surface's border where it joins, and the text and the scroll bar cover the tail (Q31). */}
+      {/* A long answer's bubble fades out at the top, box and all, as Minimal's bubbles do; both layers take the fade, since its mask clips the tail outside the box. */}
+      <div aria-hidden data-fq-piece="bubble-surface" className={cn(ANSWER_SURFACE, layout.scrolls && TOP_FADE)} style={place(layout.bubble)} />
       <span
         aria-hidden
         data-fq-tail={tail.points}
         className={cn('pointer-events-none absolute rotate-45 bg-popover', TAIL_EDGES[tail.points])}
         style={{ left: tail.x - group.x - TAIL_SIZE / 2, top: tail.y - group.y - TAIL_SIZE / 2, width: TAIL_SIZE, height: TAIL_SIZE }}
       />
-      {/* A long answer's bubble fades out at the top, box and all, as Minimal's bubbles do; the padding keeps its first line clear of the fade. */}
-      <div data-fq-piece="bubble" className={cn(ANSWER_SURFACE, layout.scrolls && TOP_FADE)} style={place(layout.bubble)}>
+      <div data-fq-piece="bubble" className={cn(ANSWER_CONTENT, layout.scrolls && TOP_FADE)} style={place(layout.bubble)}>
         <ScrollArea
           className="h-full rounded-2xl"
           viewportRef={viewportRef}
           viewportProps={{ 'data-fq-scroll': 'conversation', onScroll }}
         >
-          <div ref={contentRef} role="log" aria-label="Conversation" aria-busy={page.newest && chat.busy} className={cn('px-3 py-2', layout.scrolls && 'pt-8')}>
+          <div ref={contentRef} role="log" aria-label="Conversation" aria-busy={page.newest && chat.busy} className="px-3 py-2">
+            {/* Inside the bubble, so the layout measures it with the text. */}
+            {guide && exchange && <SemanticOfferCard semantic={semantic} variant="framed" className="-mx-1 mb-2 rounded-xl border" />}
             {!guide && (failed ? (
               <div role="alert" className="flex flex-col items-start gap-2">
                 <span>The guide did not load</span>
@@ -127,10 +136,6 @@ function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, s
         </ScrollArea>
         <ScrollArrow shown={away} onClick={toEnd} />
       </div>
-      {/* On the chat room's corner, as Minimal's grip is on its box; outside the bubble, so the fade never hides it. */}
-      <div className="pointer-events-none" style={place(layout.chat)}>
-        <Grip corner={grip} handlers={resize} name="resize" />
-      </div>
       {guide && exchange && (
         <div data-fq-strip="" className="flex items-center gap-2" style={place(layout.strip)}>
           {/* Always drawn, disabled at the ends, so the strip never shifts (Q12). */}
@@ -140,7 +145,7 @@ function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, s
             </button>
           </Tip>
           <div className="flex min-w-0 flex-wrap items-center gap-2 [&>*]:pointer-events-auto">
-            <AnswerToggles guide={guide} exchange={exchange} folds={folds} onOpen={onOpen} onGo={onGo} />
+            <AnswerToggles guide={guide} exchange={exchange} folds={folds} who={speakerName(settings)} onOpen={onOpen} onGo={onGo} />
           </div>
           <Tip tip="Next Answer">
             <button
@@ -159,7 +164,7 @@ function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, s
           {page.waiting && <span id={waitingId} className="sr-only">A new answer is writing</span>}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -169,7 +174,7 @@ function Speech({ layout, place, page, exchange, guide, failed, onRetry, chat, s
  * her feet. The layout places every piece; this draws them and reports the heights the layout stacks.
  */
 export function BubbleChat({
-  layout, page, mascot, headView, guide, failed, onRetry, chat, settings, onSettingsChange, draft, onDraftChange, onOpen, onGo,
+  layout, page, mascot, guide, failed, onRetry, chat, semantic, settings, onSettingsChange, draft, onDraftChange, onOpen, onGo,
   move, resize, mascotResize, headToggle, menu, onClose, onHeights, reader,
 }: {
   layout: BubbleLayout;
@@ -177,12 +182,13 @@ export function BubbleChat({
   page: BubblePage;
   /** The Mascot: her whole body, or her head in head view. */
   mascot: ReactNode;
-  headView: boolean;
   /** Null until the docs load. */
   guide: Guide | null;
   failed: boolean;
   onRetry: () => void;
   chat: HelpChat;
+  /** The Semantic Search switch and its offer card. */
+  semantic: SemanticSearch;
   settings: HelpSettings;
   onSettingsChange: (change: HelpSettingsChange) => void;
   draft: string;
@@ -239,11 +245,13 @@ export function BubbleChat({
     width: box.w,
     ...(sized ? { height: box.h } : {}),
   });
-  const columnTop = speaking ? layout.chat.y : (layout.pillRow ?? layout.input).y;
-  // The pill and her grip fade when idle over her head; head view keeps its pill (Q4).
-  const fade = usePillFade(!headView);
+  // The chat room stands even before the first answer, so the scrim covers it and its grip shows (Q33).
+  const columnTop = layout.chat.y;
+  // The pill and her grip fade when idle over her head, in both views (Q5, Q31).
+  const fade = usePillFade(true);
   const hover = fade && { onPointerEnter: fade.props.onPointerEnter, onPointerLeave: fade.props.onPointerLeave };
-  const pill = <Pill move={move} large={false} headToggle={headToggle} menu={menu} onClose={onClose} fade={fade} />;
+  // She is the drag handle under Bubble, so the pill takes no move and draws no grip icon (Q32).
+  const pill = <Pill large={false} headToggle={headToggle} menu={menu} onClose={onClose} fade={fade} />;
 
   return (
     <>
@@ -259,6 +267,10 @@ export function BubbleChat({
           }}
         />
       )}
+      {/* On the chat room's corner, as Minimal's grip is on its box; outside the bubble, so the fade never hides it. */}
+      <div className="pointer-events-none" style={place(layout.chat)}>
+        <Grip corner={layout.grip} handlers={resize} name="resize" />
+      </div>
       {speaking && (
         <Speech
           key={exchange?.id}
@@ -270,13 +282,19 @@ export function BubbleChat({
           failed={failed}
           onRetry={onRetry}
           chat={chat}
+          semantic={semantic}
           settings={settings}
           onSettingsChange={onSettingsChange}
           onOpen={onOpen}
           onGo={onGo}
-          resize={resize}
           contentRef={contentRef}
         />
+      )}
+      {/* Before the first answer the chat room is empty, so the card takes its top. */}
+      {guide && !exchange && (
+        <div className="flex" style={place(layout.chat, false)}>
+          <SemanticOfferCard semantic={semantic} variant="floating" className="w-full" />
+        </div>
       )}
       {exchange && (
         // The question leans toward her, so it mirrors with the group (Q6).
@@ -288,18 +306,9 @@ export function BubbleChat({
       <div ref={inputRef} style={place(layout.input, false)}>
         <AskPill draft={draft} onDraftChange={onDraftChange} chat={chat} />
       </div>
-      {headView && layout.pillRow ? (
-        <div className={cn('flex items-end gap-2', layout.side === 'right' ? 'flex-row-reverse' : 'flex-row')} style={place(layout.pillRow)}>
-          <div data-fq-body="" {...move} className="pointer-events-auto cursor-move touch-none">{mascot}</div>
-          {pill}
-        </div>
-      ) : (
-        <>
-          <div data-fq-body="" {...move} {...hover} className="pointer-events-auto flex cursor-move touch-none items-end" style={place(layout.her)}>{mascot}</div>
-          {/* The pill stands over her head, inside her bounds. */}
-          <div className="flex justify-center" style={place(layout.her, false)}>{pill}</div>
-        </>
-      )}
+      <div data-fq-body="" {...move} {...hover} className="pointer-events-auto flex cursor-move touch-none items-end" style={place(layout.her)}>{mascot}</div>
+      {/* The pill stands over her head, inside her bounds, at the outer edge; in head view it may be the wider. */}
+      <div className={cn('flex', layout.side === 'right' ? 'justify-end' : 'justify-start')} style={place(layout.her, false)}>{pill}</div>
       {/* Her grip, on her top corner on the bubble side (Q19). */}
       <div className="pointer-events-none" style={place(layout.her)}>
         <Grip corner={layout.mascotGrip} handlers={mascotResize} name="mascot-resize" fade={fade?.props} />

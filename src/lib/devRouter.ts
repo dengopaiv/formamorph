@@ -11,6 +11,7 @@
  * body and nothing ships (same guard as `baselineTestHook.ts`).
  */
 import { useSyncExternalStore } from 'react';
+import { randomUUID } from '@/lib/uuid';
 
 const DEV = import.meta.env.DEV;
 
@@ -29,6 +30,10 @@ export interface DevRoute {
   bench?: string;
   /** Start the World Editor's Authoring Tour at this step id, on a new blank world. */
   tour?: string;
+  /** `expanded` opens the World Editor's desktop search as the full Find and Replace bar. */
+  find?: string;
+  /** `open` opens the World Editor's History popover (see `DEV_MODAL_TABS.worldEditorHistory`). */
+  history?: string;
   /** Canned world+save to boot mid-game (see `devFixtures.ts`). */
   fixture?: string;
   /** On-screen diagnostic overlay to pin over the app — `viewport` is the only one so far. */
@@ -41,6 +46,8 @@ export interface DevRoute {
   fullscreen?: string;
   /** Stage attached images on the game view (see `DEV_MODAL_TABS.gameViewerAttach`). */
   attach?: string;
+  /** Pick this entity id on the full-screen Locations Canvas; `<id>:knownIn` starts in Known In mode. */
+  pick?: string;
 }
 
 /** Parse the current hash into a DevRoute, or null when it isn't a `#dev` hash. */
@@ -55,11 +62,15 @@ function parseHash(hash: string): DevRoute | null {
   const surface = params.get('surface');
   const bench = params.get('bench');
   const tour = params.get('tour');
+  const find = params.get('find');
+  const history = params.get('history');
   const fixture = params.get('fixture');
   const probe = params.get('probe');
   const mode = params.get('mode');
   const fullscreen = params.get('fullscreen');
   const attach = params.get('attach');
+  const pick = params.get('pick');
+  if (pick) route.pick = pick;
   if (fullscreen) route.fullscreen = fullscreen;
   if (attach) route.attach = attach;
   if (probe) route.probe = probe;
@@ -71,6 +82,8 @@ function parseHash(hash: string): DevRoute | null {
   if (surface) route.surface = surface;
   if (bench) route.bench = bench;
   if (tour) route.tour = tour;
+  if (find) route.find = find;
+  if (history) route.history = history;
   if (fixture) route.fixture = fixture;
   return route;
 }
@@ -119,7 +132,7 @@ export function installDevRouter(): () => void {
   // SettingsContext) survive regardless of effect order — child effects run before this parent effect.
   w.__fmDev = Object.assign(w.__fmDev ?? {}, {
     /** Jump to a screen/modal/tab in one call — sets the `#dev` hash the consumers react to. */
-    goto(view?: string, opts?: { modal?: string; tab?: string; subtab?: string; surface?: string; bench?: string; tour?: string; fixture?: string; probe?: string; mode?: string; fullscreen?: boolean; attach?: string }) {
+    goto(view?: string, opts?: { modal?: string; tab?: string; subtab?: string; surface?: string; bench?: string; tour?: string; find?: string; history?: string; fixture?: string; probe?: string; mode?: string; fullscreen?: boolean; attach?: string; pick?: string }) {
       const params = new URLSearchParams();
       if (view) params.set('view', view);
       if (opts?.modal) params.set('modal', opts.modal);
@@ -128,10 +141,13 @@ export function installDevRouter(): () => void {
       if (opts?.surface) params.set('surface', opts.surface);
       if (opts?.bench) params.set('bench', opts.bench);
       if (opts?.tour) params.set('tour', opts.tour);
+      if (opts?.find) params.set('find', opts.find);
+      if (opts?.history) params.set('history', opts.history);
       if (opts?.fullscreen) params.set('fullscreen', '1');
       if (opts?.mode) params.set('mode', opts.mode);
       if (opts?.fixture) params.set('fixture', opts.fixture);
       if (opts?.attach) params.set('attach', opts.attach);
+      if (opts?.pick) params.set('pick', opts.pick);
       // A probe outlives the screen it was turned on over, so it carries across a goto unless replaced.
       const probe = opts?.probe ?? getDevRoute()?.probe;
       if (probe) params.set('probe', probe);
@@ -165,14 +181,15 @@ export function installDevRouter(): () => void {
       return svc.getWorldData(id);
     },
     /** Write an exported world straight into storage, replacing any world with the same id. Mirrors the
-     *  import path: migrate first, then derive the record's metadata from the migrated overview. */
-    async putWorld(world: unknown) {
+     *  import path: migrate first, then derive the record's metadata from the migrated overview. `wrapper`
+     *  sets local-only record fields, such as a download link. */
+    async putWorld(world: unknown, wrapper: { sourceId?: string; downloadedAt?: string } = {}) {
       const [{ default: svc }, { migrateWorld }] = await Promise.all([
         import('@/services/WorldStorageService'),
         import('@/lib/version'),
       ]);
       const data = migrateWorld(world);
-      const id = (world as { id?: string }).id ?? crypto.randomUUID();
+      const id = (world as { id?: string }).id ?? randomUUID();
       await svc.storeWorld({
         id,
         name: data.worldOverview?.name || 'Untitled',
@@ -180,6 +197,7 @@ export function installDevRouter(): () => void {
         author: data.worldOverview?.author || '',
         thumbnail: data.worldOverview?.thumbnail || '',
         dirty: true,
+        ...wrapper,
         data: data as unknown as { worldOverview: unknown; stats: unknown[]; locations: unknown[];
           entities: unknown[]; traits: unknown[]; statUpdates: unknown[] },
       });

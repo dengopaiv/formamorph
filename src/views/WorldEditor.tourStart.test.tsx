@@ -38,14 +38,14 @@ const LIBRARY_WORLD: World = benchEditorWorld({ id: 'sedge' });
 const NEW_WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
 } as unknown as Partial<World>);
 
 const OFFER = 'Take the Authoring Tour?';
 const MODE_NOTE = 'Simple vs. Advanced';
 /** Tutorial notes wait out the appear delay; the full suite runs these files in parallel, so allow for load. */
-const findNote = (name: string) => screen.findByRole('dialog', { name }, { timeout: 4000 });
+const findNote = (name: string) => screen.findByRole('dialog', { name });
 const findStepNote = () => findNote(TOUR_STEPS[0].title);
 const queryNote = (name: string) => screen.queryByRole('dialog', { name });
 const worldNameField = () => document.getElementById('worldName') as HTMLInputElement;
@@ -107,7 +107,7 @@ describe('first-visit offer over unsaved edits', () => {
     const offer = await findNote(OFFER);
     fireEvent.change(worldNameField(), { target: { value: 'Sedge Landing, Revised' } });
     fireEvent.click(within(offer).getByRole('button', { name: 'Start Tour' }));
-    return { ...view, prompt: await screen.findByRole('alertdialog', { name: 'Unsaved changes' }, { timeout: 4000 }) };
+    return { ...view, prompt: await screen.findByRole('alertdialog', { name: 'Unsaved changes' }) };
   };
 
   it('Cancel keeps the world and leaves the offer on screen, unspent', async () => {

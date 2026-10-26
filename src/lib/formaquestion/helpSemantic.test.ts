@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDocsIndex } from '@/lib/docs/docsIndex';
-import { EMBEDDING_MODEL_ID } from '@/lib/memoryRelevance';
+import { EMBED_BOUND_MS, EMBEDDING_MODEL_ID } from '@/lib/memoryRelevance';
 import { sseReply, sseResponse, textSnapshot } from '@/test/aiTextFixtures';
 import { pastPicks } from '@/test/helpFixtures';
 import { semanticRanking, type HelpEmbedder } from './helpSemantic';
@@ -31,19 +31,32 @@ afterEach(() => {
 });
 
 describe('semanticRanking', () => {
+  it('gives up on a hung embedder after the bound and leaves no timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const hung: HelpEmbedder = { ...embedder, embed: () => new Promise(() => {}) };
+      const pending = semanticRanking(index, ['test'], { embedder: hung });
+      await vi.advanceTimersByTimeAsync(EMBED_BOUND_MS);
+      await expect(pending).resolves.toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ranks the sections by their vector against the query, best first, up to the limit', async () => {
-    const ranking = await semanticRanking(index, ['test'], embedder);
+    const ranking = await semanticRanking(index, ['test'], { embedder });
     expect(ranking?.('test', 5).map((section) => section.id)).toEqual(['Bench#checks', 'Tools#how-to-try-a-tool', 'Tools#tools', 'Bench#bench']);
     expect(ranking?.('test', 1).map((section) => section.id)).toEqual(['Bench#checks']);
   });
 
   it('ranks a section of the favored page above a nearer one, and leaves a section that points away where it is', async () => {
-    const ranking = await semanticRanking(index, ['test'], embedder);
+    const ranking = await semanticRanking(index, ['test'], { embedder });
     expect(ranking?.('test', 5, { page: 'Tools' }).map((section) => section.id)).toEqual(['Tools#how-to-try-a-tool', 'Bench#checks', 'Tools#tools', 'Bench#bench']);
   });
 
   it('gives no section for a query it did not embed', async () => {
-    const ranking = await semanticRanking(index, ['test'], embedder);
+    const ranking = await semanticRanking(index, ['test'], { embedder });
     expect(ranking?.('another', 5)).toEqual([]);
   });
 });

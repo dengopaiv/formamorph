@@ -1,5 +1,5 @@
 import { primaryImage } from './entityImages';
-import { inCast } from './bearers';
+import { inCast } from './owners';
 import { customPersonaEntity } from './blueprints';
 import type { Entity, PersonaRef } from '@/types';
 import type { ResolveEntityText } from './resolveWorldNames';
@@ -44,7 +44,7 @@ const namesOf = (entity: Entity): string[] => [entity.name, ...(entity.aliases ?
 export interface PersonaResolution {
   /** Null for no reference, an explicit None, or a reference that no longer resolves. */
   persona: ResolvedPersona | null;
-  /** The world's entities without the played one and without unpicked persona-only entities. Every in-play
+  /** The world's entities without the played one and without unpicked persona-only entities. Every in-game
    *  reader of the entity list reads this. */
   cast: Entity[];
   /** The names the planner reads as the player: the persona's name and aliases. */

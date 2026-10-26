@@ -1,0 +1,24 @@
+# 06: Tall Cut
+
+Status: ready-for-human
+Blocked by: 05
+Recommended model: Claude Sonnet 5.5 (`claude-sonnet-5-5`)
+Reasoning effort: medium
+
+Rationale: the same scene set on its own shot order; the scene library already carries both layouts.
+
+Parent: [Trailer spec](../spec.md)
+
+## What to build
+
+The social cut at 1080x1920 from the same scene list, per the storyboard's tall shot list.
+
+- Shots that drop, crop or stack follow the storyboard.
+- Runs 47.80 seconds, as the approved storyboard sets (Q9, Q16).
+- Renders with the same command as the wide cut.
+
+## Acceptance criteria
+
+- [ ] The tall cut renders at 1080x1920 from the same command.
+- [ ] It follows the storyboard's tall shot list.
+- [ ] It runs 47.80 seconds (2,868 frames).

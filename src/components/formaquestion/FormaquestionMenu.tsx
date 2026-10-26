@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Eraser, MoreVertical, ScrollText, Settings } from 'lucide-react';
+import { BookOpen, Eraser, ExternalLink, MoreVertical, ScrollText, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   ContextMenu,
@@ -20,7 +20,7 @@ import { GENERAL_COPY } from './formaquestionSettingsTabs';
 
 /**
  * The ⋮ menu of both chromes: Clear Conversation, which is off while the conversation is empty, the Chat Style
- * choices, the Mascot Position choices where a Mascot can stand, then AI Context and Settings. It hangs from the corner of the button that has room, so it always comes from the button. The chosen action runs after the menu has closed, so a dialog it opens does not
+ * choices, the Mascot Position choices where a Mascot can stand, then Open Guide, Open Wiki, AI Context and Settings. It hangs from the corner of the button that has room, so it always comes from the button. The chosen action runs after the menu has closed, so a dialog it opens does not
  * fight the menu's focus return. `container` is where the menu renders; the window sits in a layer above the
  * dialogs, so its menu must render in that layer too.
  */
@@ -29,6 +29,8 @@ const MENU_WIDTH = 208;
 
 /** What the ⋮ menu does, the same in both chromes. */
 export interface MenuActions {
+  onOpenGuide: () => void;
+  onOpenWiki: () => void;
   onOpenAiContext: () => void;
   onOpenSettings: () => void;
   /** Turns on Clear Conversation. */
@@ -39,9 +41,11 @@ export interface MenuActions {
   /** The Mascot Position the radio items mark. The sheet draws no Mascot, so it leaves the choices out. */
   mascotPlacement?: MascotPlacement;
   onMascotPlacementChange?: (placement: MascotPlacement) => void;
+  /** The choices the chrome offers; Bubble has no over or under. */
+  mascotPlacements?: readonly { value: MascotPlacement; label: string }[];
 }
 
-export function FormaquestionMenu({ onOpenAiContext, onOpenSettings, onClear, chatStyle, onChatStyleChange, mascotPlacement, onMascotPlacementChange, container, onOpenChange, large = false, round = false }: MenuActions & {
+export function FormaquestionMenu({ onOpenGuide, onOpenWiki, onOpenAiContext, onOpenSettings, onClear, chatStyle, onChatStyleChange, mascotPlacement, onMascotPlacementChange, mascotPlacements = GENERAL_COPY.mascotPosition.options, container, onOpenChange, large = false, round = false }: MenuActions & {
   container?: HTMLElement;
   /** Called as the menu opens and closes. */
   onOpenChange?: (open: boolean) => void;
@@ -117,13 +121,21 @@ export function FormaquestionMenu({ onOpenAiContext, onOpenSettings, onClear, ch
                 if (isMascotPlacement(value) && value !== mascotPlacement) pending.current = () => onMascotPlacementChange(value);
               }}
             >
-              {GENERAL_COPY.mascotPosition.options.map(({ value, label }) => (
+              {mascotPlacements.map(({ value, label }) => (
                 <ContextMenuRadioItem key={value} value={value} checked={mascotPlacement === value}>{label}</ContextMenuRadioItem>
               ))}
             </ContextMenuRadioGroup>
           </>
         )}
         <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => { pending.current = onOpenGuide; }}>
+          <BookOpen className="h-4 w-4 shrink-0" aria-hidden />
+          Open Guide
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => { pending.current = onOpenWiki; }}>
+          <ExternalLink className="h-4 w-4 shrink-0" aria-hidden />
+          Open Wiki
+        </ContextMenuItem>
         <ContextMenuItem onSelect={() => { pending.current = onOpenAiContext; }}>
           <ScrollText className="h-4 w-4 shrink-0" aria-hidden />
           AI Context

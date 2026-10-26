@@ -1,8 +1,9 @@
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
-import { Columns2, Maximize2, Minimize2, Square } from 'lucide-react';
+import { Columns2, Maximize2, Square } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { HintInfo } from '@/components/SettingsRows';
+import type { TokenValues } from '@/lib/promptValues';
 import { ANATOMY_RUN_ATTR, RequestAnatomyView, type AnatomyViewMode } from '@/components/game/RequestAnatomyView';
 import { applyAnchor, captureAnchor, type ScrollAnchor } from '@/components/prompt/previewScrollSync';
 import type { PromptJumpTarget } from '@/lib/promptJump';
@@ -50,7 +51,7 @@ export function RequestAnatomyPanel({
   /** What the prompt is for, the same line the editors show, so landing here names the prompt's job. */
   description: string;
   prompts: AnatomyPreviewPrompts;
-  values: Record<string, string>;
+  values: TokenValues;
   settings: AnatomyPreviewSettings;
   /** Which view is showing. Held by the caller, so a trip into an editor and back keeps it. */
   mode: AnatomyViewMode;
@@ -198,14 +199,14 @@ export function RequestAnatomyPanel({
               </button>
             </Tip>
           )}
-          {onRequestFullscreen && (
-            <Tip tip={fullscreen ? 'Exit full screen' : 'View full screen'}>
+          {onRequestFullscreen && !fullscreen && (
+            <Tip tip="View full screen">
               <button
                 type="button"
                 onClick={onRequestFullscreen}
                 className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               >
-                {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                <Maximize2 className="h-4 w-4" />
               </button>
             </Tip>
           )}

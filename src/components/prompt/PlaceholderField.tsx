@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, type ReactNode, type Ref } from 'react';
 import PromptField from './PromptField';
-import ChipInput from './ChipInput';
+import ChipInput, { type ChipFocusHandle } from './ChipInput';
 import { promptVocabulary, usePlaceholderChipVocabulary, worldPromptVocabulary } from '@/lib/chipVocabulary';
 import type { PromptVariable } from '@/lib/promptVariables';
-import { decodePlaceholderToken, directChipTargets } from '@/lib/placeholders';
-import { hasBuiltin } from '@/lib/builtinPlaceholders';
+import { layerValues, type TokenValues } from '@/lib/promptValues';
+import { decodePlaceholderToken, directChipTargets, parsePlaceholderText } from '@/lib/placeholders';
+import { builtinForToken, hasBuiltin } from '@/lib/builtinPlaceholders';
 import {
   allPinRows, canCommitPinSource, commitPinSource, pinsTargeting, sameSource, updatePinAt,
   type PinEditorWorld, type PinSourceRef, type PinWriters,
@@ -14,7 +15,7 @@ import { useEditorPreviewRolls } from '@/contexts/EditorPreviewRollsContext';
 import { useGameDataOptional } from '@/contexts/GameDataContext';
 import { usePlaceholderStoreOptional } from '@/contexts/PlaceholderStoreContext';
 import type { Placeholder } from '@/types';
-import type { BearerPreview } from '@/lib/ownedTraitsInPlay';
+import type { OwnerPreview } from '@/lib/ownedTraitsInPlay';
 import { PLACEHOLDER_TRIGGER, placeholderHint } from '@/lib/placeholderInsert';
 import type { OpenValueView, StepDirection } from './openValueContext';
 
@@ -28,7 +29,7 @@ const stepIndex = (index: number, direction: StepDirection, count: number): numb
 
 /**
  * A chip editor for world text that can embed placeholders. Reuses the prompt chip editor with the
- * placeholder token family: the toolbar inserts the world's placeholders, and a Wildcard chip's pop-out
+ * placeholder token family: the toolbar inserts the world's placeholders, and a Wildcard chip's Chip Options
  * offers World | Unique (only once it has 2+ values). Stores the same token-string as the rest of the field.
  *
  * A Preview tab (from `PromptField`) swaps each chip for its author-time value — Variable → its value,
@@ -37,7 +38,7 @@ const stepIndex = (index: number, direction: StepDirection, count: number): numb
  * text is tinted the chip's own color, like the prompt previews. A Values tab opens each chip in place on
  * the value its Preview drew.
  */
-const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, bearer, trait, promptChips, markdown = false, resizable = false, placeholder, className, readOnly = false, label, info, labelAside, hint, ariaLabel, tourAnchor }: {
+const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, ownerPreview, trait, promptChips, markdown = false, resizable = false, placeholder, className, readOnly = false, label, info, labelAside, hint, ariaLabel, tourAnchor, historyField }: {
   value: string;
   onChange: (v: string) => void;
   placeholders: Placeholder[];
@@ -48,13 +49,13 @@ const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, b
   ownerId?: string;
   /** The owning entity's authored name, which a Character Name chip previews as. */
   ownerName?: string;
-  /** Previews a trait's text as this bearer's: its copies and its pins. */
-  bearer?: BearerPreview;
+  /** Previews a trait's text as this owner's: its copies and its pins. */
+  ownerPreview?: OwnerPreview;
   /** A trait's or trait group's text; `owned` when an entity holds it. A world one takes blueprint chips. */
   trait?: { owned: boolean };
   /** Makes this a world custom prompt: the field also holds prompt variables, offered from its own toolbar
    *  and previewed from `previewValues`. `sampleData` badges that preview (see `PromptField`). */
-  promptChips?: { variables: PromptVariable[]; previewValues: Record<string, string>; sampleData?: boolean | string };
+  promptChips?: { variables: PromptVariable[]; previewValues: TokenValues; sampleData?: boolean | string };
   /** The field's caption, rendered by the field itself so it can share a row (see `PromptField`). */
   label?: ReactNode;
   /** Sits right after the caption (see `PromptField`). */
@@ -74,6 +75,8 @@ const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, b
   ariaLabel?: string;
   /** The Authoring Tour anchor (see `PromptField`). */
   tourAnchor?: string;
+  /** The World Editor field identity (see `PromptField`). */
+  historyField?: string;
 }) => {
   // A prompt names the player with its Persona variable, so no Built-in chip is offered there.
   const placeholderVocab = usePlaceholderChipVocabulary(placeholders, ownerId, { builtins: !promptChips, trait });
@@ -92,11 +95,11 @@ const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, b
   );
   // Re-read on every reroll: the store's identity carries its version.
   const chipValues = useMemo(
-    () => rolls.preview(value, placeholders, pinRows, ownerName, bearer),
-    [rolls, value, placeholders, pinRows, ownerName, bearer],
+    () => rolls.preview(value, placeholders, pinRows, ownerName, ownerPreview),
+    [rolls, value, placeholders, pinRows, ownerName, ownerPreview],
   );
   const promptValues = promptChips?.previewValues;
-  const previewValues = useMemo(() => (promptValues ? { ...promptValues, ...chipValues } : chipValues), [promptValues, chipValues]);
+  const previewValues = useMemo(() => (promptValues ? layerValues(promptValues, chipValues) : chipValues), [promptValues, chipValues]);
   // A value edit goes through the same store a chip rename does, and a pin edit through the writer its source
   // kind uses on the pin editors. Writes made since the world last rendered build on each other, so two in
   // one tick never drop the first.
@@ -177,8 +180,13 @@ const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, b
         }),
       };
     }
+    // A Built-in has no values to edit, so it opens read-only on what Preview shows.
+    for (const seg of parsePlaceholderText(value)) {
+      const builtin = seg.type === 'variable' ? builtinForToken(seg.token) : undefined;
+      if (seg.type === 'variable' && builtin) out[seg.token] = { text: chipValues[seg.token] ?? builtin.label, label: '' };
+    }
     return out;
-  }, [rolls, value, placeholders, pinRows, readOnly, writers, writePin, writeValue]);
+  }, [rolls, value, placeholders, pinRows, readOnly, writers, writePin, writeValue, chipValues]);
   const reroll = useCallback(
     () => rolls.reroll(directChipTargets([value]), placeholders),
     [rolls, value, placeholders],
@@ -209,6 +217,7 @@ const PlaceholderField = ({ value, onChange, placeholders, ownerId, ownerName, b
       readOnly={readOnly}
       ariaLabel={ariaLabel}
       tourAnchor={tourAnchor}
+      historyField={historyField}
       insertTrigger={PLACEHOLDER_TRIGGER}
     />
   );
@@ -226,6 +235,7 @@ export default PlaceholderField;
  */
 export const PlaceholderNameField = ({
   value, onChange, placeholders, ownerId, trait, placeholder, ariaLabel, className, readOnly = false, onFocus, onBlur, onSubmit,
+  focusRef, ariaDescribedBy,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -242,6 +252,9 @@ export const PlaceholderNameField = ({
   onFocus?: () => void;
   onBlur?: () => void;
   onSubmit?: () => void;
+  /** Receives the field's focus call, for a caller that focuses it from elsewhere. */
+  focusRef?: Ref<ChipFocusHandle>;
+  ariaDescribedBy?: string;
 }) => {
   const vocab = usePlaceholderChipVocabulary(placeholders, ownerId, { trait });
   const enabled = placeholders.length > 0 && !readOnly;
@@ -258,6 +271,8 @@ export const PlaceholderNameField = ({
       onFocus={onFocus}
       onBlur={onBlur}
       onSubmit={onSubmit}
+      focusRef={focusRef}
+      ariaDescribedBy={ariaDescribedBy}
     />
   );
 };

@@ -5,9 +5,11 @@
  * the downscale-on-export pass does. Publishing never runs this: keeping a published world's images remote is
  * the point of linking them.
  */
-import type { World } from '@/types';
+import type { GalleryImage, World } from '@/types';
 import { IMAGE_CAPS, type ImageCap } from './imageOptim';
-import { entityImages } from './entityImages';
+import { entityImageData, entityImages } from './entityImages';
+import { locationImages } from './locationImages';
+import { mapImages, rewriteMapImages } from './mapBackground';
 import { isRemoteImage } from './imageBytes';
 import { fetchAsDataUrl } from './imageSource';
 
@@ -22,8 +24,9 @@ export function remoteWorldImages(world: World): string[] {
   const urls: string[] = [];
   const thumb = world.worldOverview?.thumbnail;
   if (isRemoteImage(thumb)) urls.push(thumb as string);
-  for (const e of world.entities ?? []) urls.push(...entityImages(e).filter(isRemoteImage));
-  for (const l of world.locations ?? []) if (isRemoteImage(l.backgroundImage)) urls.push(l.backgroundImage as string);
+  for (const e of world.entities ?? []) urls.push(...entityImageData(e).filter(isRemoteImage));
+  for (const l of world.locations ?? []) urls.push(...locationImages(l).map((img) => img.data).filter(isRemoteImage));
+  urls.push(...mapImages(world.worldOverview).map((img) => img.data).filter(isRemoteImage));
   return urls;
 }
 
@@ -35,7 +38,7 @@ export function remoteImagesInContent(content: unknown): string[] {
   const item = (content ?? {}) as Partial<World> & { images?: unknown; thumbnail?: unknown };
   const urls = remoteWorldImages(item as World);
   // A character card publishes the entity itself, whose pictures aren't under `entities`.
-  if (Array.isArray(item.images)) urls.push(...entityImages(item as { images?: string[] }).filter(isRemoteImage));
+  if (Array.isArray(item.images)) urls.push(...entityImageData(item as { images?: GalleryImage[] }).filter(isRemoteImage));
   // A dictionary's cover sits at the top level rather than under `worldOverview`.
   if (isRemoteImage(item.thumbnail as string)) urls.push(item.thumbnail as string);
   return urls;
@@ -77,17 +80,30 @@ export async function embedWorldRemoteImages(
   const thumbnail = await embed(world.worldOverview?.thumbnail, IMAGE_CAPS.thumbnail);
   const entities: World['entities'] = [];
   for (const e of world.entities ?? []) {
-    const images: string[] = [];
-    for (const url of entityImages(e)) images.push((await embed(url, IMAGE_CAPS.entity)) ?? url);
+    const images: GalleryImage[] = [];
+    for (const img of entityImages(e)) images.push({ ...img, data: (await embed(img.data, IMAGE_CAPS.entity)) ?? img.data });
     entities.push({ ...e, images });
   }
   const locations: World['locations'] = [];
   for (const l of world.locations ?? []) {
-    locations.push({ ...l, backgroundImage: (await embed(l.backgroundImage, IMAGE_CAPS.background)) ?? undefined });
+    const images: GalleryImage[] = [];
+    for (const img of locationImages(l)) images.push({ ...img, data: (await embed(img.data, IMAGE_CAPS.background)) ?? img.data });
+    locations.push({ ...l, images });
   }
 
+  const map = await rewriteMapImages(world.worldOverview, async (data) => (await embed(data, IMAGE_CAPS.map)) ?? data);
+
   return {
-    world: { ...world, worldOverview: { ...world.worldOverview, thumbnail: thumbnail ?? null }, entities, locations },
+    world: {
+      ...world,
+      worldOverview: {
+        ...world.worldOverview,
+        thumbnail: thumbnail ?? null,
+        ...map,
+      },
+      entities,
+      locations,
+    },
     failures,
   };
 }

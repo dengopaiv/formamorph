@@ -11,6 +11,7 @@ import {
 import type { Codec } from '@/lib/usePersistentState';
 import type { Tool, ToolEnabledMap } from '@/types';
 import { DOCS_LOOKUP_CALL_LIMIT } from './docsLookup';
+import { HELP_CODE_TEST_CALL_LIMIT } from './helpCodeTest';
 import { EMPTY_HELP_PRESET_STORE, parseHelpPresetStore, type HelpPresetStore } from './helpPresets';
 import { DEFAULT_HELP_REVEAL, parseHelpReveal, type HelpReveal } from './helpReveal';
 import { parseHelpTools, parseHelpToolSwitches } from './helpTools';
@@ -30,10 +31,16 @@ export interface HelpSources {
 /** The Search Endpoint choice that sends the search request where answers go. */
 export const SAME_AS_ANSWER = 'same-as-answer';
 
+/** Whether the player has answered the Semantic Search offer card. A flip of the switch answers it too. */
+export type SemanticOffer = 'undecided' | 'decided';
+const isSemanticOffer = (value: unknown): value is SemanticOffer => value === 'undecided' || value === 'decided';
+
 /** Every setting a help question carries. */
 export interface HelpSettings {
   /** The sources whose rankings the search of a question merges. */
   readonly sources: HelpSources;
+  /** The state of the Semantic Search offer card. The card shows while it is undecided and the source is off. */
+  readonly semanticOffer: SemanticOffer;
   /** The text-endpoint preset answers go to, or null to follow the active endpoint. */
   readonly answerEndpoint: string | null;
   /** The preset picks go to, `SAME_AS_ANSWER`, or null to follow the active endpoint. */
@@ -46,6 +53,10 @@ export interface HelpSettings {
   readonly roll: boolean;
   /** The most help dice roll calls one help question runs. */
   readonly rollCallLimit: number;
+  /** The code test is offered on a code turn, where the endpoint takes function calls. */
+  readonly codeTest: boolean;
+  /** The most code test calls one help question runs. */
+  readonly codeTestCallLimit: number;
   /** The open screen's section leads the docs, and the request names the screen. */
   readonly openScreen: boolean;
   /** The most earlier exchanges one help request carries, newest kept. */
@@ -74,6 +85,8 @@ export interface HelpSettings {
   readonly chatStyle: ChatStyle;
   /** The Scrim's opacity in percent: the panel of the app background behind the minimal column. 0 draws nothing. */
   readonly scrimOpacity: number;
+  /** Open Wiki asks before it opens the browser. Don't Ask Again in that dialog turns it off. */
+  readonly wikiConfirm: boolean;
 }
 
 /** The Scrim opacity's range and step, in percent. */
@@ -81,20 +94,19 @@ export const SCRIM_OPACITY_MIN = 0;
 export const SCRIM_OPACITY_MAX = 100;
 export const SCRIM_OPACITY_STEP = 5;
 
-export const CHAT_STYLES = ['auto', 'bubble', 'minimal', 'full'] as const;
+export const CHAT_STYLES = ['auto', 'minimal', 'full'] as const;
 export type ChatStyle = (typeof CHAT_STYLES)[number];
 export const isChatStyle = (value: unknown): value is ChatStyle => CHAT_STYLES.some((style) => style === value);
 
-/** The chrome the window draws: Auto is Bubble while the Mascot is on, and Bubble without her has no speaker, so it draws Minimal. */
+/** The chrome the window draws: Auto is Bubble while the Mascot is on, and Full without her. Bubble is never picked by hand, since it needs her. */
 export function chatChrome({ chatStyle, mascot }: Pick<HelpSettings, 'chatStyle' | 'mascot'>): WindowChrome {
-  if (chatStyle === 'auto') return mascot ? 'bubble' : 'full';
-  if (chatStyle === 'bubble' && !mascot) return 'minimal';
-  return chatStyle;
+  return chatStyle === 'auto' ? (mascot ? 'bubble' : 'full') : chatStyle;
 }
 
 /** The settings of a player who has changed nothing. The help bar run measures these. */
 export const DEFAULT_HELP_SETTINGS: HelpSettings = {
   sources: { keyword: true, aiPicks: true, semantic: false },
+  semanticOffer: 'undecided',
   answerEndpoint: null,
   pickEndpoint: SAME_AS_ANSWER,
   lookup: false,
@@ -102,6 +114,8 @@ export const DEFAULT_HELP_SETTINGS: HelpSettings = {
   roll: false,
   // The catalog roll's limit, so a roll behaves the same in help and in play (Q61).
   rollCallLimit: DEFAULT_TOOL_CALL_LIMIT,
+  codeTest: true,
+  codeTestCallLimit: HELP_CODE_TEST_CALL_LIMIT,
   openScreen: true,
   historyLength: 4,
   reasoning: defaultPromptReasoningSetting('help'),
@@ -116,6 +130,7 @@ export const DEFAULT_HELP_SETTINGS: HelpSettings = {
   mascotPresets: EMPTY_MASCOT_PRESET_STORE,
   chatStyle: 'auto',
   scrimOpacity: 60,
+  wikiConfirm: true,
 };
 
 /** A change to the settings: any field, and inside `sources` and `reveal` only the values it names. */
@@ -158,12 +173,15 @@ export const helpSettingsCodec: Codec<HelpSettings> = {
     if (!isRecord(stored)) throw new Error('not a help settings object');
     const { sources, reveal, presets, tools, toolSwitches, mascotPresets, ...rest } = pick<HelpSettings>(stored, DEFAULT_HELP_SETTINGS, {
       sources: isRecord,
+      semanticOffer: isSemanticOffer,
       answerEndpoint: isPresetId,
       pickEndpoint: (value) => value === SAME_AS_ANSWER || isPresetId(value),
       lookup: isBool,
       lookupCallLimit: isBetween(1, HELP_CALL_LIMIT_MAX),
       roll: isBool,
       rollCallLimit: isBetween(1, HELP_CALL_LIMIT_MAX),
+      codeTest: isBool,
+      codeTestCallLimit: isBetween(1, HELP_CALL_LIMIT_MAX),
       openScreen: isBool,
       historyLength: isCount(HELP_HISTORY_MAX),
       reasoning: (value) => isRecord(value) && parsePromptReasoningSetting(value) !== null,
@@ -178,14 +196,18 @@ export const helpSettingsCodec: Codec<HelpSettings> = {
       mascotPresets: isRecord,
       chatStyle: isChatStyle,
       scrimOpacity: (value) => isBetween(SCRIM_OPACITY_MIN, SCRIM_OPACITY_MAX)(value) && (value as number) % SCRIM_OPACITY_STEP === 0,
+      wikiConfirm: isBool,
     });
     const storedSources = isRecord(sources) ? sources : {};
     const storedTools = parseHelpTools(tools);
+    const parsedSources = pick(storedSources, DEFAULT_HELP_SETTINGS.sources, { keyword: isBool, aiPicks: isBool, semantic: isBool });
     return {
       ...rest,
+      // A stored switch that is on counts as decided.
+      semanticOffer: isSemanticOffer(stored.semanticOffer) ? stored.semanticOffer : parsedSources.semantic ? 'decided' : 'undecided',
       reveal: parseHelpReveal(reveal),
       presets: parseHelpPresetStore(presets),
-      sources: pick(storedSources, DEFAULT_HELP_SETTINGS.sources, { keyword: isBool, aiPicks: isBool, semantic: isBool }),
+      sources: parsedSources,
       tools: storedTools,
       toolSwitches: parseHelpToolSwitches(toolSwitches, storedTools),
       mascotPresets: parseMascotPresetStore(mascotPresets),

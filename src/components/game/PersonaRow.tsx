@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { User } from 'lucide-react';
+import { PersonaIcon } from '@/lib/elementIcons';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PersonaPicker, type PersonaOption } from './PersonaPicker';
+import { YouMark } from './YouMark';
 import { personaOption, worldEntitiesOf } from '@/lib/persona';
 import { useGameplay } from '@/contexts/GameplayContext';
 import { useGameData } from '@/contexts/GameDataContext';
@@ -11,7 +12,7 @@ import { useResolvedWorld } from '@/lib/useResolvedWorld';
 import { useDevRoute } from '@/lib/devRouter';
 import { inGamePersonas } from '@/lib/personaInGame';
 import { pickedAtStart } from '@/lib/runtimeCharacters';
-import { primaryImage } from '@/lib/entityImages';
+import { useEntityGallery } from '@/lib/useEntityGallery';
 import { thumbFit } from '@/lib/thumbAspect';
 import { cn } from '@/lib/utils';
 import { offeredPersonas, rememberWorldPersona, samePersonaRef, worldAllowedPersonas } from '@/lib/personaPick';
@@ -66,16 +67,19 @@ export function PersonaRow({ onChange }: { onChange: (ref: PersonaRef, name: str
     onChange(choice, picked?.name ?? null);
     showPicker(false);
   };
-  const image = primaryImage(persona?.entity);
+  // The visible primary, as the panel shows it.
+  const [image] = useEntityGallery(persona?.entity).images;
   return (
     <div className="flex items-center gap-2 pl-2" data-testid="persona-row">
       <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
         {image
           ? <img src={image} alt="" className={cn('h-full w-full', thumbFit('portrait'))} />
-          : <User aria-hidden className="h-4 w-4 text-muted-foreground" />}
+          : <PersonaIcon aria-hidden className="h-4 w-4 text-muted-foreground" />}
       </span>
-      <span className="min-w-0 flex-1 truncate text-label">
-        {persona ? persona.entity.name : <span className="text-muted-foreground">None</span>}
+      <span className="flex min-w-0 flex-1 items-center text-label">
+        {persona
+          ? <><span className="min-w-0 truncate">{persona.entity.name}</span><YouMark /></>
+          : <span className="truncate text-muted-foreground">None</span>}
       </span>
       <Button variant="outline" size="sm" className="shrink-0" onClick={() => showPicker(true)}>Change</Button>
       <Dialog open={open} onOpenChange={showPicker}>

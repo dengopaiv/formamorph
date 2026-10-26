@@ -1,7 +1,7 @@
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { benchEditorWorld, renderWorldEditorBench, searchWorldField } from '@/test/worldEditorBench';
 import type { World } from '@/types';
 
 /**
@@ -35,7 +35,7 @@ vi.mock('react-toastify', () => ({
 const WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'Sedge Landing', description: 'A fen town.', author: 'Wren', thumbnail: null, bgm: null,
-    systemPrompt: 'Narrate the fen.', use3DModel: true, tags: [],
+    systemPrompt: 'Narrate the fen.', tags: [],
     introReadme: 'Before you choose, brackish water.',
     readme: 'Once you land, peat-smoke everywhere.',
     promptOverrides: { systemPrompt: 'Narrate in lamplight.', systemPromptEnabled: true },
@@ -44,7 +44,7 @@ const WORLD: World = benchEditorWorld({
 
 /** Both column labels, so a label that moves between the columns fails rather than passing twice. */
 const FIELD_LABELS = new RegExp(
-  '^(World Name|Author|Tags|Thumbnail|3D Player Avatar|Custom Player Avatar|Allowed Personas|Starts On|Background Music'
+  '^(World Name|Author|Tags|Thumbnail|Avatars|Allowed Personas|Starts On|Background Music'
   + '|Player-Facing Description|Readme|AI-Facing Description|Custom Prompts)$',
 );
 
@@ -81,16 +81,15 @@ const openPromptKind = () => screen.getAllByRole('radio')
   .map((r) => r.textContent)
   .filter((t) => t && PROMPT_KINDS.includes(t));
 
-/** Open Find and wait for the bar to take focus. */
+/** Press Ctrl+F and wait for Search World to take focus. */
 const openFind = async () => {
   fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-  await screen.findByRole('search', { name: 'Find and replace in world' });
-  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Find')));
+  await waitFor(() => expect(document.activeElement).toBe(searchWorldField()));
 };
 
-/** Type a query and wait for the bar to land on its first hit, which it does on its own. */
+/** Type a query and wait for the search to land on its first hit, which it does on its own. */
 const findFirst = async (query: string) => {
-  fireEvent.change(screen.getByLabelText('Find'), { target: { value: query } });
+  fireEvent.change(searchWorldField(), { target: { value: query } });
   await waitFor(() => expect(screen.getByText(/^1 \/ \d+$/)).toBeInTheDocument());
 };
 
@@ -108,12 +107,11 @@ beforeEach(() => {
 });
 
 describe('the World Editor Overview columns', () => {
-  it('reads the listing fields, then the avatar, then the music down the left column', async () => {
+  it('reads the listing fields, then the persona rules, then the music down the left column', async () => {
     renderWorldEditorBench(WORLD, 'advanced');
     await screen.findByLabelText('World Name');
     expect(leftLabels()).toEqual([
-      'World Name', 'Author', 'Tags', 'Thumbnail', '3D Player Avatar', 'Custom Player Avatar',
-      'Allowed Personas', 'Starts On', 'Background Music',
+      'World Name', 'Author', 'Tags', 'Thumbnail', 'Allowed Personas', 'Starts On', 'Background Music',
     ]);
   });
 
@@ -125,12 +123,10 @@ describe('the World Editor Overview columns', () => {
     ]);
   });
 
-  it('drops the avatar upload and the persona rules from the left column in Simple mode, keeping the order', async () => {
+  it('drops the Avatars and the persona rules from the left column in Simple mode, keeping the order', async () => {
     renderWorldEditorBench(WORLD, 'simple');
     await screen.findByLabelText('World Name');
-    expect(leftLabels()).toEqual([
-      'World Name', 'Author', 'Tags', 'Thumbnail', '3D Player Avatar', 'Background Music',
-    ]);
+    expect(leftLabels()).toEqual(['World Name', 'Author', 'Tags', 'Thumbnail', 'Background Music']);
   });
 
   it('drops Custom Prompts from the right column in Simple mode, keeping the order', async () => {
@@ -165,12 +161,6 @@ describe('the World Editor Overview columns', () => {
     expect(box?.querySelector('#image-upload-thumbnail')).not.toBeNull();
   });
 
-  it('names the avatar checkbox and explains it in a hint beside it', async () => {
-    renderWorldEditorBench(WORLD, 'advanced');
-    const box = await screen.findByRole('checkbox', { name: /3D Player Avatar/ });
-    const row = box.closest('div');
-    expect(within(row as HTMLElement).getByText('The player can customize it')).toBeInTheDocument();
-  });
 });
 
 describe('the Overview persona rules', () => {

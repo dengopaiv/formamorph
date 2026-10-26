@@ -56,8 +56,23 @@ describe('help code blocks', () => {
     expect(writeText).toHaveBeenCalledExactlyOnceWith('return stats.hp - 1;');
     expect(await flashTip()).toHaveTextContent('Copied');
     expect(screen.getByRole('status')).toHaveTextContent('Copied');
-    await waitFor(() => expect(queryFlashTip()).toBeNull(), { timeout: 3000 });
+    await waitFor(() => expect(queryFlashTip()).toBeNull());
     expect(success).not.toHaveBeenCalled();
+  });
+
+  it('shows the tip again on a second copy that follows a press inside the first tip\'s window', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    renderReader(FENCE);
+    const copy = screen.getByRole('button', { name: 'Copy' });
+    await userEvent.click(copy);
+    expect(await flashTip()).toHaveTextContent('Copied');
+
+    // The press closes the tip, and the copy it starts is a new confirmation.
+    await userEvent.click(copy);
+
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(await flashTip()).toHaveTextContent('Copied');
   });
 
   it('says so in the tip when the copy fails', async () => {

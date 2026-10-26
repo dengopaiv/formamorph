@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { benchEditorWorld, editorModeSelect, renderWorldEditorBench } from '@/test/worldEditorBench';
 import { AUTHORING_TOUR_SAVE_NOTE_ID, markTutorialSeen, resetTutorials } from '@/lib/tutorials';
 import { reloadTourProgress } from '@/lib/authoringTour/progress';
 import { TOUR_STEPS } from '@/lib/authoringTour/steps';
@@ -9,6 +9,9 @@ import { NEW_WORLD_NAME } from '@/lib/blankWorld';
 import { readEditorMode } from '@/lib/editorMode';
 import { WORLD_EDITOR_TABS } from './worldEditorTabs';
 import WorldStorageService from '../services/WorldStorageService';
+import { toast } from 'react-toastify';
+import { toastTexts } from '@/test/toastText';
+import { SAVE_FAILED, STORAGE_FULL } from '@/lib/saveFailureToast';
 import type { World } from '@/types';
 
 /**
@@ -44,7 +47,7 @@ const getWorldMetadata = vi.mocked(WorldStorageService.getWorldMetadata);
 const NEW_WORLD: World = benchEditorWorld({
   worldOverview: {
     name: NEW_WORLD_NAME, description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
 } as unknown as Partial<World>);
 
@@ -54,12 +57,12 @@ const NAMED_WORLD: World = benchEditorWorld({
 
 const UNNAMED_WORLD: World = benchEditorWorld({
   worldOverview: {
-    name: '', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '', use3DModel: false, tags: [],
+    name: '', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '', tags: [],
   },
 } as unknown as Partial<World>);
 
 /** The offer waits out the tutorial layer's appear delay. */
-const findOffer = () => screen.findByRole('dialog', { name: 'Take the Authoring Tour?' }, { timeout: 2000 });
+const findOffer = () => screen.findByRole('dialog', { name: 'Take the Authoring Tour?' });
 
 const openTourOn = async (world: World, mode: 'simple' | 'advanced' = 'simple') => {
   const view = renderWorldEditorBench(world, mode, { newWorld: true });
@@ -105,7 +108,7 @@ describe('Authoring Tour offer', () => {
     const { ctx } = renderWorldEditorBench(NEW_WORLD, 'simple', { newWorld: true });
     await waitFor(() => expect(ctx().worldId).toBe('w1'));
     act(() => { ctx().loadWorldData({ ...NEW_WORLD, id: 'imported' }); });
-    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' }, { timeout: 2000 });
+    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' });
     expect(screen.queryByRole('dialog', { name: 'Take the Authoring Tour?' })).not.toBeInTheDocument();
   });
 
@@ -118,7 +121,7 @@ describe('Authoring Tour offer', () => {
 
     renderWorldEditorBench(NEW_WORLD, 'simple', { newWorld: true });
     // The mode note is next in line, so its arrival shows the offer had its chance and stayed away.
-    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' }, { timeout: 2000 });
+    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' });
     expect(screen.queryByRole('dialog', { name: 'Take the Authoring Tour?' })).not.toBeInTheDocument();
   });
 
@@ -220,6 +223,18 @@ describe('Authoring Tour steps', () => {
     await waitFor(() => expect(next).toBeEnabled());
     expect(note('World Name')).toBeInTheDocument();
     expect(within(tourBar()!).getByText(`Authoring Tour · 1 / ${TOTAL}`)).toBeInTheDocument();
+    expect(toastTexts(vi.mocked(toast.error))).toEqual([expect.stringContaining(SAVE_FAILED)]);
+  });
+
+  it('says the storage is full when the save runs out of space', async () => {
+    storeWorld.mockRejectedValueOnce(new DOMException('The quota has been exceeded.', 'QuotaExceededError'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await openTourOn(NAMED_WORLD);
+    fireEvent.click(within(note('World Name')).getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toastTexts(vi.mocked(toast.error))[0]).toContain(STORAGE_FULL);
+    expect(note('World Name')).toBeInTheDocument();
   });
 
   it('Back to Tour returns to the step tab and focuses its field', async () => {
@@ -278,17 +293,17 @@ describe('Authoring Tour mode, End Tour and resume', () => {
   it('shows Simple while it runs and gives back the author’s own mode after', async () => {
     await openTourOn(NEW_WORLD, 'advanced');
     expect(screen.queryByRole('tab', { name: 'Placeholders' })).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Simple' })).toHaveAttribute('data-state', 'on');
-    expect(screen.getByRole('radio', { name: 'Simple' })).toBeDisabled();
-    expect(screen.getByRole('radio', { name: 'Advanced' })).toBeDisabled();
+    expect(editorModeSelect()).toHaveTextContent('Simple');
+    expect(editorModeSelect()).toBeDisabled();
     expect(readEditorMode()).toBe('advanced');
-    // The locked switch takes no pointer events, so the tip sits on the box around it.
+    // The locked select takes no pointer events, so the tip sits on the box around it.
     await userEvent.hover(document.querySelector('[aria-label="Editor mode"]')!.parentElement!);
     expect(await screen.findByText('End the Authoring Tour to switch modes', { selector: 'div' })).toBeVisible();
 
     fireEvent.click(within(tourBar()!).getByRole('button', { name: 'End Tour' }));
     expect(await screen.findByRole('tab', { name: 'Placeholders' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Advanced' })).toBeEnabled();
+    expect(editorModeSelect()).toHaveTextContent('Advanced');
+    expect(editorModeSelect()).toBeEnabled();
     expect(readEditorMode()).toBe('advanced');
   });
 
@@ -300,7 +315,7 @@ describe('Authoring Tour mode, End Tour and resume', () => {
     first.unmount();
 
     renderWorldEditorBench(NEW_WORLD, 'simple');
-    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' }, { timeout: 2000 });
+    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' });
     expect(tourBar()).not.toBeInTheDocument();
   });
 
@@ -338,7 +353,7 @@ describe('Authoring Tour mode, End Tour and resume', () => {
     other.unmount();
 
     renderWorldEditorBench(NEW_WORLD, 'simple');
-    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' }, { timeout: 2000 });
+    await screen.findByRole('dialog', { name: 'Simple vs. Advanced' });
     expect(tourBar()).not.toBeInTheDocument();
   });
 });

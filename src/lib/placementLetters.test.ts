@@ -76,10 +76,12 @@ describe('sameLetters', () => {
 });
 
 describe('the document walk', () => {
-  it('runs entities, locations, traits, stats, dictionaries, then placeholder values', () => {
+  it('runs entities, locations, travel hints, traits, stats, dictionaries, then placeholder values', () => {
     const texts = worldPlacementTexts({
-      entities: [{ id: 'e', name: 'ent', aliases: ['ent-alias'], playerDescription: 'ent-pd' }],
+      entities: [{ id: 'e', name: 'ent', aliases: ['ent-alias'], playerDescription: 'ent-pd', pronouns: 'ent-pro',
+        relationships: [{ targetId: 'you', label: 'ent-rel' }] }],
       locations: [{ id: 'l', name: 'loc', aiSummary: 'loc-ais' }],
+      connections: [{ id: 'c', a: 'l', b: 'l2', aToB: { hint: 'hint-ab' }, bToA: { hint: 'hint-ba' } }],
       traits: [{ id: 't', name: 'trait', statChanges: [] }],
       traitGroups: [{ id: 'g', name: 'group', parentId: null }],
       stats: [{
@@ -92,7 +94,8 @@ describe('the document walk', () => {
       placeholders: [P('p', 'ph', ['value'])],
     });
     expect(texts).toEqual([
-      'ent', 'ent-alias', 'ent-pd', 'loc', 'loc-ais', 'trait', 'group', 'stat', 'stat-desc', 'band-lo', 'band-hi',
+      'ent', 'ent-alias', 'ent-pd', 'ent-pro', 'ent-rel', 'loc', 'loc-ais', 'hint-ab', 'hint-ba', 'trait', 'group', 'stat',
+      'stat-desc', 'band-lo', 'band-hi',
       'entry', 'k1', 'val', 'sys', 'value',
     ]);
   });
@@ -141,6 +144,31 @@ describe('the document walk', () => {
       ],
     });
     expect(texts).toEqual(['first', 'later', 't-first', 't-later', 'Origins']);
+  });
+
+  it('letters a whole world as the text walk does, and again after an edit replaces one record', () => {
+    const world = {
+      entities: [{ id: 'e', name: chip('town', 'p-ent') }],
+      locations: [{ id: 'l', name: chip('town', 'p-loc') }],
+      connections: [{ id: 'c', a: 'l', b: 'l2', aToB: { hint: `to ${chip('town', 'p-hint')}` } }],
+      traits: [{ id: 't', name: chip('town', 'p-trait'), statChanges: [] }],
+      stats: [{ id: 's', name: chip('town', 'p-stat'), type: 'number' as const, description: '', min: 0, max: 1, regen: 0, descriptors: [] }],
+      dictionaries: [{ id: 'd', name: 'book', entries: [{ id: 'en', name: chip('town', 'p-entry'), key: [], value: '' }] }],
+      worldOverview: { systemPrompt: chip('town', 'p-ov') } as never,
+      placeholders: [P('p', 'ph', [chip('town', 'p-value')]), TOWN],
+    };
+    const letters = worldPlacementLetters(world);
+    expect([...letters]).toEqual([...placementLetters(worldPlacementTexts(world))]);
+    expect(letters.get('p-hint')).toBe('C');
+    expect(letters.get('p-trait')).toBe('D');
+    expect(letters.get('p-value')).toBe('H');
+
+    // A chip added to the entity, which the walk already read once, moves every later letter.
+    const edited = { ...world, entities: [{ id: 'e', name: `${chip('town', 'p-ent')} ${chip('town', 'p-new')}` }] };
+    const after = worldPlacementLetters(edited);
+    expect(after.get('p-new')).toBe('B');
+    expect(after.get('p-value')).toBe('I');
+    expect([...after]).toEqual([...placementLetters(worldPlacementTexts(edited))]);
   });
 
   it('bundles the walk and the lettering for a world and for a library item', () => {
@@ -207,9 +235,9 @@ describe('labelPlaceholders', () => {
     expect(labelPlaceholders(`The ${chip('town', 't1')} Inn`, placeholders, { letters })).toBe('The {Town Name (A)} Inn');
   });
 
-  it('reads the Player Name chip by its label, bare when lone and braced when embedded', () => {
-    expect(labelPlaceholders('{{user}}', placeholders, { letters })).toBe('Player Name');
-    expect(labelPlaceholders('Friend of {{user}}', placeholders, { letters })).toBe('Friend of {Player Name}');
+  it('reads the Persona Name chip by its label, bare when lone and braced when embedded', () => {
+    expect(labelPlaceholders('{{user}}', placeholders, { letters })).toBe('Persona Name');
+    expect(labelPlaceholders('Friend of {{user}}', placeholders, { letters })).toBe('Friend of {Persona Name}');
   });
 
   it('shows a World chip by name, with no letter', () => {

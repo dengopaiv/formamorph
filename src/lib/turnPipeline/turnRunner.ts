@@ -1,4 +1,3 @@
-import type { AiStreamEvent } from '@/lib/aiRequest/aiStream';
 import type {
   TurnMaterial,
   TurnPassRecord,
@@ -16,8 +15,8 @@ import { withImageParts } from '@/lib/aiRequest/imageParts';
  * with a typed result rather than a thrown error.
  *
  * Both concurrency modes take the same path: a stage is either dispatched as one batch or one pass at a
- * time, and that is the only thing the knob decides. Narration stream events are forwarded verbatim, in
- * arrival order, so reveal pacing and TTS stay in the view.
+ * time, and that is the only thing the knob decides. What a request streams is the Request Transport's
+ * business, so reveal pacing and TTS stay outside the runner (ADR-0012).
  */
 
 /** What one dispatched request produced. Fan-out passes contribute one of these per subject. */
@@ -55,8 +54,6 @@ export type TurnResult =
 /** What the adapter is told beyond the request itself. */
 export interface TurnRequestContext {
   signal: AbortSignal;
-  /** Set for the narration only: the stream's events, as they arrive. */
-  onEvent?: (event: AiStreamEvent) => void;
 }
 
 /** The pipeline's one seam: production sends the real AI call, tests a fake, the harness a recorder. */
@@ -90,8 +87,6 @@ export interface TurnRunnerInput {
   request: TurnRequestAdapter;
   signal: AbortSignal;
   advance?: TurnAdvance;
-  /** The narration stream's events, forwarded in the order the stream emitted them. */
-  onNarrationEvent?: (event: AiStreamEvent) => void;
   /**
    * One request has answered — called the moment it settles, not when its stage does, so a caller waiting on
    * a single pass inside a batch is released by that pass rather than by the slowest of its siblings.
@@ -111,14 +106,14 @@ interface PlannedRequest {
 
 /**
  * The post-narration passes are the only ones the concurrency knob batches: they depend on the narration
- * and on nothing from each other. Batched, one failure is absorbed and the drainers backfill it later;
+ * and on nothing from each other. Batched, one failure is absorbed and the Background Pass Queue backfills it later;
  * dispatched one at a time, a failure ends the turn.
  */
 const isBatched = (stage: TurnStage, plan: TurnPlan): boolean =>
   stage === 'postNarration' && plan.concurrency === 'parallel';
 
 export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
-  const { plan, request, signal, advance, onNarrationEvent, onPassSettled } = input;
+  const { plan, request, signal, advance, onPassSettled } = input;
   let material: TurnMaterial = { ...input.material };
   const passes: TurnPassOutcome[] = [];
   // The request that ended the turn, recorded where it fails — so nothing downstream has to read anything
@@ -152,10 +147,7 @@ export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
       : request;
 
   const send = (planned: PlannedRequest): Promise<string> => {
-    const answer = request(planned.request, {
-      signal,
-      ...(planned.pass.stage === 'narration' && onNarrationEvent ? { onEvent: onNarrationEvent } : {}),
-    });
+    const answer = request(planned.request, { signal });
     return answer.then(
       (raw) => {
         onPassSettled?.(planned.pass.id, { ok: true });
@@ -218,7 +210,7 @@ export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
         const settled = await Promise.allSettled(planned.map(send));
         if (signal.aborted) return { status: 'aborted', run: run() };
         // A failed request contributes an empty outcome rather than ending the turn — its feature is either
-        // backfilled by an idle drainer or simply absent this turn.
+        // backfilled by the Background Pass Queue or simply absent this turn.
         const batch = planned.map((entry, i) => {
           const answer = settled[i];
           return answer.status === 'fulfilled' ? outcomeOf(entry, answer.value) : failedOutcome(entry, answer.reason);
@@ -232,14 +224,40 @@ export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
         continue;
       }
 
+      // A companion goes out with the stage's first request when parallel, and right after the pass before it
+      // when serial. Its failures are dropped, so it never ends the turn.
+      const parallel = plan.concurrency === 'parallel';
+      const companionPlans = stagePasses.filter((pass) => pass.companion)
+        .map((pass) => ({ pass, planned: parallel ? requestsFor(pass) : [] }));
+      let companionAnswers: Promise<PromiseSettledResult<string>[]>[] | null = null;
+      const startCompanions = () => {
+        companionAnswers ??= companionPlans.map(({ planned }) => Promise.allSettled(planned.map(send)));
+        return companionAnswers;
+      };
+      /** One companion's settled answers as outcomes, a failure as an empty one. */
+      const companionOutcomes = (planned: PlannedRequest[], settled: PromiseSettledResult<string>[]) =>
+        planned.map((entry, j) => {
+          const answer = settled[j];
+          return answer.status === 'fulfilled' ? outcomeOf(entry, answer.value) : failedOutcome(entry, answer.reason);
+        });
+
       // One pass at a time. A fan-out pass still sends its subjects together when the knob says parallel —
       // they are independent of each other, and only the pass boundary is sequential.
       for (const pass of stagePasses) {
+        if (pass.companion && parallel) continue;
         const planned = requestsFor(pass);
         if (planned.length === 0) continue;
         const outcomes: TurnPassOutcome[] = [];
-        if (plan.concurrency === 'parallel') {
-          const answers = await Promise.all(planned.map(sendOrEndTurn));
+        if (pass.companion) {
+          for (const entry of planned) {
+            const [settled] = await Promise.allSettled([send(entry)]);
+            if (signal.aborted) return { status: 'aborted', run: run() };
+            outcomes.push(...companionOutcomes([entry], [settled]));
+          }
+        } else if (parallel) {
+          const answered = Promise.all(planned.map(sendOrEndTurn));
+          startCompanions();
+          const answers = await answered;
           if (signal.aborted) return { status: 'aborted', run: run() };
           outcomes.push(...planned.map((entry, i) => outcomeOf(entry, answers[i])));
         } else {
@@ -260,6 +278,15 @@ export async function runTurn(input: TurnRunnerInput): Promise<TurnResult> {
           material = { ...material, narration };
         }
         await applyAdvance({ at: 'pass', outcomes });
+      }
+
+      if (!parallel) continue;
+      for (const [i, { planned }] of companionPlans.entries()) {
+        const settled = await startCompanions()[i];
+        if (signal.aborted) return { status: 'aborted', run: run() };
+        const outcomes = companionOutcomes(planned, settled);
+        passes.push(...outcomes);
+        if (outcomes.length > 0) await applyAdvance({ at: 'pass', outcomes });
       }
     }
   } catch (error) {

@@ -1,4 +1,6 @@
-import { BookOpen, Earth, PersonStanding, ScrollText, User, type LucideIcon } from 'lucide-react';
+import { ScrollText, type LucideIcon } from 'lucide-react';
+
+import { ELEMENT_ICONS } from '@/lib/elementIcons';
 
 /**
  * What a community listing can be. Mirrors the server's `config/kinds` — keep the two in step.
@@ -50,15 +52,17 @@ export const KIND_LABELS: Record<CatalogKind, { one: string; many: string }> = {
   prompt: { one: 'Prompt', many: 'Prompts' },
 };
 
-/** The icon each kind wears everywhere: the browser's sections, profile tabs, and a prompt's card art. */
+/** The icon one item of each kind wears, such as a prompt's card art. */
 export const KIND_ICONS: Record<CatalogKind, LucideIcon> = {
-  world: Earth,
-  entity: User,
-  dictionary: BookOpen,
-  // The same figure the local library's Avatars tab wears.
-  model: PersonStanding,
+  world: ELEMENT_ICONS.world,
+  entity: ELEMENT_ICONS.entity,
+  dictionary: ELEMENT_ICONS.dictionary,
+  model: ELEMENT_ICONS.avatar,
   prompt: ScrollText,
 };
+
+/** The icon a tab or section listing many of a kind wears: the browser's sections and profile tabs. */
+export const KIND_TAB_ICONS: Record<CatalogKind, LucideIcon> = { ...KIND_ICONS, entity: ELEMENT_ICONS.entities };
 
 /** Whether a kind's listings carry cover art. A prompt shows its kind icon instead. */
 export const kindHasThumbnail = (kind: CatalogKind): boolean => kind !== 'prompt';

@@ -9,6 +9,8 @@ import {
   buildBandedHistory,
   importanceFactors,
   IMPORTANCE_SPREAD,
+  bandCostTracker,
+  bandExchangeCost,
   type BandTurn,
 } from './turnBanding';
 import { outputReserve } from './outputLength';
@@ -769,5 +771,110 @@ describe('buildVerbatimHistory anatomy runs', () => {
     expect(out.runs.slice(2).flat().map((r) => r.contextLabel)).toEqual([
       'past-action', 'past-narration', 'past-action', 'past-narration',
     ]);
+  });
+});
+
+describe('Strip Links And Images in the history', () => {
+  const RECAP = 'Recap the story so far.';
+  const RECALL = 'Recall the earlier scene.';
+  const LINKED = 'The sign said [Welcome](https://a.test/w) ![crest](https://a.test/c.png) over the door.';
+  const PLAIN = 'The sign said Welcome over the door.';
+  const base = {
+    contextWindow: WIDE, promptTokens: 0, maxTokens: 0, verbatimFloor: 1, rehydrateCap: WIDE,
+    actionEntities: [] as string[], keywords: [] as string[], recapPrompt: RECAP, rehydratePrompt: RECALL,
+  };
+  const turns = () =>
+    parseTurns([
+      ...pair('a1', { turnId: 't1', narration: LINKED, summary: 'Saw the [gate](https://a.test/g) ![x](https://a.test/x.png).' }),
+      ...pair('a2', { turnId: 't2', narration: 'two', summary: 's2' }),
+      ...pair('a3', { turnId: 't3', narration: LINKED, summary: 's3' }),
+    ]);
+
+  it('sends the floor turn, the recap digests and a recalled scene as plain text', () => {
+    const recalled = buildBandedHistory({ ...base, turns: turns(), semanticRehydrate: ['t1'], stripMedia: true });
+    expect(recalled.messages.map((m) => m.content)).toEqual([RECAP, 's2', RECALL, PLAIN, 'a3', PLAIN]);
+    const banded = buildBandedHistory({ ...base, turns: turns(), stripMedia: true });
+    expect(banded.messages[1].content).toBe('Saw the gate. s2');
+    expect(banded.recap).toBe('Earlier events:\nSaw the gate.\ns2');
+  });
+
+  it('sends the original text with the rule off', () => {
+    const { messages } = buildBandedHistory({ ...base, turns: turns(), semanticRehydrate: ['t1'] });
+    expect(messages.map((m) => m.content)).toEqual([RECAP, 's2', RECALL, LINKED, 'a3', LINKED]);
+  });
+
+  it('leaves the player action and a player note as written', () => {
+    const noted = parseTurns(pair('Open [this](https://a.test)', { turnId: 't1', narration: LINKED }));
+    const { messages } = buildBandedHistory({
+      ...base, turns: noted, stripMedia: true,
+      notes: [{ id: 'n1', text: 'See [the map](https://a.test/m)', anchorTurn: 1 }],
+    });
+    expect(messages.map((m) => m.content)).toEqual([
+      RECAP, 'See [the map](https://a.test/m)', 'Open [this](https://a.test)', PLAIN,
+    ]);
+  });
+
+  it('strips the verbatim history when digests are off', () => {
+    const { messages } = buildVerbatimHistory(turns(), WIDE, 0, 0, [], '', true);
+    expect(messages.map((m) => m.content)).toEqual(['a1', PLAIN, 'a2', 'two', 'a3', PLAIN]);
+  });
+});
+
+describe('bandCostTracker', () => {
+  const RECAP = 'Recap the "story" so far.';
+  const summaries = ['plain', 'quote " and \\ slash', 'line\nbreak\ttab', 'café ☕ ünïcode', '\u0001 control', 'emoji 🐉 inside', '  padded  '];
+  const turns = Array.from({ length: 40 }, (_, i) => bandTurn(i * 2 + 1, { summary: summaries[i % summaries.length] }));
+  const notes = [{ id: 'n1', text: 'a "note"', anchorTurn: 6 }, { id: 'n2', text: '', anchorTurn: 9 }];
+  const stamp = (pos: number) => (pos % 3 ? `[Day ${pos} — "dusk"]` : '');
+
+  it.each([
+    ['plain', undefined, [], undefined],
+    ['with a now-line', 'Now: the "dock".', [], undefined],
+    ['with notes and stamps', 'Now: here.', notes, stamp],
+  ] as const)('matches a full recount after every drop, %s', (_, nowLine, withNotes, withStamp) => {
+    let current = [...turns];
+    const tracker = bandCostTracker(current, RECAP, nowLine, [...withNotes], withStamp);
+    expect(tracker.cost()).toBe(bandExchangeCost(current, RECAP, nowLine, [...withNotes], withStamp));
+    // Drop from the front and the middle in turn, as the oldest-first and ranked trims do.
+    for (let step = 0; current.length > 0; step++) {
+      const at = step % 2 ? Math.floor(current.length / 2) : 0;
+      tracker.remove(current[at]);
+      current = current.filter((_t, i) => i !== at);
+      expect(tracker.cost()).toBe(bandExchangeCost(current, RECAP, nowLine, [...withNotes], withStamp));
+    }
+  });
+
+  it('matches a full recount when pieces end on lone surrogates', () => {
+    const high = String.fromCharCode(0xd83d);
+    const low = String.fromCharCode(0xdc09);
+    let current = [bandTurn(1, { summary: `high ${high}` }), bandTurn(3, { summary: `${low} low` }), bandTurn(5, { summary: 'tail' })];
+    const tracker = bandCostTracker(current, RECAP, undefined, [], undefined);
+    expect(tracker.cost()).toBe(bandExchangeCost(current, RECAP, undefined, [], undefined));
+    tracker.remove(current[2]);
+    current = current.slice(0, 2);
+    expect(tracker.cost()).toBe(bandExchangeCost(current, RECAP, undefined, [], undefined));
+  });
+
+  it('keeps trimming a long band fast enough to run on every render', () => {
+    const long = Array.from({ length: 3000 }, (_, i) => bandTurn(i, { summary: `summary of turn ${i} `.repeat(4) }));
+    const timeMs = (contextWindow: number) => {
+      const started = performance.now();
+      buildBandedHistory({ turns: long, contextWindow, promptTokens: 0, maxTokens: 0, verbatimFloor: 2, rehydrateCap: 0, keywords: [], actionEntities: [], recapPrompt: RECAP });
+      return performance.now() - started;
+    };
+    const median = (times: number[]) => [...times].sort((a, b) => a - b)[Math.floor(times.length / 2)];
+    // The same band trimmed to 4,096 tokens and kept whole take turns, so a load spike hits both. Rebuilding
+    // the band per drop makes the trim cost hundreds of times the build.
+    const [trim, whole] = [4096, 10_000_000];
+    timeMs(trim);
+    timeMs(whole);
+    const times: [number[], number[]] = [[], []];
+    for (let run = 0; run < 7; run++) {
+      times[0].push(timeMs(trim));
+      times[1].push(timeMs(whole));
+    }
+    const [trimmed, kept] = times.map(median);
+    console.info(`band of 3,000 turns: trimmed ${trimmed.toFixed(1)} ms, kept whole ${kept.toFixed(1)} ms`);
+    expect(trimmed).toBeLessThan(9 * kept);
   });
 });

@@ -1,11 +1,13 @@
 import { randomUUID } from "@/lib/uuid";
 import type {
-  BlueprintOverride, Entity, Opening, Placeholder, PlaceholderPin, LibraryDetails, RequirementBearer, StatChange, Trait, TraitGroup,
-  TraitLink, TraitLinkOverrides, TraitRequirement, TraitStatToggle,
+  Base64Data, BlueprintOverride, VrmPick, WorldVrmStore, Entity, GalleryImage, Opening, Placeholder, PlaceholderPin, LibraryDetails, RequirementOwner, Stat, StatChange, StatComparison, StatGroup,
+  StatLink, Trait, TraitGroup,
+  TraitLink, TraitLinkOverrides, TraitRequirement, TraitRequirementRow, TraitStatToggle,
 } from '@/types';
 import { readLibraryDetails } from './contentAuthor';
 import { remintOpenings } from './openings';
-import { APP_VERSION, WORLD_FILE_KIND, SAVE_FILE_KIND, migrateCarriedPlaceholders } from './version';
+import { migrateEntityScriptText } from './scriptTextMigration';
+import { APP_VERSION, WORLD_FILE_KIND, SAVE_FILE_KIND, conditionWithOwnerKey, globalRowTarget, migrateCarriedPlaceholders, migrateEntityStatFields, migrateEntityStatScripts } from './version';
 import { DICTIONARY_FILE_KIND } from './dictionaryFile';
 import type { WorldAssociation } from './compatibleWorlds';
 import { readComponentFileLinks, type ComponentFileLinks, type ComponentFileSource } from './componentFileLinks';
@@ -16,11 +18,15 @@ import type { Dictionary } from '@/types';
 import { embedEntityCard, readEntityCard } from './entityCard';
 import { readTavernCard, readTavernJson } from './tavernCard';
 import { IMAGE_CAPS, bytesToDataUrl, dataUrlMime, measureDataUrl, optimizeImageDataUrl, optimizeToWebpDataUrl } from './imageOptim';
-import { entityImages, primaryImage } from './entityImages';
+import { primaryImage } from './entityImages';
 import { fetchAsDataUrl, isRemoteImage } from './imageSource';
 import { morphCardImage } from './morphArtCanvas';
-import { portableOwnedTraits, type TraitWorld } from './portableTraits';
+import { portableOwnedStats, type OwnedStatFields } from './portableStats';
+import { portableImages, portableOwnedTraits, type TraitWorld } from './portableTraits';
 import { carriedBlueprints } from './blueprintTravel';
+import { notFlag } from './requirementRows';
+import { daypartSet, isDaypart } from './gameClock';
+import { adoptCarriedVrm, withCarriedVrm, type CarriedVrm, type PortableEntity } from './entityVrmCarry';
 
 /** Discriminator identifying a standalone character card (vs. a world, save, or dictionary file). */
 export const ENTITY_FILE_KIND = 'entity' as const;
@@ -42,9 +48,12 @@ export interface EntityCardData {
   /** Listing tags. Distinct from `imageTags`, which is the booru string for the image generator. */
   tags?: string[];
   imageTags?: string;
-  /** Gallery slots past the first, as data-URLs. The primary is the card's own pixels, so only these need
-   *  carrying in the text — which is also why a multi-picture card is a much bigger file. */
-  extraImages?: string[];
+  /** Gallery slots past the first. The primary is the card's own pixels, so only these need carrying in the
+   *  text — which is also why a multi-picture card is a much bigger file. A card written before Visibility
+   *  rules holds data-URL strings here. */
+  extraImages?: GalleryImage[];
+  /** The primary's Visibility rule, which has no other home since the primary travels as the card's pixels. */
+  primaryImageRequires?: TraitRequirementRow[];
   /** The entity's own placeholders, as they are (see lib/placeholders). A card with no
    *  `sharedPlaceholders` carries everything its chips use here, and reads it all as owned. */
   placeholders?: Placeholder[];
@@ -61,10 +70,19 @@ export interface EntityCardData {
   traitGroups?: TraitGroup[];
   /** The entity's links, each storing its original's name so a receiving world can bind it. */
   traitLinks?: TraitLink[];
+  /** The entity's owned stats and stat groups (see lib/portableStats). */
+  stats?: Stat[];
+  statGroups?: StatGroup[];
+  /** The entity's stat links, each storing its Blueprint's name so a receiving world can bind it. */
+  statLinks?: StatLink[];
   /** Where this character came from, so an importer can reconnect it (see lib/componentFileLinks). */
   source?: ComponentFileSource;
   /** The worlds this character is offered for, by listing id. Never the worlds themselves. */
   associations?: WorldAssociation[];
+  /** The entity's Avatar pick. A library or world pick names an id on the author's device; `vrm` is the file. */
+  vrmPick?: VrmPick;
+  /** The picked Avatar's file. Import adds it to the Avatar library and points the pick at that record. */
+  vrm?: CarriedVrm;
 }
 
 /** The card's text fields, stamped with the current app version. `model`/`sound` are intentionally dropped;
@@ -74,7 +92,7 @@ export interface EntityCardData {
  *  about its source and the worlds it suits; a card written without it says nothing about either. `world` is
  *  the world a world entity's requirements point into, for their names. */
 export function buildEntityCardData(
-  entity: Entity,
+  entity: PortableEntity,
   available: Placeholder[] = carriedPlaceholders(entity),
   links: ComponentFileLinks = {},
   libraryDetails?: LibraryDetails,
@@ -86,7 +104,7 @@ export function buildEntityCardData(
   // The blueprints' values, and the copies' reworded ones, reach shared placeholders too.
   const reworded = owned.flatMap((p) => Object.values(p.valueOverrides ?? {}).flatMap((o) => (o.text ? [o.text.value] : [])));
   const shared = portablePlaceholders(sharedPlaceholdersUsed([...chipTexts(entity), ...reworded], [...owned, ...blueprints], available));
-  const extras = entityImages(entity).slice(1);
+  const [primary, ...extras] = portableImages(entity, world);
   return {
     formamorphKind: ENTITY_FILE_KIND,
     version: APP_VERSION,
@@ -102,6 +120,7 @@ export function buildEntityCardData(
     ...(entity.tags?.length ? { tags: entity.tags } : {}),
     ...(entity.imageTags ? { imageTags: entity.imageTags } : {}),
     ...(extras.length ? { extraImages: extras } : {}),
+    ...(primary?.requires?.length ? { primaryImageRequires: primary.requires } : {}),
     ...(owned.length ? { placeholders: owned } : {}),
     ...(shared.length ? { sharedPlaceholders: shared } : {}),
     ...(blueprints.length ? { blueprints } : {}),
@@ -109,17 +128,35 @@ export function buildEntityCardData(
     ...(entity.openings?.length && entity.openingWeights && Object.keys(entity.openingWeights).length
       ? { openingWeights: entity.openingWeights } : {}),
     ...portableOwnedTraits(entity, world),
+    ...portableOwnedStats(entity, world),
     ...(links.source ? { source: links.source } : {}),
     ...(links.associations?.length ? { associations: links.associations } : {}),
+    ...(entity.vrmPick ? { vrmPick: entity.vrmPick } : {}),
+    ...(entity.vrm ? { vrm: entity.vrm } : {}),
   };
 }
 
+/** A card's Avatar pick and carried file as read, not yet adopted into the Avatar library. */
+export interface CardVrmFields {
+  vrmPick?: unknown;
+  vrm?: unknown;
+}
+
+const cardVrmFields = (raw: unknown): CardVrmFields => {
+  const { vrmPick, vrm } = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  return { vrmPick, vrm };
+};
+
+/** The parsed entity with the card's Avatar pick adopted into the Avatar library. */
+export const adoptCardVrm = (entity: Entity, fields: CardVrmFields): Promise<Entity> =>
+  adoptCarriedVrm<Entity>({ ...entity, ...fields });
+
 /**
  * Parse an embedded card payload into a NEW entity (fresh id, so importing the same card twice never collides).
- * The gallery comes back holding only the carried extras — the importer unshifts the card's own pixels onto the
- * front as the primary. Rejects world/save/dictionary payloads with a targeted message.
+ * `pixels`, the card's own picture, leads the gallery as the primary with the card's primary rule; without it
+ * the gallery holds only the carried extras. Rejects world/save/dictionary payloads with a targeted message.
  */
-export function parseEntityCardData(raw: unknown): Entity {
+export function parseEntityCardData(raw: unknown, pixels?: Base64Data): Entity {
   if (!raw || typeof raw !== 'object') throw new Error('Not a valid character card.');
   const obj = raw as Record<string, unknown>;
   const kind = obj.formamorphKind;
@@ -133,9 +170,9 @@ export function parseEntityCardData(raw: unknown): Entity {
   const tags = Array.isArray(obj.tags)
     ? (obj.tags as unknown[]).filter((t): t is string => typeof t === 'string' && !!t.trim())
     : [];
-  const extras = Array.isArray(obj.extraImages)
-    ? (obj.extraImages as unknown[]).filter((u): u is string => typeof u === 'string' && !!u)
-    : [];
+  const extras = Array.isArray(obj.extraImages) ? (obj.extraImages as unknown[]).flatMap(cardImage) : [];
+  const primaryRows = Array.isArray(obj.primaryImageRequires) ? cardRows(obj.primaryImageRequires) : [];
+  const images = pixels ? [{ data: pixels, ...(primaryRows.length ? { requires: primaryRows } : {}) }, ...extras] : extras;
   const openings = Array.isArray(obj.openings) ? (obj.openings as unknown[]).flatMap(cardOpening) : [];
   const weights = obj.openingWeights && typeof obj.openingWeights === 'object' && !Array.isArray(obj.openingWeights)
     ? Object.fromEntries(Object.entries(obj.openingWeights as Record<string, unknown>)
@@ -154,7 +191,7 @@ export function parseEntityCardData(raw: unknown): Entity {
     ...(typeof obj.aiSummary === 'string' && obj.aiSummary ? { aiSummary: obj.aiSummary } : {}),
     ...(tags.length ? { tags } : {}),
     ...(typeof obj.imageTags === 'string' && obj.imageTags ? { imageTags: obj.imageTags } : {}),
-    ...(extras.length ? { images: extras } : {}),
+    ...(images.length ? { images } : {}),
     // Carried placeholders ride along: the owned ones stay the entity's when it is added to a world, the shared
     // ones merge into the world's list (see `adoptEntityPlaceholders`).
     ...(Array.isArray(obj.placeholders) ? { placeholders: migrateCarriedPlaceholders(obj.placeholders) } : {}),
@@ -163,6 +200,7 @@ export function parseEntityCardData(raw: unknown): Entity {
     ...(carried.openings ? { openings: carried.openings } : {}),
     ...(carried.openingWeights ? { openingWeights: carried.openingWeights } : {}),
     ...cardOwnedTraits(obj),
+    ...cardOwnedStats(obj),
   };
 }
 
@@ -172,17 +210,49 @@ const hasIdAndName = (v: unknown): v is Record<string, unknown> & { id: string; 
 
 const nameOf = (raw: Record<string, unknown>) => (typeof raw.name === 'string' && raw.name ? { name: raw.name } : {});
 
-function cardBearer(raw: unknown): { bearer?: RequirementBearer } {
+function cardOwner(raw: unknown): { owner?: RequirementOwner } {
   if (!isRecord(raw)) return {};
-  if (raw.kind === 'you') return { bearer: { kind: 'you' } };
-  return raw.kind === 'entity' && typeof raw.id === 'string' ? { bearer: { kind: 'entity', id: raw.id, ...nameOf(raw) } } : {};
+  if (raw.kind === 'you') return { owner: { kind: 'you' } };
+  return raw.kind === 'entity' && typeof raw.id === 'string' ? { owner: { kind: 'entity', id: raw.id, ...nameOf(raw) } } : {};
 }
 
-function cardRequirement(raw: unknown): TraitRequirement[] {
+// A record, so a new operator fails the compile here until the card reads it.
+const STAT_COMPARISONS: Record<StatComparison, true> = { '>': true, '<': true, '>=': true, '<=': true, '=': true, '≠': true };
+const isStatComparison = (v: unknown): v is StatComparison => typeof v === 'string' && Object.hasOwn(STAT_COMPARISONS, v);
+
+function cardRequirement(condition: unknown): TraitRequirement[] {
+  const raw = conditionWithOwnerKey(condition);
+  if (isRecord(raw) && raw.kind === 'time') {
+    const dayparts = Array.isArray(raw.dayparts) ? daypartSet(raw.dayparts.filter(isDaypart)) : [];
+    return dayparts.length ? [{ kind: 'time', dayparts }] : [];
+  }
   if (!isRecord(raw) || typeof raw.id !== 'string') return [];
-  if (raw.kind === 'playingAs') return [{ kind: raw.kind, id: raw.id, ...nameOf(raw) }];
+  const not = notFlag(raw.not);
+  if (raw.kind === 'playingAs') return [{ kind: raw.kind, id: raw.id, ...nameOf(raw), ...not }];
+  if (raw.kind === 'stat') {
+    const { operator, value, unit } = raw;
+    if (!isStatComparison(operator) || typeof value !== 'number' || !Number.isFinite(value) || (unit !== 'raw' && unit !== 'percent')) return [];
+    return [{ kind: 'stat', id: raw.id, ...nameOf(raw), ...cardOwner(raw.owner), operator, value, unit, ...not }];
+  }
   if (raw.kind !== 'trait' && raw.kind !== 'group') return [];
-  return [{ kind: raw.kind, id: raw.id, ...nameOf(raw), ...cardBearer(raw.bearer) }];
+  return [{ kind: raw.kind, id: raw.id, ...nameOf(raw), ...cardOwner(raw.owner), ...not }];
+}
+
+/** One carried gallery slot: a data-URL string, or an image whose rule reads as the card's rows do. */
+function cardImage(raw: unknown): GalleryImage[] {
+  if (typeof raw === 'string') return raw ? [{ data: raw }] : [];
+  if (!isRecord(raw) || typeof raw.data !== 'string' || !raw.data) return [];
+  const requires = Array.isArray(raw.requires) ? cardRows(raw.requires) : [];
+  return [{ data: raw.data, ...(requires.length ? { requires } : {}) }];
+}
+
+/** The card's Requirement Rows. A bare Condition reads as a row of its own; a row left with no Condition is
+ *  dropped. */
+function cardRows(raw: unknown[]): TraitRequirementRow[] {
+  return raw.flatMap((entry) => {
+    const all = isRecord(entry) && Array.isArray(entry.all) ? entry.all.flatMap(cardRequirement) : cardRequirement(entry);
+    return all.length ? [{ all }] : [];
+  });
 }
 
 /** The record's entries that `read` accepts; absent when none is left. */
@@ -200,17 +270,24 @@ const cardPins = (raw: unknown): PlaceholderPin[] => (Array.isArray(raw) ? raw :
     ? [{ placeholderId: p.placeholderId, value: p.value, ...(typeof p.valueId === 'string' ? { valueId: p.valueId } : {}) }]
     : []));
 
+/** A row's target as the card stores it; a legacy `player` reads as `global`. */
+const rowTarget = (row: Record<string, unknown>): { target?: 'global' } => {
+  const target = globalRowTarget(row.target);
+  return target ? { target } : {};
+};
+
 const cardStatChanges = (raw: unknown): StatChange[] => (Array.isArray(raw) ? raw : []).flatMap((c): StatChange[] =>
   (isRecord(c) && typeof c.statId === 'string' && typeof c.value === 'number'
     ? [{
       statId: c.statId, value: c.value,
       ...(c.type === 'min' || c.type === 'max' || c.type === 'starting' || c.type === 'regen' ? { type: c.type } : {}),
       ...(typeof c.interval === 'string' ? { interval: c.interval } : {}),
+      ...rowTarget(c),
     }]
     : []));
 
 const cardStatToggles = (raw: unknown): TraitStatToggle[] => (Array.isArray(raw) ? raw : []).flatMap((t): TraitStatToggle[] =>
-  (isRecord(t) && typeof t.statId === 'string' && typeof t.enabled === 'boolean' ? [{ statId: t.statId, enabled: t.enabled }] : []));
+  (isRecord(t) && typeof t.statId === 'string' && typeof t.enabled === 'boolean' ? [{ statId: t.statId, enabled: t.enabled, ...rowTarget(t) }] : []));
 
 /** One override as the card stores it, both sides read through `read`; undefined when either side is not one. */
 function cardOverride<V>(raw: unknown, read: (v: unknown) => V | undefined): BlueprintOverride<V> | undefined {
@@ -223,7 +300,7 @@ function cardOverride<V>(raw: unknown, read: (v: unknown) => V | undefined): Blu
 const cardBoolean = (v: unknown) => (typeof v === 'boolean' ? v : undefined);
 const cardMode = (v: unknown) => (v === 'optional' || v === 'alwaysOn' || v === 'hidden' ? v : undefined);
 const cardList = <T>(read: (raw: unknown[]) => T[]) => (v: unknown) => (Array.isArray(v) ? read(v) : undefined);
-const cardRequirements = cardList((v) => v.flatMap(cardRequirement));
+const cardRequirements = cardList(cardRows);
 
 /** A link's overrides on one trait, each field read in its own shape; undefined when none reads. */
 function cardLinkOverrides(raw: unknown): TraitLinkOverrides | undefined {
@@ -263,7 +340,7 @@ function cardLink(raw: unknown): TraitLink[] {
 /** The card's owned traits, groups and links. Stat effects are read as stored; a stat id the world lacks does nothing. */
 function cardOwnedTraits(obj: Record<string, unknown>): Pick<Entity, 'traits' | 'traitGroups' | 'traitLinks'> {
   const traits: Trait[] = (Array.isArray(obj.traits) ? obj.traits : []).filter(hasIdAndName).map((t) => {
-    const requires = Array.isArray(t.requires) ? t.requires.flatMap(cardRequirement) : [];
+    const requires = Array.isArray(t.requires) ? cardRows(t.requires) : [];
     const pins = cardPins(t.placeholderPins);
     const statToggles = cardStatToggles(t.statToggles);
     return {
@@ -287,6 +364,7 @@ function cardOwnedTraits(obj: Record<string, unknown>): Pick<Entity, 'traits' | 
     parentId: typeof g.parentId === 'string' ? g.parentId : null,
     ...(typeof g.playerDescription === 'string' ? { playerDescription: g.playerDescription } : {}),
     ...(typeof g.aiDescription === 'string' ? { aiDescription: g.aiDescription } : {}),
+    ...(g.aiVisible === false ? { aiVisible: false } : {}),
     ...(typeof g.order === 'number' ? { order: g.order } : {}),
     ...(typeof g.minPicks === 'number' ? { minPicks: g.minPicks } : {}),
     ...(typeof g.maxPicks === 'number' ? { maxPicks: g.maxPicks } : {}),
@@ -297,6 +375,14 @@ function cardOwnedTraits(obj: Record<string, unknown>): Pick<Entity, 'traits' | 
     ...(traitGroups.length ? { traitGroups } : {}),
     ...(traitLinks.length ? { traitLinks } : {}),
   };
+}
+
+/** The card's owned stats, groups and links, each list kept to the records it can hold. A card with none reads
+ *  as an entity with none. */
+function cardOwnedStats(obj: Record<string, unknown>): OwnedStatFields {
+  const { stats, statGroups, statLinks } = obj;
+  const { stats: s, statGroups: g, statLinks: l } = migrateEntityScriptText(migrateEntityStatScripts(migrateEntityStatFields({ stats, statGroups, statLinks }))) as OwnedStatFields;
+  return { ...(s ? { stats: s } : {}), ...(g ? { statGroups: g } : {}), ...(l ? { statLinks: l } : {}) };
 }
 
 /** One card row as an opening, or nothing when it is not one. An unknown kind reads as a Player Action. The
@@ -314,10 +400,12 @@ function cardOpening(raw: unknown): Opening[] {
 
 /**
  * Encode an entity as a shareable WebP character card: its portrait carrying the text fields in a metadata chunk.
- * Entities without a portrait get Morph art so export always yields a valid image.
+ * Entities without a portrait get Morph art so export always yields a valid image. The card carries the picked
+ * Avatar's file; `vrmStore` is the world's store, for a world entity.
  */
 export async function exportEntityCard(
-  entity: Entity, available?: Placeholder[], links: ComponentFileLinks = {}, libraryDetails?: LibraryDetails, world?: TraitWorld,
+  entity: PortableEntity, available?: Placeholder[], links: ComponentFileLinks = {}, libraryDetails?: LibraryDetails, world?: TraitWorld,
+  vrmStore?: WorldVrmStore,
 ): Promise<Blob> {
   // The art follows the listing, else the library item, so a card matches the tile it came from.
   let imageUrl = primaryImage(entity) || await morphCardImage(
@@ -334,7 +422,7 @@ export async function exportEntityCard(
   if (dataUrlMime(imageUrl) !== 'image/webp') throw new Error('Could not encode the portrait as WebP.');
   const { w, h } = await measureDataUrl(imageUrl);
   const bytes = new Uint8Array(await (await fetch(imageUrl)).arrayBuffer());
-  const card = embedEntityCard(bytes, JSON.stringify(buildEntityCardData(entity, available, links, libraryDetails, world)), { w, h });
+  const card = embedEntityCard(bytes, JSON.stringify(buildEntityCardData(await withCarriedVrm(entity, vrmStore), available, links, libraryDetails, world)), { w, h });
   return new Blob([card], { type: 'image/webp' });
 }
 
@@ -349,18 +437,18 @@ export async function importEntityCard(file: File): Promise<Entity> {
   } catch {
     throw new Error('This character card is corrupted.');
   }
-  const entity = parseEntityCardData(raw);
-  entity.images = [bytesToDataUrl(bytes, 'image/webp'), ...(entity.images ?? [])];
-  return entity;
+  return adoptCardVrm(parseEntityCardData(raw, bytesToDataUrl(bytes, 'image/webp')), cardVrmFields(raw));
 }
 
 /**
  * Import a WebP, SillyTavern PNG, or SillyTavern JSON card with optional lorebook and library metadata.
- * Image cards use their pixels as the portrait; JSON cards keep their avatar URL.
+ * Image cards use their pixels as the portrait; JSON cards keep their avatar URL. A Formamorph card adopts its
+ * Avatar into the Avatar library, unless `deferVrm` asks for its fields back in `vrm` for `adoptCardVrm` later.
  */
 export async function importCharacterFile(
   file: File,
-): Promise<{ entity: Entity; book: Dictionary | null; links: ComponentFileLinks; libraryDetails?: LibraryDetails }> {
+  { deferVrm = false }: { deferVrm?: boolean } = {},
+): Promise<{ entity: Entity; book: Dictionary | null; links: ComponentFileLinks; libraryDetails?: LibraryDetails; vrm?: CardVrmFields }> {
   if (file.type === 'application/json' || /\.json$/i.test(file.name)) {
     const tavern = readTavernJson(await file.text());
     if (!tavern) throw new Error("This JSON isn't a SillyTavern character card.");
@@ -376,15 +464,17 @@ export async function importCharacterFile(
     } catch {
       throw new Error('This character card is corrupted.');
     }
-    const entity = parseEntityCardData(raw);
-    entity.images = [bytesToDataUrl(bytes, 'image/webp'), ...(entity.images ?? [])];
-    return { entity, book: null, links: readComponentFileLinks(raw), libraryDetails: readLibraryDetails(raw) };
+    const parsed = parseEntityCardData(raw, bytesToDataUrl(bytes, 'image/webp'));
+    const read = { book: null, links: readComponentFileLinks(raw), libraryDetails: readLibraryDetails(raw) };
+    return deferVrm
+      ? { entity: parsed, vrm: cardVrmFields(raw), ...read }
+      : { entity: await adoptCardVrm(parsed, cardVrmFields(raw)), ...read };
   }
 
   const tavern = readTavernCard(bytes);
   if (tavern) {
     // The PNG's pixels are the portrait; re-encode to WebP to match how entity images are stored.
-    tavern.entity.images = [await optimizeImageDataUrl(bytesToDataUrl(bytes, 'image/png'), IMAGE_CAPS.entity)];
+    tavern.entity.images = [{ data: await optimizeImageDataUrl(bytesToDataUrl(bytes, 'image/png'), IMAGE_CAPS.entity) }];
     // A foreign card carries no relationships of ours.
     return { ...tavern, links: {} };
   }

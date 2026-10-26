@@ -1,4 +1,5 @@
-import { MASCOT_BELOW_CAP } from '@/lib/formaquestion/windowBox';
+import { MASCOT_BELOW_CAP, isVerticalPlacement, type MascotPlacement, type WindowChrome } from '@/lib/formaquestion/windowBox';
+import { DEFAULT_MASCOT_NAME } from '@/lib/formaquestion/mascotPresets';
 
 /** The tabs of Formaquestion Settings, in order. Guarded against the dev-router ledger by `devRouter.test.ts`. */
 export const FORMAQUESTION_SETTINGS_TABS = [
@@ -24,27 +25,30 @@ export const GENERAL_COPY = {
     hint: 'Sets how the window looks. Auto is Bubble with the Mascot on.',
     options: [
       { value: 'auto', label: 'Auto' },
-      { value: 'bubble', label: 'Bubble' },
       { value: 'minimal', label: 'Minimal' },
       { value: 'full', label: 'Full' },
     ],
   },
+  mascotScale: { label: 'Mascot Scale', hint: "Sizes the Mascot beside the chat. Auto fits the chat's height." },
   mascotPosition: {
     label: 'Mascot Position',
-    hint: 'Sets whether the Mascot stands beside or under the chat',
-    info: '- **Beside** stands the Mascot next to the chat.\n'
-      + `- **Below** stands it under the chat and caps the chat at ${Math.round(MASCOT_BELOW_CAP * 100)}% of the screen height.\n`
-      + '- **Auto** stands it under a short chat and beside a tall one.',
+    hint: 'Sets where the Mascot stands around the chat',
+    info: `- **Above** stands the Mascot over the chat, and **Below** under it. Both cap the chat at ${Math.round(MASCOT_BELOW_CAP * 100)}% of the screen height.\n`
+      + '- **Inside** stands it beside the chat, toward the middle of the screen.\n'
+      + '- **Outside** stands it beside the chat, toward the nearer edge of the screen.\n'
+      + '- Under **Bubble**, only **Inside** and **Outside** apply.',
     options: [
-      { value: 'beside', label: 'Beside' },
+      { value: 'above', label: 'Above' },
       { value: 'below', label: 'Below' },
-      { value: 'auto', label: 'Auto' },
+      { value: 'inside', label: 'Inside' },
+      { value: 'outside', label: 'Outside' },
     ],
   },
   scrimOpacity: {
     label: 'Backdrop',
     hint: 'Shades the screen behind the chat so the text stands out',
   },
+  wikiConfirm: { label: 'Confirm Before Opening the Wiki', hint: 'Asks before “Open Wiki” opens your browser' },
   reasoning: {
     label: 'Reasoning',
     hint: 'Lets your AI reason before it answers. Answers take longer.',
@@ -54,8 +58,17 @@ export const GENERAL_COPY = {
   keyword: { label: 'Keyword Search', hint: 'Matches the words in your question to guide sections' },
   aiPicks: { label: 'AI Search', hint: 'Asks your AI to choose the sections before answering. One extra request.' },
   semantic: { label: 'Semantic Search', hint: 'Finds sections by meaning, not exact words. Downloads a small model once.' },
-  openScreen: { label: 'Use the Open Screen', hint: 'Sends the screen you have open and its guide section' },
+  openScreen: { label: 'Use the Open Screen', hint: 'Sends the open screen, your selected item, and its guide section' },
   historyLength: { label: 'History Length', hint: 'Sets how many earlier questions and answers each request holds' },
+} as const;
+
+/** The copy of the Open Wiki confirm. `page` is the docs page's title, or null for the wiki home. */
+export const WIKI_CONFIRM_COPY = {
+  title: 'Open Wiki',
+  description: (page: string | null) => (page === null ? 'Open the wiki home page in your browser?' : `Open the “${page}” page of the wiki in your browser?`),
+  dontAsk: 'Don’t Ask Again',
+  cancel: 'Cancel',
+  open: 'Open',
 } as const;
 
 /** The copy of the Mascot tab. */
@@ -64,7 +77,6 @@ export const MASCOT_COPY = {
   /** The status line of the off state. The link is the General tab's name, quoted like a control label. */
   off: { before: 'The Mascot is off. Enable it in “', link: 'General', after: '” to customize it.' },
   voice: { label: 'Voice', hint: 'Tells your AI how help answers sound while the mascot is on' },
-  scale: { label: 'Scale', hint: "Sizes the Mascot beside the chat. Auto fits the chat's height." },
   preview: {
     label: 'Preview',
     hint: 'Shows the Idle look, or the layer or overlay you select',
@@ -96,7 +108,7 @@ export const MASCOT_COPY = {
   removeOverlay: 'Remove overlay',
   preset: {
     label: 'Preset',
-    hint: 'Picks the mascot help shows. Default updates with each release.',
+    hint: `Picks the mascot help shows. ${DEFAULT_MASCOT_NAME} updates with each release.`,
     readOnly: (name: string) => `${name} is read-only`,
     /** The header actions' tooltips, by action key. */
     tips: {
@@ -105,7 +117,7 @@ export const MASCOT_COPY = {
       delete: 'Delete this mascot and its images',
       import: 'Add a mascot from a card',
       export: 'Save this mascot as a card',
-      reset: 'Put this mascot back to the Default',
+      reset: `Put this mascot back to ${DEFAULT_MASCOT_NAME}`,
     },
     deleteTitle: 'Delete Mascot',
     deleteBody: (name: string) => `Delete the "${name}" mascot and its images? You can't undo it.`,
@@ -160,6 +172,7 @@ export const AI_CONTEXT_COPY = {
   sourcesOn: 'Sources on',
   none: 'none',
   noScreen: 'No open screen',
+  focus: 'Selected',
   lead: 'Lead',
   merged: 'Merged',
   sentList: 'Sent',
@@ -186,7 +199,7 @@ export const PROMPTS_COPY = {
     answer: { label: 'Answer', hint: 'Tells your AI how to answer from the guide sections' },
     pick: { label: 'Search', hint: 'Tells your AI how to choose guide sections from the heading list' },
     lookup: { label: 'Lookup', hint: 'Tells your AI how to answer with the lookup function' },
-    code: { label: 'Code', hint: 'Tells your AI how to write stat code on questions about code' },
+    code: { label: 'Code', hint: 'Tells your AI how to write scripts on questions about code' },
   },
   options: {
     title: 'Options',
@@ -217,6 +230,12 @@ export const PROMPTS_COPY = {
 export const TOOLS_COPY = {
   lookupSummary: 'Reads guide sections on function-calling endpoints. Roughly quadruples input tokens per question.',
   rollSummary: 'Rolls the dice you name, and returns each die and the total',
+  codeTestSummary: "Tests scripts before your AI answers. Sends your open world's names.",
   unsupported: "Your Answer Endpoint won't receive these functions. Its model doesn't support them, or support isn't confirmed yet.",
   worldText: 'Sends text from the world you have open when a Tool is on',
 } as const;
+
+/** The Mascot Position choices a chrome offers: Bubble has no over or under, so it offers Inside and Outside alone. */
+export function placementOptions(chrome: WindowChrome): readonly { value: MascotPlacement; label: string }[] {
+  return GENERAL_COPY.mascotPosition.options.filter(({ value }) => chrome !== 'bubble' || !isVerticalPlacement(value));
+}

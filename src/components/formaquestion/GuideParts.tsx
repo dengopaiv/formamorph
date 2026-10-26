@@ -1,10 +1,10 @@
-import { useMemo } from 'react';
-import { ArrowLeft, ChevronDown, Search, type LucideIcon } from 'lucide-react';
+import { useContext, useLayoutEffect, useMemo, useRef } from 'react';
+import { ArrowLeft, ChevronDown, type LucideIcon } from 'lucide-react';
 import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { CompactSelectionRow } from '@/components/ui/compact-selection-row';
-import { Input } from '@/components/ui/input';
+import { SearchField } from '@/components/ui/search-field';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Hint, Meta } from '@/components/ui/typography';
 import type { DocSection, DocsContentsPage } from '@/lib/docs/docsIndex';
@@ -14,11 +14,25 @@ import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { cn } from '@/lib/utils';
 import { isSearchable } from './formaquestionTabs';
 import { FOCUS_RING, readerComponents } from './readerLinks';
+import { ReaderScrollContext } from './readerScroll';
+import { useGuideSearch } from './useGuideSearch';
 
 /** The most sections one search shows. */
 const RESULT_LIMIT = 20;
 
-export function SearchField({ value, onChange, takesFocus = true, className }: {
+/** What the Guide shows until the docs load: a loading line, or a retry after a failed load. */
+export function GuideUnavailable({ failed, onRetry }: { failed: boolean; onRetry: () => void }) {
+  return failed ? (
+    <div role="alert" className="flex flex-col items-start gap-2 p-3">
+      <Hint>The guide did not load</Hint>
+      <Button variant="outline" size="sm" onClick={onRetry}>Try Again</Button>
+    </div>
+  ) : (
+    <Hint role="status" className="p-3">Loading the guide…</Hint>
+  );
+}
+
+export function GuideSearchField({ value, onChange, takesFocus = true, className }: {
   value: string;
   onChange: (text: string) => void;
   /** The cursor goes here when the window opens. False where the question field is on show too. */
@@ -26,32 +40,29 @@ export function SearchField({ value, onChange, takesFocus = true, className }: {
   className?: string;
 }) {
   return (
-    <div className={cn('relative', className)} {...targetAttribute('formaquestion.search', 'search-field')}>
-      <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
+    <div className={className} {...targetAttribute('formaquestion.search', 'search-field')}>
+      <SearchField
         data-fq-autofocus={takesFocus ? '' : undefined}
-        type="search"
         aria-label="Search the Guide"
         placeholder="Search the Guide"
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-        // Escape belongs to the dialog behind the window. Here it must not clear the field.
-        onKeyDown={(event) => { if (event.key === 'Escape') event.preventDefault(); }}
-        className="pl-9"
+        onChange={onChange}
       />
     </div>
   );
 }
 
-export function SearchResults({ guide, query, onOpen, compact = false }: {
+export function SearchResults({ guide, query, semantic, onOpen, compact = false }: {
   guide: Guide;
   query: string;
+  /** The Semantic Search switch is on. */
+  semantic: boolean;
   onOpen: (id: string) => void;
   /** Leaves out the excerpt, for the wide layout's rail. */
   compact?: boolean;
 }) {
   const text = query.trim();
-  const results = useMemo(() => (isSearchable(text) ? guide.index.search(text, RESULT_LIMIT) : []), [guide, text]);
+  const results = useGuideSearch(guide, text, semantic, RESULT_LIMIT);
   if (!isSearchable(text)) return <Hint className="p-3">Type two or more letters</Hint>;
   if (results.length === 0) return <Hint role="status" className="p-3">No sections match “{text}”</Hint>;
   return <SectionRows guide={guide} sections={results} onOpen={onOpen} compact={compact} className="p-1" />;
@@ -146,6 +157,12 @@ export function Reader({ guide, sectionId, onOpen }: {
   onOpen: (id: string) => void;
 }) {
   const section = guide.section(sectionId);
+  const scroll = useContext(ReaderScrollContext);
+  const viewport = useRef<HTMLDivElement>(null);
+  // Runs when the entry changes, just after the keyed ScrollArea below remounts: it puts the entry's position back.
+  useLayoutEffect(() => {
+    if (viewport.current && scroll) viewport.current.scrollTop = scroll.get();
+  }, [scroll]);
   const components = useMemo(() => readerComponents(onOpen), [onOpen]);
   const body = useMemo(
     () => (section ? withReaderLinks(sectionBody(section), section.page, guide.resolve) : ''),
@@ -155,8 +172,13 @@ export function Reader({ guide, sectionId, onOpen }: {
   const siblings = guide.contents.find((entry) => entry.page === section.page)?.sections ?? [];
   const title = guide.titleOf(section.page);
   return (
-    // Keyed by section, so a new section starts at its top.
-    <ScrollArea key={section.id} className="min-h-0 flex-1" viewportProps={{ 'data-fq-scroll': 'reader' }}>
+    // Keyed by section and entry, so each entry starts at its own position.
+    <ScrollArea
+      key={`${section.id}:${scroll?.entryId ?? ''}`}
+      className="min-h-0 flex-1"
+      viewportRef={viewport}
+      viewportProps={{ 'data-fq-scroll': 'reader', onScroll: (event) => scroll?.set(event.currentTarget.scrollTop) }}
+    >
       <article className="flex flex-col gap-3 p-3 text-label" aria-label={`${title}: ${section.label}`}>
         {/* A page's introduction is named after the page, so the page line would repeat it. */}
         {section.label !== title && <Meta>{title}</Meta>}

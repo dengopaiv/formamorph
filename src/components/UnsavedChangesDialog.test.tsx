@@ -17,6 +17,17 @@ describe('UnsavedChangesDialog', () => {
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 
+  it('says Exit drops only the changes since the last save once an autosave wrote the world', () => {
+    render(<UnsavedChangesDialog open autoSaved onOpenChange={() => {}} onSave={() => {}} onExit={() => {}} />);
+    expect(screen.getByText(/“Exit Without Saving” drops only the changes since the last save/)).toBeInTheDocument();
+  });
+
+  it('keeps the plain copy when no autosave wrote the world', () => {
+    render(<UnsavedChangesDialog open onOpenChange={() => {}} onSave={() => {}} onExit={() => {}} />);
+    expect(screen.getByText(/exit without saving, or keep editing/)).toBeInTheDocument();
+    expect(screen.queryByText(/since the last save/)).toBeNull();
+  });
+
   it('renders nothing when closed', () => {
     render(<UnsavedChangesDialog open={false} onOpenChange={() => {}} onSave={() => {}} onExit={() => {}} />);
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();

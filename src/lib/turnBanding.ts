@@ -1,10 +1,11 @@
 import type { ChatMessage, DictionaryEntry } from '@/types';
 import { tilePieces, type AnatomyPiece, type AnatomyRun } from './requestAnatomy';
 import type { MemoryNote } from './memoryOverrides';
-import { parseTurnContent } from './turnDigest';
+import { parseTurnContent, turnMemory } from './turnDigest';
 import { getActivatedDictionary, parseKeywords } from './dictionaryUtils';
 import { estimateTokens } from './memoryUtils';
 import { containsWord } from './locationMatch';
+import { stripLinksAndImages } from './stripLinksAndImages';
 
 /**
  * Pure core of Slice 2 memory banding: turns the flat chat history into a budgeted, layered history.
@@ -203,7 +204,7 @@ function mergedBandText(turns: BandTurn[], notes: MemoryNote[] = [], stamp?: Ban
 /** The token cost of the whole digest band as it actually rides: one recap-question user line plus the
  *  merged digests (and the now-line closer, when set) as the assistant reply. 0 when there is nothing to
  *  say — no surviving digest and no note (no exchange is emitted). */
-function bandExchangeCost(turns: BandTurn[], recapPrompt: string, nowLine?: string, notes: MemoryNote[] = [], stamp?: BandStamp): number {
+export function bandExchangeCost(turns: BandTurn[], recapPrompt: string, nowLine?: string, notes: MemoryNote[] = [], stamp?: BandStamp): number {
   const body = mergedBandText(turns, notes, stamp);
   if (!body) return 0;
   const pair: ChatMessage[] = [
@@ -211,6 +212,44 @@ function bandExchangeCost(turns: BandTurn[], recapPrompt: string, nowLine?: stri
     { role: 'assistant', content: nowLine ? `${body}\n\n${nowLine}` : body },
   ];
   return estimateTokens(JSON.stringify(pair).length);
+}
+
+/** JSON-escaped length of `text`, without the quotes. */
+const escapedLength = (text: string) => JSON.stringify(text).length - 2;
+
+/**
+ * `bandExchangeCost` kept as a running sum, so the trim loop drops a turn in O(1) rather than rebuilding
+ * the band. Exact: a separator always sits between pieces, so the escaped length of the joined body is the
+ * sum of its pieces' plus one per join.
+ */
+export function bandCostTracker(turns: BandTurn[], recapPrompt: string, nowLine: string | undefined, notes: MemoryNote[], stamp: BandStamp | undefined) {
+  const overhead = JSON.stringify([{ role: 'user', content: recapPrompt }, { role: 'assistant', content: '' }]).length
+    + (nowLine ? escapedLength(`\n\n${nowLine}`) : 0);
+  const notePieces = bandPieces([], notes, stamp);
+  const turnLength = new Map<BandTurn, number>();
+  let chars = notePieces.reduce((sum, p) => sum + escapedLength(p.text), 0);
+  let count = notePieces.length;
+  for (const turn of turns) {
+    const [piece] = bandPieces([turn], [], stamp);
+    if (!piece) continue;
+    const length = escapedLength(piece.text);
+    turnLength.set(turn, length);
+    chars += length;
+    count++;
+  }
+  return {
+    /** The cost of the tracked turns less the ones passed to `remove`. */
+    cost(): number {
+      return count === 0 ? 0 : estimateTokens(overhead + chars + count - 1);
+    },
+    remove(turn: BandTurn) {
+      const length = turnLength.get(turn);
+      if (length === undefined) return;
+      turnLength.delete(turn);
+      chars -= length;
+      count--;
+    },
+  };
 }
 
 /** Join the band body into the planner's recap block (chronological, one piece per line). */
@@ -234,13 +273,23 @@ export function parseTurns(history: ChatMessage[]): BandTurn[] {
       turnId: parsed.turnId,
       userMsg,
       gameText: parsed.narration ?? '',
-      summary: parsed.summary,
+      summary: turnMemory(parsed),
       entities: parsed.entities,
       importance: parsed.importance,
       timeDelta: parsed.timeDelta,
     });
   }
   return turns;
+}
+
+/** The turns with the Strip Links And Images rule applied to the narration and digest they send. The
+ *  player's action and notes are not narration history, so they stay as written. */
+function strippedTurns(turns: BandTurn[]): BandTurn[] {
+  return turns.map((t) => ({
+    ...t,
+    gameText: stripLinksAndImages(t.gameText),
+    summary: t.summary === undefined ? undefined : stripLinksAndImages(t.summary),
+  }));
 }
 
 /** Legacy assembly: pack recent turns verbatim newest-first until the budget runs out, dropping the
@@ -250,13 +299,15 @@ export function parseTurns(history: ChatMessage[]): BandTurn[] {
  *  to mean, so they lead as one standing block ahead of the verbatim history. Their cost comes off the
  *  budget first — a note is player intent and outranks an extra old turn. */
 export function buildVerbatimHistory(
-  turns: BandTurn[],
+  sourceTurns: BandTurn[],
   contextWindow: number,
   promptTokens: number,
   maxTokens: number,
   notes: MemoryNote[] = [],
   recapPrompt = '',
+  stripMedia = false,
 ): { messages: ChatMessage[]; runs: AnatomyRun[][] } {
+  const turns = stripMedia ? strippedTurns(sourceTurns) : sourceTurns;
   const margin = Math.max(256, Math.round(contextWindow * 0.05));
   let budget = Math.max(0, contextWindow - promptTokens - maxTokens - margin);
   const noteBody = notes.map((n) => (n.text || '').trim()).filter(Boolean).join(' ');
@@ -375,7 +426,7 @@ export function buildBandedHistory(args: {
   /** Last turn's band membership (`BandResult.bandTurnIds`). Members rank as if scored STICKY_BONUS×
    *  higher, so the band drifts instead of being re-drawn every turn. Only acts in scored mode, and
    *  never overrides the protected ends. Null/absent/empty = no hysteresis, the pre-feature path. */
-  stickyIds?: Set<string> | null;
+  stickyIds?: ReadonlySet<string> | null;
   /** Semantic rehydration (roadmap step 2): the turnIds worth restoring to full text for this action,
    *  best-first, already threshold-gated and near-duplicate-filtered by lib/semanticRehydration. The
    *  band takes as many as fit `rehydrateCap` tokens (up to `maxRehydrations`), removes them from the
@@ -395,10 +446,14 @@ export function buildBandedHistory(args: {
    *  verbatim floor is never stamped — that is the live scene, not a memory. Absent = unstamped, the
    *  exact pre-feature body. */
   stamp?: BandStamp;
+  /** The Strip Links And Images setting: narration and digests ride as plain text. Relevance scores and
+   *  rehydration picks arrive keyed by turn id, so the rule never changes which turns are chosen. */
+  stripMedia?: boolean;
 }): BandResult {
   // `keywords` and `actionEntities` are intentionally not destructured: lexical rehydration stays
   // disabled (see step 3). Kept in the arg type so callers compile unchanged.
-  const { turns, contextWindow, promptTokens, maxTokens, verbatimFloor, milestoneDrop = null, recapPrompt, nowLine, relevanceScores = null, bandCap = null, stickyIds = null, semanticRehydrate = null, rehydratePrompt = '', rehydrateCap, maxRehydrations = Infinity, notes = [], stamp } = args;
+  const { turns: sourceTurns, stripMedia = false, contextWindow, promptTokens, maxTokens, verbatimFloor, milestoneDrop = null, recapPrompt, nowLine, relevanceScores = null, bandCap = null, stickyIds = null, semanticRehydrate = null, rehydratePrompt = '', rehydrateCap, maxRehydrations = Infinity, notes = [], stamp } = args;
+  const turns = stripMedia ? strippedTurns(sourceTurns) : sourceTurns;
   const margin = Math.max(256, Math.round(contextWindow * 0.05));
   const budget = Math.max(0, contextWindow - promptTokens - maxTokens - margin);
 
@@ -449,6 +504,7 @@ export function buildBandedHistory(args: {
     const raw = relevanceScores!.get(t.turnId!)! * (impFactor.get(t.turnId!) ?? 1);
     return stickyIds && t.turnId && stickyIds.has(t.turnId) ? raw * STICKY_BONUS : raw;
   };
+  const tracker = bandCostTracker(bandTurns, recapPrompt, nowLine, notes, stamp);
   const dropLowestEligible = (): boolean => {
     if (!scored) return false;
     const lastEligible = bandTurns.length - 1 - RANKED_RECENT_IMMUNE;
@@ -457,13 +513,17 @@ export function buildBandedHistory(args: {
     for (let i = 2; i <= lastEligible; i++) {
       if (rankScore(bandTurns[i]) < rankScore(bandTurns[lowest])) lowest = i;
     }
+    tracker.remove(bandTurns[lowest]);
     bandTurns = bandTurns.slice(0, lowest).concat(bandTurns.slice(lowest + 1));
     turnsRelevanceDropped++;
     return true;
   };
   while (bandTokens > remaining && bandTurns.length > 0) {
-    if (!dropLowestEligible()) bandTurns = bandTurns.slice(1); // fall back: drop the oldest
-    bandTokens = bandExchangeCost(bandTurns, recapPrompt, nowLine, notes, stamp);
+    if (!dropLowestEligible()) { // fall back: drop the oldest
+      tracker.remove(bandTurns[0]);
+      bandTurns = bandTurns.slice(1);
+    }
+    bandTokens = tracker.cost();
   }
   // Always-on top-K cap (step 3): even a band that fits gets trimmed to the K most relevant memories.
   // Scored mode only, and the protected ends set the effective floor.

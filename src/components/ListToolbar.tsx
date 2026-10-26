@@ -1,7 +1,7 @@
 import { forwardRef, useState, type ReactNode } from 'react';
 import { Plus } from 'lucide-react';
 import { Button, type ButtonProps } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchField } from '@/components/ui/search-field';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MENU_ROW } from '@/components/menuRow';
 import { ListAddContext, useListAdd, type ListAddApi, type ListSearch } from '@/components/listToolbarHooks';
@@ -36,7 +36,7 @@ export function ListMenuRow({ icon, label, onAdd }: { icon?: ReactNode; label: R
 /** One add action, or a menu of them. Either way the action receives the trimmed search text. */
 export type ListAddSlot =
   | { label: string; onAdd: (typed: string) => void }
-  | { label: string; menu: ReactNode; menuClassName?: string };
+  | { label: string; menu: ReactNode };
 
 /**
  * The search box and + control above an editor list. The search text filters the list and names the next
@@ -64,7 +64,7 @@ export function ListSearchToolbar({ search, add, placeholder, className, childre
             <ListAddButton label={add.label} data-tour-anchor="list-add" />
           </PopoverTrigger>
           {/* Inline, so a host modal's scroll lock lets the wheel reach a drill-in's list. */}
-          <PopoverContent portal={false} side="bottom" align="start" className={cn('w-44 overflow-hidden p-1', add.menuClassName)}>
+          <PopoverContent portal={false} side="bottom" align="start" className="w-max max-w-72 overflow-hidden p-1">
             <ListAddContext.Provider value={api}>{add.menu}</ListAddContext.Provider>
           </PopoverContent>
         </Popover>
@@ -72,11 +72,13 @@ export function ListSearchToolbar({ search, add, placeholder, className, childre
         <ListAddButton label={add.label} data-tour-anchor="list-add" onClick={() => api.add(add.onAdd)} />
       )}
       {children}
-      <Input
+      <SearchField
         data-editor-find-skip
         placeholder={placeholder}
         value={search.term}
-        onChange={(e) => search.setTerm(e.target.value)}
+        onChange={search.setTerm}
+        onClear={search.clear}
+        className="flex-1"
       />
       {after}
     </ListToolbar>

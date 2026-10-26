@@ -1,4 +1,4 @@
-import type { Stat, Trait, Entity, Dictionary, CommunityLink } from './world';
+import type { Stat, Trait, Entity, Dictionary, CommunityLink, ScriptTiming } from './world';
 import type { ChatMessage } from './ai';
 
 /** A director-invented character promoted to a persisted, per-playthrough entity (runtime characters,
@@ -9,6 +9,8 @@ export interface DiscoveredEntity {
   locationId?: string;
   /** The turn that first materialized it, for description generation / provenance. */
   sourceTurnId: string;
+  /** The Everywhere Listed entity this follower peeled off from. */
+  peeledFrom?: string;
 }
 
 /** One image the player attached to an action, already downscaled and re-encoded. */
@@ -18,13 +20,28 @@ export interface ImageAttachment {
   dataUrl: string;
 }
 
-/** The bounds a stat's own code set on it. Each is absolute; a field the code never set is absent. */
+/** The bounds one run of a stat's code wrote. Each is absolute; a field the code left alone is absent. */
 export type CodeBounds = { min?: number; max?: number; regen?: number };
 
-/** Owner id → the traits a gate cascade turned off, which switch back on once their gate holds again. */
-export type CascadeOffTraitIds = Record<string, string[]>;
+/** How far stat code has moved each bound over the playthrough. A field code never moved is absent. */
+export type CodeBoundDeltas = CodeBounds;
 
-/** One entity's owned traits in play: the ids chosen, and the chosen ones switched off. */
+/** The traits a gate cascade turned off, which switch back on once their gate holds again: the global traits'
+ *  list, and each entity's by entity id. */
+export interface CascadeOffTraitIds {
+  global?: string[];
+  owners?: Record<string, string[]>;
+}
+
+
+/** A save's trait stat records: trait id → stat id → delta for global traits; for an entity, entity id → trait
+ *  id (or `<trait id>/stats` for what the trait moved on the entity's own stats) → stat id → delta. */
+export interface SavedAppliedValues {
+  global?: Record<string, Record<string, number>>;
+  owners?: Record<string, Record<string, Record<string, number>>>;
+}
+
+/** One entity's owned traits during the game: the ids chosen, and the chosen ones switched off. */
 export interface OwnedTraitState {
   chosen: string[];
   /** Absent ⇒ none. */
@@ -34,28 +51,39 @@ export interface OwnedTraitState {
 /** Entity id → its owned trait state. Absent entity ⇒ nothing chosen. */
 export type OwnedTraitStates = Record<string, OwnedTraitState>;
 
+/** Entity id → its stats during the game, in authored order. */
+export type EntityStatValues = Record<string, PlayerStat[]>;
+
+/** Entity id → the location id it stands at during the game. An absent entity is at every location it lists. */
+export type EntityPositions = Record<string, string>;
+
+/** Entity id → stat id → what one turn moved that stat's value. Unmoved stats are absent. */
+export type EntityStatChanges = Record<string, Record<string, number>>;
+
 /** Entity id → the owned trait ids picked at the entry step. */
 export type OwnedTraitPicks = Record<string, string[]>;
 
 /** A stat during gameplay — a definition Stat whose live `value` is always a number.
  *
  *  `min`, `max` and `regen` are *effective* bounds, derived from the `base*` fields plus the active traits'
- *  contributions plus `aiMaxDelta`, with each `codeBounds` field replacing its bound last. Everything outside
- *  the trait runtime — the panel, stat code, morph bindings — reads only the effective numbers; the rest is
- *  bookkeeping. All of it is optional so a save written before bounds were derived still loads, its bases
- *  reconstructed at load time. */
+ *  contributions plus `aiMaxDelta` plus `codeDelta`. Everything outside the trait runtime — the panel, stat
+ *  code, morph bindings — reads only the effective numbers; the rest is bookkeeping. All of it is optional so
+ *  a save written before bounds were derived still loads, its bases reconstructed at load time. */
 export type PlayerStat = Omit<Stat, 'value'> & {
   value: number;
-  /** The author's own floor, which no trait may dig below. */
+  /** The author's own floor, which no layer may dig below. */
   baseMin?: number;
   baseMax?: number;
   baseRegen?: number;
   /** How far the AI has moved this stat's maximum over the playthrough, kept apart from the trait
    *  contributions so the maximum stays fully derived. */
   aiMaxDelta?: number;
-  /** What the stat's code last set, held until the code runs again. Absent when it set nothing. */
-  codeBounds?: CodeBounds;
+  /** How far stat code has moved each bound, kept apart like `aiMaxDelta` so every layer stays derived. */
+  codeDelta?: CodeBoundDeltas;
 };
+
+/** A global stat as an older save stores it, with each code-set bound as an absolute number in `codeBounds`. */
+export type LegacyCodeBoundsStat = PlayerStat & { codeBounds?: CodeBounds };
 
 /** One row of the live scene list (the Entities tab): who is physically present this turn. `name` is the
  *  real entity name (resolves the portrait) or an ad-hoc/invented name. `alias` is how the player currently
@@ -105,11 +133,16 @@ export interface CharacterData {
   currentHairStyle: string;
   hairLength: number;
   hairTypes?: Record<string, HairTypeDef>;
-  /**
-   * Which VRM the player picked: a local model-library id, `'default'` (bundled model),
-   * or unset/`'world'` (the world's `customPlayerVRM`, else the bundled default).
-   */
-  playerModelId?: string;
+  /** The Avatar the player chose for this save. Null = no choice. Absent only on a save made before
+   *  per-entity Avatars, which the game-load remap converts (see lib/legacyVrm). */
+  chosenVrm?: ChosenVrm | null;
+}
+
+/** A save's chosen Avatar: a world store entry or a library record. `legacy` marks a choice a save made
+ *  before per-entity Avatars, which replaces the whole played-side result. */
+export interface ChosenVrm {
+  pick: { kind: 'world' | 'library'; id: string };
+  legacy?: true;
 }
 
 /** The stored payload of a library VRM: the file itself plus what we know about it. The `id`, display name,
@@ -189,21 +222,30 @@ export interface AvatarListingContent {
 
 /** One saved snapshot of a play session (see GameplayContext.saveCurrentGameState). */
 export interface GameState {
-  playerStats: PlayerStat[];
-  playerTraits: Trait[];
-  /** Ids of chosen traits the player has switched off during play. They stay in `playerTraits` so the
-   *  switch can go back on; everything trait-driven reads the difference. Absent ⇒ all active. */
+  globalStats: PlayerStat[];
+  globalTraits: Trait[];
+  /** Ids of chosen global traits the player has switched off during the game. They stay in `globalTraits` so
+   *  the switch can go back on; everything trait-driven reads the difference. Absent ⇒ all active. */
   disabledTraitIds?: string[];
-  /** What each trait's last switch actually moved, trait id → stat id → delta. The next switch of that trait
-   *  reverses this rather than the authored change, so a change a bound refused gives nothing back and a
-   *  clamp is undone as fully as it was applied. Absent on saves written before it, which reverse by negating
-   *  the authored change as they always did. */
-  appliedTraitValues?: Record<string, Record<string, number>>;
-  /** Owner id → the traits a gate cascade turned off, which switch back on once their gate holds again. The
-   *  player's world traits sit under `world`. Absent ⇒ none. */
+  /** What each trait's last switch actually moved. The next switch of that trait reverses this rather than
+   *  the authored change, so a change a bound refused gives nothing back and a clamp is undone as fully as it
+   *  was applied. Absent on saves written before it, which reverse by negating the authored change as they
+   *  always did. */
+  appliedTraitValues?: SavedAppliedValues;
+  /** The traits a gate cascade turned off, which switch back on once their gate holds again. Absent ⇒ none. */
   cascadeOffTraitIds?: CascadeOffTraitIds;
   /** Each entity's owned traits. Absent ⇒ none. */
   ownedTraits?: OwnedTraitStates;
+  /** Each entity's stat values, by entity id. Absent ⇒ none. */
+  entityStats?: EntityStatValues;
+  /** Where each positioned entity stands, by entity id. Absent ⇒ none. */
+  entityPositions?: EntityPositions;
+  /** The ids of the entities following the player, in the order they joined. Absent ⇒ none. */
+  entityFollowers?: string[];
+  /** The ids of the entities the player has met, in the order they met. Absent ⇒ none. */
+  metEntities?: string[];
+  /** What this turn moved each entity stat, AI, regen and code together. Absent ⇒ none. */
+  entityStatChanges?: EntityStatChanges;
   /** Absent ⇒ none. */
   codePins?: CodePins;
   /** The live scene list — who is physically present this turn, with alias/reveal state for the tab. Legacy
@@ -241,9 +283,12 @@ export interface GameState {
   gameStates?: GameState[];
 }
 
-/** Which picture the player would rather open an entity on, keyed by entity id. Only meaningful for an
- *  entity carrying both an image and a 3D model; no entry means the image, as it always has. */
-export type EntityVisualPreference = Record<string, 'model' | 'image'>;
+/** One of the visuals an entity can show: its Avatar, its 3D model, or its image. */
+export type EntityVisualKind = 'avatar' | 'model' | 'image';
+
+/** Which visual the player would rather open an entity on, keyed by entity id. No entry, or a visual the
+ *  entity lacks, means the first it has of Avatar, 3D model, image. */
+export type EntityVisualPreference = Record<string, EntityVisualKind>;
 
 /**
  * How the player has the Traits tab arranged right now. Held in Gameplay rather than in the panel, because
@@ -313,6 +358,12 @@ export interface SaveObject {
   /** The images the player attached to actions, by turn id. Always written when there are any, so a save
    *  is self-contained. Absent ⇒ none. Out of the messages for the same reason as `sceneImages`. */
   actionAttachments?: Record<string, ImageAttachment[]>;
+  /** What scripts told the player with `player.tell`, by turn id, in call order, each with its script's
+   *  timing. Never sent in a request. Absent ⇒ none. */
+  scriptTells?: Record<string, { text: string; timing: ScriptTiming }[]>;
+  /** The opening turn's `turn.action`: the cue the player sent, or empty for an Opening Narration. History
+   *  holds the "START GAME" stand-in instead. Absent ⇒ a page-one re-roll reads the drawn opening. */
+  openingCue?: string;
   /** v2.x memory editing: memories the player wrote by hand. `anchorTurn` is the message-history length
    *  at creation, which places the note chronologically among the digests. Never judged by the selector —
    *  a player-written memory rides until deleted. Absent (or empty) on older saves ⇒ none. */
@@ -345,7 +396,7 @@ export interface PlaceholderRolls {
 export interface SaveRecord extends SaveObject {
   id: string;
   name: string;
-  /** Device-local: marks the per-world autosave slot (one per world, overwritten each turn). Like `id`, it's
+  /** Device-local: marks one of the world's rolling autosaves (as many as Autosaves Kept). Like `id`, it's
    *  stripped from the exported `.json` — a downloaded autosave re-imports as an ordinary manual save. */
   isAutosave?: boolean;
 }

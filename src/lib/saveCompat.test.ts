@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { APP_VERSION, isSaveEnvelope, migrateLegacySaveState, migrateSave } from './version';
 import { DEFAULT_AVATAR_ID } from './defaultAvatar';
-import { parseNarration } from './aiResponse';
+import { narrationOf } from './aiResponse';
 import { appendCurrentToHistory, rollbackState } from './turnHistory';
 import type { GameState, SaveObject } from '@/types';
 
@@ -74,9 +74,9 @@ describe('v1.2 save-load compatibility', () => {
 
   it('parses legacy game_text assistant messages as narration (not raw JSON)', () => {
     const assistant = v12Save.currentState.fullMessageHistory.find((m) => m.role === 'assistant');
-    const narration = parseNarration(assistant!.content);
+    const narration = narrationOf(assistant!.content);
     expect(narration).toBe('You awaken in Magiterra Nova.\n\n\tNearby Characters:\n\t\tNone');
-    expect(narration.startsWith('{')).toBe(false);
+    expect(narration?.startsWith('{')).toBe(false);
   });
 });
 
@@ -109,18 +109,18 @@ describe('migrateLegacySaveState', () => {
       playerTraits: [{ id: 't', name: 'Bat Pony', description: 'You are a Bat Pony', statChanges: [] }],
     } as unknown as GameState;
     const out = migrateLegacySaveState(state);
-    expect(out.playerTraits[0]).toMatchObject({
+    expect(out.globalTraits[0]).toMatchObject({
       playerDescription: 'You are a Bat Pony',
       aiDescription: 'You are a Bat Pony',
     });
-    expect('description' in out.playerTraits[0]).toBe(false);
+    expect('description' in out.globalTraits[0]).toBe(false);
   });
 
   it('is idempotent — an already-migrated snapshot is unchanged', () => {
     const state = {
       playerTraits: [{ id: 't', name: 'Male', playerDescription: 'You are a male', aiDescription: 'You are a male', statChanges: [] }],
     } as unknown as GameState;
-    expect(migrateLegacySaveState(state).playerTraits[0]).toMatchObject({
+    expect(migrateLegacySaveState(state).globalTraits[0]).toMatchObject({
       playerDescription: 'You are a male',
       aiDescription: 'You are a male',
     });
@@ -131,8 +131,8 @@ describe('migrateLegacySaveState', () => {
       playerStats: [{ id: 's', name: 'Stomach', value: 5 }, { id: 'h', name: 'Health', value: 90 }],
     } as unknown as GameState;
     const out = migrateLegacySaveState(state);
-    expect(out.playerStats[0].morphBindings).toEqual(['Belly']);
-    expect(out.playerStats[1].morphBindings).toBeUndefined(); // non-body stat untouched
+    expect(out.globalStats[0].morphBindings).toEqual(['Belly']);
+    expect(out.globalStats[1].morphBindings).toBeUndefined(); // non-body stat untouched
   });
 });
 
@@ -151,11 +151,11 @@ describe('migrateSave (shared import + load path)', () => {
   it('migrates a legacy (numeric-version) envelope: traits, body-stat binding, realignment, stamp', () => {
     const out = migrateSave(legacyEnvelope);
     expect(out.version).toBe(APP_VERSION);
-    expect(out.currentState.playerTraits[0]).toMatchObject({
+    expect(out.currentState.globalTraits[0]).toMatchObject({
       playerDescription: 'You are a Bat Pony',
       aiDescription: 'You are a Bat Pony',
     });
-    expect(out.currentState.playerStats[0].morphBindings).toEqual(['Belly']);
+    expect(out.currentState.globalStats[0].morphBindings).toEqual(['Belly']);
     // v2-only field stamped onto every snapshot, not just defaulted on read.
     expect(out.currentState.discoveredEntities).toEqual([]);
     // opening-only save: empty history + appended current = a single page (the migrated currentState).
@@ -169,32 +169,34 @@ describe('migrateSave (shared import + load path)', () => {
       currentState: { playerTraits: [], playerStats: [], characterData: current ? { playerModelId: current } : null },
       stateHistory: history.map((h) => ({ playerTraits: [], playerStats: [], characterData: h ? { playerModelId: h } : null })),
     } as unknown as SaveObject);
+    /** The old id this migration rewrites; the game-load remap turns it into the chosen Avatar later. */
+    const modelId = (state: { characterData: unknown }) => (state.characterData as { playerModelId?: string } | null)?.playerModelId;
 
     it("rewrites the 'default' sentinel to the seeded model's library id", () => {
       const out = migrateSave(envelope('default'));
-      expect(out.currentState.characterData?.playerModelId).toBe(DEFAULT_AVATAR_ID);
+      expect(modelId(out.currentState)).toBe(DEFAULT_AVATAR_ID);
     });
 
     it('rewrites the sentinel in every history snapshot, not just the current one', () => {
       const out = migrateSave(envelope('default', ['default', 'other-model']));
-      expect(out.stateHistory.map((s) => s.characterData?.playerModelId))
+      expect(out.stateHistory.map(modelId))
         .toEqual([DEFAULT_AVATAR_ID, 'other-model']);
     });
 
     it("rewrites the pre-rename 'default-model' id onto the current default", () => {
       const out = migrateSave(envelope('default-model', ['default-model']));
-      expect(out.currentState.characterData?.playerModelId).toBe(DEFAULT_AVATAR_ID);
-      expect(out.stateHistory.map((s) => s.characterData?.playerModelId)).toEqual([DEFAULT_AVATAR_ID]);
+      expect(modelId(out.currentState)).toBe(DEFAULT_AVATAR_ID);
+      expect(out.stateHistory.map(modelId)).toEqual([DEFAULT_AVATAR_ID]);
     });
 
     it('leaves a real library id alone', () => {
       const out = migrateSave(envelope('some-uploaded-model'));
-      expect(out.currentState.characterData?.playerModelId).toBe('some-uploaded-model');
+      expect(modelId(out.currentState)).toBe('some-uploaded-model');
     });
 
     it("leaves the 'world' selection alone", () => {
       const out = migrateSave(envelope('world'));
-      expect(out.currentState.characterData?.playerModelId).toBe('world');
+      expect(modelId(out.currentState)).toBe('world');
     });
 
     it('tolerates a save with no character data', () => {
@@ -205,7 +207,7 @@ describe('migrateSave (shared import + load path)', () => {
     it('is idempotent — a migrated save is unchanged by a second pass', () => {
       const once = migrateSave(envelope('default'));
       const twice = migrateSave(once);
-      expect(twice.currentState.characterData?.playerModelId).toBe(DEFAULT_AVATAR_ID);
+      expect(modelId(twice.currentState)).toBe(DEFAULT_AVATAR_ID);
     });
   });
 

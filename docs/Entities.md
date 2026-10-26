@@ -1,4 +1,4 @@
-# 🎭 Entities in Play
+# 🎭 Entities in Game
 <!-- keywords: companions, party members, side characters, who counts as there, supporting roles -->
 <!-- route: gameViewer.entities -->
 
@@ -10,8 +10,8 @@ Who the story counts as present with you: the cast the author wrote, the entitie
 <!-- keywords: characters, npcs, people, present, list, cast, nearby, who is here, around me, in the room, party roster, look someone up, view their bio, current company -->
 <!-- route: gameViewer.entities -->
 
-1. During play, open the side panel's **Entities** tab. On desktop, select **Entities** above the panel if the avatar shows.
-2. Read the list. Your persona heads it, marked **(You)**.
+1. During the game, open the side panel's **Entities** tab. On desktop, select **Entities** above the panel if the avatar shows.
+2. Read the list. Your persona heads it, marked **You**.
 3. Select an entry to open its details.
 
 ## How to Add Your Own Entities to a Game
@@ -23,13 +23,13 @@ Who the story counts as present with you: the cast the author wrote, the entitie
 3. Open the **Library Additions** category. See [Library Additions](Starting-a-Game#library-additions).
 4. Select the entities and dictionaries from your library that this game should have.
 5. To start future games in this world with the same picks, select **Remember Additions**.
-6. Select **Start game**. In a world with a 3D model, the button reads **Continue to Avatar**.
+6. Select **Start Game**. When the persona you play has an Avatar, the button reads **Continue to Avatar**.
 
 ## How to Remove a Cast Member
 <!-- keywords: delete, character, npc, get rid of, kick out, drop, wrong name listed, not a real person, clean up list, false positive, dismiss, bogus entry, trash button missing -->
 <!-- route: gameViewer.entities -->
 
-1. During play, open the side panel's **Entities** tab.
+1. During the game, open the side panel's **Entities** tab.
 2. Find the entry and select its trash button, **Remove** followed by its name.
 3. Select **Confirm** in the **Remove …?** dialog.
 
@@ -54,10 +54,10 @@ Only story-invented entities and Library Additions have the button. See [Removin
 | Where it comes from | The author wrote it in the World Editor | You picked it from your library at Enter World | The story made it up mid-scene |
 | Lives in | The world. Every playthrough gets it. | This playthrough | This playthrough |
 | Editable | Yes, in the World Editor | Yes, in your library | No |
-| Removable during play | No | Yes | Yes |
+| Removable during the game | No | Yes | Yes |
 | Survives a new game | Yes | Only with **Remember Additions** | No |
 
-All of them appear in the **Entities** tab during play. All of them count the same way when the story works out who is present and what you can do next.
+All of them appear in the **Entities** tab during the game. All of them count the same way when the story works out who is present and what you can do next.
 
 ## Entities the Story Invents
 <!-- keywords: ai made someone up, improvised npc, auto added names, name detection, why was he skipped, only talked about, random stranger appears, place listed as person, on the fly -->
@@ -127,7 +127,7 @@ The game picks up entities written with **names**. It can't pick up entities wri
 ## How a Game Opens
 <!-- keywords: first message, intro scene, alternate greetings, random beginning, reroll the start, same start every time, why this beginning, starts with filled input -->
 
-At **Start game**, the game draws one opening. **Quick Start** draws the same way. The [World Editor](World-Editor-Openings) page explains how authors write them.
+At **Start Game**, the game draws one opening. **Quick Start** draws the same way. The [World Editor](World-Editor-Openings) page explains how authors write them.
 
 | At Enter World you pick | The draw uses |
 |---|---|

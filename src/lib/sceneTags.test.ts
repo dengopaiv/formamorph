@@ -1,7 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { composeSceneTags, deriveCountTags, splitTags, stripNames, stripPlaces, MAX_SCENE_CHARACTERS } from './sceneTags';
+import { composeSceneTags, deriveCountTags, pickSceneCast, splitTags, stripNames, stripPlaces, MAX_SCENE_CHARACTERS } from './sceneTags';
+import type { Entity } from '@/types';
 
 const girl = (name: string, extra = '') => ({ name, tags: `1girl, ${extra}`.replace(/,\s*$/, '') });
+const ent = (name: string): Entity => ({ id: name, name });
+
+describe('pickSceneCast', () => {
+  const cast = [ent('Mira'), ent('Tam'), ent('Vos')];
+  const persona = ent('Wren');
+
+  it('leads with the persona when the planner put the player in the picture', () => {
+    expect(pickSceneCast({ participants: ['Mira'], entities: cast, persona, playerInFrame: true }).map((e) => e.name))
+      .toEqual(['Wren', 'Mira']);
+  });
+
+  it('leaves the persona out when the planner kept the player out of it', () => {
+    expect(pickSceneCast({ participants: ['Mira', 'Tam'], entities: cast, persona, playerInFrame: false }).map((e) => e.name))
+      .toEqual(['Mira', 'Tam']);
+  });
+
+  it('reads no planner call as the player being in frame', () => {
+    expect(pickSceneCast({ participants: ['Mira'], entities: cast, persona, playerInFrame: undefined }).map((e) => e.name))
+      .toEqual(['Wren', 'Mira']);
+  });
+
+  it('gives the persona one of the capped slots', () => {
+    const picked = pickSceneCast({ participants: ['Mira', 'Tam', 'Vos'], entities: cast, persona, playerInFrame: true });
+    expect(picked).toHaveLength(MAX_SCENE_CHARACTERS);
+    expect(picked.map((e) => e.name)).toEqual(['Wren', 'Mira']);
+  });
+
+  it('is the participants alone when no persona is played', () => {
+    expect(pickSceneCast({ participants: ['Tam', 'Nobody'], entities: cast, persona: null, playerInFrame: true }).map((e) => e.name))
+      .toEqual(['Tam']);
+  });
+});
 
 describe('deriveCountTags', () => {
   it('merges two same-kind characters into one plural count', () => {
@@ -26,6 +59,23 @@ describe('deriveCountTags', () => {
 });
 
 describe('composeSceneTags', () => {
+  it('passes authored NovelAI syntax through with cleanTags off', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', '{{silver hair}}, 0.8::freckles ::')],
+      locationTags: 'no humans, [[river]]',
+      actionTags: 'source#hug, Mira smiling',
+      cleanTags: false,
+    })).toBe('1girl, {{silver hair}}, 0.8::freckles ::, source#hug, smiling, [[river]]');
+  });
+
+  it('strips that syntax by default', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', '{{silver hair}}')],
+      locationTags: '[[river]]',
+      actionTags: 'source#hug',
+    })).toBe('1girl, silver hair, source hug, river');
+  });
+
   it('orders subject, appearance, action, then background', () => {
     expect(composeSceneTags({
       characters: [girl('Mira', 'silver hair')],
@@ -82,6 +132,97 @@ describe('composeSceneTags', () => {
 
   it('survives every source being empty', () => {
     expect(composeSceneTags({ characters: [], locationTags: '', actionTags: '' })).toBe('');
+  });
+});
+
+describe('composeSceneTags — segmented', () => {
+  it('puts counts, action and place in the base and each character in their own part', () => {
+    expect(composeSceneTags({
+      characters: [{ name: 'Wren', tags: '1boy, solo, short hair, grey coat' }, girl('Mira', 'silver hair')],
+      locationTags: 'wooden dock, river',
+      actionTags: 'arguing',
+      segmented: true,
+    })).toBe('1girl, 1boy, arguing, wooden dock, river | boy, short hair, grey coat | girl, silver hair');
+  });
+
+  it('merges same-kind counts in the base and keeps each kind bare in its part', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', 'silver hair'), { name: 'Sedge', tags: '2girls, red coat' }],
+      locationTags: '',
+      actionTags: 'walking',
+      segmented: true,
+    })).toBe('2girls, walking | girl, silver hair | girl, red coat');
+  });
+
+  it('splits a one-character scene the same way', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', 'solo focus, silver hair')],
+      locationTags: 'river',
+      actionTags: 'standing',
+      segmented: true,
+    })).toBe('1girl, standing, river | girl, silver hair');
+  });
+
+  it('keeps a tag both characters share in both parts', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', 'long hair, blue eyes'), girl('Sedge', 'long hair, red coat')],
+      locationTags: 'long hair',
+      actionTags: 'long hair',
+      segmented: true,
+    })).toBe('2girls, long hair | girl, long hair, blue eyes | girl, long hair, red coat');
+  });
+
+  it('dedupes inside one part', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', 'silver hair, Silver_Hair')],
+      locationTags: 'rain',
+      actionTags: 'rain',
+      segmented: true,
+    })).toBe('1girl, rain | girl, silver hair');
+  });
+
+  it('keeps the separators with Clean Up Tags on', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', '{{silver hair}}')],
+      locationTags: '[[river]]',
+      actionTags: 'source#hug',
+      segmented: true,
+      cleanTags: true,
+    })).toBe('1girl, source hug, river | girl, silver hair');
+  });
+
+  it('keeps NovelAI syntax inside a part with Clean Up Tags off', () => {
+    expect(composeSceneTags({
+      characters: [girl('Mira', '{{silver hair}}, 0.8::freckles ::')],
+      locationTags: '[[river]]',
+      actionTags: 'source#hug',
+      segmented: true,
+      cleanTags: false,
+    })).toBe('1girl, source#hug, [[river]] | girl, {{silver hair}}, 0.8::freckles ::');
+  });
+
+  it('gives an untagged character a part with only their kind', () => {
+    expect(composeSceneTags({
+      characters: [{ name: 'Wren', tags: '' }, girl('Mira', 'silver hair')],
+      locationTags: '',
+      actionTags: 'talking',
+      segmented: true,
+    })).toBe('1girl, 1other, talking | other | girl, silver hair');
+  });
+
+  it('still drops "no humans" and strips names and places from the action', () => {
+    expect(composeSceneTags({
+      characters: [{ name: 'Dean Wolfram', tags: '1boy, grey coat' }],
+      locationTags: 'no humans, wooden dock',
+      actionTags: 'dean wolfram walking, sedge landing at dusk',
+      places: ['Sedge Landing'],
+      segmented: true,
+    })).toBe('1boy, walking, at dusk, wooden dock | boy, grey coat');
+  });
+
+  it('is the plain line for an empty scene', () => {
+    expect(composeSceneTags({ characters: [], locationTags: 'no humans, wooden dock', actionTags: 'rain', segmented: true }))
+      .toBe('rain, no humans, wooden dock');
   });
 });
 

@@ -10,7 +10,6 @@ import { SETTINGS_DIALOG_SIZE } from '@/components/modals/settingsDialogSize';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -20,31 +19,31 @@ import {
 import { routeText, targetAttribute } from '@/lib/surface/surfaceTargets';
 import { useRouteLanding } from '@/lib/surface/useLanding';
 import { toolsSupported } from '@/lib/reasoningEffort';
+import { useSettingsOptional } from '@/contexts/SettingsContext';
 import { EndpointTab } from './FormaquestionEndpointTab';
 import { MascotTab } from './FormaquestionMascotTab';
 import { PromptsTab } from './FormaquestionPromptsTab';
 import { ToolsTab } from './FormaquestionToolsTab';
 import { useHelpRevealSource } from './useHelpRevealSource';
 import { setMascotPlacement, useMascotPlacement } from './useMascotDevice';
+import { MascotScaleRow } from './MascotScaleRow';
+import { ModelDownloadBar } from './ModelDownloadBar';
+import { isMascotPlacement, isVerticalPlacement, type MascotPlacement, type WindowChrome } from '@/lib/formaquestion/windowBox';
 import { useMascotDraft } from './useMascotDraft';
 import type { SemanticSearch } from './useSemanticSearch';
-import { FORMAQUESTION_SETTINGS_TABS, GENERAL_COPY, type FormaquestionSettingsTab } from './formaquestionSettingsTabs';
+import { FORMAQUESTION_SETTINGS_TABS, GENERAL_COPY, placementOptions, type FormaquestionSettingsTab } from './formaquestionSettingsTabs';
 
-const MB = 1048576;
+/** The placement the dropdown marks: Bubble draws a stored Above or Below as Outside, so the dropdown says so. */
+const shownPlacement = (placement: MascotPlacement, chrome: WindowChrome): MascotPlacement =>
+  (chrome === 'bubble' && isVerticalPlacement(placement) ? 'outside' : placement);
 
 /** The progress bar of the model download, and the failed state with its retry. */
 function SemanticStatus({ semantic }: { semantic: SemanticSearch }) {
   const { progress, error, downloading } = semantic;
-  const known = progress !== null && progress.total > 0;
   if (downloading) {
     return (
       <Row>
-        <div className="flex items-center gap-2">
-          <Progress className="h-2 flex-1" aria-label="Model download" value={known ? (progress.loaded / progress.total) * 100 : 0} />
-          <span className="text-meta text-muted-foreground whitespace-nowrap">
-            {known ? `${Math.round(progress.loaded / MB)} / ${Math.round(progress.total / MB)} MB` : 'Preparing…'}
-          </span>
-        </div>
+        <ModelDownloadBar progress={progress} />
       </Row>
     );
   }
@@ -63,8 +62,9 @@ function SemanticStatus({ semantic }: { semantic: SemanticSearch }) {
 function ReasoningRow({ settings, onChange, target }: { settings: HelpSettings; onChange: (change: HelpSettingsChange) => void; target: ReasoningFieldTarget }) {
   const row = targetAttribute('formaquestionSettings.general', 'reasoning');
   const copy = GENERAL_COPY.reasoning;
+  const global = useSettingsOptional()?.nativeReasoning;
   const field = promptReasoningFieldProps({
-    target, kind: 'help', setting: settings.reasoning, budgetPct: settings.reasoningBudget, suppressed: false, showAwaitingProof: true,
+    target, kind: 'help', setting: settings.reasoning, budgetPct: settings.reasoningBudget, global, suppressed: false, showAwaitingProof: true,
     onChange: (reasoning) => onChange({ reasoning }),
     onBudgetChange: (reasoningBudget) => onChange({ reasoningBudget }),
   });
@@ -118,21 +118,27 @@ function GeneralTab({ settings, onChange, semantic, answerTarget }: {
             onChange={(chatStyle) => onChange({ chatStyle })}
           />
         </Row>
-        {/* Bubble ignores Mascot Position (Q9). */}
-        {chatChrome(settings) !== 'bubble' && (
-          <Row
-            target={targetAttribute('formaquestionSettings.general', 'mascot-position')}
-            label={GENERAL_COPY.mascotPosition.label}
-            hint={GENERAL_COPY.mascotPosition.hint}
-            info={<HintInfo>{GENERAL_COPY.mascotPosition.info}</HintInfo>}
-          >
-            <OptionSwitcher
-              ariaLabel={GENERAL_COPY.mascotPosition.label}
-              value={placement}
-              options={GENERAL_COPY.mascotPosition.options}
-              onChange={setMascotPlacement}
-            />
-          </Row>
+        {/* Without her there is nothing to place or size; Bubble offers Inside and Outside alone (Q34). */}
+        {settings.mascot && (
+          <>
+            <Row
+              htmlFor="fq-mascot-position"
+              target={targetAttribute('formaquestionSettings.general', 'mascot-position')}
+              label={GENERAL_COPY.mascotPosition.label}
+              hint={GENERAL_COPY.mascotPosition.hint}
+              info={<HintInfo>{GENERAL_COPY.mascotPosition.info}</HintInfo>}
+            >
+              <Select value={shownPlacement(placement, chatChrome(settings))} onValueChange={(value) => { if (isMascotPlacement(value)) setMascotPlacement(value); }}>
+                <SelectTrigger id="fq-mascot-position" aria-label={GENERAL_COPY.mascotPosition.label} className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {placementOptions(chatChrome(settings)).map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Row>
+            <MascotScaleRow />
+          </>
         )}
         <Row htmlFor="fq-scrim-opacity" target={targetAttribute('formaquestionSettings.general', 'backdrop')} label={GENERAL_COPY.scrimOpacity.label} hint={GENERAL_COPY.scrimOpacity.hint}>
           <ValueSlider
@@ -147,6 +153,12 @@ function GeneralTab({ settings, onChange, semantic, answerTarget }: {
             valueClassName="w-14 shrink-0 whitespace-nowrap"
           />
         </Row>
+        <CheckRow
+          htmlFor="fq-wiki-confirm"
+          checked={settings.wikiConfirm}
+          onChange={(wikiConfirm) => onChange({ wikiConfirm })}
+          {...GENERAL_COPY.wikiConfirm}
+        />
       </Section>
       <Section title="Answer">
         <ReasoningRow settings={settings} onChange={onChange} target={answerTarget} />

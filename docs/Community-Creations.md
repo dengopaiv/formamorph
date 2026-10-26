@@ -65,6 +65,20 @@ You can enter one world per contest. Only a world can enter. To enter a world yo
 
 To report a comment, select its **Report comment** button. To report a person, open their profile and select **Report Profile**.
 
+## How to Change Your Profile Image
+<!-- keywords: picture, photo, pfp, icon, account picture, upload, crop, display pic, user portrait, animated gif, account face, take off my pic, reposition, initial letter shown -->
+<!-- route: profile -->
+
+You need a Community Creations account.
+
+1. On the main menu, select the round button at the bottom left. **User Profile** opens.
+2. Select your profile image.
+3. Select a `.png`, `.jpg`, `.webp` or `.gif` file, up to 10 MB.
+4. In **Position Your Picture**, drag the image to move it. Scroll, or use the **Zoom** slider, to zoom. The circle shows what everyone sees.
+5. Select **Save**.
+
+To remove it, select **Remove your profile image**. With no picture, your initial shows in its place. See [The User Profile Dialog](#the-user-profile-dialog).
+
 ## How to Delete Your Account
 <!-- keywords: remove, close, erase, cancel, deactivate, my data, profile, gdpr, unregister, terminate membership, wipe my info, leave for good, right to erasure, undo deletion, privacy request -->
 <!-- route: profile.settings -->
@@ -83,10 +97,10 @@ You are logged out immediately. The account is erased seven days later. To cance
 
 1. Log in.
 2. On the main menu, select the round **Feedback** button at the bottom left.
-3. Open the **Bugs** or **Suggestions** tab.
-4. Select **Report a Bug** or **Suggest Something**.
+3. Open the **Bugs**, **Suggestions** or **Questions** tab.
+4. Select **Report a Bug**, **Suggest Something** or **Ask a Question**.
 5. Fill in **Title**, **Category** and the description.
-6. Select **Send Report** or **Send Suggestion**.
+6. Select **Send Report**, **Send Suggestion** or **Post Question**.
 
 In a game, **Send Feedback** in the menu opens the form directly. See [Bugs and Suggestions](#bugs-and-suggestions).
 
@@ -122,7 +136,7 @@ The dialog has no close button. After **Decline**, the app asks again the next t
 | **Prompts** | Prompt presets that change how the AI writes. |
 | **Contest** | The entries of a contest. It shows only while a contest exists. See [Contests](#contests). |
 
-On a wide screen the tabs are a list on the left. In portrait they are a menu at the top.
+On a wide screen the tabs are a side rail on the left, below the search and filters. Select **Collapse** at the bottom of the rail to show only icons, and **Expand** to show the names again. In portrait, select the **Sections** bar under the header to open the tab list. It has the same order and lines as the rail.
 
 ### Search, Sort and Filters
 
@@ -143,7 +157,7 @@ Each filter becomes a chip in the bar. Select a chip's remove button to drop it.
 
 You can also type a filter in the search box: `author:`, `tag:` or `status:`, and `model:` on the **Prompts** tab. A space or **Enter** turns it into a chip. Each tab keeps its own filters, and they stay after you close the app.
 
-In portrait, sort and filters are behind the **Filters** button. It shows how many are on.
+In portrait, sort, refresh and filters are behind the **Filters** button. A badge on it shows how many filters are on.
 
 ### Hiding Listings
 
@@ -408,7 +422,7 @@ Read the policy any time at [formamorph.ai/privacy](https://formamorph.ai/privac
 
 ### The User Profile Dialog
 
-Select the round button at the bottom left of the main menu. Its badge counts unread messages. The dialog shows your profile image, **Member since** and your stats. Select your profile image to change it. See [How to Change Your Profile Image](Avatars#how-to-change-your-profile-image).
+Select the round button at the bottom left of the main menu. Its badge counts unread messages. The dialog shows your profile image, **Member since** and your stats. Select your profile image to change it. See [How to Change Your Profile Image](#how-to-change-your-profile-image).
 
 The header has **Log Out**. Your email, **Change Password** and **Delete Account** are on the **Settings** tab.
 
@@ -436,7 +450,7 @@ To cancel, log in before that date. The **Deletion Cancelled** notice opens and 
 A suspended account can't be deleted from here. Select **Open Feedback** to ask the team.
 
 ## Bugs and Suggestions
-<!-- keywords: ticket status, track my ticket, known issues, roadmap, upvote an idea, dev response, planned features, what data is sent -->
+<!-- keywords: ticket status, track my ticket, known issues, roadmap, upvote an idea, dev response, planned features, what data is sent, ask a question, community help, unanswered, me too -->
 <!-- route: feedbackHub -->
 
 Select the round **Feedback** button at the bottom left of the main menu. It shows when you are logged in. The steps to send one are in [How to Report a Bug or Suggest Something](#how-to-report-a-bug-or-suggest-something).
@@ -445,10 +459,11 @@ Select the round **Feedback** button at the bottom left of the main menu. It sho
 |---|---|
 | **Bugs** | Your bug reports, or all of them with **All Reports**. **Report a Bug** opens the form. Only you and the team reply to your report. |
 | **Suggestions** | Everyone's suggestions, or yours with **Mine**. **Suggest Something** opens the form. Anyone can reply and vote. Sort by **Newest** or **Most voted**. |
+| **Questions** | Everyone's questions, or yours with **Mine**. **Ask a Question** opens the form. Anyone can reply, and a vote says you have the same question. The tab opens on **Unanswered**, sorted by **Most Voted**. |
 
 A bug report includes your app version and platform. Nothing about your worlds or saves goes with it. The form keeps an unsent draft.
 
-Staff set each item's status. A bug is **Open**, **Need Info**, **Confirmed**, **Resolved** or **Won't Fix**. A suggestion is **Open**, **Considering**, **Planned**, **Declined** or **Done**. Replies show in the item's thread, under **Bugs** or **Suggestions**.
+Staff set each item's status. A bug is **Open**, **Need Info**, **Confirmed**, **Resolved** or **Won't Fix**. A suggestion is **Open**, **Considering**, **Planned**, **Declined** or **Done**. A question is **Open**, **Answered** or **Closed**, and a closed question takes no more replies. Replies show in the item's thread, under **Bugs**, **Suggestions** or **Questions**.
 
 ## Related
 

@@ -45,10 +45,10 @@ export function refreshChosenTraits(chosen: Trait[], authored: Trait[]): Trait[]
 
 /**
  * Re-read each saved stat's authoring identity from the world, the stat sibling of `refreshChosenTraits`:
- * `code`, `name`, `description`, and `type` come from the world by id, so a save started before the
+ * `scripts`, `name`, `description`, and `type` come from the world by id, so a save started before the
  * author's latest edit still runs the new code on its next turn.
  *
- * Every other field — `value`, bounds, `starting`, the AI max delta, code bounds, `enabled`, and the
+ * Every other field — `value`, bounds, `starting`, the AI max delta, the code delta, `enabled`, and the
  * trait-derived base fields — stays the saved stat's own: they are the numbers the playthrough actually
  * reached, not the author's current defaults. A stat the world no longer has keeps its saved copy whole,
  * the same fallback an unmatched trait gets.
@@ -59,7 +59,7 @@ export function refreshSavedStats(saved: readonly PlayerStat[], authored: readon
     const current = byId.get(stat.id);
     return current
       ? {
-        ...stat, beforeCode: current.beforeCode, code: current.code,
+        ...stat, scripts: current.scripts,
         name: current.name, description: current.description, type: current.type,
       }
       : stat;

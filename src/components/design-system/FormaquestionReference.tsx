@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { SectionTitle } from '@/components/ui/typography';
 import { EdgeTabButton } from '@/components/formaquestion/EdgeTab';
-import { FormaquestionFrame } from '@/components/formaquestion/FormaquestionFrame';
+import { FormaquestionFrame, type ResizeHandlers } from '@/components/formaquestion/FormaquestionFrame';
 import type { MenuActions } from '@/components/formaquestion/FormaquestionMenu';
 import type { DragHandlers } from '@/components/formaquestion/usePointerDrag';
 import { useGuideView } from '@/components/formaquestion/formaquestionTabs';
@@ -10,6 +10,7 @@ import { GuideBody } from '@/components/formaquestion/GuideBody';
 import { MascotPiece } from '@/components/formaquestion/MascotPiece';
 import { MinimalChat } from '@/components/formaquestion/MinimalChat';
 import { ReaderPiece } from '@/components/formaquestion/ReaderPiece';
+import { IDLE_SEMANTIC_SEARCH } from '@/components/formaquestion/useSemanticSearch';
 import type { HelpChat, HelpExchange } from '@/components/formaquestion/useHelpChat';
 import { createDocsIndex } from '@/lib/docs/docsIndex';
 import { createGuide } from '@/lib/formaquestion/guide';
@@ -19,6 +20,7 @@ import { cropFrame, fitMask, headSize, type MascotSize } from '@/lib/formaquesti
 import { activeMascotRig } from '@/lib/formaquestion/mascotPresets';
 import type { Edge } from '@/lib/formaquestion/tabPlace';
 import { HEAD_HEIGHT, NARROW_WIDTH, READER_WIDTH, WIDE_WIDTH } from '@/lib/formaquestion/windowBox';
+import { randomUUID } from '@/lib/uuid';
 
 /** A small guide for the sample window. The app's own docs stay out of the reference. */
 const SAMPLE_PAGES = {
@@ -87,7 +89,7 @@ function useSampleChat(): HelpChat {
     readsImages: false,
     pending: [],
     setPending: () => {},
-    ask: (question) => setExchanges((all) => [...all, { id: crypto.randomUUID(), question, images: [], answer: '', reasoning: '', status: 'no-ai', sources: [], flagged: false, nearest: [] }]),
+    ask: (question) => setExchanges((all) => [...all, { id: randomUUID(), question, images: [], answer: '', reasoning: '', status: 'no-ai', sources: [], flagged: false, nearest: [] }]),
     stop: () => {},
     clear: () => setExchanges([]),
   }), [exchanges]);
@@ -105,6 +107,8 @@ const SHEET_SIZE = { width: 360, height: 560 };
 
 /** The ⋮ menu of a sample: its Chat Style choice writes the sample's settings, and the dialogs do nothing. */
 const sampleMenu = (settings: HelpSettings, change: (next: HelpSettingsChange) => void, onClear?: () => void): MenuActions => ({
+  onOpenGuide: () => {},
+  onOpenWiki: () => {},
   onOpenAiContext: () => {},
   onOpenSettings: () => {},
   onClear,
@@ -114,6 +118,7 @@ const sampleMenu = (settings: HelpSettings, change: (next: HelpSettingsChange) =
 
 /** Grip handlers that draw the grip and resize nothing. */
 const INERT_DRAG: DragHandlers = { onPointerDown: () => {}, onPointerMove: () => {}, onPointerUp: () => {}, onPointerCancel: () => {} };
+const INERT_RESIZE: ResizeHandlers = { n: INERT_DRAG, e: INERT_DRAG, s: INERT_DRAG, w: INERT_DRAG, nw: INERT_DRAG, ne: INERT_DRAG, sw: INERT_DRAG, se: INERT_DRAG };
 
 function SampleWindow() {
   const [wide, setWide] = useState(false);
@@ -167,6 +172,7 @@ function SampleMinimalChrome() {
           failed={false}
           onRetry={() => {}}
           chat={chat}
+          semantic={IDLE_SEMANTIC_SEARCH}
           settings={settings}
           onSettingsChange={changeSettings}
           draft={draft}
@@ -177,7 +183,7 @@ function SampleMinimalChrome() {
           head={head}
           headToggle={{ showingHead, onToggle: () => setShowingHead((current) => !current) }}
           menu={sampleMenu(settings, changeSettings, chat.exchanges.length > 0 ? chat.clear : undefined)}
-          resize={INERT_DRAG}
+          resize={INERT_RESIZE}
           onClose={() => {}}
         />
       </div>

@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import fullChangelog from '../../../docs/Changelog.md?raw';
 import { BUNDLED_DOCS, bundledDocsIndex } from './bundledDocsIndex';
-import { NON_GUIDE_PAGES, pageNameOf } from './docsChecks';
+import { isNonGuidePage, pageNameOf } from './docsChecks';
 import { otherPagesLinked, SECTION_CHAR_LIMIT } from './docsIndex';
 import { SECTION_CUT_MARKER } from './sectionParts';
 
@@ -17,8 +17,8 @@ const sections = ids.flatMap((id) => index.get([id]).filter((section) => section
 
 describe('the bundled Docs Index', () => {
   it('holds every docs page except the non-guide pages', () => {
-    expect(Object.keys(BUNDLED_DOCS).sort()).toEqual(DOCS_FOLDER.filter((page) => !NON_GUIDE_PAGES.includes(page)).sort());
-    expect(contents.map((page) => page.page).filter((page) => NON_GUIDE_PAGES.includes(page))).toEqual([]);
+    expect(Object.keys(BUNDLED_DOCS).sort()).toEqual(DOCS_FOLDER.filter((page) => !isNonGuidePage(page)).sort());
+    expect(contents.map((page) => page.page).filter(isNonGuidePage)).toEqual([]);
   });
 
   it('splits every page into at least one section', () => {
@@ -119,7 +119,7 @@ describe('the bundled Docs Index', () => {
     const versions = changelog?.sections.filter((s) => s.level === 2).map((s) => /\d+\.\d+\.\d+/.exec(s.label)?.[0]);
     expect(expected.length).toBeGreaterThan(0);
     expect(versions).toEqual(expected);
-    expect(BUNDLED_DOCS.Changelog).not.toContain('In Progress');
+    expect(BUNDLED_DOCS.Changelog).not.toMatch(/^#+ .*In Progress/m);
   });
 });
 
@@ -166,5 +166,102 @@ describe('hub sections in the bundled docs', () => {
 
   it('still finds Settings#output for a question about what it holds', () => {
     expect(index.search('What does Settings → Output hold?', 5).map((s) => s.id)).toContain('Settings#output');
+  });
+
+  it.each(['plac', 'placholder'])('leads with placeholder sections for "%s"', (query) => {
+    expect(index.search(query, 3).map((s) => s.heading)).toEqual([
+      expect.stringMatching(/placeholder/i), expect.stringMatching(/placeholder/i), expect.stringMatching(/placeholder/i),
+    ]);
+  });
+});
+
+describe('the Scripts sections for a player who still says stat code', () => {
+  const SCRIPTS_SECTIONS = /^(ScriptsGuide#|World-Editor-Stats#scripts$|World-Editor-Traits#scripts$)/;
+
+  it.each([
+    'stat code',
+    'what is stat code?',
+    'where do I put stat code?',
+    'how do I write stat code?',
+  ])('fills the top 3 for "%s" with Scripts sections', (question) => {
+    const top = index.search(question, 3).map((s) => s.id);
+    expect(top.filter((id) => !SCRIPTS_SECTIONS.test(id))).toEqual([]);
+  });
+
+  it('still holds a page at the old name, and keeps it out of the search', () => {
+    expect(DOCS_FOLDER).toContain('StatCodeGuide');
+    expect(Object.keys(BUNDLED_DOCS)).not.toContain('StatCodeGuide');
+    expect(ids.filter((id) => id.startsWith('StatCodeGuide'))).toEqual([]);
+  });
+});
+
+describe('the Variable menu section of the Scripts Guide', () => {
+  it.each([
+    "how do I reference an entity's trait in stat code?",
+    'how do I insert a trait of an entity into my stat code?',
+    'what does the Variable menu hold?',
+  ])('is in the top 3 for "%s"', (question) => {
+    expect(index.search(question, 3).map((s) => s.id)).toContain('ScriptsGuide#how-to-insert-a-name-from-your-world');
+  });
+});
+
+describe('the Chip Options sections of the Prompts guide', () => {
+  it.each([
+    'how do I send only entities with stats?',
+    'how do I keep entities that have no stats out of the Entities chip?',
+    'how do I filter the entities a prompt sends?',
+  ])('answers "%s" in its top 3', (question) => {
+    expect(index.search(question, 3).map((s) => s.id)).toContain('Prompts#how-to-send-only-entities-with-stats');
+  });
+
+  it.each([
+    'what are the rows in Chip Options?',
+    'what does Stat Detail do on the Entities chip?',
+  ])('answers "%s" in its top 3', (question) => {
+    expect(index.search(question, 3).map((s) => s.id)).toContain('Prompts#chip-options');
+  });
+});
+
+describe('the other-stat write sections of the Stat Code Guide', () => {
+  const IDS = ['ScriptsGuide#how-to-change-another-stat-from-code', 'ScriptsGuide#writing-to-other-stats'];
+
+  it.each([
+    'how can one of my stat scripts change a different stat, like lowering health when a dice roll comes up 1?',
+    'can my script move another stat at the same time?',
+    'I want one event to hurt Health and raise Luck, do I need code in both stats?',
+    'can a stat script change the max of a different stat?',
+  ])('is in the top 3 for "%s"', (question) => {
+    const top = index.search(question, 3).map((s) => s.id);
+    expect(IDS.some((id) => top.includes(id))).toBe(true);
+  });
+
+  it('is first for a question about two scripts that write one stat', () => {
+    expect(index.search('two of my stat scripts change the same stat, which one wins?', 1).map((s) => s.id))
+      .toEqual(['ScriptsGuide#writing-to-other-stats']);
+  });
+});
+
+describe('the owner sections of the Stat Code Guide', () => {
+  // Code hover cards link each global to its own heading.
+  it.each(['self', 'stats', 'owner'])('has one heading for %s', (name) => {
+    const [section] = index.get([`ScriptsGuide#${name}`]);
+    expect(section?.markdown).toMatch(new RegExp(`^### ${name}\\b`, 'i'));
+  });
+
+  // The questions use player wording, not the keyword lines' wording.
+  it.each([
+    'what is owner in stat code?',
+    'in a script on one of my monster\'s stats, how do I get to that monster\'s other stats?',
+    'what does owner mean in a Blueprint stat script?',
+  ])('answers "%s" in its top 3', (question) => {
+    expect(index.search(question, 3).map((s) => s.id)).toContain('ScriptsGuide#owner');
+  });
+
+  it.each([
+    'can the script on a monster\'s stat raise a danger meter that belongs to the whole world?',
+    'I want a village event script to lower a villager\'s energy. How do I write that?',
+    'when two scripts set one number in the same turn, whose result stays?',
+  ])('answers "%s" with the write section in its top 3', (question) => {
+    expect(index.search(question, 3).map((s) => s.id)).toContain('ScriptsGuide#writing-to-other-stats');
   });
 });

@@ -10,12 +10,17 @@ export interface InsertSnippet {
   select?: string;
 }
 
-/** The two lookups every template needs. The first needs the map's bracket syntax, which completions
- *  can't write around a name; the second is `self.value`, kept alongside it so the menu teaches both. */
-export const STAT_CODE_SNIPPETS: InsertSnippet[] = [
-  { label: 'Another stat’s value', text: 'stats["Health"].value', select: 'Health' },
-  { label: 'This stat’s value', text: 'self.value' },
-];
+/** Offsets into an inserted text: the part left selected afterwards. */
+export interface InsertSelection {
+  from: number;
+  to: number;
+}
+
+/** Where a snippet's `select` falls in its text, or nothing to select. */
+export function snippetSelection(snippet: InsertSnippet): InsertSelection | undefined {
+  const from = snippet.select ? snippet.text.indexOf(snippet.select) : -1;
+  return from >= 0 ? { from, to: from + snippet.select!.length } : undefined;
+}
 
 /** The slot forms a template may declare. Only offered in the template editor — a stat's own code has no
  *  slots to fill, so the menu would only ever generate something the sandbox chokes on. */

@@ -3,12 +3,23 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import WorldStorageService, { type StoredWorldRecord } from './WorldStorageService';
-import { clearDeletedDefaultWorlds } from '@/lib/defaultWorlds';
+import { clearDeletedDefaultWorlds, readDeletedDefaultWorlds } from '@/lib/defaultWorlds';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import AuthService from './AuthService';
 import { getDownloadState } from '@/lib/downloadState';
 import { PUBLISH_LIMITS } from '@/lib/publishLimits';
 import { KIND_LABELS } from '@/lib/catalogKinds';
+import { openWorldLibrary, putWorldRecords } from '@/lib/worldLibrary';
+import { Blob as NodeBlob } from 'node:buffer';
+import { WORLD_CHANGE_CHANNEL } from '@/lib/worldChangeSignal';
+
+vi.mock('@/lib/jsonFileWorkerUtils', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await (await import('@/test/inlineJsonWorker')).inlineJsonWorker()),
+}));
+
+/** The JSON a publish sent as the `n`th fetch call's body. */
+const sentBody = async (n: number) => JSON.parse(await (vi.mocked(fetch).mock.calls[n][1]?.body as Blob).text());
 
 const res = (body: unknown, ok = true, status = 200): Response =>
   ({ ok, status, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response);
@@ -159,6 +170,10 @@ describe('deleteComment', () => {
 });
 
 describe('publishItem', () => {
+  // The worker builds the body with the browser's native Blob. jsdom's is a JS polyfill that takes seconds
+  // to copy the 100 MB the limit cases send; Node's native one is what the worker has.
+  beforeEach(() => { vi.stubGlobal('Blob', NodeBlob); });
+
   const payload = (over = {}) => ({
     kind: 'world' as const, name: 'N', description: 'D', thumbnail: 't', contentData: { a: 1 }, ...over,
   });
@@ -191,7 +206,7 @@ describe('publishItem', () => {
 
     await WorldStorageService.publishItem(payload({ kind: 'entity', contentData: { name: 'Mara' } }));
 
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
+    const body = await sentBody(0);
     expect(body.kind).toBe('entity');
     expect(body.contentData).toEqual({ name: 'Mara' });
   });
@@ -211,7 +226,7 @@ describe('publishItem', () => {
 
     await WorldStorageService.publishItem(payload({ tags: ['fantasy'] }));
 
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
+    const body = await sentBody(0);
     expect(body).toEqual(wholeBody);
   });
 
@@ -224,7 +239,7 @@ describe('publishItem', () => {
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(init?.method).toBe('PUT');
     expect(url as string).toContain('/worlds/w99');
-    expect(JSON.parse(init?.body as string)).toEqual(wholeBody);
+    expect(JSON.parse(await (init?.body as Blob).text())).toEqual(wholeBody);
   });
 
   it('carries the contest entry when given one, and omits it when not', async () => {
@@ -234,8 +249,8 @@ describe('publishItem', () => {
     await WorldStorageService.publishItem(payload(), null, 'ev1');
     await WorldStorageService.publishItem(payload());
 
-    const entered = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
-    const plain = JSON.parse(vi.mocked(fetch).mock.calls[1][1]?.body as string);
+    const entered = await sentBody(0);
+    const plain = await sentBody(1);
     expect(entered.contestEventId).toBe('ev1');
     expect(plain).not.toHaveProperty('contestEventId');
   });
@@ -408,6 +423,71 @@ describe('local world storage (IndexedDB)', () => {
 
     await WorldStorageService.deleteWorld('sticky-2');
   });
+
+  it('reads a bundled default as unedited until a save marks it edited', async () => {
+    await WorldStorageService.storeWorld({ ...validWorld, id: 'bundled-1', sourceHash: 'abc123' });
+    expect(await WorldStorageService.isUneditedDefault('bundled-1')).toBe(true);
+    await WorldStorageService.storeWorld({ ...validWorld, id: 'bundled-1', dirty: true });
+    expect(await WorldStorageService.isUneditedDefault('bundled-1')).toBe(false);
+
+    await WorldStorageService.storeWorld({ ...validWorld, id: 'own-1' });
+    expect(await WorldStorageService.isUneditedDefault('own-1')).toBe(false);
+    expect(await WorldStorageService.isUneditedDefault('missing')).toBe(false);
+
+    await WorldStorageService.deleteWorld('bundled-1');
+    await WorldStorageService.deleteWorld('own-1');
+  });
+
+  describe('tells the other tabs', () => {
+    let otherTab: BroadcastChannel;
+    let heard: unknown[];
+    beforeEach(() => {
+      heard = [];
+      otherTab = new BroadcastChannel(WORLD_CHANGE_CHANNEL);
+      otherTab.onmessage = (event) => { heard.push(event.data); };
+    });
+    afterEach(() => { otherTab.close(); });
+    /** Lets messages already posted arrive: posts a marker behind them and waits for it, then drops it. */
+    const settle = async () => {
+      const marker = new BroadcastChannel(WORLD_CHANGE_CHANNEL);
+      marker.postMessage({ worldId: 'marker' });
+      marker.close();
+      await vi.waitFor(() => expect(heard).toContainEqual({ worldId: 'marker' }));
+      heard = heard.filter((message) => (message as { worldId: string }).worldId !== 'marker');
+    };
+
+    it('after a stored world is written, and not for a write that fails', async () => {
+      await expect(
+        WorldStorageService.storeWorld({ id: 'bad', name: 'X' } as unknown as StoredWorldRecord),
+      ).rejects.toThrow();
+      await WorldStorageService.storeWorld({ ...validWorld, id: 'tell-1' });
+      await vi.waitFor(() => expect(heard).toEqual([{ worldId: 'tell-1' }]));
+      await WorldStorageService.deleteWorld('tell-1');
+    });
+
+    it('after a content rewrite, and not for one that changes nothing', async () => {
+      await WorldStorageService.storeWorld({ ...validWorld, id: 'tell-2' });
+      await vi.waitFor(() => expect(heard).toHaveLength(1));
+      await WorldStorageService.updateWorldContent('tell-2', (data) => data);
+      await settle();
+      expect(heard).toHaveLength(1);
+      await WorldStorageService.updateWorldContent('tell-2', (data) => ({ ...data, stats: [] }));
+      await vi.waitFor(() => expect(heard).toEqual([{ worldId: 'tell-2' }, { worldId: 'tell-2' }]));
+      await WorldStorageService.deleteWorld('tell-2');
+    });
+
+    it('after a whole-record write, as a backup restore makes', async () => {
+      await writeRaw({ ...validWorld, id: 'tell-3' });
+      await vi.waitFor(() => expect(heard).toEqual([{ worldId: 'tell-3' }]));
+      await WorldStorageService.deleteWorld('tell-3');
+    });
+
+    it('after a delete, as a delete', async () => {
+      await WorldStorageService.storeWorld({ ...validWorld, id: 'tell-4' });
+      await WorldStorageService.deleteWorld('tell-4');
+      await vi.waitFor(() => expect(heard).toEqual([{ worldId: 'tell-4' }, { worldId: 'tell-4', deleted: true }]));
+    });
+  });
 });
 
 /** Read a stored record straight from IndexedDB — `getWorldMetadata` doesn't expose `sourceHash`. */
@@ -425,19 +505,16 @@ const readRaw = (id: string): Promise<StoredWorldRecord | undefined> =>
 
 /**
  * Patch a stored record in place, bypassing `storeWorld` — its sticky merge would restore the very
- * `sourceHash` these tests need to stale or clear.
+ * `sourceHash` these tests need to stale or clear. The metadata goes with it, as every library write does.
  */
-const writeRaw = (record: StoredWorldRecord): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const open = indexedDB.open('worldsDB');
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const db = open.result;
-      const req = db.transaction(['worlds'], 'readwrite').objectStore('worlds').put(record);
-      req.onsuccess = () => { resolve(); db.close(); };
-      req.onerror = () => { reject(req.error); db.close(); };
-    };
-  });
+const writeRaw = async (record: StoredWorldRecord): Promise<void> => {
+  const db = await openWorldLibrary();
+  try {
+    await putWorldRecords(db, [record]);
+  } finally {
+    db.close();
+  }
+};
 
 describe('linkWorldToListing', () => {
   const world: StoredWorldRecord = {
@@ -648,6 +725,18 @@ describe('default worlds: seed vs. the player deleting one', () => {
     await WorldStorageService.loadDefaultWorlds(RAMPAGE);
 
     await expect(WorldStorageService.getWorldData('rampage')).rejects.toBe('World not found');
+  });
+
+  it('stops counting a deleted default once it is stored again, as Keep Mine in another tab saves it back', async () => {
+    await WorldStorageService.loadDefaultWorlds(RAMPAGE);
+    const world = await WorldStorageService.getWorldData('rampage');
+    await WorldStorageService.deleteWorld('rampage');
+    expect(readDeletedDefaultWorlds().has('rampage')).toBe(true);
+
+    await WorldStorageService.storeWorld({ id: 'rampage', name: 'City Rampage', dirty: true, data: world } as StoredWorldRecord);
+
+    expect(readDeletedDefaultWorlds().has('rampage')).toBe(false);
+    await WorldStorageService.deleteWorld('rampage');
   });
 
   it('leaves a deleted default gone across repeated seed passes', async () => {

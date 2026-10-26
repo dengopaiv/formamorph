@@ -36,12 +36,12 @@ function modelOn(id: string): TextEndpointEditorModel {
     fields: {
       endpointUrl: `http://${id}.test/v1`, apiToken: '', modelName: 'local', maxTokens: 512, maxOutputOverrideEnabled: false,
       contextWindow: 8192, contextWindowOverride: null, detectedContextWindow: null, detectStatus: 'idle',
-      samplerOverrides: DEFAULT_TEXT_ENDPOINT_VALUES.samplerOverrides,
+      samplerOverrides: DEFAULT_TEXT_ENDPOINT_VALUES.samplerOverrides, extraParams: '',
     },
     edit: {
       setEndpointUrl: vi.fn(), setApiToken: vi.fn(), setModelName: vi.fn(), setMaxTokens: vi.fn(),
       setMaxOutputOverrideEnabled: vi.fn(), setContextWindowOverride: vi.fn(), detectContextWindow: vi.fn(),
-      setSamplerEnabled: vi.fn(), setSamplerValue: vi.fn(),
+      setSamplerEnabled: vi.fn(), setSamplerValue: vi.fn(), setExtraParams: vi.fn(),
     },
     onSelect: vi.fn(), onAdd: vi.fn(), onRename: vi.fn(), onDelete: vi.fn(), onReset: vi.fn(),
   };
@@ -82,6 +82,19 @@ describe('TextEndpointEditor', () => {
     expect(screen.queryByText('Reachable')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Recheck' })).toBeNull();
     expect(useEndpointReachable).not.toHaveBeenCalled();
+  });
+
+  it('offers no Duplicate on the bundled engine preset, but keeps it on the shared default', () => {
+    const engine = modelOn('engine');
+    engine.edited = { ...engine.edited, builtIn: true, engine: true };
+    const { unmount } = render(<TextEndpointEditor model={engine} advanced onOpenConnectionGuide={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Duplicate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Preset Actions' })).toBeNull();
+    unmount();
+    const shared = modelOn('default');
+    shared.edited = { ...shared.edited, builtIn: true };
+    render(<TextEndpointEditor model={shared} advanced onOpenConnectionGuide={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Duplicate' })).toBeInTheDocument();
   });
 
   it('probes a URL once typing stops, never a half-typed one', () => {
@@ -166,6 +179,31 @@ describe('TextEndpointEditor', () => {
     await user.click(screen.getByRole('combobox'));
     await user.click(await screen.findByRole('option', { name: 'llama' }));
     expect(model.onSelect).toHaveBeenCalledWith('llama');
+  });
+
+  it('edits Extra Parameters through its setter and ties an error to the box', async () => {
+    const model = modelOn('vllm');
+    const { rerender } = render(<TextEndpointEditor model={model} advanced onOpenConnectionGuide={() => {}} />);
+    const box = screen.getByLabelText('Extra Parameters');
+    expect(box).toHaveAttribute('aria-invalid', 'false');
+    expect(box).not.toHaveAttribute('aria-describedby');
+
+    await userEvent.setup().type(box, '1');
+    expect(model.edit.setExtraParams).toHaveBeenLastCalledWith('1');
+
+    model.fields = { ...model.fields, extraParams: '{"top_a": ' };
+    rerender(<TextEndpointEditor model={model} advanced onOpenConnectionGuide={() => {}} />);
+    expect(box).toHaveAttribute('aria-invalid', 'true');
+    expect(box).toHaveAccessibleDescription(/^Not valid JSON.*Requests go out without these fields\./);
+  });
+
+  it('clears Extra Parameters with Reset AI Endpoint', async () => {
+    const model = modelOn('vllm');
+    render(<TextEndpointEditor model={model} advanced onOpenConnectionGuide={() => {}} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Reset AI Endpoint' }));
+    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Confirm' }));
+    expect(model.edit.setExtraParams).toHaveBeenCalledWith('');
   });
 
   it('duplicates the preset without a name dialog and selects the copy', async () => {

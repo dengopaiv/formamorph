@@ -1,7 +1,5 @@
 import { useDictionaryStore } from '@/contexts/DictionaryStoreContext';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Hint } from '@/components/ui/typography';
 import { useEditorMode } from '@/lib/editorMode';
@@ -9,6 +7,8 @@ import { useGameDataOptional } from '@/contexts/GameDataContext';
 import { statCodeName } from '@/lib/statCodeNames';
 import { useRenameField } from '@/lib/useCodeRename';
 import type { Dictionary, Placeholder } from '@/types';
+import { WorldInput, WorldTextarea } from '@/components/editor/WorldField';
+import { fieldFrame } from '@/lib/historyField';
 
 /** Stable empty list, so the rename reader keeps its identity where there is no world. */
 const EMPTY_PLACEHOLDERS: Placeholder[] = [];
@@ -30,9 +30,9 @@ const DictionaryBookFields = ({ book, showEnabled = true }: { book: Dictionary; 
   });
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
+      <div className="space-y-2" {...fieldFrame('name')}>
         <Label>Name</Label>
-        <Input
+        <WorldInput
           value={book.name}
           onChange={(e) => updateDictionary({ ...book, name: e.target.value })}
           aria-label="Name"
@@ -41,9 +41,9 @@ const DictionaryBookFields = ({ book, showEnabled = true }: { book: Dictionary; 
           onKeyDown={(e) => { if (e.key === 'Enter') rename.onSubmit(); }}
         />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2" {...fieldFrame('description')}>
         <Label>Description</Label>
-        <Textarea
+        <WorldTextarea
           value={book.description ?? ''}
           onChange={(e) => updateDictionary({ ...book, description: e.target.value })}
           placeholder="Notes for you, not injected into the prompt"
@@ -51,7 +51,7 @@ const DictionaryBookFields = ({ book, showEnabled = true }: { book: Dictionary; 
         />
       </div>
       {advanced && showEnabled && (
-        <label className="flex items-center gap-2 text-label">
+        <label className="flex items-center gap-2 text-label" {...fieldFrame('enabled')}>
           <Checkbox
             checked={book.enabled !== false}
             onCheckedChange={(v) => updateDictionary({ ...book, enabled: v === true })}

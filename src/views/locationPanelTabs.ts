@@ -1,17 +1,19 @@
 /** The location detail panel's own tabs, in order. Single source of truth: `LocationManager`'s `PanelTabsList`
  *  renders from this, and the dev-router ledger (`DEV_MODAL_TABS.worldEditorLocation`) is guarded against it
  *  in `devRouter.test.ts`. */
-import { ImageIcon, MapPin, Pin, Play, Users } from 'lucide-react';
+import { ImageIcon, Pin } from 'lucide-react';
 
+import { ELEMENT_ICONS } from '@/lib/elementIcons';
 import { isOpeningFieldKey } from '@/lib/openings';
+import { isTravelHintFieldKey } from '@/lib/connectionEditing';
 import { tabForField } from './findFocus';
 
 export const LOCATION_PANEL_TABS = [
-  { value: 'details', label: 'Details', icon: MapPin },
-  { value: 'presence', label: 'Presence', icon: Users },
+  { value: 'details', label: 'Details', icon: ELEMENT_ICONS.location },
+  { value: 'presence', label: 'Presence', icon: ELEMENT_ICONS.entities },
   { value: 'media', label: 'Media', icon: ImageIcon },
   { value: 'pins', label: 'Pins', icon: Pin, advancedOnly: true },
-  { value: 'openings', label: 'Openings', icon: Play, advancedOnly: true },
+  { value: 'openings', label: 'Openings', icon: ELEMENT_ICONS.opening, advancedOnly: true },
 ] as const;
 
 export type LocationPanelTab = (typeof LOCATION_PANEL_TABS)[number]['value'];
@@ -34,5 +36,6 @@ const TAB_BY_FIELD: Record<string, LocationPanelTab> = {
 /** The tab holding `fieldKey`, or `null` for a key no tab claims. */
 export function locationTabForField(fieldKey: string): LocationPanelTab | null {
   if (isOpeningFieldKey(fieldKey)) return 'openings';
+  if (isTravelHintFieldKey(fieldKey)) return 'presence';
   return tabForField(fieldKey, TAB_BY_FIELD);
 }

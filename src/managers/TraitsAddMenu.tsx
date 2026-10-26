@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronRight, FilePlus, FolderPlus, LayoutTemplate } from 'lucide-react';
+import { ChevronRight, FilePlus, FolderPlus } from 'lucide-react';
+import { BlueprintIcon } from '@/lib/elementIcons';
 import { ListMenuRow } from '@/components/ListToolbar';
 import { useListAdd } from '@/components/listToolbarHooks';
 import { MENU_ROW } from '@/components/menuRow';
 import { DrillSlide, type SlideFrom } from '@/components/DrillSlide';
-import { BearerList } from '@/managers/BearerPicker';
-import { bearerChoices } from '@/lib/bearerChoices';
+import { OwnerList } from '@/managers/OwnerPicker';
+import { ownerChoices } from '@/lib/ownerChoices';
 import type { Entity, EntityGroup } from '@/types';
 
 /** What the + menu's drill-in adds to an entity. */
@@ -45,8 +46,8 @@ export function TraitsAddMenu({
   return (
     <DrillSlide key={drilled ?? ''} from={from}>
       {drilled ? (
-        <BearerList
-          choices={bearerChoices(entityGroups, entities)}
+        <OwnerList
+          choices={ownerChoices(entityGroups, entities)}
           label="Entities"
           onPick={(id) => add((typed) => onAddToEntity(drilled, id, typed))}
           back={{ label: TO_ENTITY_LABEL[drilled], onBack: () => drill(null) }}
@@ -58,7 +59,7 @@ export function TraitsAddMenu({
           {advanced && drillRow(<FolderPlus className="h-4 w-4" />, 'group')}
           {advanced && drillRow(<FilePlus className="h-4 w-4" />, 'trait')}
           {advanced && !hasBlueprints
-            && <ListMenuRow icon={<LayoutTemplate className="h-4 w-4" />} label="Add Blueprints Group" onAdd={onAddBlueprints} />}
+            && <ListMenuRow icon={<BlueprintIcon className="h-4 w-4" />} label="Add Blueprints Group" onAdd={onAddBlueprints} />}
         </>
       )}
     </DrillSlide>

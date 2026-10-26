@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTraitWorkspace } from './setupTraitWorkspace';
-import { bearerTraitTree, bearerGroupId } from './ownedTraitsInPlay';
+import { ownerTraitTree, ownerGroupId } from './ownedTraitsInPlay';
 import { isShown } from './traitEffects';
 import type { Entity, Trait } from '@/types';
 
@@ -13,7 +13,7 @@ describe('buildTraitWorkspace with entity nodes', () => {
       traitGroups: [{ id: 'temper', name: 'Temper', parentId: null, order: 0 }],
       traits: [trait('calm', 'temper')],
     };
-    const tree = bearerTraitTree({ traits: [trait('brave')], traitGroups: [], entities: [wolf] }, undefined);
+    const tree = ownerTraitTree({ traits: [trait('brave')], traitGroups: [], entities: [wolf] }, undefined);
     const { categories, navigationGroups } = buildTraitWorkspace(tree.traits, tree.groups, new Set(tree.entityNodes.keys()));
     expect(categories.map((c) => [c.name, c.entityId ?? null, c.entityNode ?? false, c.traits.map((t) => t.id)])).toEqual([
       ['General', null, false, ['brave']],
@@ -29,7 +29,7 @@ describe('buildTraitWorkspace with entity nodes', () => {
       traitGroups: [{ id: 'bond', name: 'Bond', parentId: null, order: 1 }],
       traits: [trait('tamed'), trait('loyal', 'bond')],
     };
-    const tree = bearerTraitTree({
+    const tree = ownerTraitTree({
       traits: [trait('paladin', 'class')],
       traitGroups: [{ id: 'class', name: 'Class', parentId: null, order: 0, playerDescription: 'Pick one class.' }],
       entities: [ash],
@@ -42,10 +42,10 @@ describe('buildTraitWorkspace with entity nodes', () => {
     ]);
   });
 
-  it('gives a linked group under an entity its own page in that entity, so two bearers of one group get two pages', () => {
+  it('gives a linked group under an entity its own page in that entity, so two owners of one group get two pages', () => {
     const classes = { id: 'classes', name: 'Classes', parentId: 'blueprints', order: 0 };
     const link = (id: string, order: number) => ({ id, originalId: 'classes', kind: 'group' as const, originalName: 'Classes', groupId: null, order });
-    const tree = bearerTraitTree({
+    const tree = ownerTraitTree({
       traits: [trait('paladin', 'classes')],
       traitGroups: [{ id: 'blueprints', name: 'Blueprints', parentId: null, order: 0, system: 'blueprints' }, classes],
       entities: [{ id: 'ash', name: 'Ash', traitLinks: [link('l-ash', 0)] }, { id: 'bo', name: 'Bo', traitLinks: [link('l-bo', 0)] }],
@@ -53,9 +53,9 @@ describe('buildTraitWorkspace with entity nodes', () => {
     const { categories } = buildTraitWorkspace(tree.traits, tree.groups, new Set(tree.entityNodes.keys()));
     expect(categories.map((c) => [c.id, c.entityId ?? null, c.traits.map((t) => t.id)])).toEqual([
       ['ash', 'ash', []],
-      [bearerGroupId('ash', 'classes'), 'ash', ['paladin']],
+      [ownerGroupId('ash', 'classes'), 'ash', ['paladin']],
       ['bo', 'bo', []],
-      [bearerGroupId('bo', 'classes'), 'bo', ['paladin']],
+      [ownerGroupId('bo', 'classes'), 'bo', ['paladin']],
     ]);
   });
 
@@ -78,7 +78,7 @@ describe('buildTraitWorkspace with rows the player does not see', () => {
     trait('paladin', 'class'),
     { ...trait('bond', 'class'), mode: 'hidden' },
     { ...trait('veil', 'secret'), mode: 'hidden' },
-    { ...trait('curse', 'omens'), mode: 'alwaysOn', requires: [{ kind: 'trait', id: 'paladin' }] },
+    { ...trait('curse', 'omens'), mode: 'alwaysOn', requires: [{ all: [{ kind: 'trait', id: 'paladin' }] }] },
   ];
   const shows = (picks: string[]) => (t: Trait) => isShown(t, picks);
 
@@ -95,9 +95,9 @@ describe('buildTraitWorkspace with rows the player does not see', () => {
 
   it("reads an entity's rows under that entity's picks", () => {
     const wolf: Entity = {
-      id: 'wolf', name: 'Wolf', traits: [{ ...trait('howl'), mode: 'alwaysOn', requires: [{ kind: 'trait', id: 'x' }] }],
+      id: 'wolf', name: 'Wolf', traits: [{ ...trait('howl'), mode: 'alwaysOn', requires: [{ all: [{ kind: 'trait', id: 'x' }] }] }],
     };
-    const tree = bearerTraitTree({ traits: [], traitGroups: [], entities: [wolf] }, undefined);
+    const tree = ownerTraitTree({ traits: [], traitGroups: [], entities: [wolf] }, undefined);
     const build = (picks: Record<string, string[]>) => buildTraitWorkspace(
       tree.traits, tree.groups, new Set(tree.entityNodes.keys()), (t, entityId) => isShown(t, picks[entityId ?? 'world'] ?? []),
     ).categories.map((c) => c.name);

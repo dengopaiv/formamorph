@@ -8,6 +8,7 @@ import {
 } from './turnPipeline/turnPlan';
 import { parseTurns, buildBandedHistory, type BandStamp } from './turnBanding';
 import { renderPromptTemplate } from './promptTemplate';
+import { readValue, type TokenValues } from './promptValues';
 import { estimateTokens } from './memoryUtils';
 import { buildStamper, hoursByPosition } from './gameClock';
 import type { SectionStyle } from './promptPresets';
@@ -208,16 +209,17 @@ function previewInput(prompts: AnatomyPreviewPrompts, settings: AnatomyPreviewSe
       thinkingMode: settings.thinkingMode,
       concurrentTurnRequests: true,
       choicesEnabled: true, statUpdatesEnabled: true, statCount: 3,
-      locationChangeEnabled: true, locationAutoApply: settings.locationAutoApply,
+      locationChangeEnabled: true, locationAutoApply: settings.locationAutoApply, entityMovement: true,
       aiClock: true, memoryDigests: recap, characterDiaries: true, describeCharacters: true,
       imageAttachments: false, promptAttachments: {}, language: settings.language,
+      stripLinksAndImages: false,
     },
   };
 }
 
 /** The material every hub but the narration's is drawn from: a mid-story turn whose narration has landed
  *  and whose planning stages have all answered. */
-function previewMaterial(values: Record<string, string>, action: string, plannerRecap: string): TurnMaterial {
+function previewMaterial(values: TokenValues, action: string, plannerRecap: string): TurnMaterial {
   return {
     ...emptyTurnMaterial({
       action,
@@ -231,7 +233,7 @@ function previewMaterial(values: Record<string, string>, action: string, planner
     lastStory: FIXTURE_TURNS[FIXTURE_TURNS.length - 1].narration,
     plannerRecap,
     turnPlan: FIXTURE_TURN_PLAN,
-    activeCharacterGuidance: values['<ACTIVE CHARACTER GUIDANCE>'] ?? '',
+    activeCharacterGuidance: readValue(values, '<ACTIVE CHARACTER GUIDANCE>') ?? '',
     directorScene: FIXTURE_SCENE,
     npcCastSize: FIXTURE_INTENTS.length,
     intents: FIXTURE_INTENTS,
@@ -290,6 +292,13 @@ const LOCATION_PASSES: { id: TurnPassId; caption: string }[] = [
   { id: 'locationSuggest', caption: 'Sent after the narration. The move is offered, and you choose whether to take it.' },
 ];
 
+/** The entity location prompt rides beside whichever location request the turn sends. */
+const ENTITY_LOCATION_CAPTION = `Sent with the location request, once per entity that can follow you. ${EXAMPLE_CAPTION}`;
+const ENTITY_LOCATION_PASSES: { id: TurnPassId; caption: string }[] = [
+  { id: 'entityLocationAuto', caption: ENTITY_LOCATION_CAPTION },
+  { id: 'entityLocationSuggest', caption: ENTITY_LOCATION_CAPTION },
+];
+
 /**
  * Every request one prompt is part of, drawn under the player's own settings. An empty list means this
  * configuration never sends the prompt's request at all — which the panel says outright, rather than
@@ -301,7 +310,7 @@ const LOCATION_PASSES: { id: TurnPassId; caption: string }[] = [
 export function buildAnatomyHub(
   tab: string,
   prompts: AnatomyPreviewPrompts,
-  values: Record<string, string>,
+  values: TokenValues,
   conditions: AnatomyConditions,
   settings: AnatomyPreviewSettings,
 ): AnatomyRequestPreview[] {
@@ -328,6 +337,11 @@ export function buildAnatomyHub(
       .filter(({ id }) => passById(id).isDue(input))
       .map(({ id, caption }) => draw(passById(id), caption));
   }
+  if (tab === 'entitylocation') {
+    return ENTITY_LOCATION_PASSES
+      .filter(({ id }) => passById(id).isDue(input))
+      .map(({ id, caption }) => draw(passById(id), caption));
+  }
   if (tab === 'scenetags') return [draw(sceneTagsPass)];
   if (tab === 'milestone') return [draw(milestoneSelectPass, CAPTIONS.milestone)];
   const id = HUB_PASS[tab];
@@ -337,7 +351,7 @@ export function buildAnatomyHub(
 /** The digested older turns the precall planner is led with — the same band the narration is built on. */
 function fixtureRecap(
   prompts: AnatomyPreviewPrompts,
-  values: Record<string, string>,
+  values: TokenValues,
   settings: AnatomyPreviewSettings,
 ): string {
   return narrationBand(prompts, values, { recap: true, recall: false, brackets: false }, settings).band.recap;
@@ -347,7 +361,7 @@ function fixtureRecap(
  *  turn rides on. Shared, since the planner is led with the same band's recap. */
 function narrationBand(
   prompts: AnatomyPreviewPrompts,
-  values: Record<string, string>,
+  values: TokenValues,
   conditions: AnatomyConditions,
   settings: AnatomyPreviewSettings,
 ) {
@@ -409,7 +423,7 @@ function narrationBand(
  */
 function buildNarrationAnatomy(
   prompts: AnatomyPreviewPrompts,
-  values: Record<string, string>,
+  values: TokenValues,
   conditions: AnatomyConditions,
   settings: AnatomyPreviewSettings,
 ): AnatomyBlock[] {

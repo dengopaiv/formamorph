@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { statCodeCompletions, statCodeDiagnostics, summarizeProblems } from './statCodeAnalysis';
+import { codeDiagnostics, statCodeCompletions, statCodeDiagnostics, summarizeProblems } from './statCodeAnalysis';
 import { BUILT_IN_TEMPLATES } from './statCodeTemplates';
-import { placeholderEntryFields, STAT_FIELDS, TRAIT_ENTRY_FIELDS } from './statCodeSurface';
+import { worldToolSurface } from './tools/worldToolSurface';
+import { placeholderEntryFields, SCRIPT_SURFACES, scriptSurface, STAT_CODE_SURFACE, STAT_FIELDS, TRAIT_ENTRY_FIELDS } from './statCodeSurface';
 import { phValues } from '@/test/placeholderValues';
 import { encodePlaceholderToken } from './placeholders';
 import type { Placeholder } from '@/types';
@@ -121,7 +122,7 @@ return scale(total) + min + max;`)).toEqual([]);
     }
   });
 
-  it('warns about a write to another stat’s entry, which the host ignores', () => {
+  it('says nothing about a write to another stat’s entry, which the host takes', () => {
     for (const code of [
       'stats[0].value = 1;\nreturn 2;',
       'stats.Health.value = 1;\nreturn 2;',
@@ -129,10 +130,7 @@ return scale(total) + min + max;`)).toEqual([]);
       'const other = Object.values(stats).find(s => s.id !== self.id);\nother.value = 1;\nreturn 2;',
       'const other = Object.values(stats).find(s => self.id != s.id);\nother.value = 1;\nreturn 2;',
     ]) {
-      const problems = statCodeDiagnostics(code);
-      expect(problems, code).toHaveLength(1);
-      expect(problems[0].severity, code).toBe('warning');
-      expect(problems[0].message, code).toMatch(/another stat/i);
+      expect(statCodeDiagnostics(code), code).toEqual([]);
     }
   });
 
@@ -149,8 +147,15 @@ return scale(total) + min + max;`)).toEqual([]);
   });
 
   it('leaves template slots alone instead of covering a template in errors', () => {
+    // Each template reads against the names its own timings add, as the template editor does.
     for (const template of BUILT_IN_TEMPLATES) {
-      expect(statCodeDiagnostics(template.code, { slots: true }), template.name).toEqual([]);
+      // A world script template reads the world script's surface, and a World Tool template its Tool's.
+      const surfaces = template.kind === 'worldTool'
+        ? template.timings.map((timing) => [timing, worldToolSurface([], timing)] as const)
+        : template.timings.map((timing) => [timing, scriptSurface(template.kind === 'script' ? STAT_CODE_SURFACE : SCRIPT_SURFACES.world, timing)] as const);
+      for (const [timing, surface] of surfaces) {
+        expect(codeDiagnostics(template.code, { slots: true, surface }), `${template.name} at ${timing}`).toEqual([]);
+      }
     }
   });
 
@@ -216,7 +221,7 @@ describe('statCodeCompletions', () => {
   it('offers the stat fields after a dot', () => {
     const offered = labels('const me = stats[self.name];\nreturn me.|');
     expect(offered).toEqual([
-      'id', 'name', 'type', 'description', 'enabled', 'min', 'max', 'value', 'regen', 'previous', 'delta',
+      'id', 'name', 'type', 'description', 'enabled', 'min', 'max', 'value', 'regen', 'hidden', 'previous', 'delta',
     ]);
   });
 
@@ -226,8 +231,8 @@ describe('statCodeCompletions', () => {
   });
 
   it('offers the clock members after clock, and day and daypart after clock.previous', () => {
-    expect(labels('return clock.|')).toEqual(['day', 'daypart', 'deltaHours', 'elapsedHours', 'previous']);
-    expect(labels('return clock.previous.|')).toEqual(['day', 'daypart']);
+    expect(labels('return clock.|')).toEqual(['day', 'daypart', 'hour', 'minute', 'deltaHours', 'elapsedHours', 'previous', 'advance']);
+    expect(labels('return clock.previous.|')).toEqual(['day', 'daypart', 'hour', 'minute']);
   });
 
   it('offers the four members after delta, and the four numbers after each member', () => {
@@ -249,7 +254,7 @@ describe('statCodeCompletions', () => {
 
   it('offers the whole stat’s fields after previous, and none of its own turn-relative ones', () => {
     for (const doc of ['return self.previous.|', 'return stats[0].previous.|']) {
-      expect(labels(doc), doc).toEqual(['id', 'name', 'type', 'description', 'min', 'max', 'value', 'regen']);
+      expect(labels(doc), doc).toEqual(['id', 'name', 'type', 'description', 'min', 'max', 'value', 'regen', 'hidden']);
     }
   });
 
@@ -272,6 +277,15 @@ describe('statCodeCompletions', () => {
     // `filter` hands back another array, so the chain is not a stat.
     expect(labels('return Object.values(stats).filter(s => s.value > 0).|')).toEqual([]);
     expect(labels('return Object.values(stats).find(s => s.value > 0).name.|')).toEqual([]);
+  });
+
+  it('reads a chain written with spaces around its dots', () => {
+    expect(labels('return stats . Health .|', { statNames: ['Health'] })).toEqual(STAT_FIELDS.map((field) => field.name));
+  });
+
+  it('offers nothing after a dot inside a comment', () => {
+    expect(labels('// stats.|\nreturn 1;', { statNames: ['Health'] })).toEqual([]);
+    expect(labels('/* self.| */ return 1;')).toEqual([]);
   });
 
   it('still names a stat behind the operators an expression is written with', () => {
@@ -462,7 +476,7 @@ describe('placeholders in stat code', () => {
   // `placeholders` is a tree: a placeholder that holds others carries them as members. The editor completes
   // and checks the same paths. Owner routes have their own suite.
   describe('paths', () => {
-    /** Hair holds Shade, and Shade holds Tone. An owned placeholder is always a chip value of its holder. */
+    /** Hair holds Shade, and Shade holds Tone. An owned placeholder is always a chip value of its parent. */
     const chip = (id: string) => ({ id: `v:${id}`, text: encodePlaceholderToken({ id, mode: 'world', placementId: `p-${id}` }) });
     const hair = ph('hair', 'Hair', { values: [chip('shade')] });
     const shade = ph('shade', 'Shade', { ownerId: 'hair', values: [chip('tone')] });
@@ -484,7 +498,7 @@ describe('placeholders in stat code', () => {
       expect(messages('placeholders.Molly.Hair.pin("x");', scoped)).toEqual(['Unknown placeholder name “Molly”.']);
     });
 
-    it('underlines a segment no entry has, and names the nearest under its holder', () => {
+    it('underlines a segment no entry has, and names the nearest under its parent', () => {
       const [problem] = statCodeDiagnostics('placeholders.Hair.Shdae.pin("x");', scoped);
       expect(problem).toMatchObject({
         severity: 'error',
@@ -500,11 +514,11 @@ describe('placeholders in stat code', () => {
     });
 
     it('warns on a child whose name loses to a member every placeholder has', () => {
-      const holder = ph('holder', 'Holder', { values: [chip('child')] });
-      const shadowed = { placeholders: { list: [holder, ph('child', 'value', { ownerId: 'holder' })] } };
-      expect(messages('placeholders.Holder.value = "x";', shadowed)).toEqual([
+      const parent = ph('parent', 'Parent', { values: [chip('child')] });
+      const shadowed = { placeholders: { list: [parent, ph('child', 'value', { ownerId: 'parent' })] } };
+      expect(messages('placeholders.Parent.value = "x";', shadowed)).toEqual([
         'Every placeholder has a value member, so this reads the member. '
-        + 'The placeholder named “value” under “Holder” is not reachable from code.',
+        + 'The placeholder named “value” under “Parent” is not reachable from code.',
       ]);
     });
 
@@ -513,7 +527,7 @@ describe('placeholders in stat code', () => {
       expect(messages('return placeholders.Hair.Shade.Tone.text.length;', scoped)).toEqual([]);
     });
 
-    it('offers a holder’s own members first, then what it holds', () => {
+    it('offers a parent’s own members first, then what it holds', () => {
       const members = placeholderEntryFields('Wildcard').map((entry) => entry.name);
       expect(labels('return placeholders.Hair.|', scoped)).toEqual([...members, 'Shade']);
     });
@@ -617,17 +631,44 @@ describe('the stats map in stat code', () => {
       .toEqual(['2 stats are named “Health”. A stat that is on wins the name over a switched-off one. Otherwise this reads the last one authored.']);
   });
 
-  it('warns about a write to another stat through the map, by dot, by bracket, or by a name holding it', () => {
-    for (const code of [
-      'stats.Health.value = 1;\nreturn 2;',
-      'stats["Night Vision"].max += 1;\nreturn 2;',
-      'const hp = stats.Health;\nhp.value -= 1;\nreturn 2;',
-      'stats.Health = 5;\nreturn 2;',
-    ]) {
-      const problems = statCodeDiagnostics(code, { statNames, selfName: 'Mood' });
-      expect(problems, code).toHaveLength(1);
-      expect(problems[0], code).toMatchObject({ severity: 'warning', message: expect.stringMatching(/another stat.*Write to self instead/) });
+  it('raises no warning for a write to another stat through the map, by dot, by bracket, or by a name holding it', () => {
+    for (const field of ['value', 'min', 'max', 'regen']) {
+      for (const code of [
+        `stats.Health.${field} = 1;\nreturn 2;`,
+        `stats["Night Vision"].${field} += 1;\nreturn 2;`,
+        `stats.Health.${field}++;\nreturn 2;`,
+        `const hp = stats.Health;\nhp.${field} -= 1;\nreturn 2;`,
+        `const hub = Object.values(stats).find(s => s.id !== self.id);\nhub.${field} = 1;\nreturn 2;`,
+      ]) {
+        expect(statCodeDiagnostics(code, { statNames, selfName: 'Mood' }), code).toEqual([]);
+      }
     }
+  });
+
+  it('counts a write to another stat as the code doing something, as a write to self is', () => {
+    expect(statCodeDiagnostics('stats.Health.value -= 1;', { statNames, selfName: 'Mood' })).toEqual([]);
+  });
+
+  it('underlines an unknown stat name on the write side as it does on the read side, and a known name not', () => {
+    const options = { statNames, selfName: 'Mood' };
+    const code = 'stats.Helth.value = 1;\nreturn 2;';
+    const [problem] = statCodeDiagnostics(code, options);
+    expect(problem).toMatchObject({ severity: 'error', message: 'No stat is named “Helth”. Did you mean “Health”?' });
+    expect(code.slice(problem.from, problem.to)).toBe('Helth');
+    expect(statCodeDiagnostics(code, options)).toHaveLength(1);
+    // The read of the same name carries the same complaint.
+    expect(messages('return stats.Helth.value;', options)).toEqual([problem.message]);
+    for (const known of ['stats.Health.max += 1;', 'stats["Night Vision"].regen = 2;', 'stats.Health.value++;']) {
+      expect(statCodeDiagnostics(`${known}\nreturn 2;`, options), known).toEqual([]);
+    }
+    expect(messages('stats["Night Vison"].min = 0;\nreturn 2;', options))
+      .toEqual(['No stat is named “Night Vison”. Did you mean “Night Vision”?']);
+  });
+
+  it('warns about replacing a whole entry, which the host drops, for any stat', () => {
+    const options = { statNames, selfName: 'Mood' };
+    expect(messages('stats.Health = 5;\nreturn 2;', options)).toEqual(['Write to stats.Health.value instead.']);
+    expect(messages('stats.Mood = 5;\nreturn 2;', options)).toEqual(['Write to self.value instead.']);
   });
 
   it('takes a write to its own entry through the map as a write to self', () => {
@@ -670,18 +711,33 @@ describe('the stats map in stat code', () => {
     for (const option of completeAt('return stats.|', { statNames })?.options ?? []) expect(option.info).toBeTruthy();
   });
 
+  it('offers the four writable fields after an entry’s dot, with the documentation they carry on self', () => {
+    const writable = ['value', 'min', 'max', 'regen'];
+    const onSelf = (completeAt('return self.|', { statNames })?.options ?? []).filter((option) => writable.includes(option.label));
+    expect(onSelf.map((option) => option.label).sort()).toEqual([...writable].sort());
+    for (const doc of ['stats.Health.|', 'stats["Night Vision"].|', "stats['Night Vision'].|", 'stats[self.name]?.|']) {
+      const offered = (completeAt(`return ${doc}`, { statNames })?.options ?? []).filter((option) => writable.includes(option.label));
+      expect(offered, doc).toEqual(onSelf);
+      // Every entry takes these writes, so no line sends the author back to self.
+      for (const option of offered) expect(option.info, `${doc} ${option.label}`).not.toMatch(/self/);
+    }
+  });
+
   it('checks a write to its own entry through the map exactly as it checks self', () => {
     const options = { statNames, selfName: 'Mood' };
     expect(messages('stats.Mood.valeu = 5;', options)).toEqual(['stats.Mood has no field “valeu”. Did you mean “value”?']);
     expect(messages('stats["Mood"].name = "x";', options))
-      .toEqual(['stats["Mood"].name can’t be written. Only self.value, self.min, self.max, self.regen can.']);
+      .toEqual(['stats["Mood"].name can’t be written. Only self.value, self.min, self.max, self.regen, self.hidden can.']);
     expect(messages('const me = self;\nme.delta.ai.value = 1;', options)[0]).toMatch(/^me\.delta can’t be written/);
   });
 
-  it('warns about a write nested inside another stat’s entry', () => {
-    for (const code of ['stats.Health.previous.value = 1;\nreturn 2;', 'const hp = stats.Health;\nhp.delta.ai.value = 1;\nreturn 2;']) {
-      expect(messages(code, { statNames, selfName: 'Mood' }), code).toEqual([expect.stringMatching(/another stat/)]);
-    }
+  it('checks a write to another stat’s entry for the field it names, as it does for self', () => {
+    const options = { statNames, selfName: 'Mood' };
+    expect(messages('stats.Health.valeu = 5;\nreturn 2;', options)).toEqual(['stats.Health has no field “valeu”. Did you mean “value”?']);
+    expect(messages('stats.Health.previous.value = 1;\nreturn 2;', options))
+      .toEqual(['stats.Health.previous can’t be written. Only stats.Health.value, stats.Health.min, stats.Health.max, stats.Health.regen, stats.Health.hidden can.']);
+    expect(messages('const hp = stats.Health;\nhp.delta.ai.value = 1;\nreturn 2;', options))
+      .toEqual(['hp.delta can’t be written. Only hp.value, hp.min, hp.max, hp.regen, hp.hidden can.']);
   });
 
   it('says nothing after a chain that continues past the one lookup', () => {
@@ -697,5 +753,161 @@ describe('the stats map in stat code', () => {
       expect(messages(`return ${name} ? 1 : 0;`), name).toContainEqual(expect.stringContaining(name));
     }
     expect(labels('return cur|')).not.toContain('currentStatId');
+  });
+
+  describe('clock fields', () => {
+    it('accepts every real clock field', () => {
+      for (const field of ['day', 'daypart', 'deltaHours', 'elapsedHours', 'previous', 'previous.day', 'previous.daypart']) {
+        expect(statCodeDiagnostics(`return clock.${field};`), field).toEqual([]);
+      }
+    });
+
+    it('flags an unknown field on clock as an error and suggests the closest one', () => {
+      const [problem] = statCodeDiagnostics('return clock.deltaHour;');
+      expect(problem.severity).toBe('error');
+      expect(problem.message).toBe('clock has no field “deltaHour”. Did you mean “deltaHours”?');
+    });
+
+    it('flags an unknown field on clock.previous as an error and suggests the closest one', () => {
+      const [problem] = statCodeDiagnostics('return clock.previous.dayparts;');
+      expect(problem.severity).toBe('error');
+      expect(problem.message).toBe('clock.previous has no field “dayparts”. Did you mean “daypart”?');
+    });
+
+    it('flags time and previous.week, which the clock does not carry', () => {
+      expect(messages('return clock.time;')).toEqual(['clock has no field “time”.']);
+      expect(messages('return clock.previous.week;')).toEqual(['clock.previous has no field “week”.']);
+    });
+
+    it('accepts hour and minute on clock and clock.previous', () => {
+      expect(statCodeDiagnostics('return clock.hour + clock.minute + clock.previous.hour + clock.previous.minute;')).toEqual([]);
+    });
+
+    it('reads the same clock through optional chaining and spacing', () => {
+      expect(messages('return clock?.previous?.week;')).toEqual(['clock.previous has no field “week”.']);
+      expect(messages('return clock . previous . week;')).toEqual(['clock.previous has no field “week”.']);
+      expect(statCodeDiagnostics('return clock?.previous?.day;')).toEqual([]);
+    });
+
+    it('underlines the field name', () => {
+      const code = 'return clock.time;';
+      const [problem] = statCodeDiagnostics(code);
+      expect(code.slice(problem.from, problem.to)).toBe('time');
+    });
+
+    it('leaves a clock the code declared itself alone', () => {
+      expect(statCodeDiagnostics('const clock = { time: 1 }; return clock.time;')).toEqual([]);
+    });
+
+    it('does not read a field off another object that ends in clock', () => {
+      expect(messages('const o = { clock: { time: 1 } }; return o.clock.time;')).toEqual([]);
+    });
+  });
+
+  describe('whole stats used as numbers', () => {
+    /** The text each diagnostic underlines, beside its message. */
+    const flagged = (code: string, options?: Parameters<typeof statCodeDiagnostics>[1]) =>
+      statCodeDiagnostics(code, options).map((problem) => [code.slice(problem.from, problem.to), problem.severity, problem.message]);
+    const wholeStat = (text: string) => [text, 'error', `${text} is a whole stat, not a number. Use ${text}.value.`];
+
+    it('flags a stat compared to a number and suggests .value', () => {
+      expect(flagged('return stats.Courage >= 50;')).toEqual([wholeStat('stats.Courage')]);
+    });
+
+    it('flags self in arithmetic', () => {
+      expect(flagged('return self + 1;')).toEqual([wholeStat('self')]);
+    });
+
+    it('flags a bracketed stat inside an if condition', () => {
+      expect(flagged('if (stats["Hit Points"] > 0) return 1;\nreturn 0;')).toEqual([wholeStat('stats["Hit Points"]')]);
+    });
+
+    it('flags a stat reached by a computed key or through ?.', () => {
+      expect(flagged('return stats[self.name] * 2;')).toEqual([wholeStat('stats[self.name]')]);
+      expect(flagged('return stats?.Courage < 5;')).toEqual([wholeStat('stats?.Courage')]);
+    });
+
+    it('flags each comparison and arithmetic operator, on either side', () => {
+      for (const op of ['<', '>', '<=', '>=', '+', '-', '*', '/', '%', '**']) {
+        expect(flagged(`return self ${op} 2;`), op).toEqual([wholeStat('self')]);
+        expect(flagged(`return 2 ${op} stats.Int;`), op).toEqual([wholeStat('stats.Int')]);
+      }
+    });
+
+    it('flags both operands when both are whole stats', () => {
+      expect(flagged('return stats.A - stats.B;')).toEqual([wholeStat('stats.A'), wholeStat('stats.B')]);
+    });
+
+    it('looks through parentheses', () => {
+      expect(flagged('return ((self)) * 2;')).toEqual([wholeStat('self')]);
+    });
+
+    it('looks past comments around the operator', () => {
+      expect(flagged('return self /* hp */ + 1;')).toEqual([wholeStat('self')]);
+      expect(flagged('return - /* hp */ self;')).toEqual([wholeStat('self')]);
+      expect(flagged('return self === /* n */ 3;')).toEqual([wholeStat('self')]);
+    });
+
+    it('flags unary minus and plus', () => {
+      expect(flagged('return -self;')).toEqual([wholeStat('self')]);
+      expect(flagged('return +stats.Int;')).toEqual([wholeStat('stats.Int')]);
+    });
+
+    it('flags equality only against a number literal', () => {
+      expect(flagged('return stats.Level === 3;')).toEqual([wholeStat('stats.Level')]);
+      expect(flagged('return 3 != self;')).toEqual([wholeStat('self')]);
+      expect(flagged('return self == -1;')).toEqual([wholeStat('self')]);
+      expect(flagged('return (stats.Level) !== (3);')).toEqual([wholeStat('stats.Level')]);
+      expect(flagged('return self === -(3);')).toEqual([wholeStat('self')]);
+    });
+
+    it('accepts identity checks between entries and against null', () => {
+      for (const code of [
+        'return Object.values(stats).find((s) => s !== self);',
+        'return stats.A === stats.B;',
+        'if (self == null) return 0;\nreturn 1;',
+        'return stats.Mood === "happy";',
+      ]) {
+        expect(statCodeDiagnostics(code), code).toEqual([]);
+      }
+    });
+
+    it('accepts .value forms, member reads and entries passed to functions', () => {
+      for (const code of [
+        'return stats.Courage.value >= 50;',
+        'return self.value + 1;',
+        'return stats["Hit Points"].value > 0 ? 1 : 0;',
+        'return self.max - self.value;',
+        'return -self.value;',
+        'return Math.min(stats.Int.max, 1) + JSON.stringify(self).length;',
+      ]) {
+        expect(statCodeDiagnostics(code), code).toEqual([]);
+      }
+    });
+
+    it('leaves logical operators, negation and compound assignment alone', () => {
+      for (const code of ['return self && 1;', 'return stats.A ?? 0;', 'return !self;', 'let x = 1;\nx += self;\nreturn x;']) {
+        expect(statCodeDiagnostics(code), code).toEqual([]);
+      }
+    });
+
+    it('leaves a self or stats the code declared itself alone', () => {
+      expect(statCodeDiagnostics('const self = 3;\nreturn self + 1;')).toEqual([]);
+      expect(statCodeDiagnostics('const stats = { A: 1 };\nreturn stats.A + 1;')).toEqual([]);
+    });
+
+    it('does not read an entry off another object that ends in stats', () => {
+      expect(statCodeDiagnostics('const o = { stats: { A: 1 } };\nreturn o.stats.A + 1;')).toEqual([]);
+    });
+
+    it('flags a stat named by a slot in the template editor', () => {
+      expect(flagged('return stats[{{who:stat}}] > {{n:number=1}};', { slots: true })).toEqual([wholeStat('stats[{{who:stat}}]')]);
+      expect(statCodeDiagnostics('return stats[{{who:stat}}].value > {{n:number=1}};', { slots: true })).toEqual([]);
+    });
+
+    it('leaves an operator a slot holds alone in the template editor', () => {
+      expect(statCodeDiagnostics('return self.value {{op:choice(>=|<=)}} {{n:number=1}};', { slots: true })).toEqual([]);
+      expect(statCodeDiagnostics('return {{x:choice(self+1|2)}};', { slots: true })).toEqual([]);
+    });
   });
 });

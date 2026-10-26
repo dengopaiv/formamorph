@@ -1,8 +1,9 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vitest/config'
+import { searchForWorkspaceRoot } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import { readFileSync } from 'fs'
+import { readFileSync, realpathSync } from 'fs'
 import { createRequire } from 'module'
 import { releasedMinorChangelog } from './src/lib/docs/changelogSlice'
 
@@ -14,6 +15,8 @@ const syncAppOrigin = process.env.E2E_SYNC_APP_ORIGIN
 const portArg = process.argv.findIndex((arg) => arg === '--port' || arg.startsWith('--port='))
 const cachePort = portArg < 0 ? '5173' : process.argv[portArg].split('=')[1] ?? process.argv[portArg + 1]
 const devCacheDir = path.resolve(__dirname, 'node_modules/.vite', `${path.basename(__dirname)}-${cachePort}`)
+// A worktree's linked node_modules resolves outside its root, where Vite refuses files such as the QuickJS wasm.
+const servedRoots = [searchForWorkspaceRoot(process.cwd()), realpathSync(path.resolve(__dirname, 'node_modules'))]
 
 const directSyncAppModules = {
   name: 'direct-sync-app-modules',
@@ -80,8 +83,22 @@ const docsIndexMarkdown = {
   },
 }
 
+// `electron/cacheTypes.cjs` is pure CommonJS that main and the renderer both load. Dev serves a .cjs raw,
+// so wrap it as an ES module with the names from its `module.exports = { ... }` line.
+const cacheTypesCjs = {
+  name: 'cache-types-cjs',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!id.split('?')[0].endsWith('/electron/cacheTypes.cjs')) return null
+    const names = /module\.exports\s*=\s*\{([^}]*)\}/.exec(code)?.[1].split(',').map((n) => n.trim()).filter(Boolean) ?? []
+    if (names.length === 0) this.error('electron/cacheTypes.cjs must end in a one-line `module.exports = { a, b }`')
+    const exports = names.map((n) => `export const ${n} = shared.${n};`).join('\n')
+    return `const shared = (() => {\nconst module = { exports: {} };\n${code}\nreturn module.exports;\n})();\n${exports}\n`
+  },
+}
+
 export default defineConfig({
-  plugins: [react(), directSyncAppModules, holdUpdates, docsIndexMarkdown],
+  plugins: [react(), directSyncAppModules, holdUpdates, docsIndexMarkdown, cacheTypesCjs],
   cacheDir: process.env.E2E_SYNC_APP ? path.resolve(__dirname, 'node_modules/.vite-sync-app') : devCacheDir,
   base: './',
   // Expose the package.json version to the app (single source of truth for the app/world/save stamp).
@@ -109,7 +126,10 @@ export default defineConfig({
     // Dev-mode pre-bundling rewrites these into .vite/deps, breaking their import.meta.url-relative
     // .wasm lookup (the QuickJS engine file). Serving them unbundled keeps the wasm path resolvable.
     // Pre-bundling also breaks the ONNX runtime's `?url` imports.
-    exclude: ['quickjs-emscripten', '@jitl/quickjs-wasmfile-release-sync', 'wasm-webp', 'onnxruntime-web-dist'],
+    exclude: [
+      'quickjs-emscripten', '@jitl/quickjs-wasmfile-release-sync', '@jitl/quickjs-wasmfile-release-asyncify',
+      'wasm-webp', 'onnxruntime-web-dist',
+    ],
   },
   worker: {
     // The image-encode worker lazily `import()`s wasm-webp; under the default iife worker format that dynamic
@@ -118,6 +138,7 @@ export default defineConfig({
     rollupOptions: { output: { inlineDynamicImports: true } },
   },
   server: {
+    fs: { allow: servedRoots },
     // When the baseline harness spawns the dev server (BASELINE_NO_WATCH=1) it disables watching and HMR
     // entirely: the harness reads source once at page load and never needs live reload, so a developer editing
     // ANY file (src included) while a long scripted run is in flight can't restart the page under it. A normal
@@ -146,8 +167,8 @@ export default defineConfig({
         }),
   },
   test: {
-    // e2e/ belongs to Playwright; .scratch/ contains untracked working copies and experiments.
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '.scratch/**', '.claude/worktrees/**'],
+    // e2e/ belongs to Playwright; .scratch/ contains untracked working copies and experiments; marketing/ packages run their own checks.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '.scratch/**', '.claude/worktrees/**', 'marketing/**'],
     setupFiles: ['./src/test/setup.ts'],
     // A change to one of these makes `--changed` and `related` run the full suite. They replace vitest's `**/`
     // defaults, which can't match inside a ticket worktree: picomatch's `**` skips the `.claude` folder.
@@ -160,6 +181,17 @@ export default defineConfig({
       '.env*',
     ].map((file) => path.resolve(__dirname, file).replace(/\\/g, '/')),
     css: false,
+    // One fork per hardware thread halves each test's speed for the same throughput: on 32 threads the
+    // 5-second tests ran 4.6 s idle and timed out under a peer's load. Half the threads keeps the wall
+    // time and gives every fork a thread of its own.
+    maxWorkers: '50%',
+    // Timeouts catch hangs, not slowness: load stretches a test, and the slow-test report flags it.
+    // A fake-timer test's `waitFor` never expires on its own, so this is also how long its miss takes.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    expect: { poll: { timeout: 10_000 } },
+    slowTestThreshold: 2000,
+    reporters: ['default', './scripts/slowTestReporter.mjs'],
     // A new jsdom per file is a large share of the suite's CPU, so plain .ts tests run in node. A .ts test
     // that needs the DOM opts in with `// @vitest-environment jsdom`.
     projects: [

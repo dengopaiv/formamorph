@@ -8,7 +8,8 @@ import { TOOL_CATALOG } from './toolCatalog';
 import { vectorKey } from '@/lib/memoryRelevance';
 import { REHYDRATE_MARGIN_MIN_BAND, REHYDRATE_SIM_THRESHOLD } from '@/lib/semanticRehydration';
 import { DIARY_SIM_THRESHOLD } from '@/lib/semanticDiary';
-import { buildToolSnapshot, sampleToolSnapshot, type ToolMeaning, type ToolMemory, type ToolMemorySource } from './toolSnapshot';
+import { buildToolSnapshot, type ToolMeaning, type ToolMemory, type ToolMemorySource } from './toolSnapshot';
+import { sampleToolSnapshot } from './sampleToolSnapshot';
 import { runToolCall } from './toolRunner';
 import { recallMatches } from './toolRecall';
 import { parseTool } from './toolValidation';
@@ -142,6 +143,18 @@ describe('recall, lexical', () => {
     const snapshot = buildToolSnapshot(sampleChipScene(), sampleDictionaries(), source([{}, {}]));
     expect(await runToolCall(RECALL, '{"query": "anything"}', snapshot)).toEqual({ text: '{"matches": []}' });
     expect(await recall('anything', null)).toEqual([]);
+  });
+
+  it('returns plain text when the world strips links and images, and the written text when it does not', async () => {
+    const turns: TurnSpec[] = [{
+      summary: 'Mira showed [the gate](https://a.test/g) ![crest](https://a.test/c.png) to Wren.',
+      diaries: { Bell: 'I kept the [lantern](https://a.test/l) safe.' },
+    }];
+    expect(await recall('gate lantern', { ...source(turns), stripMedia: true })).toEqual([
+      { turn: 1, kind: 'digest', text: 'Mira showed the gate to Wren.' },
+      { turn: 1, kind: 'diary', character: 'Bell', text: 'I kept the lantern safe.' },
+    ]);
+    expect((await recall('gate', source(turns)))[0].text).toContain('[the gate](https://a.test/g)');
   });
 
   it('no longer finds a turn the player rolled back', async () => {

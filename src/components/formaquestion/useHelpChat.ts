@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toastAiRequestFailure } from '@/lib/aiRequest/aiRequestFailureToast';
 import type { DocSection, DocsIndex } from '@/lib/docs/docsIndex';
 import { openDocs } from '@/lib/formaquestion/docsOpener';
+import { helpFocus } from '@/lib/formaquestion/helpFocus';
 import { askHelp, type HelpStage } from '@/lib/formaquestion/helpSession';
 import type { HelpSettings } from '@/lib/formaquestion/helpSettings';
 import type { HelpTrace } from '@/lib/formaquestion/helpTrace';
@@ -9,6 +10,7 @@ import { helpWorld } from '@/lib/formaquestion/helpWorld';
 import { surfaceRegistry } from '@/lib/surface/surfaceRegistry';
 import { turnActivity, useTurnGenerating } from '@/lib/turnActivity';
 import { useMountedRef } from '@/lib/useMountedRef';
+import { randomUUID } from '@/lib/uuid';
 import type { ImageAttachment } from '@/types';
 import type { HelpAi } from './useHelpAi';
 
@@ -95,10 +97,11 @@ export function useHelpChat(index: DocsIndex | null, ai: HelpAi, settings: HelpS
     // The Surface, the open world and the settings at send time, before any wait.
     const surface = surfaceRegistry.get();
     const world = helpWorld.get();
+    const focus = helpFocus.get();
     const sentSettings = settingsRef.current;
     const controller = new AbortController();
     running.current = controller;
-    const id = crypto.randomUUID();
+    const id = randomUUID();
     const images = aiRef.current.readsImages ? pendingRef.current : [];
     setPending([]);
     const change = (fields: Partial<HelpExchange>) => {
@@ -130,7 +133,7 @@ export function useHelpChat(index: DocsIndex | null, ai: HelpAi, settings: HelpS
           if (reasoningAt && answered && reasoningMs === undefined) reasoningMs = Math.round(performance.now() - reasoningAt);
           return reasoningMs;
         };
-        for await (const event of askHelp({ question, history, language, settings: sentSettings, snapshot, index, surface, images, world, signal: controller.signal })) {
+        for await (const event of askHelp({ question, history, language, settings: sentSettings, snapshot, index, surface, focus, images, world, signal: controller.signal })) {
           if (event.type === 'trace') change({ trace: event.trace });
           else if (event.type === 'stage') change({ stage: event.stage });
           else if (event.type === 'face') change({ face: event.face });

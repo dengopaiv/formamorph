@@ -11,13 +11,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Star } from "lucide-react";
+import { Eye, Plus, Star, TriangleAlert } from "lucide-react";
+import { ImageRuleCog, ImageRuleSummary, useHasRuleSource, type RuleHost } from '@/components/editor/ImageRuleCog';
 import AiGenerateButton from "@/components/AiGenerateButton";
 import TagField from "@/components/prompt/TagField";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ImageUpload } from '../lib/UtilityComponents';
 import { fileToDataUrl } from '@/lib/imageDrop';
 import { followReorder } from '@/lib/imageGalleryOrder';
+import { withImageRule } from '@/lib/entityImages';
 import { useStableIds } from '@/lib/useStableIds';
 import { useImageDropTarget } from '@/lib/useImageDropTarget';
 import { RemoteImg } from '@/lib/useRemoteImage';
@@ -29,8 +31,9 @@ import { GenerateImageButton } from '../components/GenerateImageButton';
 import type { ImageCap } from '../lib/imageOptim';
 import type { ImageSubjectKind } from '@/lib/imagePrompt';
 import { useEditorMode } from '@/lib/editorMode';
-import type { Placeholder } from '@/types';
+import type { GalleryImage, Placeholder, TraitRequirementRow } from '@/types';
 import { Tip } from '@/components/ui/tooltip';
+import { fieldFrame } from '@/lib/historyField';
 
 interface ImageWidgetProps {
   /** Field label above the upload — "Background Image" for locations, "Image" for entities. */
@@ -38,8 +41,8 @@ interface ImageWidgetProps {
   /** The Authoring Tour's `data-tour-anchor` for the widget, when a step points at it. */
   tourAnchor?: string;
   /** The pictures this subject carries, in order; slot 0 is the primary. */
-  images: string[];
-  onImagesChange: (next: string[]) => void;
+  images: GalleryImage[];
+  onImagesChange: (next: GalleryImage[]) => void;
   /** How many pictures may be held. One (the default) renders as a plain single upload with no gallery chrome.
    *  Pass Infinity for an unbounded gallery. */
   slots?: number;
@@ -50,6 +53,8 @@ interface ImageWidgetProps {
    *  comes back as a tag no image model knows; an author who wants one types it into the tags. */
   description?: string;
   kind: ImageSubjectKind;
+  /** The subject's name for a generated image's file name on the image server; never sent to the model. */
+  fileSubject?: string;
   tags?: string;
   onTagsChange: (value: string) => void;
   /** The world's (or the standalone item's) placeholders, so a tag can be one. None simply means no chip
@@ -57,7 +62,18 @@ interface ImageWidgetProps {
   placeholders?: Placeholder[];
   /** The entity or location whose tags these are — see `ownerId` on `PlaceholderField`. */
   ownerId?: string;
+  /** Whose images carry Visibility rules. Set, each tile gets a cog, a badge and a summary where a rule source
+   *  exists. Keep the object stable across renders. */
+  ruleHost?: RuleHost;
+  /** The framed slot, for a host that shows the framed image's details. Unset, the gallery keeps its own. */
+  framed?: number;
+  onFramedChange?: (index: number) => void;
+  /** False hides the strip's rule cog and the framed rule's summary, for a host that edits the rule itself. */
+  ruleCog?: boolean;
 }
+
+/** The inputs a host passes to control the gallery's frame and cog. */
+export type GalleryFrameProps = Pick<ImageWidgetProps, 'framed' | 'onFramedChange' | 'ruleCog'>;
 
 const WidgetContext = createContext<ImageWidgetProps | null>(null);
 
@@ -86,49 +102,72 @@ const FRAME_CLASS = {
  *  picture rather than the whole column. */
 const FRAME_WIDTH = { portrait: 'mx-auto max-w-[300px]', landscape: 'mx-auto max-w-[400px]' };
 
+/** One image's Visibility rule as a tile edits it. */
+interface TileRule {
+  host: RuleHost;
+  rows: TraitRequirementRow[];
+  onChange: (rows: TraitRequirementRow[]) => void;
+}
+
 /** One picture in the strip. Click frames it; drag reorders it — position 0 is what stands in wherever a
- *  single picture is shown, so dragging to the front is the whole promote gesture. */
-const ImageTile = ({ id, url, index, framed, onSelect }: {
+ *  single picture is shown, so dragging to the front is the whole promote gesture. A cog on hover sets the
+ *  picture's Visibility rule, and a badge marks one that has a rule. The cog sits beside the tile's button,
+ *  not inside it, and the button alone drags. */
+const ImageTile = ({ id, url, index, framed, onSelect, ruled, rule }: {
   id: string;
   url: string;
   index: number;
   framed: boolean;
   onSelect: () => void;
+  /** Whether the image has a rule, badged even where the cog is hidden. */
+  ruled: boolean;
+  rule?: TileRule;
 }) => {
-  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({ id });
+  const { setNodeRef, setActivatorNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({ id });
   const primary = index === 0;
+  const name = primary ? 'Primary image' : `Image ${index + 1}`;
   return (
-    // The tip explains the tile; the short spoken name stays on the button.
-    <Tip
-      tip={primary
-        ? 'Primary. Shown wherever one image is needed. Drag to reorder.'
-        : `Image ${index + 1}. Drag to reorder.`}
-      labelsChild={false}
+    <div
+      ref={setNodeRef}
+      // Translate, not Transform: the latter bakes in dnd-kit's slot-fit scale and resizes the dragged tile.
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn('group relative h-14 w-14 shrink-0', isDragging && 'opacity-50')}
     >
-      <button
-        ref={setNodeRef}
-        type="button"
-        // Translate, not Transform: the latter bakes in dnd-kit's slot-fit scale and resizes the dragged tile.
-        style={{ transform: CSS.Translate.toString(transform), transition }}
-        {...attributes}
-        {...listeners}
-        onClick={onSelect}
-        aria-label={primary ? 'Primary image' : `Image ${index + 1}`}
-        aria-pressed={framed}
-        className={cn(
-          'relative h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 touch-none',
-          framed ? 'border-primary' : 'border-border hover:border-muted-foreground',
-          isDragging && 'opacity-50',
-        )}
+      {/* The tip explains the tile; the short spoken name stays on the button. */}
+      <Tip
+        tip={primary
+          ? 'Primary. Shown wherever one image is needed. Drag to reorder.'
+          : `Image ${index + 1}. Drag to reorder.`}
+        labelsChild={false}
       >
-        <RemoteImg src={url} alt="" className="h-full w-full object-cover" />
-        {primary && (
-          <span className="absolute bottom-0 right-0 rounded-tl bg-overlay/70 p-0.5 text-white">
-            <Star className="h-2.5 w-2.5 fill-current" />
-          </span>
-        )}
-      </button>
-    </Tip>
+        <button
+          ref={setActivatorNodeRef}
+          type="button"
+          {...attributes}
+          {...listeners}
+          onClick={onSelect}
+          aria-label={ruled ? `${name}, has a Visibility rule` : name}
+          aria-pressed={framed}
+          className={cn(
+            'relative h-full w-full overflow-hidden rounded-md border-2 touch-none',
+            framed ? 'border-primary' : 'border-border hover:border-muted-foreground',
+          )}
+        >
+          <RemoteImg src={url} alt="" className="h-full w-full object-cover" />
+          {primary && (
+            <span className="absolute bottom-0 right-0 rounded-tl bg-overlay/70 p-0.5 text-white">
+              <Star className="h-2.5 w-2.5 fill-current" />
+            </span>
+          )}
+          {ruled && (
+            <span data-image-rule-badge="" aria-hidden className="absolute bottom-0 left-0 rounded-tr bg-overlay/70 p-0.5 text-white">
+              <Eye className="h-2.5 w-2.5" />
+            </span>
+          )}
+        </button>
+      </Tip>
+      {rule && <ImageRuleCog {...rule} className="absolute right-0.5 top-0.5" />}
+    </div>
   );
 };
 
@@ -165,6 +204,13 @@ const AddTile = ({ htmlFor, selected, onSelect, onUrl, onFiles }: {
   );
 };
 
+/** `list` with slot `index` showing `data` under the slot's own rule; an empty `data` drops the slot and its rule. */
+function withSlotData(list: readonly GalleryImage[], index: number, data: string): GalleryImage[] {
+  const next: (GalleryImage | undefined)[] = [...list];
+  next[index] = data ? { ...list[index], data } : undefined;
+  return next.filter((img): img is GalleryImage => !!img);
+}
+
 /**
  * The picture half of the widget: the image-upload → embedded-prompt confirmation → generate-image stack
  * shared by the Location and Entity editors. Owns the `pendingPrompt` handshake: an uploaded image's
@@ -183,8 +229,10 @@ const AddTile = ({ htmlFor, selected, onSelect, onUrl, onFiles }: {
  */
 export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
   const {
-    label, images, onImagesChange, slots = 1, imageId, cap, description, kind, tags, onTagsChange, tourAnchor,
+    label, images, onImagesChange, slots = 1, imageId, cap, description, kind, fileSubject, tags, onTagsChange, tourAnchor, ruleHost,
+    framed, onFramedChange, ruleCog = true,
   } = useImageWidget();
+  const ruleSourced = useHasRuleSource();
   // SD prompt pulled from an uploaded image, pending the user's OK to use it as Image Tags.
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // A generated picture with nowhere free to go, held while the user picks the slot it replaces.
@@ -199,7 +247,8 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
   const { promptImagesBatch, dialog: batchDialog } = useDownscalePrompt();
 
   // Filled slots, plus a trailing empty one to upload into while there is room.
-  const shown = images.slice(0, slots);
+  const shownImages = images.slice(0, slots);
+  const shown = shownImages.map((img) => img.data);
   const rows = shown.length < slots ? [...shown, ''] : shown;
   // One slot renders as the plain uploader it always was; several earn the frame-and-strip pane.
   const gallery = slots > 1;
@@ -211,7 +260,9 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
 
   // Which slot the big frame is showing. Stays in range as pictures are added and removed — a removed last
   // picture would otherwise leave the frame pointing past the end and showing nothing at all.
-  const [selected, setSelected] = useState(0);
+  const [ownSelected, setOwnSelected] = useState(0);
+  const selected = framed ?? ownSelected;
+  const setSelected = (i: number) => { setOwnSelected(i); onFramedChange?.(i); };
   const showing = Math.min(selected, rows.length - 1);
   const setShowing = (i: number) => setSelected(Math.max(0, i));
 
@@ -222,11 +273,18 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
   const openSlot = rows.findIndex((url) => !url);
 
   /** Write one slot; an emptied slot drops out rather than leaving a hole for the next one to fall into. */
-  const setSlot = (index: number, value: string) => {
-    const next = [...shown];
-    next[index] = value;
-    onImagesChange(next.filter(Boolean));
-  };
+  const setSlot = (index: number, value: string) => onImagesChange(withSlotData(shownImages, index, value));
+
+  /** Write one slot's Visibility rule; an emptied rule drops the field. */
+  const setRule = (index: number, requires: TraitRequirementRow[]) => onImagesChange(withImageRule(shownImages, index, requires));
+  const rulable = gallery && !!ruleHost;
+  const tileRule = (i: number): TileRule | undefined => (rulable && ruleSourced && ruleCog
+    ? { host: ruleHost, rows: shownImages[i].requires ?? [], onChange: (rows) => setRule(i, rows) }
+    : undefined);
+  const framedRule = rulable && ruleSourced && ruleCog ? shownImages[showing]?.requires : undefined;
+  const tileRuled = (i: number) => rulable && ruleSourced && !!shownImages[i].requires?.length;
+  // Only an entity's primary stands in outside play, where no rule reads.
+  const coverRuled = rulable && ruleHost.kind === 'entity' && !!shownImages[0]?.requires?.length;
 
   /** Take a generated picture. It fills the open slot where there is one, and otherwise asks which picture it
    *  replaces, resolving false if the author decides it replaces none of them. */
@@ -278,9 +336,7 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
         thumbs.forEach(URL.revokeObjectURL);
       }
     }
-    const next = [...shown];
-    stored.forEach((url, k) => { next[index + k] = url; });
-    onImagesChange(next.filter(Boolean));
+    onImagesChange(stored.reduce((next, url, k) => withSlotData(next, index + k, url), shownImages));
   };
 
   // The pane behind the framed picture. A framed picture refuses drops itself, so without this a drag over
@@ -307,7 +363,7 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
     const from = tileIds.indexOf(String(active.id));
     const to = tileIds.indexOf(String(over.id));
     if (from === -1 || to === -1) return;
-    onImagesChange(arrayMove(shown, from, to).filter(Boolean));
+    onImagesChange(arrayMove(shownImages, from, to));
     // Follow the picture, not the position — otherwise dragging the framed one leaves the frame behind.
     setSelected(followReorder(showing, from, to));
   };
@@ -367,6 +423,8 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
                   index={i}
                   framed={i === showing}
                   onSelect={() => setShowing(i)}
+                  ruled={tileRuled(i)}
+                  rule={tileRule(i)}
                 />
               ))}
             </StableSortableContext>
@@ -383,6 +441,13 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
           )}
         </div>
       )}
+      {ruleHost && framedRule?.length ? <ImageRuleSummary host={ruleHost} rows={framedRule} /> : null}
+      {coverRuled && (
+        <p data-image-rule-cover-warning="" className="flex items-start gap-1 text-helper text-warning">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          The primary image ignores its rule outside play
+        </p>
+      )}
       <ConfirmDialog
         open={pendingPrompt !== null}
         onOpenChange={(o) => { if (!o) setPendingPrompt(null); }}
@@ -393,42 +458,63 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
       />
       {tagsSlot}
       <GenerateImageButton
-        subject={{ description: description || '', kind }}
+        subject={{ description: description || '', kind, name: fileSubject }}
         cap={cap}
         onChange={placeGenerated}
         tags={tags ?? ''}
         onTagsChange={onTagsChange}
       />
-      <Dialog open={pendingGenerated !== null} onOpenChange={(o) => { if (!o) closeOverwrite(false); }}>
-        <DialogContent className="sm:max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Replace which image?</DialogTitle>
-            <DialogDescription>
-              There is no free slot for the generated image. Choose the one it takes the place of.
-            </DialogDescription>
-          </DialogHeader>
-          <RadioGroup value={String(overwriteSlot)} onValueChange={(v) => setOverwriteSlot(Number(v))}>
-            {shown.map((_url, i) => (
-              <Label
-                key={i}
-                htmlFor={`${imageId}-overwrite-${i}`}
-                className="flex cursor-pointer items-center gap-3 rounded-md border p-2 hover:border-muted-foreground"
-              >
-                <RadioGroupItem value={String(i)} id={`${imageId}-overwrite-${i}`} />
-                <RemoteImg src={shown[i]} alt="" className="h-12 w-12 rounded object-cover" />
-                <span>{i === 0 ? 'Primary' : `Image ${i + 1}`}</span>
-              </Label>
-            ))}
-          </RadioGroup>
-          <DialogFooter className="flex flex-col sm:flex-row gap-2">
-            <Button type="button" variant="outline" onClick={() => closeOverwrite(false)}>Cancel</Button>
-            <Button type="button" onClick={() => closeOverwrite(true)}>Replace</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ReplaceImageDialog
+        open={pendingGenerated !== null}
+        images={shown}
+        slot={overwriteSlot}
+        onSlotChange={setOverwriteSlot}
+        idPrefix={imageId}
+        onClose={closeOverwrite}
+      />
     </div>
   );
 };
+
+/** Asks which held image a generated one takes the place of. `onClose(true)` replaces the picked slot. */
+export function ReplaceImageDialog({ open, images, slot, onSlotChange, idPrefix, onClose }: {
+  open: boolean;
+  images: string[];
+  slot: number;
+  onSlotChange: (slot: number) => void;
+  idPrefix: string;
+  onClose: (replace: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(false); }}>
+      <DialogContent surface="imageReplace" className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>Replace which image?</DialogTitle>
+          <DialogDescription>
+            There is no free slot for the generated image. Choose the one it takes the place of.
+          </DialogDescription>
+        </DialogHeader>
+        <RadioGroup value={String(slot)} onValueChange={(v) => onSlotChange(Number(v))}>
+          {images.map((url, i) => (
+            <Label
+              key={i}
+              htmlFor={`${idPrefix}-overwrite-${i}`}
+              className="flex cursor-pointer items-center gap-3 rounded-md border p-2 hover:border-muted-foreground"
+            >
+              <RadioGroupItem value={String(i)} id={`${idPrefix}-overwrite-${i}`} />
+              <RemoteImg src={url} alt="" className="h-12 w-12 rounded object-cover" />
+              <span>{i === 0 ? 'Primary' : `Image ${i + 1}`}</span>
+            </Label>
+          ))}
+        </RadioGroup>
+        <DialogFooter className="flex flex-col sm:flex-row gap-2">
+          <Button type="button" variant="outline" onClick={() => onClose(false)}>Cancel</Button>
+          <Button type="button" onClick={() => onClose(true)}>Replace</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /**
  * The tags half of the widget: the booru Image Tags line with its AI tag writer. Advanced only, as the tags
@@ -440,15 +526,17 @@ export const ImageTags = () => {
   const { advanced } = useEditorMode();
   if (!advanced) return null;
   return (
-    <TagField
-      label="Image Tags"
-      value={tags || ''}
-      onChange={onTagsChange}
-      placeholders={placeholders}
-      ownerId={ownerId}
-      placeholder="booru tags, comma separated"
-      aside={<AiGenerateButton mode="tags" kind={kind} source={description} onChange={onTagsChange} />}
-    />
+    <div {...fieldFrame('imageTags')}>
+      <TagField
+        label="Image Tags"
+        value={tags || ''}
+        onChange={onTagsChange}
+        placeholders={placeholders}
+        ownerId={ownerId}
+        placeholder="booru tags, comma separated"
+        aside={<AiGenerateButton mode="tags" kind={kind} source={description} onChange={onTagsChange} />}
+      />
+    </div>
   );
 };
 

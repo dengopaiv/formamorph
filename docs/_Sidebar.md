@@ -12,7 +12,7 @@
 - [❓ Formaquestion](Formaquestion)
 - [💾 Saves and Backup](Saves-and-Backup)
 - [🧠 Story Memory](Memory)
-- [🎭 Entities in Play](Entities)
+- [🎭 Entities in Game](Entities)
 - [🪪 Personas](Personas)
 - [🌐 Community Creations](Community-Creations)
 - [⚙️ Settings](Settings)
@@ -25,6 +25,7 @@
 - [✍️ Text Formatting](TextFormatting)
 - [🛠️ World Editor](WorldEditor)
   - [🌍 Overview](World-Editor-Overview)
+  - [📦 Media](World-Editor-Media)
   - [🎬 Openings](World-Editor-Openings)
   - [📊 Stats](World-Editor-Stats)
   - [🎭 Entities](World-Editor-Entities)
@@ -35,7 +36,7 @@
 - [🧪 Test Bench](Test-Bench)
 - [🪪 Personas for Authors](Persona-Authoring)
 - [📐 World Format](WorldFormat)
-- [🧮 Stat Code Guide](StatCodeGuide)
+- [🧮 Scripts Guide](ScriptsGuide)
 - [🔗 Linked Content](LinkedContent)
 
 **Project**

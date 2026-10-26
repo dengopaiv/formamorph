@@ -10,19 +10,26 @@ import {
   resolveSlotValue,
   validateSlotValues,
   fillTemplate,
+  ownerAnswer,
+  slotAnswer,
   isBuiltInTemplate,
   isNameSlotType,
-  PERSONA_TRAIT_OWNER,
+  PERSONA_SLOT_OWNER,
   BUILT_IN_TEMPLATES,
   DAYPART_OPTIONS,
-  timingOf,
-  templatesForTiming,
-  type StatCodeTemplate,
+  readTemplate,
+  missingParams,
+  templatesFor,
+  templateTimingLabels,
+  type CodeTemplate,
   type TemplateSlot,
 } from './statCodeTemplates';
+import { readsTurnStart } from './statCodeTiming';
+import { SCRIPT_TIMINGS } from './scripts';
+import { SAMPLE_SENTENCE, sampleNarration } from './scriptTestSamples';
 import { executeStatCode, type SandboxEntity, type SandboxTrait } from './statCodeExecutor';
 import { phMap, phWrite } from '@/test/sandboxPlaceholders';
-import type { Stat } from '@/types';
+import type { ScriptTiming, Stat } from '@/types';
 
 const makeStat = (over: Partial<Stat>): Stat => ({
   id: '1',
@@ -85,6 +92,50 @@ describe('parseTemplateSlots', () => {
     expect(loose.slots.find((slot) => slot.name === 'b')).toEqual({ name: 'b', type: 'trait' });
     // A list was never a tie, so a saved template that wrote one still parses clean.
     expect(parseTemplateSlots('{{t:trait(a|b)}}')).toEqual({ slots: [{ name: 't', type: 'trait', options: ['a', 'b'] }], errors: [] });
+  });
+
+  it('ties a stat slot to the persona or to an entity slot the same way, in every kind', () => {
+    for (const kind of ['script', 'worldTool'] as const) {
+      const { slots, errors } = parseTemplateSlots('{{who:entity}} {{a:stat(who)}} {{b:stat(persona)}} {{c:stat(nobody)}}', kind);
+      expect(errors).toEqual([]);
+      expect(slots).toEqual([
+        { name: 'who', type: 'entity' },
+        { name: 'a', type: 'stat', owner: 'who' },
+        { name: 'b', type: 'stat', owner: 'persona' },
+        { name: 'c', type: 'stat' },
+      ]);
+    }
+  });
+});
+
+describe('a typed parameter slot', () => {
+  it('reads its Parameter type and the default name, and takes a plain slot as text named after itself', () => {
+    const { slots, errors } = parseTemplateSlots('{{sides:param(number)=die}} {{flag:param(boolean)}} {{line:param}}', 'worldTool');
+    expect(errors).toEqual([]);
+    expect(slots).toEqual([
+      { name: 'sides', type: 'param', paramType: 'number', defaultValue: 'die' },
+      { name: 'flag', type: 'param', paramType: 'boolean' },
+      { name: 'line', type: 'param', paramType: 'string' },
+    ]);
+    expect(defaultSlotValues(slots)).toEqual({ sides: 'die', flag: 'flag', line: 'line' });
+  });
+
+  it('reports a type the Tool editor cannot create and reads it as text', () => {
+    for (const type of ['colour', 'enum']) {
+      const { slots, errors } = parseTemplateSlots(`{{a:param(${type})}}`, 'worldTool');
+      expect(errors).toEqual([`Slot "a" has unknown Parameter type "${type}" — treating it as text.`]);
+      expect(slots[0]).toMatchObject({ paramType: 'string' });
+    }
+  });
+
+  it('lists the Parameters a fill leaves missing, once each, with the slot’s type', () => {
+    const { slots } = parseTemplateSlots('{{a:param(number)=amount}} {{b:param=line}} {{c:param(number)=have}} {{d:param(number)=amount}}', 'worldTool');
+    const have = [{ name: 'have', type: 'number' as const }, { name: 'unrelated', type: 'string' as const }];
+    expect(missingParams(slots, defaultSlotValues(slots), have)).toEqual([
+      { name: 'amount', type: 'number', description: '', required: true, options: [] },
+      { name: 'line', type: 'string', description: '', required: true, options: [] },
+    ]);
+    expect(missingParams(slots, { ...defaultSlotValues(slots), a: 'have' }, have).map((param) => param.name)).toEqual(['line', 'amount']);
   });
 });
 
@@ -210,6 +261,77 @@ describe('fillTemplate', () => {
   it('emits 0 for an unparseable number rather than invalid code', () => {
     expect(fillTemplate('{{n:number}}', { n: 'abc' })).toBe('0');
   });
+
+  describe('a trait slot picked from the owner’s traits', () => {
+    const owner = ownerAnswer('Scarred');
+
+    it('reroutes the `traits` it indexes through to `owner.traits`, and leaves a world pick on `traits`', () => {
+      expect(fillTemplate('traits[{{t:trait}}].enabled', { t: owner })).toBe('owner.traits["Scarred"].enabled');
+      expect(fillTemplate('traits?.[{{t:trait}}]', { t: owner })).toBe('owner.traits?.["Scarred"]');
+      expect(fillTemplate('{{t:trait}}; persona.traits[{{t}}]', { t: owner })).toBe('"Scarred"; persona.traits["Scarred"]');
+      expect(fillTemplate('traits[{{t:trait}}].enabled', { t: 'Scarred' })).toBe('traits["Scarred"].enabled');
+    });
+
+    it('runs through the sandbox as the owner’s trait', async () => {
+      const rage = makeStat({ id: 'r', name: 'Rage', value: 9 });
+      // The world holds a Scarred that is off, so only the owner's route reads on.
+      const code = 'return traits[{{t:trait}}].enabled ? 1 : 2;';
+      const options = {
+        traits: [{ name: 'Scarred', enabled: false, acquired: false }],
+        owner: { name: 'Bram', id: 'bram', traits: [{ name: 'Scarred', enabled: true, acquired: true }], stats: { stats: [rage] } },
+      };
+      expect(await executeStatCode(fillTemplate(code, { t: owner }), [], rage, options)).toMatchObject({ value: 1, error: null });
+      expect(await executeStatCode(fillTemplate(code, { t: 'Scarred' }), [], rage, options)).toMatchObject({ value: 2, error: null });
+    });
+  });
+
+  describe('a stat slot picked from the owner’s stats', () => {
+    const owner = ownerAnswer('Rage');
+
+    it('reroutes the `stats` it indexes through to `owner.stats`', () => {
+      expect(fillTemplate('const a = stats[{{s:stat}}].value;', { s: owner })).toBe('const a = owner.stats["Rage"].value;');
+      expect(fillTemplate('stats [ {{s:stat}} ].value', { s: owner })).toBe('owner.stats [ "Rage" ].value');
+      expect(fillTemplate('stats?.[{{s:stat}}]?.value', { s: owner })).toBe('owner.stats?.["Rage"]?.value');
+    });
+
+    it('leaves a world pick on `stats`, and reads a plain answer as the world’s', () => {
+      expect(fillTemplate('stats[{{s:stat}}].value', { s: 'Rage' })).toBe('stats["Rage"].value');
+      expect(fillTemplate('stats[{{s:stat}}].value', {})).toBe('stats[""].value');
+    });
+
+    it('reroutes each use of a repeated slot', () => {
+      expect(fillTemplate('stats[{{s:stat}}].max - stats[{{s}}].value', { s: owner })).toBe('owner.stats["Rage"].max - owner.stats["Rage"].value');
+    });
+
+    it('quotes the bare name where the slot is not indexed through `stats`', () => {
+      expect(fillTemplate('const name = {{s:stat}}; foo.stats[{{s}}]; owner.stats[{{s}}]', { s: owner }))
+        .toBe('const name = "Rage"; foo.stats["Rage"]; owner.stats["Rage"]');
+    });
+
+    it('escapes a quote in the name', () => {
+      expect(fillTemplate('stats[{{s:stat}}]', { s: ownerAnswer('Ka"os') })).toBe('owner.stats["Ka\\"os"]');
+    });
+
+    it('splits an answer into its route and name', () => {
+      expect(slotAnswer(owner)).toEqual({ route: 'owner', name: 'Rage' });
+      expect(slotAnswer('Rage')).toEqual({ route: 'world', name: 'Rage' });
+    });
+
+    it('reads as filled, and runs through the sandbox as the owner’s stat', async () => {
+      const slot: TemplateSlot = { name: 's', type: 'stat' };
+      expect(validateSlotValues([slot], { s: owner })).toEqual({});
+      const rage = { id: 'r', name: 'Rage', type: 'number', description: '', min: 0, max: 100, value: 9, regen: 0 } as Stat;
+      const gold = { ...rage, id: 'g', name: 'Rage', value: 40 } as Stat;
+      const result = await executeStatCode(fillTemplate('return stats[{{s:stat}}].value;', { s: owner }), [gold], rage, {
+        owner: { name: 'Bram', id: 'bram', traits: [], stats: { stats: [rage] } },
+      });
+      expect(result).toMatchObject({ value: 9, error: null });
+      const world = await executeStatCode(fillTemplate('return stats[{{s:stat}}].value;', { s: 'Rage' }), [gold], rage, {
+        owner: { name: 'Bram', id: 'bram', traits: [], stats: { stats: [rage] } },
+      });
+      expect(world).toMatchObject({ value: 40, error: null });
+    });
+  });
 });
 
 describe('built-in templates', () => {
@@ -222,12 +344,14 @@ describe('built-in templates', () => {
 
   it('declare only slots whose defaults survive validation', () => {
     for (const template of BUILT_IN_TEMPLATES) {
-      const { slots, errors } = parseTemplateSlots(template.code);
+      const { slots, errors } = parseTemplateSlots(template.code, template.kind);
       expect(errors, template.name).toEqual([]);
       // A name slot has no sensible shipped default (world-specific), so fill it here the way the form will.
       const values = { ...defaultSlotValues(slots) };
       for (const slot of slots) {
-        if (isNameSlotType(slot.type)) values[slot.name] = { stat: 'Health', placeholder: 'Mood', trait: 'Cursed', entity: 'Mira' }[slot.type];
+        if (isNameSlotType(slot.type)) {
+          values[slot.name] = { stat: 'Health', placeholder: 'Mood', trait: 'Cursed', entity: 'Mira', location: 'Inn', param: 'amount' }[slot.type];
+        }
       }
       expect(validateSlotValues(slots, values), template.name).toEqual({});
     }
@@ -256,15 +380,16 @@ describe('built-in templates', () => {
   /** The world's names, the way the picker fills a slot of each kind. */
   const pickFor = (slot: TemplateSlot): string | undefined => {
     switch (slot.type) {
-      case 'stat': return slot.name === 'secondStat' ? 'Strength' : 'Health';
+      case 'stat': return slot.name === 'secondStat' || slot.name === 'bonusStat' ? 'Strength' : 'Health';
       case 'placeholder': return placeholders[0].name;
-      case 'trait': return slot.owner === PERSONA_TRAIT_OWNER ? scarred.name : slot.owner ? wounded.name : traits[0].name;
+      case 'trait': return slot.owner === PERSONA_SLOT_OWNER ? scarred.name : slot.owner ? wounded.name : traits[0].name;
       case 'entity': return mira.name;
       default: return undefined;
     }
   };
 
-  for (const template of BUILT_IN_TEMPLATES) {
+  // World Tool templates run through Try It's runner in worldToolTemplates.runsClean.test.ts.
+  for (const template of BUILT_IN_TEMPLATES.filter((t) => t.kind === 'script')) {
     it(`runs in the sandbox: ${template.name}`, async () => {
       const { slots } = parseTemplateSlots(template.code);
       const values = { ...defaultSlotValues(slots) };
@@ -272,20 +397,48 @@ describe('built-in templates', () => {
         const picked = pickFor(slot);
         if (picked !== undefined) values[slot.name] = picked;
       }
-      // The clock its own box hands it: a measured turn after the AI, and the opening turn's zero hours
-      // before, which is the reading the before box gives on the turn its templates are written for.
-      const clock = template.timing === 'before'
+      // The clock its first timing hands it: the opening turn's zero hours where the turn start is read, which
+      // is the turn those templates are written for, and a measured turn after the AI.
+      const clock = template.kind === 'script' && readsTurnStart(template.timings[0])
         ? { deltaHours: 0, elapsedHours: 0 }
         : { deltaHours: 2, elapsedHours: 12 };
+      const timing = template.kind === 'script' ? template.timings[0] : undefined;
       const result = await executeStatCode(fillTemplate(template.code, values), world, self, {
         ...castOptions, clock,
+        ...(timing === 'output' && { narration: sampleNarration(SAMPLE_SENTENCE) }),
+        ...(timing === 'switch' && { switchedTrait: { ...traits[0], owner: '' } }),
       });
       expect(result.error, template.name).toBeNull();
-      // A template writes a value, a bound, a placeholder, or a trait; one that does nothing is broken.
-      const wrote = result.value !== null || !!result.bounds || !!result.placeholders?.length || !!result.traits?.length;
+      // A template writes a value, a bound, a placeholder, a trait or a sentence; one that does nothing is broken.
+      const wrote = result.value !== null || !!result.bounds || !!result.placeholders?.length || !!result.traits?.length
+        || (result.sentence !== undefined && result.sentence !== SAMPLE_SENTENCE);
       expect(wrote, template.name).toBe(true);
     });
   }
+
+  describe('the start and output templates', () => {
+    const build = (id: string, values: Record<string, string>) => {
+      const template = BUILT_IN_TEMPLATES.find(t => t.id === id)!;
+      return fillTemplate(template.code, values);
+    };
+
+    it('starts a stat inside its range even when a limit is outside it or the limits are swapped', async () => {
+      const code = build('builtin-random-starting-value', { low: '900', high: '-50' });
+      for (let run = 0; run < 20; run++) {
+        const { value, error } = await executeStatCode(code, world, self, { clock: { deltaHours: 0, elapsedHours: 0 } });
+        expect(error).toBeNull();
+        expect(value).toBeGreaterThanOrEqual(0);
+        expect(value).toBeLessThanOrEqual(200);
+      }
+    });
+
+    it('replaces a word that holds an apostrophe', async () => {
+      const code = build('builtin-replace-word', { word: "o'clock", replacement: 'hour' });
+      const { sentence, error } = await executeStatCode(code, world, self, { narration: sampleNarration("It is ten o'clock.") });
+      expect(error).toBeNull();
+      expect(sentence).toBe('It is ten hour.');
+    });
+  });
 
   // The three write templates prove themselves by what the host reads back, not by a returned number:
   // a bound on `self`, a pin on a placeholder, and a switch on a trait.
@@ -356,6 +509,64 @@ describe('built-in templates', () => {
         .toBe('placeholders["Hair Color"].value');
       expect(fillTemplate('traits[{{t:trait}}].enabled', { t: 'Night Owl' }))
         .toBe('traits["Night Owl"].enabled');
+    });
+  });
+
+  describe('Dice Roll With Consequences', () => {
+    const template = BUILT_IN_TEMPLATES.find(t => t.id === 'builtin-dice-roll-consequences')!;
+    const values = { bandPlaceholder: 'Mood', penaltyStat: 'Health', bonusStat: 'Strength' };
+    // The sandbox's Math.random is QuickJS's own and cannot be seeded, so each case fixes the die.
+    // `faces` is the unit draw the code scales by 20: 0 rolls a 1, 0.5 an 11, 0.99 a 20.
+    const rollWith = (faces: number) =>
+      executeStatCode(`Math.random = () => ${faces};\n${fillTemplate(template.code, values)}`, world, self, castOptions);
+
+    it('lists the two target stats and the placeholder as slots, captioned like the other templates', () => {
+      expect(parseTemplateSlots(template.code).slots.map(slot => [slot.type, humanizeSlotName(slot.name)])).toEqual([
+        ['placeholder', 'Band Placeholder'],
+        ['stat', 'Penalty Stat'],
+        ['stat', 'Bonus Stat'],
+      ]);
+    });
+
+    it('halves the penalty stat on a 1 and writes nothing else', async () => {
+      const result = await rollWith(0);
+      expect(result).toEqual({
+        value: 1, error: null,
+        statWrites: [{ id: 'h', name: 'Health', value: 40 }],
+        placeholders: [phWrite('Mood', 'calm')],
+      });
+    });
+
+    it('adds 1 to the bonus stat on a 20 and writes nothing else', async () => {
+      const result = await rollWith(0.99);
+      expect(result).toEqual({
+        value: 20, error: null,
+        statWrites: [{ id: 's', name: 'Strength', value: 21 }],
+        placeholders: [phWrite('Mood', 'furious')],
+      });
+    });
+
+    it('leaves both stats alone on any other roll and still pins the band', async () => {
+      // A roll of 11 sits in the third of the placeholder's four bands.
+      expect(await rollWith(0.5)).toEqual({ value: 11, error: null, placeholders: [phWrite('Mood', 'angry')] });
+      // The rolls next to each edge are plain rolls: 2 does not halve, 19 does not add.
+      const two = await rollWith(0.06);
+      expect([two.value, two.statWrites, two.placeholders]).toEqual([2, undefined, [phWrite('Mood', 'calm')]]);
+      const nineteen = await rollWith(0.9);
+      expect([nineteen.value, nineteen.statWrites, nineteen.placeholders]).toEqual([19, undefined, [phWrite('Mood', 'furious')]]);
+    });
+
+    // Four bands over 20 rolls change at 5 to 6, 10 to 11 and 15 to 16.
+    it('moves the pinned band at the edges between bands', async () => {
+      const pinned = async (faces: number) => (await rollWith(faces)).placeholders;
+      expect(await pinned(0.21)).toEqual([phWrite('Mood', 'calm')]);
+      expect(await pinned(0.26)).toEqual([phWrite('Mood', 'wary')]);
+      expect(await pinned(0.51)).toEqual([phWrite('Mood', 'angry')]);
+      expect(await pinned(0.76)).toEqual([phWrite('Mood', 'furious')]);
+    });
+
+    it('is in the After the AI menu', () => {
+      expect(templatesFor(BUILT_IN_TEMPLATES, 'script', 'after')).toContain(template);
     });
   });
 
@@ -451,36 +662,76 @@ describe('built-in templates', () => {
   });
 });
 
-describe('which box a template belongs to', () => {
-  it('splits the built-ins so neither menu offers the other box’s templates', () => {
-    const before = templatesForTiming(BUILT_IN_TEMPLATES, 'before').map(t => t.id);
-    const after = templatesForTiming(BUILT_IN_TEMPLATES, 'after').map(t => t.id);
+describe('which menus a template shows in', () => {
+  const menu = (timing: ScriptTiming) => templatesFor(BUILT_IN_TEMPLATES, 'script', timing).map(t => t.name);
 
-    // The three setup shapes: a value the first narration reads, a pin it reads, a trait it reads.
-    expect(before).toEqual([
-      'builtin-placeholder-follows-stat', 'builtin-trait-by-threshold', 'builtin-opening-value',
-    ]);
-    expect(after).not.toHaveLength(0);
-    expect(before.filter(id => after.includes(id))).toEqual([]);
-    expect([...before, ...after]).toHaveLength(BUILT_IN_TEMPLATES.length);
+  it('keeps the clock-delta templates out of every menu but After the AI', () => {
+    for (const timing of ['before', 'start', 'output', 'switch'] as const) {
+      expect(menu(timing), timing).not.toContain('Hourly Change');
+      expect(menu(timing), timing).not.toContain('Regen Toward Target');
+    }
+    expect(menu('after')).toEqual(expect.arrayContaining(['Hourly Change', 'Regen Toward Target']));
   });
 
-  // Three readings are dead in the before box: `deltaHours` is 0 because the turn has consumed no time,
-  // `delta` is zeros because nothing has moved, and `previous` is the stat itself. A template built on any
-  // of them would run and quietly do nothing, so it belongs in the after menu. The rest of the clock still
-  // reads: `elapsedHours` at turn start is what tells the opening turn from every later one.
-  it('offers no before template that is built on a reading the before box zeroes', () => {
-    const deadInTheBeforeBox = /deltaHours|delta[.]|previous/;
-    for (const template of templatesForTiming(BUILT_IN_TEMPLATES, 'before')) {
-      expect(template.code, template.name).not.toMatch(deadInTheBeforeBox);
+  it('lists one formula in each menu it works in', () => {
+    for (const timing of ['before', 'after', 'start', 'switch'] as const) expect(menu(timing), timing).toContain('Weighted Blend');
+    expect(menu('output')).not.toContain('Weighted Blend');
+  });
+
+  // `deltaHours` is 0, `delta` is zeros and `previous` is the stat itself in every timing that reads the turn
+  // start, so a template built on any of them runs there and quietly does nothing.
+  it('offers no template built on a reading its timing zeroes', () => {
+    const deadAtTurnStart = /deltaHours|delta[.]|previous/;
+    for (const timing of SCRIPT_TIMINGS.filter(readsTurnStart)) {
+      for (const template of templatesFor(BUILT_IN_TEMPLATES, 'script', timing)) {
+        expect(template.code, `${template.name} at ${timing}`).not.toMatch(deadAtTurnStart);
+      }
     }
   });
 
-  it('reads a template with no timing as an after-the-AI one', () => {
-    expect(timingOf({})).toBe('after');
-    expect(timingOf({ timing: 'before' })).toBe('before');
-    const untimed = { id: 'x', name: 'x', description: '', code: '' } as StatCodeTemplate;
-    expect(templatesForTiming([untimed], 'after')).toEqual([untimed]);
-    expect(templatesForTiming([untimed], 'before')).toEqual([]);
+  it('shows each new template only in its own timing’s menu', () => {
+    const own = {
+      start: ['Random Starting Value', 'Start From Persona Trait'],
+      switch: ['Change When a Trait Switches', 'Mirror a Trait'],
+      output: ['Replace a Word', 'Count a Word', 'Bold a Word Past a Threshold'],
+    } as const;
+    for (const [timing, names] of Object.entries(own) as [ScriptTiming, readonly string[]][]) {
+      expect(menu(timing), timing).toEqual(expect.arrayContaining([...names]));
+      for (const other of SCRIPT_TIMINGS.filter(t => t !== timing)) {
+        for (const name of names) expect(menu(other), `${name} in ${other}`).not.toContain(name);
+      }
+    }
+  });
+
+  it('never lists a template in a menu of the other kind', () => {
+    const tool: CodeTemplate = { id: 't', kind: 'worldTool', name: 'Tool', description: '', code: '', timings: ['after'] };
+    const stat: CodeTemplate = { id: 's', kind: 'script', name: 'Stat', description: '', code: '', timings: ['after'] };
+    expect(templatesFor([tool, stat], 'script', 'after')).toEqual([stat]);
+    expect(templatesFor([tool, stat], 'worldTool', 'after')).toEqual([tool]);
+  });
+
+  it('names every timing a template runs in', () => {
+    const blend = BUILT_IN_TEMPLATES.find(t => t.id === 'builtin-weighted-blend')!;
+    expect(templateTimingLabels(blend)).toEqual(['Before the AI', 'After the AI', 'At Game Start', 'When a Trait Switches']);
+  });
+});
+
+describe('readTemplate', () => {
+  it('reads its own output back unchanged', () => {
+    for (const entry of [{ name: 'a', code: 'x', timing: 'before' }, { name: 'b', code: 'y', kind: 'worldTool', timings: ['after', 'call'] }]) {
+      const once = readTemplate(entry);
+      expect(once).not.toBeNull();
+      expect(readTemplate(once)).toEqual(once);
+    }
+  });
+
+  it('puts the picked timings in the kind’s order', () => {
+    expect(readTemplate({ name: 'a', code: 'x', kind: 'worldTool', timings: ['after', 'call'] })?.timings).toEqual(['call', 'after']);
+  });
+
+  it('is no template without a name or code', () => {
+    expect(readTemplate({ code: 'x' })).toBeNull();
+    expect(readTemplate({ name: 'x' })).toBeNull();
+    expect(readTemplate(null)).toBeNull();
   });
 });

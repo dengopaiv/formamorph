@@ -1,4 +1,5 @@
 import type { WorldMetadata } from './world';
+import type { SavedScriptWrites } from '@/lib/statCodeTurn';
 
 /** Sender role of a chat message, matching the OpenAI chat-completion roles. */
 export type ChatRole = 'system' | 'user' | 'assistant';
@@ -81,6 +82,7 @@ export type AIRequestType =
   | 'choices'
   | 'statUpdates'
   | 'locationChange'
+  | 'entityLocation'
   | 'summary'
   | 'milestoneSelect'
   | 'diary'
@@ -110,11 +112,27 @@ export interface ToolParam {
 /** The world data a Lookup handler searches. `memories` is catalog-only: a user Tool can't store it. */
 export type ToolLookupSource = 'entities' | 'locations' | 'dictionary' | 'memories';
 
+/** When a World Tool's script runs: at the call, on each narration sentence after it, or with the After the AI
+ *  scripts. */
+export type ToolScriptTiming = 'call' | 'output' | 'after';
+
 /** What runs when the AI calls a Tool. */
 export type ToolHandler =
   | { kind: 'lookup'; source: ToolLookupSource; param: string; returns: 'full' | 'summary' }
   | { kind: 'template'; body: string }
-  | { kind: 'script'; code: string };
+  | ToolScriptHandler;
+
+/** A Script handler. `timing`, `reply` and `stack` exist on World Tools only; absent `timing` is `call`. `reply`
+ *  and `stack` apply to the `output` and `after` timings. */
+export interface ToolScriptHandler {
+  kind: 'script';
+  code: string;
+  timing?: ToolScriptTiming;
+  /** The text an armed call answers with; blank answers "Done.". */
+  reply?: string;
+  /** Every call in a turn fires; off, a later call replaces the armed one. */
+  stack?: boolean;
+}
 
 /** A function the AI can call during a request. User Tools live in one global list; built-in Tools are the catalog. */
 export interface Tool {
@@ -166,6 +184,11 @@ export interface AITurnResult {
    *  this turn. Written for each participant as turns age out; a character's full diary is these across
    *  turns. Absent on pre-diary saves. */
   diaries?: Record<string, string>;
+  /** The lines scripts added to this turn's memory with `memories.add`, in call order. Read after `summary`. */
+  codeMemory?: string[];
+  /** The lines scripts added to entities' diaries with `diary`, by entity name, in call order. Read after
+   *  that name's `diaries` entry. */
+  codeDiaries?: Record<string, string[]>;
   /** The location this turn took place at, so a runtime-discovered character joins the right roster. */
   locationId?: string;
   /** The player's notes as they were for this turn — frozen from the live scratchpad when the turn commits,
@@ -180,14 +203,32 @@ export interface AITurnResult {
    *  reload and a saved scene stays reproducible without carrying its pixels. Absent until a scene image is
    *  made. The images themselves are deliberately NOT here — see lib/sceneImages. */
   sceneTags?: string;
+  /** Whether the planner put the player in this turn's picture, so the scene cast knows to draw the persona.
+   *  Absent when no planner ran and on saves written before the flag; absent reads as in frame. */
+  playerInFrame?: boolean;
   /** A reasoning model's (or inline-thinking) private scratchpad for this turn, shown as a collapsible aside
    *  above the narration. `ms` is the think duration. Absent when the model didn't reason / on pre-2.1.0 saves. */
   reasoning?: { text: string; ms: number };
+  /** The turn's Script World Tool calls, in call order, which a stat re-roll replays (Q39). Absent when the
+   *  AI called none. */
+  toolCalls?: TurnToolCall[];
+}
+
+/** One Script World Tool call a turn made. */
+export interface TurnToolCall {
+  toolId: string;
+  args: Record<string, unknown>;
+  timing: ToolScriptTiming;
+  /** What an On Call script wrote, which a re-roll lays on again in place of a run (Q41). Absent on the other
+   *  timings and when the script failed. */
+  writes?: SavedScriptWrites;
 }
 
 /** An authenticated account as returned by the auth server; extra server fields pass through the index signature. */
 export interface AuthUser {
   username: string;
+  /** When a timed suspension ends, as a server timestamp; null or absent for none. */
+  suspendedUntil?: string | null;
   [key: string]: unknown;
 }
 

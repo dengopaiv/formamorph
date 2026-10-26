@@ -12,34 +12,36 @@
  * Pure and world-shaped: no React, no storage, no world mutation.
  */
 import { authoredChipScene } from '@/lib/chipValues/authoredScene';
-import { chipValues, statChipValues } from '@/lib/chipValues/chipValues';
+import { chipValues, knownPulledIds } from '@/lib/chipValues/chipValues';
 import type { CopyLookup } from '@/lib/blueprints';
 import { allPlaceholders } from '@/lib/placeholderHomes';
+import { traitScopedPins } from '@/lib/placeholderPins';
 import {
-  contextDelivery, navigableDestinationEntries, reachableEntityIds, scopedChipOpts, sublocationEntityIds,
+  contextDelivery, knownEntityIds, navigableDestinationEntries, reachableEntityIds, scopedChipOpts, sublocationEntityIds,
   type ContextDelivery,
 } from '@/lib/locationContext';
 import { estimateTokens } from '@/lib/memoryUtils';
 import { NONE_PLACEHOLDER } from '@/lib/promptFallbacks';
 import { placedChip } from '@/lib/promptTemplate';
+import type { ValueLookup } from '@/lib/promptValues';
 import { splitToken, variableForToken } from '@/lib/promptVariables';
 import { enabledStats } from '@/lib/traitEffects';
 import type { Entity, GameLocation, PlayerStat } from '@/types';
-import { lensActiveTraits, resolveLensText, type BenchLens } from './lens';
+import { lensActiveTraits, lensOwnerScopes, resolveLensEntityText, resolveLensText, type BenchLens } from './lens';
 import type { RuleWorld } from './rules';
 
 /** The slices of the authored world this instrument reads. */
 export type AiContextWorld = Pick<
   RuleWorld,
-  'worldOverview' | 'stats' | 'locations' | 'connections' | 'entities' | 'traits' | 'traitGroups'
+  'worldOverview' | 'stats' | 'statGroups' | 'locations' | 'connections' | 'entities' | 'traits' | 'traitGroups'
   | 'dictionaries' | 'placeholders'
 >;
 
 /** The blocks, in the order the prompts lay them out: the world, then who you are, then where you are. */
 export type ContextBlockId =
-  | 'world' | 'stats' | 'traits'
+  | 'world' | 'persona' | 'stats' | 'traits'
   | 'location' | 'sublocations' | 'parent' | 'reachable' | 'destinations'
-  | 'entities' | 'subEntities' | 'reachableEntities'
+  | 'entities' | 'subEntities' | 'reachableEntities' | 'knownEntities'
   | 'dictionary';
 
 /** One context block as the panel lists it: what it is, what it renders to, and what that costs. */
@@ -66,8 +68,8 @@ export interface DestinationRow {
   via: 'implicit' | 'connection';
 }
 
-/** Which roster an entity is listed in — the three scopes the prompts pull separately. */
-export type RosterScope = 'here' | 'sublocations' | 'reachable';
+/** Which roster an entity is listed in — the four scopes the prompts pull separately. */
+export type RosterScope = 'here' | 'sublocations' | 'reachable' | 'known';
 
 /** One entity in one scope's roster, and which of its descriptions that scope's block carries. */
 export interface RosterEntity {
@@ -109,6 +111,7 @@ export const EMPTY_AI_CONTEXT: AiContextData = {
 // positions under one row, Background first, so it shows every entry a turn could inject.
 const BLOCK_TOKENS: Record<ContextBlockId, { label: string; token: string; parts?: string[] }> = {
   world: { label: 'World Description', token: '<WORLD DESCRIPTION>' },
+  persona: { label: 'Persona', token: '<PERSONA|markdown>' },
   stats: { label: 'Stats', token: '<STATS DESCRIPTION|descriptions.markdown>' },
   traits: { label: 'Traits', token: '<TRAITS DESCRIPTION|markdown>' },
   location: { label: 'Location', token: '<LOCATION|markdown>' },
@@ -119,6 +122,7 @@ const BLOCK_TOKENS: Record<ContextBlockId, { label: string; token: string; parts
   entities: { label: 'Entities Here', token: '<ENTITIES|markdown>' },
   subEntities: { label: 'Entities in Sub-Locations', token: '<ENTITIES|sublocations.markdown>' },
   reachableEntities: { label: 'Entities Reachable', token: '<ENTITIES|reachable.summary.markdown>' },
+  knownEntities: { label: 'Entities Known Here', token: '<ENTITIES|known.summary.markdown>' },
   dictionary: { label: 'Dictionary', token: '<DICTIONARY>', parts: ['<DICTIONARY|before>', '<DICTIONARY>'] },
 };
 
@@ -129,9 +133,9 @@ const prefersSummary = (id: ContextBlockId): boolean => scopedChipOpts(BLOCK_TOK
 
 /** A block's value from the module's output: its token's value, or its parts' values joined, placeholders
  *  skipped. A token the module has no value for throws, so the table cannot name a chip no prompt can hold. */
-function blockValue(id: ContextBlockId, values: Record<string, string>): string {
+function blockValue(id: ContextBlockId, values: ValueLookup): string {
   const valueOf = (token: string): string => {
-    const value = values[token];
+    const value = values(token);
     if (value === undefined) throw new Error(`Chip Values has no value for ${token}`);
     return value;
   };
@@ -159,17 +163,12 @@ export function blockChipPlacedIn(template: string, id: ContextBlockId, position
   return placedChip(template, (key) => key === want);
 }
 
-/** The lens's stats in the shape `token` asks for, before the lens resolves any chips. An unregistered token
+/** The stats block any Stats chip renders for the lens PC, with the PC's chips resolved. An unregistered token
  *  throws, as `blockValue` does. */
-function renderStats(world: AiContextWorld, lens: BenchLens, token: string): string {
-  const value = statChipValues(lensStats(world, lens))[token];
+export function buildStatBlock(world: AiContextWorld, lens: BenchLens, token: string): string {
+  const value = chipValues(lensScene(world, lens))(token);
   if (value === undefined) throw new Error(`Chip Values has no value for ${token}`);
   return value;
-}
-
-/** The stats block any Stats chip renders for the lens PC, with the PC's chips resolved. */
-export function buildStatBlock(world: AiContextWorld, lens: BenchLens, token: string): string {
-  return resolveLensText(renderStats(world, lens, token), allPlaceholders(world), lens.pins);
 }
 
 /** The scopes' rosters, each paired with the entity block that renders it. */
@@ -177,6 +176,7 @@ const ROSTERS: { scope: RosterScope; label: string; block: ContextBlockId }[] = 
   { scope: 'here', label: 'Here', block: 'entities' },
   { scope: 'sublocations', label: 'In Sub-Locations', block: 'subEntities' },
   { scope: 'reachable', label: 'In Reachable Locations', block: 'reachableEntities' },
+  { scope: 'known', label: 'Known Here', block: 'knownEntities' },
 ];
 
 /** The traits active under this lens, as the shared fresh-game substitution computes them. */
@@ -192,6 +192,26 @@ function lensStats(world: AiContextWorld, lens: BenchLens): PlayerStat[] {
   return enabledStats(stats, lens.statEnabled);
 }
 
+/** The world's opening as the lens PC meets it: its location, traits and stats, every chip read through its pins. */
+function lensScene(world: AiContextWorld, lens: BenchLens) {
+  const placeholders = allPlaceholders(world);
+  const scopeOf = lensOwnerScopes(world, lens);
+  return authoredChipScene(world, {
+    location: lens.location,
+    activeTraitIds: activeTraitIds(world, lens),
+    stats: lensStats(world, lens),
+    resolve: (text: string, copies?: CopyLookup) => resolveLensText(text, placeholders, lens.pins, copies),
+    // Each entity's text reads its own scope, and its trait's text that trait's pins over it, as play reads them.
+    resolveEntity: (entity, text) => resolveLensEntityText(entity, text, placeholders, scopeOf(entity.id)),
+    resolveOwned: (trait, text, owner) => {
+      const scope = scopeOf(owner.id);
+      return resolveLensEntityText(owner, text, placeholders, {
+        pins: traitScopedPins(scope.bind(trait), scope.pins, placeholders), copies: scope.copies,
+      });
+    },
+  });
+}
+
 /**
  * Everything the AI Context instrument shows for `lens`. The location is the lens's, and every chip resolves
  * through the lens PC's pins, so a world whose text is placeholder-driven reads as that character sees it.
@@ -203,17 +223,10 @@ export function buildAiContext(world: AiContextWorld, lens: BenchLens): AiContex
   const locations = world.locations ?? [];
   const connections = world.connections ?? [];
   const entities = world.entities ?? [];
-  const placeholders = allPlaceholders(world);
   const location = lens.location;
-  const resolve = (text: string, copies?: CopyLookup) => resolveLensText(text, placeholders, lens.pins, copies);
-
-  const scene = authoredChipScene(world, {
-    location,
-    activeTraitIds: activeTraitIds(world, lens),
-    stats: lensStats(world, lens),
-    resolve,
-  });
+  const scene = lensScene(world, lens);
   const values = chipValues(scene);
+  const resolve = scene.resolve;
 
   // Each scope drops whoever a higher-precedence one already listed, exactly as the entity blocks do — a
   // roster that listed someone twice would disagree with the text beside it.
@@ -221,7 +234,9 @@ export function buildAiContext(world: AiContextWorld, lens: BenchLens): AiContex
   const here = new Set(hereIds);
   const subIds = sublocationEntityIds(location, locations, entities).filter((id) => !here.has(id));
   const shown = new Set([...hereIds, ...subIds]);
-  const reachIds = reachableEntityIds(location, locations, entities).filter((id) => !shown.has(id));
+  const reachIds = reachableEntityIds(location, locations, connections, entities).filter((id) => !shown.has(id));
+  const listed = new Set([...shown, ...reachIds]);
+  const knownIds = knownEntityIds(location, locations, entities, knownPulledIds(scene)).filter((id) => !listed.has(id));
 
   // Text stays exactly as the module produced it, trailing newline included — what an author reads here is
   // byte-for-byte what the model receives; the Dictionary block is its two lore chips, one after the other.
@@ -249,7 +264,7 @@ export function buildAiContext(world: AiContextWorld, lens: BenchLens): AiContex
       : [];
   });
   const scopeIds: Record<RosterScope, string[]> = {
-    here: hereIds, sublocations: subIds, reachable: reachIds,
+    here: hereIds, sublocations: subIds, reachable: reachIds, known: knownIds,
   };
 
   return {

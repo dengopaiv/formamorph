@@ -10,6 +10,8 @@ import type { TurnPlanInput, TurnPrompts, TurnSettings } from './turnPlan';
 export const TEST_PROMPTS: TurnPrompts = {
   locationChange: 'ROUTER <WORLD DESCRIPTION>',
   locationChangeUser: 'Action: <PLAYER ACTION>',
+  entityLocation: 'MOVER <WORLD DESCRIPTION> for <CHARACTER NAME>',
+  entityLocationUser: 'Move: <CHARACTER NAME> | <PLAYER ACTION> | <NARRATION> | <MOVE STATE> | <MOVE OPTIONS>',
   thinking: 'THINK <WORLD DESCRIPTION>',
   director: 'DIRECTOR <WORLD DESCRIPTION> <ACTIVE CHARACTER GUIDANCE>',
   directorUser: 'Last: <NARRATION> | Now: <PLAYER ACTION>',
@@ -22,6 +24,7 @@ export const TEST_PROMPTS: TurnPrompts = {
   choicesUser: 'Choices: <PLAYER ACTION> | <NARRATION>',
   statUpdates: 'STATS <WORLD DESCRIPTION>',
   statUpdatesUser: 'Stats: <PLAYER ACTION> | <NARRATION>',
+  statText: { system: null, user: null },
   summary: 'SUMMARY <WORLD DESCRIPTION>',
   summaryUser: 'Digest: <PLAYER ACTION> | <NARRATION>',
   milestoneSelect: 'MILESTONE <WORLD DESCRIPTION>',
@@ -46,6 +49,7 @@ export const TEST_SETTINGS: TurnSettings = {
   statCount: 3,
   locationChangeEnabled: true,
   locationAutoApply: true,
+  entityMovement: true,
   aiClock: true,
   memoryDigests: true,
   characterDiaries: true,
@@ -53,6 +57,7 @@ export const TEST_SETTINGS: TurnSettings = {
   imageAttachments: false,
   promptAttachments: {},
   language: 'English',
+  stripLinksAndImages: false,
 };
 
 /** A mid-story turn with somewhere to go, overridable field by field. */

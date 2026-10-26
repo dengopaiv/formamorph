@@ -17,15 +17,18 @@ export const REF_SAFE_COMPOSED_CHILDREN = [
   'WorldActionButton',
   'TokenChip', // src/components/prompt/TokenChip.tsx
   'ToggleGroupItem', // src/components/ui/toggle-group.tsx
+  'SelectItem', // src/components/ui/select.tsx
   'TabsTrigger', // src/components/ui/tabs.tsx
   'Checkbox', // src/components/ui/checkbox.tsx
   'RemoteImg', // src/lib/useRemoteImage.tsx
   'EdgeTabButton', // src/components/formaquestion/EdgeTab.tsx
+  'InsertMenuButton', // src/components/prompt/InsertMenuButton.tsx
   'Handle', // @xyflow/react — memo(forwardRef(...))
   // Radix triggers forward their ref, and pass anything else they are handed down through their own
   // `asChild` — which is how a tip and a popover share one button.
   'PopoverTrigger',
   'ContextMenuTrigger', // src/components/ui/context-menu.tsx chains the handlers it wraps
+  'DialogClose', // src/components/ui/dialog.tsx — Radix's Close itself
   // lucide-react icons forward refs
   'ChevronDown',
   // Radix's own Slot — merging the ref it is handed into its child is the whole job.

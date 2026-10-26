@@ -4,7 +4,7 @@ import { WorldCardFace } from './WorldCardFace';
 import type { WorldRecord } from '@/components/WorldDetails';
 
 /**
- * The library card's face renders from a world record alone. In Play shows it inside the World Editor,
+ * The library card's face renders from a world record alone. In Game shows it inside the World Editor,
  * where there is no library board to drag on and no game running.
  */
 
@@ -86,5 +86,28 @@ describe('WorldCardFace empty description and tags', () => {
   it('still shows a description it has when asked to omit an empty one', () => {
     render(<WorldCardFace world={world} layout="detailed" aspect="portrait" omitEmptyDescription />);
     expect(screen.getByText('A drowned coastal town.')).toBeInTheDocument();
+  });
+});
+
+describe('WorldCardFace mid-run', () => {
+  it('shows the run and does not open, in either layout', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    for (const layout of ['grid', 'detailed'] as const) {
+      const opened: string[] = [];
+      render(<WorldCardFace world={world} layout={layout} progress={0.4} onSelect={(id) => opened.push(id)} />);
+      expect(screen.getByRole('progressbar', { name: 'Optimizing images' })).toBeInTheDocument();
+      await userEvent.click(screen.getByAltText('Saltmarsh'));
+      expect(opened).toEqual([]);
+      cleanup();
+    }
+  });
+
+  it('opens again once the run ends', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const opened: string[] = [];
+    render(<WorldCardFace world={world} layout="grid" onSelect={(id) => opened.push(id)} />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    await userEvent.click(screen.getByAltText('Saltmarsh'));
+    expect(opened).toEqual(['world-1']);
   });
 });

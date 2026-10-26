@@ -3,17 +3,18 @@ import {
   castOwnedTraits, emptyEntryDraft, entryDefaults, entryGateInput, libraryCastIds, rekeyOwnedPicks, withLibraryDefaults,
   withLocationPick, withPersonaPick, withSettledTraits, type EntryDraft, type EntryTraitWorld,
 } from './entryDraft';
-import { settle, switchTrait } from './traitGates';
+import { gateOf, gateStates, settle, switchTrait } from './traitGates';
+import { cascadeOffInput } from './traitRuntime';
 import type { PersonaPickContext } from './personaPick';
 import type { Entity, GameLocation, PersonaRef, Trait } from '@/types';
 
-const entity = (id: string, locations: string[], startingLocationId?: string): Entity => ({
-  id, name: id, playerDescription: '', aiDescription: '', aiSummary: '', persona: true, locations, startingLocationId,
+const entity = (id: string, locations: string[]): Entity => ({
+  id, name: id, playerDescription: '', aiDescription: '', aiSummary: '', persona: true, locations,
 });
 const place = (id: string, isStarting = false): GameLocation => ({ id, name: id, isStarting });
 
 const context: PersonaPickContext = {
-  worldEntities: [entity('keeper', ['inn', 'dock']), entity('drifter', ['road']), entity('hermit', ['dock'], 'cellar')],
+  worldEntities: [entity('keeper', ['inn', 'dock']), entity('drifter', ['road']), entity('hermit', ['cellar']), entity('homeless', [])],
   locations: [place('inn'), place('dock', true), place('road'), place('cellar'), place('gate', true)],
 };
 const world = (entityId: string): PersonaRef => ({ source: 'world', entityId });
@@ -33,10 +34,10 @@ describe('withPersonaPick', () => {
     expect(withPersonaPick(withLocationPick(emptyEntryDraft(), null), world('keeper'), context).locationId).toBeNull();
   });
 
-  it('keeps the location for a world persona with no starting location among its locations', () => {
-    expect(withPersonaPick(emptyEntryDraft(), world('drifter'), context).locationId).toBeNull();
+  it('keeps the location for a world persona with no locations', () => {
+    expect(withPersonaPick(emptyEntryDraft(), world('homeless'), context).locationId).toBeNull();
     const fromKeeper = withPersonaPick(emptyEntryDraft(), world('keeper'), context);
-    expect(withPersonaPick(fromKeeper, world('drifter'), context).locationId).toBe('dock');
+    expect(withPersonaPick(fromKeeper, world('homeless'), context).locationId).toBe('dock');
   });
 
   it('keeps the location for a library persona and for None', () => {
@@ -45,15 +46,18 @@ describe('withPersonaPick', () => {
     expect(withPersonaPick(fromKeeper, { source: 'none' }, context).locationId).toBe('dock');
   });
 
-  it('preselects the unflagged location a world persona names', () => {
+  it("preselects a world persona's first location when none of them is flagged", () => {
     expect(withPersonaPick(emptyEntryDraft(), world('hermit'), context).locationId).toBe('cellar');
+    const fromKeeper = withPersonaPick(emptyEntryDraft(), world('keeper'), context);
+    expect(withPersonaPick(fromKeeper, world('drifter'), context).locationId).toBe('road');
   });
 
   it('drops a hand-picked unflagged location on a switch away, and a later persona pick moves it again', () => {
     const hermit = withLocationPick(withPersonaPick(emptyEntryDraft(), world('hermit'), context), 'cellar');
-    const drifter = withPersonaPick(hermit, world('drifter'), context);
-    expect(drifter).toMatchObject({ locationId: null, locationChosen: false });
-    expect(withPersonaPick(drifter, world('keeper'), context).locationId).toBe('dock');
+    const homeless = withPersonaPick(hermit, world('homeless'), context);
+    expect(homeless).toMatchObject({ locationId: null, locationChosen: false });
+    expect(withPersonaPick(homeless, world('drifter'), context)).toMatchObject({ locationId: 'road', locationChosen: false });
+    expect(withPersonaPick(hermit, world('keeper'), context).locationId).toBe('dock');
   });
 
   it('drops a library persona from the added characters', () => {
@@ -67,8 +71,8 @@ describe('owned trait picks in the draft', () => {
   const ash: Entity = {
     id: 'ash', name: 'Ash', persona: true,
     traits: [
-      trait('tamed', { isDefault: true }), trait('scarred'), trait('guard', { requires: [{ kind: 'playingAs', id: 'ash' }] }),
-      trait('crest', { isDefault: true, requires: [{ kind: 'playingAs', id: 'ash' }] }),
+      trait('tamed', { isDefault: true }), trait('scarred'), trait('guard', { requires: [{ all: [{ kind: 'playingAs', id: 'ash' }] }] }),
+      trait('crest', { isDefault: true, requires: [{ all: [{ kind: 'playingAs', id: 'ash' }] }] }),
     ],
   };
   const bob: Entity = { id: 'bob', name: 'Bob', persona: true };
@@ -77,9 +81,18 @@ describe('owned trait picks in the draft', () => {
     traits: [trait('paladin', { isDefault: true })], traitGroups: [], entities: [ash, bob], library,
   });
   const repick = (draft: EntryDraft, ref: PersonaRef, w = castWorld()) =>
-    withSettledTraits({ ...draft, persona: ref }, settle(entryGateInput(w, { ...draft, persona: ref }), draft.cascadeOffTraitIds));
+    withSettledTraits({ ...draft, persona: ref }, settle(entryGateInput(w, { ...draft, persona: ref }), cascadeOffInput(draft.cascadeOffTraitIds)));
   const toggle = (draft: EntryDraft, ownerId: string, traitId: string) =>
-    withSettledTraits(draft, switchTrait(entryGateInput(castWorld(), draft), ownerId, traitId, draft.cascadeOffTraitIds)!);
+    withSettledTraits(draft, switchTrait(entryGateInput(castWorld(), draft), ownerId, traitId, cascadeOffInput(draft.cascadeOffTraitIds))!);
+
+  // Q7: the setup screen reads a Condition on the persona by the played persona's name, for the You pill.
+  it("reads a Condition on the persona by the played persona's name, or Persona with no one played", () => {
+    const knight: Entity = { id: 'knight', name: 'Knight', traits: [trait('squire', { requires: [{ all: [{ kind: 'trait', id: 'tamed', owner: { kind: 'you' } }] }] })] };
+    const condition = (persona: PersonaRef) =>
+      gateOf(gateStates(entryGateInput(castWorld([knight]), { ...emptyEntryDraft(), persona })), 'knight', 'squire')!.rows[0].conditions[0];
+    expect(condition(world('ash'))).toMatchObject({ text: 'Ash: tamed', persona: 'Ash' });
+    expect(condition({ source: 'none' })).toMatchObject({ text: 'Persona: tamed', persona: undefined });
+  });
 
   it("preselects every owner's defaults, the world's and each entity's, settled under the persona", () => {
     const asAsh = entryDefaults(castWorld([wren]), world('ash'));
@@ -94,7 +107,7 @@ describe('owned trait picks in the draft', () => {
     expect(draft.ownedTraitIds.ash).toEqual(['tamed', 'scarred']);
     draft = repick(draft, world('ash'));
     expect(draft.ownedTraitIds.ash).toEqual(['tamed', 'scarred', 'guard']);
-    expect(draft.cascadeOffTraitIds.ash).toEqual([]);
+    expect(draft.cascadeOffTraitIds.owners?.ash).toEqual([]);
   });
 
   it('turns a "playing as" owned trait off when the persona changes, and keeps it to return', () => {
@@ -103,7 +116,7 @@ describe('owned trait picks in the draft', () => {
     expect(result.turnedOff).toEqual([{ ownerId: 'ash', traitId: 'guard' }]);
     const next = withSettledTraits(draft, result);
     expect(next.ownedTraitIds.ash).toEqual(['tamed']);
-    expect(next.cascadeOffTraitIds.ash).toEqual(['guard']);
+    expect(next.cascadeOffTraitIds.owners?.ash).toEqual(['guard']);
   });
 
   it('never brings back a trait the player switched off by hand', () => {
@@ -147,13 +160,13 @@ describe('library entities in the cast', () => {
   it("leaves a library default off when the player's trait it requires is not picked", () => {
     const knight: Entity = {
       id: 'knight', name: 'Knight',
-      traits: [trait('crest', { isDefault: true, requires: [{ kind: 'trait', id: 'paladin', bearer: { kind: 'you' } }] })],
+      traits: [trait('crest', { isDefault: true, requires: [{ all: [{ kind: 'trait', id: 'paladin', owner: { kind: 'you' } }] }] })],
     };
     const w: EntryTraitWorld = { traits: [trait('paladin', { isDefault: true })], traitGroups: [], entities: [], library: [knight] };
     expect(withLibraryDefaults({ ...emptyEntryDraft(), traitIds: ['paladin'] }, w).ownedTraitIds.knight).toEqual(['crest']);
     const unpicked = withLibraryDefaults(emptyEntryDraft(), w);
     expect(unpicked.ownedTraitIds.knight).toEqual([]);
-    expect(unpicked.cascadeOffTraitIds.knight).toEqual(['crest']);
+    expect(unpicked.cascadeOffTraitIds.owners?.knight).toEqual(['crest']);
   });
 
   it('changes nothing when every library entity already has picks', () => {

@@ -13,7 +13,7 @@ A new game starts at **Enter World**. One dialog holds every choice before page 
 2. Select **Enter World**.
 3. If the world has an **Introduction**, read it and close it.
 4. In the **Enter World** dialog, select each category in the list on the left and make your picks. The categories are in [The Enter World Dialog](#the-enter-world-dialog).
-5. Select **Start game**. In a world with a 3D model, the button reads **Continue to Avatar**, and the avatar step comes next.
+5. Select **Start Game**. When the persona you play has an Avatar, the button reads **Continue to Avatar**, and the Avatar step comes next.
 
 A world with nothing to choose skips the **Enter World** dialog.
 
@@ -36,7 +36,7 @@ For the **Persona** category, see [How to Pick a Persona](Personas#how-to-pick-a
 2. Select the traits you want. A round button allows one pick in its group; a checkbox allows several.
 3. Do the same for each category under **Starting Traits**. The category list shows how many traits you picked out of those shown, such as **1/3**.
 
-**Start game** stays off until every group has its minimum picks. A group that is short shows *Choose 1 more trait*.
+**Start Game** stays off until every group has its minimum picks. A group that is short shows *Choose 1 more trait*.
 
 ## How to Pick a Starting Location
 <!-- keywords: choose, spawn, begin, random, place, starting area, first room, initial zone, start point, where do i start, home town, origin -->
@@ -106,7 +106,7 @@ The dialog opens on the first category. **Cancel** leaves without starting. **Es
 ## Starting Traits
 <!-- keywords: padlock, locked option, unable to unselect, radio button, stat bonus, companion, prerequisite, turned off automatically, default picks -->
 
-**General** holds the world's own traits for you. Each trait group with traits to pick gets its own category.
+**General** holds the global traits for you. No one owns a global trait, so none of them is your persona's. Each trait group with traits to pick gets its own category.
 
 An entity whose traits you set gets a category with its portrait and name. Your own entity is marked **You**. This is how a world lets you pick a companion's traits, or the race and class of a [Custom Persona](Personas#create-your-own).
 
@@ -114,13 +114,13 @@ An entity whose traits you set gets a category with its portrait and name. Your 
 |---|---|
 | A round button | Pick one. Select it again to clear it. |
 | A checkbox | Pick several. When the group is full, the rest turn off. |
-| A check mark with no control | **Always On**. The trait is on and you can't change it. |
-| A lock and *Requires …* | The trait needs another trait first. Pick one it names and it unlocks. |
+| A check mark with no control | **Automatic**. The trait is on and you can't change it. |
+| A lock and *Requires …* | The trait needs something first, such as *Requires Knight and not Paladin, or Mercenary*. Meet every part of one alternative and it unlocks. |
 | A lock and *Locked* | The trait needs only traits you can't see |
-| *Unlocked by …* | The trait you picked that opened it |
+| *Unlocked by …* | The picks that opened it |
 | A stat line, such as *Strength: +2* | What the trait does to a stat |
 
-A world can have **Hidden** traits. They work like **Always On** traits, and they never show in the list.
+A world can have **Hidden** traits. They work like **Automatic** traits, and they never show in the list.
 
 When one pick switches other traits off, a notice names them: *Turned off …, because of …*. Select **Dismiss** to close it.
 
@@ -136,7 +136,7 @@ The list shows **Random** first, then each starting location with its descriptio
 | A location | That location |
 | **Random** | Any starting location, at random |
 
-When you play one of the world's own entities, its starting location is picked for you. You can pick another. After you pick a location yourself, a persona change no longer moves it.
+When you play one of the world's own entities, its locations join the list, and its starting location is picked for you. You can pick another. After you pick a location yourself, a persona change no longer moves it.
 
 ## Library Additions
 <!-- keywords: bring my character, extra npc, companion, mods, custom content, lorebook order, remember for next time, tag meaning, include my own -->
@@ -145,7 +145,7 @@ The category has a search box and two lists.
 
 | List | What it holds | Starts |
 |---|---|---|
-| **Entities** | Entities from your library. Each one you include joins the game at your starting location. See [Entities in Play](Entities). | Excluded |
+| **Entities** | Entities from your library. Each one you include joins the game at your starting location. See [Entities in Game](Entities). | Excluded |
 | **Dictionaries** | The world's own dictionaries, then the ones in your library | The world's on as the author set them; yours off |
 
 Select a row to read it in the details pane. A dictionary row's tag says where it comes from: **World** for one bundled with the world, **Library** for one of yours, **Linked** for the world's copy of a library dictionary.
@@ -163,7 +163,9 @@ An author can write an **Introduction** for the world. It opens before the **Ent
 ## The Avatar Step
 <!-- keywords: 3d model, appearance, body sliders, finalize, vrm, how i look, continue button -->
 
-In a world with a 3D model, **Continue to Avatar** opens **Character Customization**. Pick a **Player Avatar**, adjust it, and select **Finalize Character** to start. **Back** returns to the **Enter World** dialog. See [Character Customization](Avatars#character-customization).
+The step shows when the persona you play has an Avatar. The button switches between **Continue to Avatar** and **Start Game** as you change your persona. A persona with no Avatar skips the step.
+
+**Continue to Avatar** opens **Character Customization**. When the persona uses **User's Default**, pick a **Player Avatar**. It starts on your default. When the author picked an Avatar, that one shows and you can't change it. Adjust it, and select **Finalize Character** to start. **Back** returns to the **Enter World** dialog. Your changes apply to the Avatar of the entity you play. See [Character Customization](Avatars#character-customization).
 
 ## What Happens at Start
 <!-- keywords: first turn, opening scene, prefilled text, already typed, first message, greeting, popups, intro scene -->
@@ -191,5 +193,5 @@ The first time you open Formamorph, a short animation spells out the name, then 
 
 - [🎮 How to Play](How-to-Play): what you do once the story starts
 - [🪪 Personas](Personas): who you are in the story
-- [🎭 Entities in Play](Entities): the cast, Library Additions and how a game opens
+- [🎭 Entities in Game](Entities): the cast, Library Additions and how a game opens
 - [🎬 World Editor: Openings](World-Editor-Openings): how authors write openings

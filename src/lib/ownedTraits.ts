@@ -1,19 +1,21 @@
 // Traits an entity owns: pure edits of one entity's own trait tree, and the gate input that sees every owner.
 
-import type { Entity, Trait, TraitGroup, TraitRequirement } from '@/types';
+import type { Entity, Trait, TraitGroup, TraitLink, TraitRequirement } from '@/types';
 import { randomUUID } from './uuid';
+import { removeGroupPromotingChildren } from './groupTree';
 import { newTrait } from './blankWorld';
-import { WORLD_OWNER, type GateOwner } from './traitGates';
-import { effectivePlacement, offeredWorldTraits, ownsTraits, placeableGroupIds } from './traitTree';
+import type { GateInput, GateOwner } from './traitGates';
+import { mapConditions } from './requirementRows';
+import { hasImageRules, withImageRules } from './entityImages';
+import { offeredWorldTraits, ownsTraits } from './traitTree';
+import { nodePlacement, placeableGroupIds, withEntityLists } from './ownerTree';
 
 const traitsOf = (entity: Entity): Trait[] => entity.traits ?? [];
 const groupsOf = (entity: Entity): TraitGroup[] => entity.traitGroups ?? [];
 
 /** The entity with its owned lists replaced. An empty list is stored as absent. */
-export function withOwnedTraits(entity: Entity, traits: Trait[], groups: TraitGroup[]): Entity {
-  const { traits: _t, traitGroups: _g, ...rest } = entity;
-  return { ...rest, ...(traits.length ? { traits } : {}), ...(groups.length ? { traitGroups: groups } : {}) };
-}
+export const withOwnedTraits = (entity: Entity, traits: Trait[], groups: TraitGroup[]): Entity =>
+  withEntityLists(entity, { traits, traitGroups: groups });
 
 /** How many items sit at the entity's root: owned traits and groups, and links. */
 export const rootCount = (entity: Entity): number =>
@@ -42,11 +44,17 @@ export const updateOwnedGroup = (entity: Entity, group: TraitGroup): Entity =>
 export function removeOwnedItem(entity: Entity, id: string): Entity {
   const group = groupsOf(entity).find((g) => g.id === id);
   if (!group) return withOwnedTraits(entity, traitsOf(entity).filter((t) => t.id !== id), groupsOf(entity));
-  return withOwnedTraits(
-    entity,
-    traitsOf(entity).map((t) => (t.groupId === id ? { ...t, groupId: group.parentId } : t)),
-    groupsOf(entity).filter((g) => g.id !== id).map((g) => (g.parentId === id ? { ...g, parentId: group.parentId } : g)),
-  );
+  // Links share the group's slots with the traits, so they renumber with them.
+  const links = entity.traitLinks ?? [];
+  const named = links.map((l) => ({ ...l, name: l.originalName }));
+  const next = removeGroupPromotingChildren(groupsOf(entity), [...traitsOf(entity), ...named], id);
+  const placed = new Map(next.leaves.map((leaf) => [leaf.id, leaf]));
+  const traits = traitsOf(entity).map((t) => placed.get(t.id) as Trait);
+  const moved = links.map((l) => {
+    const { name: _name, ...rest } = placed.get(l.id) as TraitLink & { name: string };
+    return rest as TraitLink;
+  });
+  return withEntityLists(entity, { traits, traitGroups: next.groups, traitLinks: moved });
 }
 
 /** The writes a trait store over one entity makes, each through `edit` on that entity. */
@@ -75,22 +83,23 @@ export function findOwnedItem(
 }
 
 /** A copy of the entity whose owned traits and groups have fresh ids, so the copy shares none with the
- *  source. Requirements that point inside the entity follow; ones that point out of it keep their target.
+ *  source. Requirements that point inside the entity follow, the images' Visibility rules included; ones that
+ *  point out of it keep their target.
  *  `entityIds` maps each copied entity to its copy, so "playing as" the source becomes "playing as" the copy. */
 export function remintOwnedTraits(entity: Entity, entityIds: ReadonlyMap<string, string> = new Map()): Entity {
   const links = entity.traitLinks ?? [];
-  if (!entity.traits?.length && !entity.traitGroups?.length && !links.length) return entity;
+  if (!entity.traits?.length && !entity.traitGroups?.length && !links.length && !hasImageRules(entity)) return entity;
   const ids = new Map([...traitsOf(entity), ...groupsOf(entity), ...links].map((item) => [item.id, randomUUID()] as const));
   const remap = (id: string | null | undefined) => (id ? ids.get(id) ?? id : id);
   const remapRequirement = (r: TraitRequirement): TraitRequirement =>
-    ({ ...r, id: (r.kind === 'playingAs' ? entityIds.get(r.id) : ids.get(r.id)) ?? r.id });
+    (r.kind === 'time' ? r : { ...r, id: (r.kind === 'playingAs' ? entityIds.get(r.id) : ids.get(r.id)) ?? r.id });
   const reminted = withOwnedTraits(
-    entity,
+    withImageRules(entity, remapRequirement),
     traitsOf(entity).map((t) => ({
       ...t,
       id: remap(t.id)!,
       groupId: remap(t.groupId),
-      ...(t.requires ? { requires: t.requires.map(remapRequirement) } : {}),
+      ...(t.requires ? { requires: mapConditions(t.requires, remapRequirement) } : {}),
     })),
     groupsOf(entity).map((g) => ({ ...g, id: remap(g.id)!, parentId: remap(g.parentId) ?? null })),
   );
@@ -100,22 +109,23 @@ export function remintOwnedTraits(entity: Entity, entityIds: ReadonlyMap<string,
     : reminted;
 }
 
-/** Every owner's traits for the gate module: the world first, then each entity that owns a trait or a group,
- *  then the library entities, whose nodes sit at the top level. The world owner leaves out Blueprints unless
- *  `keepBlueprints`, which the editor sets so its rows still read their gates. */
+/** Every scope's traits for the gate module: global scope's tree, then each entity that owns a trait or a
+ *  group, then the library entities, whose nodes sit at the top level. The global tree leaves out Blueprints
+ *  unless `keepBlueprints`, which the editor sets so its rows still read their gates. */
 export function traitOwners(
   world: { traits: readonly Trait[]; traitGroups: readonly TraitGroup[]; entities: readonly Entity[] },
   library: readonly Entity[] = [],
   { keepBlueprints = false } = {},
-): GateOwner[] {
+): Pick<GateInput, 'global' | 'owners'> {
   const placeable = placeableGroupIds(world.traitGroups);
   const owner = (e: Entity, parentGroupId: string | null): GateOwner =>
     ({ id: e.id, name: e.name, traits: traitsOf(e), groups: groupsOf(e), parentGroupId });
-  const offered = keepBlueprints ? { traits: world.traits, groups: world.traitGroups } : offeredWorldTraits(world.traits, world.traitGroups);
-  return [
-    { id: WORLD_OWNER, name: '', ...offered },
-    ...world.entities.filter(ownsTraits).map((e) => owner(e, effectivePlacement(e, placeable)?.groupId ?? null)),
-    ...library.filter(ownsTraits).map((e) => owner(e, null)),
-  ];
+  return {
+    global: keepBlueprints ? { traits: world.traits, groups: world.traitGroups } : offeredWorldTraits(world.traits, world.traitGroups),
+    owners: [
+      ...world.entities.filter(ownsTraits).map((e) => owner(e, nodePlacement(e.traitPlacement, e, placeable)?.groupId ?? null)),
+      ...library.filter(ownsTraits).map((e) => owner(e, null)),
+    ],
+  };
 }
 

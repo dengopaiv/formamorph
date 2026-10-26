@@ -9,10 +9,10 @@ import {
   defaultDiaryPrompt, defaultDirectorPrompt, defaultDirectorUserPrompt,
   defaultCharacterPrompt, defaultStoryboardPrompt, defaultDiscoverEntityPrompt, defaultDiscoverEntityUserPrompt,
   defaultSceneTagsPrompt, defaultSceneTagsUserPrompt,
-  defaultLocationChangePrompt, defaultLocationChangeUserPrompt,
+  defaultLocationChangePrompt, defaultLocationChangeUserPrompt, defaultEntityLocationPrompt, defaultEntityLocationUserPrompt,
   defaultNarrationUserPrompt, defaultOocDirectivePrompt,
   defaultOpeningTimePrompt, defaultOpeningTimeUserPrompt, OPENING_SCENE_CUE,
-  defaultStatUpdatesPrompt, defaultStatUpdatesUserPrompt,
+  defaultStatUpdatesPrompt, defaultStatUpdatesUserPrompt, textStatUpdatesPrompt, textStatUpdatesUserPrompt,
   defaultSummaryPrompt, defaultSummaryUserPrompt,
   defaultMilestoneSelectPrompt, defaultMilestoneSelectUserPrompt,
   defaultThinkingPrompt, defaultTimePassedPrompt, defaultTimePassedUserPrompt,
@@ -39,6 +39,8 @@ export const PARITY_SETTINGS: TurnSettings = {
   statCount: 3,
   locationChangeEnabled: true,
   locationAutoApply: true,
+  // On, as it ships: a world with no tracked entity sends no entity request, so the recording still holds.
+  entityMovement: true,
   aiClock: true,
   memoryDigests: true,
   characterDiaries: true,
@@ -48,12 +50,15 @@ export const PARITY_SETTINGS: TurnSettings = {
   imageAttachments: false,
   promptAttachments: {},
   language: 'English',
+  stripLinksAndImages: false,
 };
 
 /** Current defaults for request previews and assembly tests. */
 export const PARITY_PROMPTS: TurnPrompts = {
   locationChange: defaultLocationChangePrompt,
   locationChangeUser: defaultLocationChangeUserPrompt,
+  entityLocation: defaultEntityLocationPrompt,
+  entityLocationUser: defaultEntityLocationUserPrompt,
   thinking: defaultThinkingPrompt,
   director: defaultDirectorPrompt,
   directorUser: defaultDirectorUserPrompt,
@@ -66,6 +71,7 @@ export const PARITY_PROMPTS: TurnPrompts = {
   choicesUser: defaultChoicesUserPrompt,
   statUpdates: defaultStatUpdatesPrompt,
   statUpdatesUser: defaultStatUpdatesUserPrompt,
+  statText: { system: textStatUpdatesPrompt, user: textStatUpdatesUserPrompt },
   summary: defaultSummaryPrompt,
   summaryUser: defaultSummaryUserPrompt,
   milestoneSelect: defaultMilestoneSelectPrompt,

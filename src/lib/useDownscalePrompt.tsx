@@ -14,7 +14,7 @@ import { toast } from 'react-toastify';
 import { dataUrlMime } from './imageBytes';
 import { useClosingSnapshot } from './useClosingSnapshot';
 import { withOptimizeProgress } from './optimizeProgress';
-import { entityImages } from './entityImages';
+import { entityImageData } from './entityImages';
 import {
   applyEntityImagesOptimize,
   applyImageOptimize,
@@ -210,6 +210,8 @@ export function useDownscalePrompt() {
         cancelLabel: 'Keep as-is',
       }));
       if (mode === 'off') return null;
+      // The run starts now, before the first image lands, so a caller's progress shows from the choice on.
+      onProgress?.(0, countWorldImages(world));
       try {
         const optimized = onProgress
           ? await applyWorldOptimize(world, mode, onProgress, signal)
@@ -230,7 +232,7 @@ export function useDownscalePrompt() {
    *  download). Returns the entity — the same reference when nothing was re-encoded. */
   const promptEntity = useCallback(
     async (entity: Entity): Promise<Entity> => {
-      const images = entityImages(entity);
+      const images = entityImageData(entity);
       const mode = await promptOptimizeChoice(await scanImages(images, IMAGE_CAPS.entity), (s) => ({
         title: s.n > 1 ? 'Optimize entity images?' : s.overCount > 0 ? 'Large image' : 'Optimize image?',
         description:

@@ -22,15 +22,6 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-// jsdom has no Worker: the measure answers with the real byte count, off a promise like the worker's.
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
@@ -52,8 +43,9 @@ const setup = () => renderWorldEditorBench(WORLD, 'advanced');
 const flask = () => screen.getByRole('button', { name: /^Test Bench/ });
 /** The full panel is showing when its own chrome is: the popover has neither control. */
 const benchPanelShown = () => screen.queryByRole('button', { name: 'Close Test Bench' }) !== null;
-/** The editor's own list panel is showing when its tab strip is. */
-const editorTabsShown = () => screen.queryByRole('tab', { name: 'Entities' }) !== null;
+const railTabs = () => within(screen.getByRole('tablist', { name: 'Editor Sections' })).getAllByRole('tab');
+/** The editor's own list panel is showing when its rail is live. */
+const editorTabsShown = () => railTabs().every((tab) => !tab.hasAttribute('disabled'));
 const popoverShown = () => screen.queryByRole('button', { name: 'Open Test Bench' }) !== null;
 /** The mobile sheet, whose open/closed is read off it: vaul keeps its content mounted for the exit
  *  animation, and jsdom runs no animations to finish. */
@@ -101,6 +93,12 @@ describe('WorldEditor — the Bench Popover', () => {
     // The entity opened in the detail panel, and the list is still there to work down.
     expect(await screen.findByText('Name')).toBeInTheDocument();
     expect(popoverShown()).toBe(true);
+  });
+
+  it('shows no count until the first pass lands, then the count', async () => {
+    setup();
+    expect(flask()).toHaveAccessibleName('Test Bench');
+    await waitFor(() => expect(flask()).toHaveAccessibleName('Test Bench, 1 new finding'));
   });
 
   it('quiets the badge on the way out, the same as closing the panel does', async () => {
@@ -159,13 +157,16 @@ describe('WorldEditor — the Publish Size bar', () => {
 
 describe('WorldEditor — where the full Bench sits', () => {
   it('opens embedded, taking the editor list and leaving the detail panel live', async () => {
-    setup();
+    renderWorldEditorBench(WORLD, 'advanced', { initialTab: 'entities' });
     await clickOpenBench();
 
     expect(benchPanelShown()).toBe(true);
-    expect(editorTabsShown()).toBe(false);
+    // The rail stays drawn so the layout holds, with every tab disabled and the editor's tab kept.
+    railTabs().forEach((tab) => expect(tab).toBeDisabled());
+    expect(railTabs().find((tab) => tab.getAttribute('aria-selected') === 'true')).toHaveTextContent('Entities');
+    expect(screen.queryByPlaceholderText('Filter Entities')).toBeNull();
     // The Bench replaced the list, not the editor: its header and footer are still reachable mid-triage.
-    expect(screen.getByRole('button', { name: 'Find and replace' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Search World' })).toBeInTheDocument();
 
     // And the detail panel beside it is what a finding's item opens into.
     fireEvent.click(await screen.findByRole('button', { name: 'Maren' }));

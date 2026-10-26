@@ -29,7 +29,7 @@ vi.mock('@/lib/usePersistentState', async () => {
 const ENDPOINT = 'http://slow.test/v1';
 const MODEL = 'late-12b';
 const RECORD: ReasoningCapability = {
-  reasons: true, levels: [], budget: null, dialect: 'unknown', offAllowed: null, tools: null,
+  reasons: true, levels: [], budget: null, dialect: 'unknown', offAllowed: null, tools: null, structuredOutput: null,
   sources: { reasons: 'native', levels: 'native' },
 };
 
@@ -69,7 +69,7 @@ async function resolveInFlight() {
   const view = renderHook(() => useSettings(), { wrapper });
   await act(async () => { view.result.current.setNativeReasoning({ enabled: true, level: 'high' }); });
   // The unprompted resolve is debounced by 1200 ms.
-  await waitFor(() => expect(resolveReasoningCapability).toHaveBeenCalledTimes(1), { timeout: 3000 });
+  await waitFor(() => expect(resolveReasoningCapability).toHaveBeenCalledTimes(1));
   return view;
 }
 

@@ -4,7 +4,7 @@ import { benchEditorWorld, openEditorTab, renderWorldEditorBench } from '@/test/
 import { LANDING_PULSE_CLASS, LANDING_RING_CLASS } from '@/lib/landingPulse';
 import { routeText, SURFACE_TARGETS } from '@/lib/surface/surfaceTargets';
 import { stubReducedMotion } from '@/test/reducedMotion';
-import { frames, recordScrolls, rowOf } from '@/test/landing';
+import { endLanding, frames, recordScrolls, ringOn, rowOf } from '@/test/landing';
 
 /** Take Me There landing in the World Editor: the control a request names is scrolled to, focused, and pulsed once. */
 
@@ -52,7 +52,7 @@ describe('World Editor Take Me There landing', () => {
       renderWorldEditorBench(WORLD, 'advanced', requestFor(surface, target));
       const route = routeText(surface, target);
       await waitFor(() => expect(scrolled).toContain(rowOf(route)));
-      expect(rowOf(route)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+      expect(ringOn(rowOf(route), LANDING_PULSE_CLASS)).toBe(true);
       expect(document.querySelectorAll(`.${LANDING_PULSE_CLASS}`)).toHaveLength(1);
     },
   );
@@ -60,32 +60,32 @@ describe('World Editor Take Me There landing', () => {
   it('focuses the search box when the request names a tab toolbar', async () => {
     renderWorldEditorBench(WORLD, 'advanced', requestFor('worldEditor.stats', 'list-toolbar'));
     await waitFor(() => expect(scrolled).toContain(rowOf(STATS_BAR)));
-    expect(document.activeElement).toBe(screen.getByPlaceholderText('Search or add new stats'));
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Filter Stats'));
   });
 
-  it('focuses the Find button when the request names it', async () => {
+  it('focuses Search World when the request names Find', async () => {
     renderWorldEditorBench(WORLD, 'advanced', requestFor('worldEditor', 'find-button'));
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Find and replace' })));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search World' })));
   });
 
-  it('focuses the selected mode when the request names the mode switch', async () => {
+  it('focuses the mode select when the request names the mode control', async () => {
     renderWorldEditorBench(WORLD, 'advanced', requestFor('worldEditor', 'editor-mode'));
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Advanced' })));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('combobox', { name: 'Editor mode' })));
   });
 
-  it('takes the pulse class off when the animation ends', async () => {
+  it('removes the ring when the animation ends', async () => {
     renderWorldEditorBench(WORLD, 'advanced', requestFor('worldEditor.stats', 'list-toolbar'));
-    await waitFor(() => expect(rowOf(STATS_BAR)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true));
+    await waitFor(() => expect(ringOn(rowOf(STATS_BAR), LANDING_PULSE_CLASS)).toBe(true));
     const row = rowOf(STATS_BAR)!;
-    row.dispatchEvent(Object.assign(new Event('animationend', { bubbles: true }), { animationName: LANDING_PULSE_CLASS }));
-    expect(row.classList.contains(LANDING_PULSE_CLASS)).toBe(false);
+    endLanding(row);
+    expect(ringOn(row, LANDING_PULSE_CLASS)).toBe(false);
   });
 
   it('draws the still ring without the pulse under reduced motion', async () => {
     stubReducedMotion();
     renderWorldEditorBench(WORLD, 'advanced', requestFor('worldEditor.stats', 'list-toolbar'));
-    await waitFor(() => expect(rowOf(STATS_BAR)!.classList.contains(LANDING_RING_CLASS)).toBe(true));
-    expect(rowOf(STATS_BAR)!.classList.contains(LANDING_PULSE_CLASS)).toBe(false);
+    await waitFor(() => expect(ringOn(rowOf(STATS_BAR), LANDING_RING_CLASS)).toBe(true));
+    expect(ringOn(rowOf(STATS_BAR), LANDING_PULSE_CLASS)).toBe(false);
   });
 
   it('leaves the tab open with no error when the target is not on screen', async () => {
@@ -122,10 +122,10 @@ describe('World Editor Take Me There landing', () => {
     const view = renderWorldEditorBench(WORLD, 'advanced', requestFor('worldEditor.stats', 'list-toolbar'));
     await waitFor(() => expect(scrolled).toHaveLength(1));
     const row = rowOf(STATS_BAR)!;
-    row.dispatchEvent(Object.assign(new Event('animationend', { bubbles: true }), { animationName: LANDING_PULSE_CLASS }));
+    endLanding(row);
     view.rerender({ ...requestFor('worldEditor.stats', 'list-toolbar'), requestKey: 'b' });
     await waitFor(() => expect(scrolled).toHaveLength(2));
     expect(scrolled[1]).toBe(row);
-    expect(row.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+    expect(ringOn(row, LANDING_PULSE_CLASS)).toBe(true);
   });
 });

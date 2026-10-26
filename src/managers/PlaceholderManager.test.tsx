@@ -14,6 +14,7 @@ import LibraryPlaceholdersEditor from './LibraryPlaceholdersEditor';
 import PlaceholderManager from './PlaceholderManager';
 import { phValueId, phValues } from '@/test/placeholderValues';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import type { PlaceholderPanelTab } from '@/views/placeholderPanelTabs';
 
 /** A color as jsdom stores it once set inline — `hsl(…)` comes back as `rgb(…)`, a `var()` form verbatim. */
 const cssColor = (value: string) => {
@@ -49,25 +50,37 @@ vi.mock('@/contexts/GameDataContext', () => ({
   useGameDataOptional: () => gameData,
 }));
 // Radix Select never opens its listbox in jsdom, so the Pins section's source pickers stand in as native
-// selects — the options stay genuinely under test. The trigger's own aria-label names the select.
+// selects — the options stay genuinely under test. The trigger's own aria-label names the select and its
+// focus handlers ride on it; text the trigger shows in place of the picked item shows as the picked option.
 vi.mock('@/components/ui/select', async () => {
   const { Children, isValidElement } = await import('react');
-  const SelectTrigger = (_props: { 'aria-label'?: string; children?: React.ReactNode }) => null;
+  type TriggerProps = { 'aria-label'?: string; onFocus?: () => void; onBlur?: () => void; children?: React.ReactNode };
+  const SelectTrigger = (_props: TriggerProps) => null;
+  const SelectValue = (_props: { children?: React.ReactNode }) => null;
   return {
     Select: ({ value, onValueChange, children }: {
       value: string; onValueChange: (v: string) => void; children: React.ReactNode;
     }) => {
       const trigger = Children.toArray(children).find((c) => isValidElement(c) && c.type === SelectTrigger);
-      const label = (isValidElement<{ 'aria-label'?: string }>(trigger) && trigger.props['aria-label']) || 'Select placeholder';
+      const props: TriggerProps = isValidElement<TriggerProps>(trigger) ? trigger.props : {};
+      const shown = Children.toArray(props.children).find((c) => isValidElement(c) && c.type === SelectValue);
+      const display = isValidElement<{ children?: React.ReactNode }>(shown) ? shown.props.children : undefined;
       return (
-        <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+        <select
+          aria-label={props['aria-label'] || 'Select placeholder'}
+          value={value}
+          onChange={(e) => onValueChange(e.target.value)}
+          onFocus={props.onFocus}
+          onBlur={props.onBlur}
+        >
           <option value="" />
+          {display !== undefined && value && <option value={value} hidden>{display}</option>}
           {children}
         </select>
       );
     },
     SelectTrigger,
-    SelectValue: () => null,
+    SelectValue,
     SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
     SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
       <option value={value}>{children}</option>
@@ -144,20 +157,20 @@ beforeEach(() => {
 describe('PlaceholderManager — chips vs multiline', () => {
   describe('which style opens', () => {
     it('opens in multiline when any value holds a newline', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
       expect(within(styleToggle()).getByRole('radio', { name: 'Multiline' })).toBeChecked();
       expect(box(1)).toHaveValue(PARA);
     });
 
     it('keeps the chip row for short values', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       expect(within(styleToggle()).getByRole('radio', { name: 'Chips' })).toBeChecked();
       expect(screen.queryByLabelText('Value 1')).not.toBeInTheDocument();
       expect(screen.getByRole('textbox', { name: 'Add keyword' })).toBeInTheDocument();
     });
 
     it('changes nothing in the store on a round trip through both styles', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       expect(box(1)).toHaveValue('Red');
       pickStyle('Chips');
@@ -165,7 +178,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('shows a multiline value in the chip row as its first line', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
       pickStyle('Chips');
       expect(screen.getByText('A weathered lighthouse. …')).toBeInTheDocument();
       expect(screen.queryByText(/beam sweeps/)).not.toBeInTheDocument();
@@ -174,14 +187,14 @@ describe('PlaceholderManager — chips vs multiline', () => {
 
   describe('editing values', () => {
     it('stores a paragraph with its newlines, trimmed only at the ends', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red']) })} />);
       pickStyle('Multiline');
       type(1, `  \n${PARA}\n  `);
       expect(storedTexts()).toEqual([PARA]);
     });
 
     it('drops a value that has been emptied', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       type(1, '   ');
       expect(storedTexts()).toEqual(['Blue']);
@@ -190,7 +203,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('collapses a box typed to match an earlier one, so the chip row never sees a repeat', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       type(2, 'Red');
       expect(storedTexts()).toEqual(['Red']);
@@ -199,11 +212,11 @@ describe('PlaceholderManager — chips vs multiline', () => {
     it('leaves a box alone when its own write comes back as the placeholder', () => {
       // The real parent feeds every write back down as the prop, so the panel sees its own edit arrive from
       // outside on the very next render. Text still being typed — trailing space, empty — must survive that.
-      const { rerender } = render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Blue']) })} />);
+      const { rerender } = render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Blue']) })} />);
       pickStyle('Multiline');
       fireEvent.click(screen.getByRole('button', { name: 'Collapse value 2' }));
       type(1, 'Crimson ');
-      rerender(<PlaceholderManager placeholder={stored()} />);
+      rerender(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={stored()} />);
 
       expect(box(1)).toHaveValue('Crimson '); // not trimmed back under the caret
       expect(screen.getByRole('button', { name: 'Expand value 2' })).toBeInTheDocument(); // still collapsed
@@ -212,8 +225,8 @@ describe('PlaceholderManager — chips vs multiline', () => {
     it('re-reads a value list rewritten from outside, and does not paste the old one back', () => {
       // The find bar replaces inside placeholder values, through the same store, while this panel is open
       // on that placeholder. The boxes are the editing truth only for edits they made themselves.
-      const { rerender } = render(<PlaceholderManager placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
-      rerender(<PlaceholderManager placeholder={ph({ values: phValues([PARA, 'Nightfall']) })} />);
+      const { rerender } = render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
+      rerender(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA, 'Nightfall']) })} />);
       expect(box(2)).toHaveValue('Nightfall');
 
       type(1, 'Dawn');
@@ -221,7 +234,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('adds a value with the Add Value button', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       fireEvent.click(screen.getByRole('button', { name: 'Add Value' }));
       type(3, 'Green');
@@ -229,7 +242,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('deletes a value with its box’s remove button', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       fireEvent.click(screen.getByRole('button', { name: 'Remove value 1' }));
       expect(storedTexts()).toEqual(['Blue']);
@@ -241,14 +254,14 @@ describe('PlaceholderManager — chips vs multiline', () => {
     const weight = (n: number) => screen.getByLabelText(`Draw weight for value ${n}`);
 
     it('offers no weight until there are two values to weigh', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red']) })} />);
       pickStyle('Multiline');
       expect(screen.queryByLabelText('Draw weight for value 1')).not.toBeInTheDocument();
       expect(screen.queryByText('100%')).not.toBeInTheDocument();
     });
 
     it('writes a weight from the box header and shows the resulting chance', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       fireEvent.change(weight(1), { target: { value: '3' } });
       expect(stored().weights).toEqual({ [phValueId('Red')]: 3 });
@@ -257,7 +270,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('keeps a weight through a rename, with nothing carried across the edit', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       fireEvent.change(weight(1), { target: { value: '3' } });
       type(1, 'Crimson');
@@ -269,7 +282,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('drops the weight of a value the author removed', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       pickStyle('Multiline');
       fireEvent.change(weight(1), { target: { value: '3' } });
       fireEvent.click(screen.getByRole('button', { name: 'Remove value 1' }));
@@ -282,7 +295,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     const collapseAll = () => screen.getByRole('button', { name: /^(Collapse|Expand) all values$/ });
 
     it('collapses one card to its first line, leaving its controls live', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
       fireEvent.click(screen.getByRole('button', { name: 'Collapse value 1' }));
       expect(screen.queryByLabelText('Value 1')).not.toBeInTheDocument();
       expect(screen.getByText('A weathered lighthouse. …')).toBeInTheDocument();
@@ -294,7 +307,7 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('takes every card down and back up in one press', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA, 'Dusk']) })} />);
       fireEvent.click(collapseAll());
       expect(screen.queryByLabelText('Value 1')).not.toBeInTheDocument();
       expect(screen.queryByLabelText('Value 2')).not.toBeInTheDocument();
@@ -305,20 +318,20 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('opens a list of three values collapsed and a list of two expanded', () => {
-      const { unmount } = render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Green']) })} />);
+      const { unmount } = render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Green']) })} />);
       pickStyle('Multiline');
       expect(box(1)).toHaveValue('Red');
       expect(box(2)).toHaveValue('Green');
       unmount();
 
-      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Green', 'Blue']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Green', 'Blue']) })} />);
       pickStyle('Multiline');
       expect(screen.queryByLabelText('Value 1')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Expand value 3' })).toBeInTheDocument();
     });
 
     it('opens a value added to a collapsed list expanded', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Green', 'Blue']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Green', 'Blue']) })} />);
       pickStyle('Multiline');
       fireEvent.click(screen.getByRole('button', { name: 'Add Value' }));
       expect(box(4)).toHaveValue('');
@@ -326,11 +339,11 @@ describe('PlaceholderManager — chips vs multiline', () => {
     });
 
     it('is not offered in the chip row, nor for a lone value', () => {
-      const { unmount } = render(<PlaceholderManager placeholder={ph()} />);
+      const { unmount } = render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       expect(screen.queryByRole('button', { name: /all values$/ })).not.toBeInTheDocument();
       unmount();
 
-      render(<PlaceholderManager placeholder={ph({ values: phValues([PARA]) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([PARA]) })} />);
       expect(screen.queryByRole('button', { name: /all values$/ })).not.toBeInTheDocument();
     });
   });
@@ -350,13 +363,13 @@ describe('PlaceholderManager — kind', () => {
   });
 
   it('writes the flag the moment the author declares an Object', () => {
-    render(<PlaceholderManager placeholder={ph()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
     pickKind('Object');
     expect(stored().roll).toBe(false);
   });
 
   it('writes the flag back when the author declares a Wildcard', () => {
-    render(<PlaceholderManager placeholder={ph({ roll: false })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false })} />);
     pickKind('Wildcard');
     expect(stored().roll).toBe(true);
   });
@@ -364,20 +377,20 @@ describe('PlaceholderManager — kind', () => {
   it('keeps the kind when the one already on is clicked again', () => {
     // A single ToggleGroup clears its value when the active item is clicked again. An empty result here
     // would read as "no kind declared" and silently drop the author's word back to the inferred one.
-    render(<PlaceholderManager placeholder={ph({ roll: false })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false })} />);
     pickKind('Object');
     expect(kindOption('Object')).toBeChecked();
     expect(updatePlaceholder).not.toHaveBeenCalled();
   });
 
   it('shows a legacy placeholder as the Wildcard it already behaves as, and writes nothing', () => {
-    render(<PlaceholderManager placeholder={ph()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
     expect(kindOption('Wildcard')).toBeChecked();
     expect(updatePlaceholder).not.toHaveBeenCalled();
   });
 
   it('stays offered at one value, where the two kinds coincide', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red']) })} />);
     expect(kindOption('Object')).toBeEnabled();
     pickKind('Object');
     expect(stored().roll).toBe(false);
@@ -385,9 +398,9 @@ describe('PlaceholderManager — kind', () => {
 
   describe('the state line', () => {
     it('reads Variable at one value, whichever kind is declared', () => {
-      const { rerender } = render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
+      const { rerender } = render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red']) })} />);
       expect(screen.getByText('A Variable, so it always resolves to its one value')).toBeInTheDocument();
-      rerender(<PlaceholderManager placeholder={ph({ values: phValues(['Red']), roll: false })} />);
+      rerender(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red']), roll: false })} />);
       expect(screen.getByText('A Variable, so it always resolves to its one value')).toBeInTheDocument();
     });
 
@@ -401,33 +414,33 @@ describe('PlaceholderManager — kind', () => {
         { id: 'king', name: 'King', values: phValues(['Aldric']) },
       ];
       const { rerender } = render(
-        <PlaceholderManager placeholder={ph({ values: phValues([`The ${chip('adj')} ${chip('noun')}`]) })} />,
+        <PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([`The ${chip('adj')} ${chip('noun')}`]) })} />,
       );
       expect(screen.getByText(
         'A Variable whose one value is a template. It rolls its chips, and picks World or Unique like a Wildcard.',
       )).toBeInTheDocument();
-      rerender(<PlaceholderManager placeholder={ph({ values: phValues([`King ${chip('king')}`]) })} />);
+      rerender(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([`King ${chip('king')}`]) })} />);
       expect(screen.getByText('A Variable, so it always resolves to its one value')).toBeInTheDocument();
       siblings = [];
     });
 
     it('counts the values a Wildcard picks between', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']) })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']) })} />);
       expect(screen.getByText('Picks one of 3 values')).toBeInTheDocument();
     });
 
     it('counts the values an Object shows together', () => {
-      render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']), roll: false })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']), roll: false })} />);
       expect(screen.getByText('Shows all 3 values')).toBeInTheDocument();
     });
 
     it('says an empty placeholder resolves to nothing', () => {
-      render(<PlaceholderManager placeholder={ph({ values: [] })} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: [] })} />);
       expect(screen.getByText('No values yet, so this resolves to nothing')).toBeInTheDocument();
     });
 
     it('follows the selector as it is pressed', () => {
-      render(<PlaceholderManager placeholder={ph()} />);
+      render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
       expect(screen.getByText('Picks one of 2 values')).toBeInTheDocument();
       pickKind('Object');
       expect(screen.getByText('Shows all 2 values')).toBeInTheDocument();
@@ -446,13 +459,13 @@ describe('PlaceholderManager — chip values', () => {
   });
 
   it('draws a lone-chip value as its target, not as the token behind it', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p2')]) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([chip('p2')]) })} />);
     expect(screen.getByText('Hair')).toBeInTheDocument();
     expect(screen.queryByText(/\{\{ph:/)).not.toBeInTheDocument();
   });
 
   it('wears its target’s accent, so a value that is a placeholder looks like one', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p2'), 'Red']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([chip('p2'), 'Red']) })} />);
     // The accent itself comes from the vocabulary, so what is asserted is that the chip took it — at full,
     // since an even split favors neither — and that the literal value beside it stayed a plain chip.
     const chipped = screen.getByText('Hair').closest('[data-chip]') as HTMLElement;
@@ -462,32 +475,32 @@ describe('PlaceholderManager — chip values', () => {
   });
 
   it('draws a drilled chip as its whole path, so a part never reads like a root', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p2', 'Color')]) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([chip('p2', 'Color')]) })} />);
     expect(screen.getByText('Hair › Color')).toBeInTheDocument();
   });
 
   it('names an explicit pick by the placeholder it selects, not by its id', () => {
     siblings = [...siblings, { id: 'p3', name: 'Brown', values: phValues(['brown']) }];
-    render(<PlaceholderManager placeholder={ph({ values: phValues([pickChip('p2', 'p3')]) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([pickChip('p2', 'p3')]) })} />);
     expect(screen.getByText('Hair › Brown')).toBeInTheDocument();
   });
 
   it('offers the typeahead in the chip row', () => {
-    render(<PlaceholderManager placeholder={ph()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
     expect(screen.getByText('Add keyword... — { inserts a placeholder')).toBeInTheDocument();
   });
 
   it('hands the multiline boxes the same placeholders to insert', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues(['Red']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red']) })} />);
     pickStyle('Multiline');
-    // The world's two placeholders, after the Player Name chip every prose field offers.
+    // The world's two placeholders, after the Persona Name chip every prose field offers.
     expect(box(1)).toHaveAttribute('data-palette', '3');
   });
 
   // The one-line summaries are plain text, so a chip in a value has nowhere to draw itself and would print
   // the token instead — the raw shape an author should never see.
   it('names the chip in a collapsed multiline card, rather than printing its token', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p2'), 'Red']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([chip('p2'), 'Red']) })} />);
     pickStyle('Multiline');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse value 1' }));
     expect(screen.getByText('Hair')).toBeInTheDocument();
@@ -495,7 +508,7 @@ describe('PlaceholderManager — chip values', () => {
   });
 
   it('names the chip in the draw-weight pop-out, rather than printing its token', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p2'), 'Red']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([chip('p2'), 'Red']) })} />);
     fireEvent.click(screen.getByText('Hair'));
     // Two now: the chip itself, and the pop-out's title for the value it opened on.
     expect(screen.getAllByText('Hair')).toHaveLength(2);
@@ -503,7 +516,7 @@ describe('PlaceholderManager — chip values', () => {
   });
 
   it('removes a value from its × without opening the weight pop-out over the gone chip', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Red', 'Blue', 'Green']) })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Remove Red' }));
     expect(screen.queryByText('Red')).not.toBeInTheDocument();
     // The × sits inside the chip whose click opens the pop-out; a remove that also opened it left the
@@ -524,26 +537,26 @@ describe('PlaceholderManager — an Object', () => {
   const popOut = () => screen.queryByLabelText('Draw weight');
 
   it('opens no weight pop-out on a chip click', () => {
-    render(<PlaceholderManager placeholder={ph({ roll: false, values: three() })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false, values: three() })} />);
     fireEvent.click(screen.getByText('Red'));
     expect(popOut()).not.toBeInTheDocument();
   });
 
   it('shows no stepper in the box view', () => {
-    render(<PlaceholderManager placeholder={ph({ roll: false, values: three() })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false, values: three() })} />);
     pickStyle('Multiline');
     expect(screen.getByRole('button', { name: 'Expand value 3' })).toBeInTheDocument(); // three values open collapsed
     expect(stepper()).not.toBeInTheDocument();
   });
 
   it('offers no eye, and keeps Preview', () => {
-    render(<PlaceholderManager placeholder={ph({ roll: false, values: three() })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false, values: three() })} />);
     expect(eye()).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
   });
 
   it('gets all three back the moment it is declared a Wildcard', () => {
-    render(<PlaceholderManager placeholder={ph({ roll: false, values: three() })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false, values: three() })} />);
     pickKind('Wildcard');
     expect(eye()).toBeInTheDocument();
     fireEvent.click(screen.getByText('Red'));
@@ -553,7 +566,7 @@ describe('PlaceholderManager — an Object', () => {
   });
 
   it('takes the revealed numbers down with the eye when a Wildcard is declared an Object', () => {
-    render(<PlaceholderManager placeholder={ph({ values: three() })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: three() })} />);
     fireEvent.click(screen.getByRole('button', { name: /Show roll chances/i }));
     expect(screen.getByText(/^Red/)).toHaveTextContent('(33%)');
     pickKind('Object');
@@ -562,7 +575,7 @@ describe('PlaceholderManager — an Object', () => {
   });
 
   it('closes an open weight pop-out when a Wildcard is declared an Object', () => {
-    render(<PlaceholderManager placeholder={ph({ values: three() })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: three() })} />);
     fireEvent.click(screen.getByText('Red'));
     expect(popOut()).toBeInTheDocument();
     pickKind('Object');
@@ -572,21 +585,21 @@ describe('PlaceholderManager — an Object', () => {
 
 /**
  * A shared row opens this same panel with the name, the kind and the values locked — they belong to the
- * original — and the draw weights live. Those weights are written as an override on the holder, so benching
- * a value for one character leaves the original, and every other holder, exactly as they were.
+ * original — and the draw weights live. Those weights are written as an override on the parent placeholder, so benching
+ * a value for one character leaves the original, and every other parent placeholder, exactly as they were.
  */
 describe('PlaceholderManager — a shared row', () => {
   /** Molly holds the placeholder under test without owning it, which is what makes the row a shared one. */
-  const holder = (over: Partial<Placeholder> = {}): Placeholder => ({
+  const parent = (over: Partial<Placeholder> = {}): Placeholder => ({
     id: 'h1', name: 'Molly', roll: false, values: phValues([chip('p1')]), ...over,
   });
   const site = { ownerId: 'h1', key: phValueId(chip('p1')) };
   const shared = (over: Partial<Placeholder> = {}) =>
-    render(<PlaceholderManager placeholder={ph(over)} share={site} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph(over)} share={site} />);
   const weightChip = (label: string) => screen.getByRole('button', { name: `Draw weight for ${label}` });
   const setWeight = (n: number) => fireEvent.change(screen.getByLabelText('Draw weight'), { target: { value: String(n) } });
 
-  beforeEach(() => { siblings = [holder(), ph()]; });
+  beforeEach(() => { siblings = [parent(), ph()]; });
 
   it('locks the name, the kind and the value list', () => {
     shared();
@@ -597,17 +610,17 @@ describe('PlaceholderManager — a shared row', () => {
     expect(screen.getByText(/values come from the original/i)).toBeInTheDocument();
   });
 
-  it('writes the weight onto the holder, and never onto the original', () => {
+  it('writes the weight onto the parent placeholder, and never onto the original', () => {
     shared();
     fireEvent.click(weightChip('Red'));
     setWeight(0);
     expect(stored().id).toBe('h1');
     expect(stored().sharedWeights).toEqual({ [site.key]: { [phValueId('Red')]: 0 } });
-    expect(stored().values.map((v) => v.text)).toEqual([chip('p1')]); // the holder is otherwise untouched
+    expect(stored().values.map((v) => v.text)).toEqual([chip('p1')]); // the parent placeholder is otherwise untouched
   });
 
   it('drops the override when the weight goes back to what the original draws by', () => {
-    siblings = [holder({ sharedWeights: { [site.key]: { [phValueId('Red')]: 0 } } }), ph()];
+    siblings = [parent({ sharedWeights: { [site.key]: { [phValueId('Red')]: 0 } } }), ph()];
     shared();
     fireEvent.click(weightChip('Red'));
     setWeight(1);
@@ -615,7 +628,7 @@ describe('PlaceholderManager — a shared row', () => {
   });
 
   it('reads the merged weights, so the revealed chance belongs to this row', () => {
-    siblings = [holder({ sharedWeights: { [site.key]: { [phValueId('Red')]: 0 } } }), ph()];
+    siblings = [parent({ sharedWeights: { [site.key]: { [phValueId('Red')]: 0 } } }), ph()];
     shared();
     fireEvent.click(screen.getByRole('button', { name: /Show roll chances/i }));
     expect(weightChip('Red')).toHaveTextContent('(0%)');
@@ -623,7 +636,7 @@ describe('PlaceholderManager — a shared row', () => {
   });
 
   it('keeps a benched value in the list, which is the only way back off the bench', () => {
-    siblings = [holder({ sharedWeights: { [site.key]: { [phValueId('Red')]: 0 } } }), ph()];
+    siblings = [parent({ sharedWeights: { [site.key]: { [phValueId('Red')]: 0 } } }), ph()];
     shared();
     expect(weightChip('Red')).toBeInTheDocument();
   });
@@ -634,7 +647,7 @@ describe('PlaceholderManager — a shared row', () => {
     expect(screen.getByText(/never draws/i)).toBeInTheDocument();
   });
 
-  it('falls back to the plain editor when the holder is gone', () => {
+  it('falls back to the plain editor when the parent placeholder is gone', () => {
     siblings = [ph()];
     shared();
     expect(screen.getByDisplayValue('Scene')).toBeEnabled();
@@ -678,12 +691,12 @@ describe('PlaceholderManager — chance coloring', () => {
   });
 
   it('shows an even split as ordinary secondary chips, nothing faded', () => {
-    render(<PlaceholderManager placeholder={ph({ values: phValues(['Ash', 'Jet', 'Rust', 'Moss']) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues(['Ash', 'Jet', 'Rust', 'Moss']) })} />);
     for (const v of ['Ash', 'Jet', 'Rust', 'Moss']) expect(look(v)).toEqual(css(chanceChipStyle(100)));
   });
 
   it('fades the values a heavier sibling is favored over, at their share of its chance', () => {
-    render(<PlaceholderManager placeholder={ph({
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({
       values: phValues(['Ash', 'Jet', 'Rust', 'Moss']), weights: { [phValueId('Ash')]: 3 },
     })} />);
     expect(look('Ash')).toEqual(css(chanceChipStyle(100)));
@@ -692,7 +705,7 @@ describe('PlaceholderManager — chance coloring', () => {
 
   it('benches a weight-0 value of either kind to one identical look', () => {
     siblings = [ph(), { id: 'p2', name: 'Hair', values: phValues(['Brown', 'Blonde']) }];
-    render(<PlaceholderManager placeholder={ph({
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({
       values: phValues(['Red', 'Blue', chip('p2')]), weights: { [phValueId('Blue')]: 0, [phValueId(chip('p2'))]: 0 },
     })} />);
     expect(look('Red')).toEqual(css(chanceChipStyle(100)));
@@ -701,7 +714,7 @@ describe('PlaceholderManager — chance coloring', () => {
   });
 
   it('colors every value of an Object as full — all of them apply', () => {
-    render(<PlaceholderManager placeholder={ph({ roll: false })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ roll: false })} />);
     expect(bg('Red')).toBe(chanceChipStyle(100).backgroundColor);
   });
 
@@ -711,7 +724,7 @@ describe('PlaceholderManager — chance coloring', () => {
     const northern: Placeholder = { id: 'northern', name: 'Northern', values: phValues([chip('hair'), 'bald']) };
     const molly: Placeholder = { id: 'molly', name: 'Molly', values: phValues([chip('northern'), 'Southern']) };
     siblings = [molly, northern, hair];
-    render(<PlaceholderManager placeholder={northern} rowId="molly/northern" />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={northern} rowId="molly/northern" />);
     // Hair and bald split Northern evenly, so neither is favored: the row's 50% is common to both.
     expect(bg('Hair')).toBe(cssColor(accentAtChance(placeholderAccent('hair'), 100).backgroundColor));
     fireEvent.click(screen.getByRole('button', { name: /Show roll chances/i }));
@@ -724,21 +737,21 @@ describe('PlaceholderManager — chance coloring', () => {
 
   it('desaturates a reference chip a sibling is favored over', () => {
     siblings = [ph(), { id: 'p2', name: 'Hair', values: phValues(['Brown', 'Blonde']) }];
-    render(<PlaceholderManager placeholder={ph({
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({
       values: phValues(['Red', chip('p2')]), weights: { [phValueId('Red')]: 4 },
     })} />);
     expect(bg('Hair')).toBe(cssColor(accentAtChance(placeholderAccent('p2'), 25).backgroundColor));
   });
 
   it('offers the eye whenever there is more than one value, weighted or not', () => {
-    render(<PlaceholderManager placeholder={ph()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
     expect(screen.getByRole('button', { name: /Show roll chances/i })).toBeInTheDocument();
   });
 
   it('colors a shared row’s read-only chips the same way', () => {
     const molly: Placeholder = { id: 'molly', name: 'Molly', values: phValues([chip('p1')]) };
     siblings = [ph(), molly];
-    render(<PlaceholderManager placeholder={ph()} rowId="molly/p1" share={{ ownerId: 'molly', key: phValueId(chip('p1')) }} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} rowId="molly/p1" share={{ ownerId: 'molly', key: phValueId(chip('p1')) }} />);
     expect(bg('Red')).toBe(chanceChipStyle(100).backgroundColor);
   });
 });
@@ -750,20 +763,20 @@ describe('PlaceholderManager — the preview sample', () => {
 
   it('shows the result inline, with nested chips resolved to a real string', () => {
     siblings = [ph(), { id: 'p2', name: 'Hair', values: phValues(['Brown']) }];
-    render(<PlaceholderManager placeholder={ph({ values: phValues([`${chip('p2')} hair`]) })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([`${chip('p2')} hair`]) })} />);
     fireEvent.click(preview());
     expect(screen.getByRole('status', { name: 'Sample preview' })).toHaveTextContent('Brown hair');
   });
 
   it('names itself Preview, and says on hover that the sample is only a look', async () => {
-    render(<PlaceholderManager placeholder={ph()} />, { wrapper: TooltipProvider });
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />, { wrapper: TooltipProvider });
     await userEvent.hover(preview());
     await waitFor(() => expect(screen.getByText('Preview a sample of this placeholder')).toBeInTheDocument());
   });
 
   it('paints each direct chip’s run in its placeholder’s accent, named in the tip, literal text plain', async () => {
     siblings = [ph(), { id: 'p2', name: 'Hair', values: phValues(['Brown']) }, { id: 'p3', name: 'Eyes', values: phValues(['Green']) }];
-    render(<PlaceholderManager placeholder={ph({ values: phValues([`${chip('p2')} and ${chip('p3')}`]) })} />, { wrapper: TooltipProvider });
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([`${chip('p2')} and ${chip('p3')}`]) })} />, { wrapper: TooltipProvider });
     fireEvent.click(preview());
     const status = screen.getByRole('status', { name: 'Sample preview' });
     expect(status).toHaveTextContent('Brown and Green');
@@ -797,13 +810,13 @@ describe('PlaceholderManager — the preview sample', () => {
         ['p-hair', { kind: 'entity' as const, id: 'molly', name: 'Molly' }],
       ]),
     };
-    const { unmount } = render(<PlaceholderManager placeholder={ph({ values: phValues([chip('p-eyes')]) })} />, { wrapper: TooltipProvider });
+    const { unmount } = render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: phValues([chip('p-eyes')]) })} />, { wrapper: TooltipProvider });
     fireEvent.click(preview());
     await userEvent.hover(within(screen.getByRole('status', { name: 'Sample preview' })).getByText('Green'));
     await waitFor(() => expect(screen.getAllByText('Molly › Eyes').length).toBeGreaterThan(0));
     unmount();
     // Molly's own Hair drawing Molly's Eyes: the panel already says whose it is, so the tip reads bare.
-    render(<PlaceholderManager placeholder={{ ...hair, values: phValues([chip('p-eyes')]) }} />, { wrapper: TooltipProvider });
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={{ ...hair, values: phValues([chip('p-eyes')]) }} />, { wrapper: TooltipProvider });
     fireEvent.click(preview());
     await userEvent.hover(within(screen.getByRole('status', { name: 'Sample preview' })).getByText('Green'));
     await waitFor(() => expect(screen.getAllByText('Eyes').length).toBeGreaterThan(0));
@@ -812,7 +825,7 @@ describe('PlaceholderManager — the preview sample', () => {
 
   it('draws again on each click', () => {
     const values = phValues(['Red', 'Blue']);
-    render(<PlaceholderManager placeholder={ph({ values })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values })} />);
     const seen = new Set<string>();
     for (let i = 0; i < 40 && seen.size < 2; i++) {
       fireEvent.click(preview());
@@ -822,7 +835,7 @@ describe('PlaceholderManager — the preview sample', () => {
   });
 
   it('respects a benched value', () => {
-    render(<PlaceholderManager placeholder={ph({ weights: { [phValueId('Blue')]: 0 } })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ weights: { [phValueId('Blue')]: 0 } })} />);
     for (let i = 0; i < 20; i++) {
       fireEvent.click(preview());
       expect(screen.getByRole('status', { name: 'Sample preview' })).toHaveTextContent('Red');
@@ -830,15 +843,15 @@ describe('PlaceholderManager — the preview sample', () => {
   });
 
   it('is hidden with nothing to draw from, and persists nothing', () => {
-    render(<PlaceholderManager placeholder={ph({ values: [] })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ values: [] })} />);
     expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
-    render(<PlaceholderManager placeholder={ph({ id: 'other' })} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph({ id: 'other' })} />);
     fireEvent.click(preview());
     expect(updatePlaceholder).not.toHaveBeenCalled();
   });
 
   it('drops the sample once the values change under it', () => {
-    render(<PlaceholderManager placeholder={ph()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={ph()} />);
     fireEvent.click(preview());
     expect(screen.getByRole('status', { name: 'Sample preview' })).toBeInTheDocument();
     pickStyle('Multiline');
@@ -860,7 +873,7 @@ describe('PlaceholderManager — value pins', () => {
   const pinButton = (value: string) => screen.getByRole('button', { name: `Pins for ${value}` });
 
   it('counts the value’s pins on the badge, and opens them in a popover', async () => {
-    render(<PlaceholderManager placeholder={pinned()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={pinned()} />);
     expect(pinButton('Red').textContent).toBe('1');
     expect(pinButton('Blue').textContent).toBe('');
     await userEvent.click(pinButton('Red'));
@@ -868,7 +881,7 @@ describe('PlaceholderManager — value pins', () => {
   });
 
   it('writes the popover’s rows onto that value, by id, and leaves the others alone', async () => {
-    render(<PlaceholderManager placeholder={pinned()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={pinned()} />);
     await userEvent.click(pinButton('Red'));
     await userEvent.click(screen.getByRole('textbox', { name: 'Pinned Value' }));
     await userEvent.click(screen.getByRole('button', { name: 'sun' }));
@@ -882,7 +895,7 @@ describe('PlaceholderManager — value pins', () => {
   });
 
   it('refuses a pin on the value’s own placeholder: not offered, and noted where one is stored', async () => {
-    render(<PlaceholderManager placeholder={pinned([{ placeholderId: 'p1', value: 'Blue' }])} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={pinned([{ placeholderId: 'p1', value: 'Blue' }])} />);
     await userEvent.click(pinButton('Red'));
     expect(screen.getByText("A value can't pin its own placeholder")).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Select placeholder' }));
@@ -892,14 +905,14 @@ describe('PlaceholderManager — value pins', () => {
   it('shows no pin button in Simple mode', () => {
     render(
       <EditorModeContext.Provider value={{ mode: 'simple', advanced: false, setMode: () => {} }}>
-        <PlaceholderManager placeholder={pinned()} />
+        <PlaceholderManager tab="details" onTabChange={() => {}} placeholder={pinned()} />
       </EditorModeContext.Provider>,
     );
     expect(screen.queryByRole('button', { name: /^Pins for/ })).toBeNull();
   });
 
   it('offers the same button and the same popover in the multiline style', async () => {
-    render(<PlaceholderManager placeholder={pinned()} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={pinned()} />);
     pickStyle('Multiline');
     expect(pinButton('Red').textContent).toBe('1');
     expect(pinButton('Blue').textContent).toBe('');
@@ -911,7 +924,7 @@ describe('PlaceholderManager — value pins', () => {
     const para = 'A long value.\n\nWith a second paragraph.';
     const scene = ph({ values: [{ id: 'v-para', text: para, pins: [{ placeholderId: 'p2', value: 'fog' }] }] });
     siblings = [scene, WEATHER];
-    render(<PlaceholderManager placeholder={scene} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={scene} />);
     expect(within(styleToggle()).getByRole('radio', { name: 'Multiline' })).toBeChecked();
     expect(pinButton('A long value. …').textContent).toBe('1');
   });
@@ -940,8 +953,13 @@ describe('PlaceholderManager — the Pins section', () => {
   });
 
   /** The world editor's store, reduced to what the section reads and writes. */
-  const Host = ({ initial, placeholder = TOWN }: { initial: TestWorld; placeholder?: Placeholder }) => {
+  const Host = ({ initial, placeholder = TOWN, openOn = 'pins' }: {
+    initial: TestWorld;
+    placeholder?: Placeholder;
+    openOn?: PlaceholderPanelTab;
+  }) => {
     const [state, setState] = useState(initial);
+    const [tab, setTab] = useState(openOn);
     const swap = <T extends { id: string }>(list: T[], item: T) => list.map((x) => (x.id === item.id ? item : x));
     latest = state;
     gameData = {
@@ -953,12 +971,18 @@ describe('PlaceholderManager — the Pins section', () => {
       // No entity in this world owns a trait.
       updateEntity: () => {},
     };
-    return <PlaceholderManager placeholder={placeholder} />;
+    return <PlaceholderManager tab={tab} onTabChange={setTab} placeholder={placeholder} />;
   };
   const world = () => latest;
   const sources = () => screen.getAllByRole('combobox', { name: 'Pin Source' }) as HTMLSelectElement[];
   const values = () => screen.getAllByRole('textbox', { name: 'Pinned Value' }) as HTMLInputElement[];
   const location = (id: string) => world().locations.find((l) => l.id === id)!;
+  // A closed picker holds no list; the click focuses it, and focus mounts every option.
+  const opened = async (picker: HTMLElement) => {
+    await userEvent.click(picker);
+    return picker;
+  };
+  const openAndPick = async (picker: HTMLElement, option: string) => userEvent.selectOptions(await opened(picker), option);
 
   beforeEach(() => {
     siblings = [TOWN, REGION];
@@ -970,7 +994,7 @@ describe('PlaceholderManager — the Pins section', () => {
   it('lists every pin on this placeholder, strongest source first, each row naming its source', () => {
     render(<Host initial={base()} />);
     expect(values().map((v) => v.value)).toEqual(['Hollow', 'Marrow', 'Snowfall']);
-    expect(sources().map((s) => s.selectedOptions[0].textContent)).toEqual(['Hunger ≤ 20: Starving', 'Sworn', 'Region = Northern']);
+    expect(sources().map((s) => s.selectedOptions[0].textContent)).toEqual(['Hunger ≤ 20', 'Trait: Sworn', 'Region = Northern']);
     // Each row says who else claims the placeholder and which one the rules pick.
     expect(screen.getAllByText(/Also pinned by/).length).toBe(3);
   });
@@ -978,8 +1002,8 @@ describe('PlaceholderManager — the Pins section', () => {
   it('adds a location pin — kind, then source — and the pin lands on that location', async () => {
     render(<Host initial={base()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Add Pin' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Pin Kind' }), 'Location');
-    const picker = screen.getByRole('combobox', { name: 'New Pin Source' });
+    await openAndPick(screen.getByRole('combobox', { name: 'Pin Kind' }), 'Location');
+    const picker = await opened(screen.getByRole('combobox', { name: 'New Pin Source' }));
     expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'The Fen', 'The Moor']);
     await userEvent.selectOptions(picker, 'The Fen');
     expect(location('fen').placeholderPins).toEqual([{ placeholderId: 'town', value: '' }]);
@@ -999,10 +1023,10 @@ describe('PlaceholderManager — the Pins section', () => {
   it('re-aims a pin at another source of the same kind, carrying the pin across', async () => {
     const pin = { placeholderId: 'town', value: 'Fen Town', valueId: phValueId('Fen Town') };
     render(<Host initial={{ ...base(), locations: [{ ...fen, placeholderPins: [pin] }, moor] }} />);
-    await userEvent.selectOptions(sources()[1], 'The Moor');
+    await openAndPick(sources()[1], 'The Moor');
     expect(location('fen').placeholderPins).toBeUndefined();
     expect(location('moor').placeholderPins).toEqual([pin]);
-    expect(sources()[1].selectedOptions[0].textContent).toBe('The Moor');
+    expect(sources()[1].selectedOptions[0].textContent).toBe('Location: The Moor');
   });
 
   it('removes a pin from its source', async () => {
@@ -1015,8 +1039,8 @@ describe('PlaceholderManager — the Pins section', () => {
   it('offers a value picker that leaves this placeholder’s own values out', async () => {
     render(<Host initial={base()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Add Pin' }));
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Pin Kind' }), 'Placeholder Value');
-    const picker = screen.getByRole('combobox', { name: 'New Pin Source' });
+    await openAndPick(screen.getByRole('combobox', { name: 'Pin Kind' }), 'Placeholder Value');
+    const picker = await opened(screen.getByRole('combobox', { name: 'New Pin Source' }));
     expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'Region = Northern', 'Region = Southern']);
   });
 
@@ -1030,11 +1054,19 @@ describe('PlaceholderManager — the Pins section', () => {
     siblings = initial.placeholders;
     render(<Host initial={initial} placeholder={garb} />);
     await userEvent.click(screen.getByRole('button', { name: 'Add Pin' }));
-    const kinds = screen.getByRole('combobox', { name: 'Pin Kind' });
+    const kinds = await opened(screen.getByRole('combobox', { name: 'Pin Kind' }));
     expect(within(kinds).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'Trait', 'Placeholder Value']);
     await userEvent.selectOptions(kinds, 'Placeholder Value');
-    const picker = screen.getByRole('combobox', { name: 'New Pin Source' });
+    const picker = await opened(screen.getByRole('combobox', { name: 'New Pin Source' }));
     expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['', 'Plate = gilt']);
+  });
+
+  it('lives on its own tab, apart from the values', async () => {
+    render(<Host initial={base()} openOn="details" />);
+    expect(screen.queryByText('Placeholder Pins')).toBeNull();
+    await userEvent.click(screen.getByRole('tab', { name: 'Pins' }));
+    expect(screen.getByText('Placeholder Pins')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Details' })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('is hidden in Simple mode', () => {
@@ -1045,39 +1077,41 @@ describe('PlaceholderManager — the Pins section', () => {
     );
     expect(screen.queryByText('Placeholder Pins')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add Pin' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Pins' })).toBeNull();
   });
 
   it('is hidden where there is no world behind the editor, as in a library modal', () => {
-    render(<PlaceholderManager placeholder={TOWN} />);
+    render(<PlaceholderManager tab="pins" onTabChange={() => {}} placeholder={TOWN} />);
+    expect(screen.queryByRole('tab', { name: 'Pins' })).toBeNull();
     expect(screen.queryByText('Placeholder Pins')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add Pin' })).toBeNull();
   });
 });
 
-// Stat code reaches a part as a member of its holder, and every placeholder already carries six members of
+// Stat code reaches a part as a member of its parent placeholder, and every placeholder already carries six members of
 // its own. A part named like one of those loses the name, which the author has to be told here.
 describe('PlaceholderManager — a part named like a code member', () => {
-  const holder = ph({ id: 'holder', name: 'Hair', values: phValues([chip('part')]) });
-  const warning = () => screen.queryByText(/stat code can’t reach this part by name/);
+  const parent = ph({ id: 'parent', name: 'Hair', values: phValues([chip('part')]) });
+  const warning = () => screen.queryByText(/scripts can’t reach this part by name/);
 
   it('warns on a part whose name is one of an entry’s own members', () => {
-    const part = ph({ id: 'part', name: 'value', values: phValues(['ash']), ownerId: 'holder' });
-    siblings = [holder, part];
-    render(<PlaceholderManager placeholder={part} />);
+    const part = ph({ id: 'part', name: 'value', values: phValues(['ash']), ownerId: 'parent' });
+    siblings = [parent, part];
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={part} />);
     expect(warning()).toBeInTheDocument();
   });
 
   it('says nothing about a part named anything else', () => {
-    const part = ph({ id: 'part', name: 'Shade', values: phValues(['ash']), ownerId: 'holder' });
-    siblings = [holder, part];
-    render(<PlaceholderManager placeholder={part} />);
+    const part = ph({ id: 'part', name: 'Shade', values: phValues(['ash']), ownerId: 'parent' });
+    siblings = [parent, part];
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={part} />);
     expect(warning()).not.toBeInTheDocument();
   });
 
   it('says nothing about a top-level placeholder of that name, which code reaches by bare name', () => {
     const top = ph({ id: 'top', name: 'value', values: phValues(['ash']) });
     siblings = [top];
-    render(<PlaceholderManager placeholder={top} />);
+    render(<PlaceholderManager tab="details" onTabChange={() => {}} placeholder={top} />);
     expect(warning()).not.toBeInTheDocument();
   });
 });

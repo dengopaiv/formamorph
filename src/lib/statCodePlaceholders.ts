@@ -1,4 +1,4 @@
-import type { CodePins, Dictionary, Entity, Placeholder, PlaceholderRolls } from '@/types';
+import type { CodePins, Dictionary, Entity, OwnedTraitStates, Placeholder, PlaceholderRolls, PlayerStat, Trait } from '@/types';
 import type { PlaceholderOwnerRef, PlaceholderOwners } from './placeholderHomes';
 import { libraryPlaceholderSet } from './libraryPlaceholders';
 import {
@@ -7,8 +7,21 @@ import {
 } from './placeholders';
 import { placeholderPathMap, type PlaceholderPathNode } from './statCodePaths';
 import type { SandboxDictionary, SandboxPlaceholder, SandboxPlaceholderNode } from './statCodeExecutor';
-import type { CodeOwnerName } from './statCodeAnalysis';
+import type { CodeDictionaryNames, CodeOwnerName } from './statCodeAnalysis';
 import { statCodeName } from './statCodeNames';
+
+/** A book a run or the editor reads: a dictionary, or its name alone where its entries are not given. */
+export type DictionarySource = CodeOwnerName & Partial<Pick<Dictionary, 'entries'>>;
+
+/** What the pins in force depend on, besides the authored world. */
+export interface PinState {
+  codePins: CodePins;
+  /** The player's acquired traits, switched-off ones included. */
+  acquired: readonly Trait[];
+  disabledTraitIds: readonly string[];
+  ownedTraits?: OwnedTraitStates;
+  stats: readonly PlayerStat[];
+}
 
 /** The placeholders one stat-code run reads, and what they resolve under. */
 export interface StatCodePlaceholderSet {
@@ -17,7 +30,7 @@ export interface StatCodePlaceholderSet {
    *  every placeholder reads as the world's own. Every play and editor site passes it. */
   owners?: PlaceholderOwners;
   /** Every dictionary, in authored order. Each is a `dictionaries` entry, its placeholders its owner node. */
-  dictionaries?: readonly CodeOwnerName[];
+  dictionaries?: readonly DictionarySource[];
   /** Ids of the authored books in play: the ones left on at Enter World. Absent, every authored book is in play,
    *  as in the editor run and the Test Bench, which have no Enter World. */
   inPlayDictionaryIds?: ReadonlySet<string>;
@@ -30,6 +43,9 @@ export interface StatCodePlaceholderSet {
   /** The Code Pins as stored, so an Object pinned to a list reads that list back rather than its join.
    *  A Code Pin outranks every authored source, so an id in here is the pin in force. */
   codePins?: CodePins;
+  /** The pins in force once a run's writes land: the playthrough's own pin walk over the Code Pins, traits and
+   *  stats a During AI Output sentence leaves, which the next sentence reads. Absent, `pins` stands. */
+  pinsAfter?: (state: PinState) => Readonly<Record<string, string>>;
   /** Chooser for `roll()` and for any placeholder with no roll yet. Defaults to the weighted draw. */
   pick?: PlaceholderPick;
 }
@@ -72,18 +88,22 @@ export function withLibraryPlaceholders(set: StatCodePlaceholderSet, entities: r
     owners: new Map([
       ...set.owners ?? [], ...added.flatMap((p) => { const ref = ownerOf.get(p.id); return ref ? [[p.id, ref] as const] : []; }),
     ]),
-    dictionaries: [...set.dictionaries ?? [], ...books.map(({ id, name }) => ({ id, name }))],
+    dictionaries: [...set.dictionaries ?? [], ...books.map(({ id, name, entries }) => ({ id, name, entries }))],
   };
 }
 
-/** Each dictionary under its code name: chips read as code reads them. */
+/** Each dictionary under its code name, with its enabled entries under theirs: chips read as code reads them. */
 export const codeDictionaries = (
-  dictionaries: readonly CodeOwnerName[] | undefined, list: readonly Placeholder[],
-): CodeOwnerName[] => (dictionaries ?? []).map(({ id, name }) => ({ id, name: statCodeName(name, list) }));
+  dictionaries: readonly DictionarySource[] | undefined, list: readonly Placeholder[],
+): CodeDictionaryNames[] => (dictionaries ?? []).map(({ id, name, entries = [] }) => ({
+  id, name: statCodeName(name, list),
+  entries: entries.filter((entry) => entry.enabled !== false)
+    .map((entry) => ({ id: entry.id, name: statCodeName(entry.name, list), keys: entry.key, value: entry.value })),
+}));
 
 /** Each dictionary as a `dictionaries` entry, its owner node its `placeholders`. */
 export const sandboxDictionaries = (
-  books: readonly CodeOwnerName[], owners: ReadonlyMap<string, SandboxPlaceholderNode> | undefined,
+  books: readonly CodeDictionaryNames[], owners: ReadonlyMap<string, SandboxPlaceholderNode> | undefined,
 ): SandboxDictionary[] => books.map((book) => ({ ...book, placeholders: owners?.get(book.id) }));
 
 /** One run's placeholder nodes: the top-level keys of `placeholders`, and each owner's node by owner id. */

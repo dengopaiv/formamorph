@@ -1,7 +1,6 @@
 /**
  * Tiny shared helpers over the callback-based IndexedDB API: open a database (creating any missing
- * object stores) and promisify a single request. Each consumer keeps its own connection caching and
- * transaction logic — this just removes the repeated open/promise boilerplate.
+ * object stores), cache a connection, prune by recency, and settle requests and transactions as promises.
  */
 
 export interface StoreSpec {
@@ -33,12 +32,103 @@ export function openDatabase(
   });
 }
 
+/**
+ * One shared connection to a database, opened on first use. A failed open clears the cache, so the next
+ * call retries instead of replaying the rejection.
+ */
+export function cachedConnection(
+  name: string,
+  version: number | undefined,
+  stores: StoreSpec[],
+): () => Promise<IDBDatabase> {
+  let connection: Promise<IDBDatabase> | null = null;
+  return () => {
+    if (!connection) {
+      const opening = openDatabase(name, version, stores);
+      connection = opening;
+      opening.catch(() => {
+        if (connection === opening) connection = null;
+      });
+    }
+    return connection;
+  };
+}
+
+/**
+ * Queue deletes for the least recently used records of `store` beyond `maxEntries`, inside its transaction.
+ * A `count()` gates the work, so the common under-cap case never loads a record.
+ *
+ * @param order - A record's recency stamp; the highest is the most recent
+ * @param keyOf - A record's primary key
+ */
+export function pruneLeastRecent<R>(
+  store: IDBObjectStore,
+  maxEntries: number,
+  order: (record: R) => number,
+  keyOf: (record: R) => IDBValidKey,
+): void {
+  const count = store.count();
+  count.onsuccess = () => {
+    if (count.result <= maxEntries) return;
+    const all = store.getAll() as IDBRequest<R[]>;
+    all.onsuccess = () => {
+      all.result
+        .sort((a, b) => order(b) - order(a))
+        .slice(maxEntries)
+        .forEach((record) => store.delete(keyOf(record)));
+    };
+  };
+}
+
 /** Resolve with a request's `result` on success; reject with its `error` on failure. */
 export function promisifyRequest<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+/**
+ * Resolve when `transaction` commits; reject with its error when it fails or aborts.
+ *
+ * A write is done only at commit: a full disk aborts the transaction after every request in it succeeded.
+ */
+export function transactionDone(transaction: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    // A failed request's error reaches the transaction before the abort sets `transaction.error`.
+    const fail = (event: Event) => reject(
+      (event.target as IDBRequest | IDBTransaction | null)?.error ?? transaction.error ?? new Error('The write was aborted'),
+    );
+    transaction.onerror = fail;
+    transaction.onabort = fail;
+  });
+}
+
+/**
+ * Read with `read`, then write from its result in the same transaction; resolve when that commits.
+ *
+ * Settles on every path: a write that throws aborts the transaction and rejects with what it threw, and a
+ * write that writes nothing resolves when the transaction completes.
+ *
+ * @param transaction - The read-write transaction `read` runs in
+ * @param read - The request whose result the write needs
+ * @param write - Queues the writes; may throw to refuse
+ */
+export function writeAfterRead<T>(
+  transaction: IDBTransaction, read: IDBRequest<T>, write: (result: T) => void,
+): Promise<void> {
+  const done = transactionDone(transaction);
+  let thrown: { error: unknown } | null = null;
+  read.onsuccess = () => {
+    try {
+      write(read.result);
+    } catch (error) {
+      thrown = { error };
+      transaction.abort();
+    }
+  };
+  return done.catch((error: unknown) => { throw thrown ? thrown.error : error; });
 }
 
 /**

@@ -7,8 +7,8 @@ import { entityTraitNames, worldTraitPlaces } from '@/lib/statCodeTraits';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { worldPlaceholderPlaces } from '@/lib/statCodePlaceholderPlaces';
 import { StatCodeTemplateDialog } from './StatCodeTemplateDialog';
-import type { StatCodeTiming } from '@/lib/statCodeTiming';
-import type { StatCodeTemplate } from '@/lib/statCodeTemplates';
+import type { ScriptTiming } from '@/types';
+import type { CodeTemplate } from '@/lib/statCodeTemplates';
 
 /** What a template asks for is a form the author writes by typing slots into code, and the form has to
  *  agree with the code it generates underneath — that agreement is what these cover. */
@@ -76,7 +76,9 @@ const placeholders: Placeholder[] = [
 ];
 const placeholderOwners = new Map([['secret', { kind: 'entity' as const, id: 'e1', name: 'Mira' }]]);
 
-const open = (timing: StatCodeTiming = 'after', cast: Entity[] = entities) => render(
+type DialogProps = Extract<React.ComponentProps<typeof StatCodeTemplateDialog>, { kind?: 'script' | 'worldScript' }>;
+
+const open = (timing: ScriptTiming = 'after', cast: Entity[] = entities, extra: Partial<DialogProps> = {}) => render(
   <StatCodeTemplateDialog
     open
     onOpenChange={vi.fn()}
@@ -88,6 +90,7 @@ const open = (timing: StatCodeTiming = 'after', cast: Entity[] = entities) => re
     placeholderPlaces={worldPlaceholderPlaces({ list: placeholders, owners: placeholderOwners, groups: placeholderGroups })}
     traitPlaces={worldTraitPlaces({ traits, traitGroups }, [])}
     entities={entityTraitNames({ traits, traitGroups, entities: cast, entityGroups }, [])}
+    {...extra}
   />,
 );
 
@@ -96,17 +99,20 @@ const rows = async () => (await screen.findAllByRole('option')).map((option) => 
 // The highlighter splits the code into token spans, so read the whole generated block.
 const generated = () => document.querySelector('pre')?.textContent ?? '';
 
-const localTemplate: StatCodeTemplate = {
+const localTemplate: CodeTemplate = {
   id: 'local-template',
   name: 'Local Demonstration',
   description: 'A controlled template.',
   code: 'return {{amount:number=2}};',
-  timing: 'after',
+  kind: 'script',
+  timings: ['after'],
 };
 
 /** Start a new template and replace its code with `code`. */
-async function authoring(user: ReturnType<typeof userEvent.setup>, code: string, timing: StatCodeTiming = 'after', cast?: Entity[]) {
-  open(timing, cast);
+async function authoring(
+  user: ReturnType<typeof userEvent.setup>, code: string, timing: ScriptTiming = 'after', cast?: Entity[], extra?: Partial<DialogProps>,
+) {
+  open(timing, cast, extra);
   await user.click(await screen.findByRole('button', { name: /New Template/i }));
   const field = await screen.findByLabelText('Template code');
   await user.clear(field);
@@ -194,6 +200,95 @@ describe('the form a template presents', () => {
     expect(screen.getByRole('combobox', { name: 'Source' })).toHaveTextContent('Damp');
   });
 
+  describe('in an owned or Blueprint stat’s box', () => {
+    // Mira's own Rage and Stock sit beside the world's Warmth and Damp; Warmth is the stat being edited.
+    const rage = { id: 'o1', name: 'Rage', type: 'number', value: 1, min: 0, max: 10 } as unknown as Stat;
+    const stock = { id: 'o2', name: 'Stock', type: 'number', value: 1, min: 0, max: 10 } as unknown as Stat;
+    const owned: Partial<DialogProps> = { owner: 'entity', ownerStats: [rage, stock], currentStatId: 'o1' };
+    const code = 'return stats[{{source:stat}}].value;';
+
+    it('lists the owner’s stats first and the world’s after them, each under its list', async () => {
+      const user = userEvent.setup();
+      await authoring(user, code, 'after', undefined, owned);
+
+      await user.click(await screen.findByRole('combobox', { name: 'Source' }));
+      expect(await rows()).toEqual(['StockOwner', 'WarmthWorld', 'DampWorld']);
+    });
+
+    it('inserts the owner’s route for an owner pick and the world’s for a world pick', async () => {
+      const user = userEvent.setup();
+      await authoring(user, code, 'after', undefined, owned);
+
+      await user.click(await screen.findByRole('combobox', { name: 'Source' }));
+      await user.click(screen.getByRole('option', { name: /^Stock/ }));
+      await waitFor(() => expect(generated()).toContain('owner.stats["Stock"].value'));
+      expect(screen.getByRole('combobox', { name: 'Source' })).toHaveTextContent('Stock');
+
+      await user.click(screen.getByRole('combobox', { name: 'Source' }));
+      await user.click(screen.getByRole('option', { name: /^Damp/ }));
+      await waitFor(() => expect(generated()).toContain('return stats["Damp"].value;'));
+      expect(generated()).not.toContain('owner.stats');
+    });
+
+    it('keeps two stats of one name apart by their list', async () => {
+      const user = userEvent.setup();
+      const twin = { ...stock, id: 'o3', name: 'Damp' } as Stat;
+      await authoring(user, code, 'after', undefined, { ...owned, ownerStats: [rage, twin] });
+
+      await user.click(await screen.findByRole('combobox', { name: 'Source' }));
+      expect(await rows()).toEqual(['DampOwner', 'WarmthWorld', 'DampWorld']);
+      await user.click(screen.getAllByRole('option', { name: /^Damp/ })[0]);
+      await waitFor(() => expect(generated()).toContain('owner.stats["Damp"]'));
+    });
+
+    it('lists a Blueprint stat’s group the same way', async () => {
+      const user = userEvent.setup();
+      await authoring(user, code, 'after', undefined, { ...owned, owner: 'blueprint', ownerStats: [stock] });
+
+      await user.click(await screen.findByRole('combobox', { name: 'Source' }));
+      expect(await rows()).toEqual(['StockOwner', 'WarmthWorld', 'DampWorld']);
+    });
+
+    describe('a plain trait slot', () => {
+      const traitCode = 'return traits[{{t:trait}}].enabled;';
+      const miraTraits = entityTraitNames({ traits, traitGroups, entities, entityGroups }, [])[0].traits;
+      const world = ['Storm TouchedLineage › Storms', 'HeirLineage', 'CursedWorld'];
+
+      it('lists the entity’s own traits first under Owner, then the world’s, and fills `owner.traits`', async () => {
+        const user = userEvent.setup();
+        await authoring(user, traitCode, 'after', undefined, { ...owned, ownerTraits: miraTraits });
+
+        await user.click(await screen.findByRole('combobox', { name: 'T' }));
+        expect(await rows()).toEqual(['WoundedOwner › Scars', 'CalmOwner', ...world]);
+        await user.click(screen.getByRole('option', { name: /^Wounded/ }));
+        await waitFor(() => expect(generated()).toContain('return owner.traits["Wounded"].enabled;'));
+        expect(screen.getByRole('combobox', { name: 'T' })).toHaveTextContent('Wounded');
+
+        await user.click(screen.getByRole('combobox', { name: 'T' }));
+        await user.click(screen.getByRole('option', { name: /^Cursed/ }));
+        await waitFor(() => expect(generated()).toContain('return traits["Cursed"].enabled;'));
+      });
+
+      it('lists the world’s traits only in a global or a Blueprint stat’s box', async () => {
+        const user = userEvent.setup();
+        await authoring(user, traitCode, 'after', undefined, { ...owned, owner: 'blueprint', ownerStats: [stock] });
+        await user.click(await screen.findByRole('combobox', { name: 'T' }));
+        expect(await rows()).toEqual(world);
+      });
+    });
+
+    it('hands a built-in template’s owner pick to Insert as code', async () => {
+      const user = userEvent.setup();
+      const onInsert = vi.fn();
+      open('after', entities, { ...owned, onInsert });
+      await user.click(await screen.findByText('Inverse of Another Stat'));
+      await user.click(await screen.findByRole('combobox', { name: 'Source' }));
+      await user.click(await screen.findByRole('option', { name: /^Stock/ }));
+      await user.click(screen.getByRole('button', { name: 'Insert Code' }));
+      expect(onInsert.mock.calls[0][0]).toContain('const source = owner.stats["Stock"];');
+    });
+  });
+
   // The sandbox `traits` map holds world traits only, so an owned trait there would generate a name that never resolves.
   it('lists only the world’s traits in a plain trait slot, in Traits-tab order under their groups', async () => {
     const user = userEvent.setup();
@@ -243,6 +338,57 @@ describe('the form a template presents', () => {
     await waitFor(() => expect(generated()).toContain('entities["Mira"].traits[""]'));
   });
 
+  describe('a stat slot tied to an entity or the persona', () => {
+    const stat = (id: string, name: string): Stat =>
+      ({ id, name, type: 'number', description: '', value: 1, min: 0, max: 10, regen: 0, descriptors: [] });
+    const vale: Entity = { id: 'e4', name: 'Vale', order: 2, persona: true, stats: [stat('v1', 'Nerve')] };
+    const cast: Entity[] = [
+      { ...entities[0], stats: [stat('m1', 'Grit'), stat('m2', 'Hunger')] },
+      { ...entities[1], stats: [stat('a1', 'Faith')] },
+      { ...entities[2], stats: [stat('r1', 'Nerve'), stat('r2', 'Luck')] },
+      vale,
+    ];
+
+    it('lists the picked entity’s stats, fills its route, and clears when the entity changes', async () => {
+      const user = userEvent.setup();
+      await authoring(user, 'entities[{{who:entity}}].stats[{{s:stat(who)}}].value;', 'after', cast);
+
+      await user.click(await screen.findByRole('combobox', { name: 'S' }));
+      expect(screen.queryAllByRole('option')).toEqual([]);
+      await user.keyboard('{Escape}');
+      await user.click(await screen.findByRole('combobox', { name: 'Who' }));
+      await user.click(await screen.findByRole('option', { name: /^Mira/ }));
+      await user.click(screen.getByRole('combobox', { name: 'S' }));
+      expect(await rows()).toEqual(['Grit', 'Hunger']);
+      await user.click(screen.getByRole('option', { name: 'Hunger' }));
+      await waitFor(() => expect(generated()).toContain('entities["Mira"].stats["Hunger"].value'));
+
+      await user.click(screen.getByRole('combobox', { name: 'Who' }));
+      await user.click(await screen.findByRole('option', { name: 'Ash' }));
+      await waitFor(() => expect(generated()).toContain('entities["Ash"].stats[""].value'));
+      await user.click(screen.getByRole('combobox', { name: 'S' }));
+      expect(await rows()).toEqual(['Faith']);
+    });
+
+    it('lists each persona entity’s stats under its name, and fills `persona.stats`', async () => {
+      const user = userEvent.setup();
+      await authoring(user, 'persona.stats[{{s:stat(persona)}}].value;', 'after', cast);
+
+      await user.click(await screen.findByRole('combobox', { name: 'S' }));
+      expect(await rows()).toEqual(['NerveRook', 'LuckRook', 'NerveVale']);
+      await user.click(screen.getByRole('option', { name: /^Luck/ }));
+      await waitFor(() => expect(generated()).toContain('persona.stats["Luck"].value'));
+    });
+
+    it('lists the world’s stats for a loose tie', async () => {
+      const user = userEvent.setup();
+      await authoring(user, 'stats[{{s:stat(nobody)}}].value;', 'after', cast);
+
+      await user.click(await screen.findByRole('combobox', { name: 'S' }));
+      expect(await rows()).toEqual(['Damp']);
+    });
+  });
+
   it('lists the picked entity’s traits in its own tree order under its own groups, and follows the pick', async () => {
     const user = userEvent.setup();
     await authoring(user, 'entities[{{who:entity}}].traits[{{t:trait(who)}}];');
@@ -260,7 +406,7 @@ describe('the form a template presents', () => {
     expect(await rows()).toEqual(['Scarred']);
   });
 
-  // `persona.traits` reads by name, so a name two personas share is one value under either holder.
+  // `persona.traits` reads by name, so a name two personas share is one value under either owner.
   it('lists each persona entity’s traits under its name and groups, a shared name under both', async () => {
     const user = userEvent.setup();
     const vale: Entity = {
@@ -347,7 +493,7 @@ describe('personal template boundaries', () => {
     const user = userEvent.setup();
     const repository = {
       list: vi.fn(async () => [localTemplate]),
-      save: vi.fn(async (template: StatCodeTemplate) => ({ ...template, id: template.id || 'saved-copy' })),
+      save: vi.fn(async (template: CodeTemplate) => ({ ...template, id: template.id || 'saved-copy' })),
       remove: vi.fn(async () => {}),
       import: vi.fn(async () => 1),
     };
@@ -411,27 +557,72 @@ describe('which templates a box offers', () => {
     expect(screen.queryByRole('button', { name: 'Hourly Change' })).toBeNull();
   });
 
-  it('leaves the before menu’s templates out of the after menu', async () => {
+  it('leaves a template that runs only before the AI out of the after menu', async () => {
     open('after');
     expect(await screen.findByRole('button', { name: 'Hourly Change' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Opening Turn Value' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Trait by Threshold' })).toBeNull();
   });
 
-  it('names the box the selected template runs in', async () => {
+  // Start, Output and Switch read a zero clock delta, so a drift template does nothing there.
+  it.each(['start', 'output', 'switch'] as const)('lists no clock-delta template in the %s menu', async (timing) => {
+    open(timing);
+    expect(await screen.findByRole('button', { name: /New Template/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Hourly Change' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Regen Toward Target' })).toBeNull();
+  });
+
+  it.each(['before', 'after', 'start', 'switch'] as const)('lists Weighted Blend in the %s menu', async (timing) => {
+    open(timing);
+    expect(await screen.findByRole('button', { name: 'Weighted Blend' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['start', ['Random Starting Value', 'Start From Persona Trait']],
+    ['switch', ['Change When a Trait Switches', 'Mirror a Trait']],
+    ['output', ['Replace a Word', 'Count a Word', 'Bold a Word Past a Threshold']],
+  ] as const)('lists the %s-only templates in their own menu and no value formula in the output menu', async (timing, names) => {
+    open(timing);
+    for (const name of names) expect(await screen.findByRole('button', { name })).toBeInTheDocument();
+    if (timing === 'output') expect(screen.queryByRole('button', { name: 'Weighted Blend' })).toBeNull();
+  });
+
+  it('keeps a start-only template out of the output menu', async () => {
+    open('output');
+    expect(await screen.findByRole('button', { name: 'Replace a Word' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Random Starting Value' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mirror a Trait' })).toBeNull();
+  });
+
+  it('fills only the selected template with primary and leaves the others a neutral hover', async () => {
+    const user = userEvent.setup();
+    open('after');
+    const hourly = await screen.findByRole('button', { name: 'Hourly Change' });
+    await user.click(hourly);
+
+    expect(hourly).toHaveClass('bg-primary', 'text-primary-foreground');
+    expect(hourly).not.toHaveClass('bg-accent', 'hover:bg-secondary');
+    const other = screen.getByRole('button', { name: 'Weighted Blend' });
+    expect(other).toHaveClass('hover:bg-secondary');
+    expect(other).not.toHaveClass('bg-primary');
+  });
+
+  it('names every box the selected template runs in', async () => {
     const user = userEvent.setup();
     open('after');
     await user.click(await screen.findByRole('button', { name: 'Hourly Change' }));
     expect(screen.getByText('Runs After the AI')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Weighted Blend' }));
+    expect(screen.getByText('Runs Before the AI, After the AI, At Game Start, When a Trait Switches')).toBeInTheDocument();
   });
 
   it('shows only the author’s templates for this box', async () => {
     const repository = {
-      list: vi.fn(async () => [
+      list: vi.fn(async (): Promise<CodeTemplate[]> => [
         localTemplate,
-        { ...localTemplate, id: 'setup-template', name: 'Setup Demonstration', timing: 'before' as const },
+        { ...localTemplate, id: 'setup-template', name: 'Setup Demonstration', timings: ['before'] },
+        { id: 'tool', kind: 'worldTool', name: 'Tool Demonstration', description: '', code: 'return 1;', timings: ['after'] },
       ]),
-      save: vi.fn(async (template: StatCodeTemplate) => template),
+      save: vi.fn(async (template: CodeTemplate) => template),
       remove: vi.fn(async () => {}),
       import: vi.fn(async () => 0),
     };
@@ -450,12 +641,13 @@ describe('which templates a box offers', () => {
 
     expect(await screen.findByText('Setup Demonstration')).toBeInTheDocument();
     expect(screen.queryByText('Local Demonstration')).toBeNull();
+    expect(screen.queryByText('Tool Demonstration')).toBeNull();
   });
 
-  // A template written while the before box was open belongs to that box, with the field there to move it.
+  // A template written while the before box was open runs in that box, with the field there to add more.
   it('starts a new template in the box its menu was opened from', async () => {
     const user = userEvent.setup();
-    const save = vi.fn(async (template: StatCodeTemplate) => ({ ...template, id: 'saved' }));
+    const save = vi.fn(async (template: CodeTemplate) => ({ ...template, id: 'saved' }));
     render(
       <StatCodeTemplateDialog
         open
@@ -475,6 +667,48 @@ describe('which templates a box offers', () => {
     const name = await screen.findByLabelText('Name');
     await user.type(name, 'Mine');
     await user.click(screen.getByRole('button', { name: 'Save Template' }));
-    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ timing: 'before' })));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ kind: 'script', timings: ['before'] })));
+  });
+
+  it('lists a template saved with two timings in both menus, and in no other', async () => {
+    const user = userEvent.setup();
+    const library: CodeTemplate[] = [];
+    const repository = {
+      list: vi.fn(async () => [...library]),
+      save: vi.fn(async (template: CodeTemplate) => { library.push({ ...template, id: 'two' }); return library[0]; }),
+      remove: vi.fn(async () => {}),
+      import: vi.fn(async () => 0),
+    };
+    const { unmount } = open('before', entities, { repository });
+    await user.click(await screen.findByRole('button', { name: /New Template/i }));
+    await user.type(await screen.findByLabelText('Name'), 'Twice');
+    await user.click(screen.getByRole('combobox', { name: 'Runs' }));
+    await user.click(await screen.findByRole('option', { name: /At Game Start/ }));
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Save Template' }));
+    await waitFor(() => expect(library).toEqual([expect.objectContaining({ name: 'Twice', timings: ['before', 'start'] })]));
+    unmount();
+
+    for (const timing of ['before', 'start'] as const) {
+      const shown = open(timing, entities, { repository });
+      expect(await screen.findByRole('button', { name: 'Twice' }), timing).toBeInTheDocument();
+      shown.unmount();
+    }
+    // A control that runs after the AI shows the library has loaded into that menu.
+    library.push({ ...localTemplate, id: 'control', name: 'Control', timings: ['after'] });
+    open('after', entities, { repository });
+    expect(await screen.findByRole('button', { name: 'Control' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Twice' })).toBeNull();
+  });
+
+  it('blocks Save with no timing picked', async () => {
+    const user = userEvent.setup();
+    open('after');
+    await user.click(await screen.findByRole('button', { name: /New Template/i }));
+    await user.type(await screen.findByLabelText('Name'), 'Nowhere');
+    await user.click(screen.getByRole('combobox', { name: 'Runs' }));
+    await user.click(await screen.findByRole('option', { name: /After the AI/ }));
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: 'Save Template' })).toBeDisabled();
   });
 });

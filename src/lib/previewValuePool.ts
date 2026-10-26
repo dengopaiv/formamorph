@@ -1,11 +1,13 @@
 import { lengthGuidance, type ParagraphLimit } from './outputLength';
 import { type SectionStyle } from './promptPresets';
-import { markdownGuidance, markdownDefinitions, activeCharacterGuidance } from '@/components/game/GamePrompts';
+import { markdownGuidance, activeCharacterGuidance } from '@/components/game/GamePrompts';
 import { languageDirective, type LanguageSurface } from './languages';
 import { DISCOVER_LATER_LABEL, DISCOVER_PASSAGE_LABEL } from './runtimeCharacters';
 import { milestoneMomentValues } from './milestoneMemory';
+import { entityMoveOptions, entityMoveOptionsText, entityMoveStateText } from './entityFollowing';
 import { chipValues } from './chipValues/chipValues';
 import { sampleChipScene } from './chipValues/sampleScene';
+import { layerValues, type TokenValues, type ValueLookup } from './promptValues';
 
 /**
  * The one pool the prompt editor's Preview draws on, in two layers.
@@ -22,7 +24,7 @@ import { sampleChipScene } from './chipValues/sampleScene';
  */
 
 /** Which tokens the derived layer owns — real settings values, never sampled. */
-export const DERIVED_TOKENS = ['<LENGTH GUIDANCE>', '<MARKDOWN GUIDANCE>', '<MARKDOWN GUIDANCE|definitions>', '<ACTIVE CHARACTER GUIDANCE>', '<LANGUAGE>'];
+export const DERIVED_TOKENS = ['<LENGTH GUIDANCE>', '<MARKDOWN GUIDANCE>', '<ACTIVE CHARACTER GUIDANCE>', '<LANGUAGE>'];
 
 /**
  * The sample playthrough's current beat — the values only a live turn supplies. The Anatomy hub cans this
@@ -69,13 +71,16 @@ const TURN_VALUES: Record<string, string> = {
   // Headed and numbered the way the milestone selector sends them.
   ...milestoneMomentValues(SAMPLE_MOMENTS.kept, SAMPLE_MOMENTS.fresh),
   '<SUBJECT>': 'a weathered lamp-keeper on a stone shore',
+  // Rendered the way the entity location request renders them for an entity not yet following.
+  '<MOVE STATE>': entityMoveStateText(SAMPLE_TURN.character.name, false),
+  '<MOVE OPTIONS>': entityMoveOptionsText(entityMoveOptions(false)),
 };
 
 /**
  * Every sampled token: the sample world's scene values from Chip Values, and the sample turn's per-turn
  * values. The derived tokens stay out, so a sample never shadows the player's real setting.
  */
-export const SAMPLE_PREVIEW_VALUES: Record<string, string> = { ...TURN_VALUES, ...chipValues(sampleChipScene()) };
+export const SAMPLE_PREVIEW_VALUES: ValueLookup = layerValues(TURN_VALUES, chipValues(sampleChipScene()));
 
 /** Settings the derived layer reads. Exactly the inputs the real guidance functions take. */
 export interface DerivedPreviewSettings {
@@ -106,7 +111,6 @@ export function derivedPreviewValues(s: DerivedPreviewSettings): Record<string, 
   return {
     '<LENGTH GUIDANCE>': lengthGuidance(s.paragraphLimit, s.maxTokens),
     '<MARKDOWN GUIDANCE>': markdownGuidance(s.markdownOutput),
-    '<MARKDOWN GUIDANCE|definitions>': markdownDefinitions(s.markdownOutput),
     '<ACTIVE CHARACTER GUIDANCE>': activeCharacterGuidance(s.limitActiveCharacters, s.activeCharacterLimit),
     ...languagePreviewValue('narration', s.language),
   };
@@ -114,11 +118,12 @@ export function derivedPreviewValues(s: DerivedPreviewSettings): Record<string, 
 
 /**
  * The values a Preview should use: samples underneath, real settings-derived guidance over them, and a live
- * game's own context over that. Callers pass `live` only when a playthrough is running.
+ * game's own context over that. Callers pass `live` only when a playthrough is running. A live lookup renders
+ * any scene token on its first read, so an in-game token never falls through to the sample world.
  */
 export function composePreviewValues(
   settings: DerivedPreviewSettings,
-  live?: Record<string, string>,
-): Record<string, string> {
-  return { ...SAMPLE_PREVIEW_VALUES, ...derivedPreviewValues(settings), ...(live ?? {}) };
+  live?: TokenValues,
+): ValueLookup {
+  return layerValues(SAMPLE_PREVIEW_VALUES, derivedPreviewValues(settings), live);
 }

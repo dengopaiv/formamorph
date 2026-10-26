@@ -34,9 +34,9 @@ const WORLD: World = benchEditorWorld({
   traits: [
     { id: 't-paladin', name: 'Paladin', groupId: 'g-class', statChanges: [] },
     { id: 't-rogue', name: 'Rogue', groupId: 'g-class', statChanges: [] },
-    { id: 't-plate', name: 'Plate Armor', statChanges: [], requires: [{ kind: 'trait', id: 't-paladin' }] },
+    { id: 't-plate', name: 'Plate Armor', statChanges: [], requires: [{ all: [{ kind: 'trait', id: 't-paladin' }] }] },
     { id: 't-loose', name: 'Lamp-Lit', statChanges: [] },
-    { id: 't-mark', name: 'Guild Mark', statChanges: [], requires: [{ kind: 'trait', id: 'gone', name: 'Thief' }] },
+    { id: 't-mark', name: 'Guild Mark', statChanges: [], requires: [{ all: [{ kind: 'trait', id: 'gone', name: 'Thief' }] }] },
   ],
 } as Partial<World>);
 
@@ -66,7 +66,7 @@ describe('the Requires field', () => {
   it('adds a requirement from the picker, which lists each section with where its target lives', async () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     selectTrait('Lamp-Lit');
-    expect(within(requiresField()).getByText('Available when any one of these holds')).toBeInTheDocument();
+    expect(within(requiresField()).queryByText(/any one of these/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Add Requirement' }));
 
     const list = await screen.findByRole('listbox');
@@ -78,33 +78,65 @@ describe('the Requires field', () => {
     expect(within(list).getByRole('option', { name: /^playing as Sir Aldric/ })).toBeInTheDocument();
     expect(within(list).queryByRole('option', { name: /Odd Wick/ })).toBeNull();
 
-    // A target asks which bearer next; the same bearer is the plain requirement.
+    // Only You can hold a world trait, so the plain requirement is added with no owner page.
     fireEvent.click(paladin);
-    fireEvent.click(screen.getByRole('option', { name: /^Same Bearer/ }));
-    expect(traitRequires(ctx, 't-loose')).toEqual([{ kind: 'trait', id: 't-paladin' }]);
+    expect(screen.queryByRole('option', { name: /^Same Owner/ })).toBeNull();
+    expect(traitRequires(ctx, 't-loose')).toEqual([{ all: [{ kind: 'trait', id: 't-paladin' }] }]);
     expect(within(requiresField()).getByRole('button', { name: 'Paladin' })).toBeInTheDocument();
   });
 
-  it('joins chips with "or" and filters the picker by name', async () => {
+  it('adds another way as a row joined by "or", and filters the picker by name', async () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     selectTrait('Plate Armor');
-    fireEvent.click(screen.getByRole('button', { name: 'Add Requirement' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Or Another Way' }));
     const list = await screen.findByRole('listbox');
-    // A requirement already listed stays in place; its bearer reads disabled on the next page.
-    fireEvent.click(within(list).getByRole('option', { name: /^Paladin/ }));
-    expect(screen.getByRole('option', { name: /^Same Bearer/ })).toHaveAttribute('aria-disabled', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Back to targets' }));
-    const search = screen.getByPlaceholderText('Search traits, groups, and personas');
+    // A one-chip row already listed stays in place and reads disabled.
+    expect(within(list).getByRole('option', { name: /^Paladin/ })).toHaveAttribute('aria-disabled', 'true');
+    const search = screen.getByPlaceholderText('Search traits, groups, time of day, and personas');
     // The search reads what a row shows, never the requirement key behind it.
     fireEvent.change(search, { target: { value: 'trait' } });
     expect(screen.queryAllByRole('option')).toEqual([]);
     fireEvent.change(search, { target: { value: 'any cl' } });
     expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['any ClassWorld']);
     fireEvent.click(screen.getByRole('option', { name: /any Class/ }));
-    fireEvent.click(screen.getByRole('option', { name: /^Same Bearer/ }));
 
-    expect(traitRequires(ctx, 't-plate')).toEqual([{ kind: 'trait', id: 't-paladin' }, { kind: 'group', id: 'g-class' }]);
+    expect(traitRequires(ctx, 't-plate')).toEqual([{ all: [{ kind: 'trait', id: 't-paladin' }] }, { all: [{ kind: 'group', id: 'g-class' }] }]);
     expect(within(requiresField()).getByText('or')).toBeInTheDocument();
+  });
+
+  it('asks which owner when an entity also has the target, and adds for the one picked', async () => {
+    const world = benchEditorWorld({
+      ...WORLD,
+      entities: [
+        ...WORLD.entities,
+        {
+          id: 'ash', name: 'Ash', playerDescription: 'A wolf.', aiDescription: 'A wolf.', locations: ['harbor'],
+          traits: [{ id: 't-tamed', name: 'Tamed', statChanges: [] }],
+        },
+      ],
+    } as Partial<World>);
+    const { ctx } = renderWorldEditorBench(world, 'advanced');
+    selectTrait('Lamp-Lit');
+    fireEvent.click(screen.getByRole('button', { name: 'Add Requirement' }));
+    fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: /^Tamed/ }));
+
+    const page = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(page).toEqual(['Same OwnerWhoever has the trait', 'Persona', 'Ash']);
+    fireEvent.click(screen.getByRole('option', { name: /^Ash/ }));
+    expect(traitRequires(ctx, 't-loose')).toEqual([{ all: [{ kind: 'trait', id: 't-tamed', owner: { kind: 'entity', id: 'ash', name: 'Ash' } }] }]);
+  });
+
+  it('reads a target already listed for You as listed, so a world trait cannot take it twice', async () => {
+    const world = benchEditorWorld({
+      ...WORLD,
+      traits: WORLD.traits.map((t) => (t.id === 't-plate'
+        ? { ...t, requires: [{ all: [{ kind: 'trait', id: 't-paladin', owner: { kind: 'you' } }] }] }
+        : t)),
+    } as Partial<World>);
+    renderWorldEditorBench(world, 'advanced');
+    selectTrait('Plate Armor');
+    fireEvent.click(screen.getByRole('button', { name: 'Or Another Way' }));
+    expect(within(await screen.findByRole('listbox')).getByRole('option', { name: /^Paladin/ })).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('removes a requirement, and leaves the field absent once the last one goes', () => {
@@ -126,7 +158,7 @@ describe('the Requires field', () => {
     const world = benchEditorWorld({
       ...WORLD,
       traits: WORLD.traits.map((t) => (t.id === 't-plate'
-        ? { ...t, requires: [{ kind: 'group', id: 'g-class' }, { kind: 'playingAs', id: 'aldric' }] }
+        ? { ...t, requires: [{ all: [{ kind: 'group', id: 'g-class' }] }, { all: [{ kind: 'playingAs', id: 'aldric' }] }] }
         : t)),
     } as Partial<World>);
     renderWorldEditorBench(world, 'advanced');
@@ -143,7 +175,7 @@ describe('the Requires field', () => {
   it('reads an unresolved requirement red under its stored name, with nothing to open', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectTrait('Guild Mark');
-    const chip = within(requiresField()).getByText('Thief').closest('[data-unresolved]');
+    const chip = within(requiresField().querySelector<HTMLElement>('[data-requirement-row]')!).getByText('Thief').closest('[data-unresolved]');
     expect(chip).toHaveClass('text-destructive');
     expect(within(requiresField()).queryByRole('button', { name: 'Thief' })).toBeNull();
     expect(within(requiresField()).getByRole('button', { name: 'Remove Thief' })).toBeInTheDocument();
@@ -173,7 +205,7 @@ describe('gate marks on the Traits tree', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Traits/);
     act(() => { ctx().removeTrait('t-paladin'); });
-    expect(traitRequires(ctx, 't-plate')).toEqual([{ kind: 'trait', id: 't-paladin' }]);
+    expect(traitRequires(ctx, 't-plate')).toEqual([{ all: [{ kind: 'trait', id: 't-paladin' }] }]);
     const row = treeRow('Plate Armor');
     expect(row.querySelector('.lucide-lock')).not.toBeNull();
     expect(within(row).getByText('Plate Armor').closest('.text-destructive')).not.toBeNull();

@@ -11,9 +11,11 @@ import type { InstalledSource } from '@/lib/worldDependencies';
 import AuthService from '@/services/AuthService';
 import DictionaryStorageService from '@/services/DictionaryStorageService';
 import EntityStorageService from '@/services/EntityStorageService';
+import { withLibraryPick } from '@/lib/libraryVrm';
+import { adoptListingVrm } from '@/lib/entityVrmCarry';
 import type {
   CommunityLink, ContentLocationRef, Dictionary, DictionaryMetadata, Entity, EntityMetadata, LibraryDetails, GameLocation,
-  Placeholder,
+  Placeholder, WorldVrmStore,
 } from '@/types';
 
 /** What the link choice means for the content picked, by who owns it. */
@@ -188,14 +190,15 @@ export function toLibraryItem<T extends LinkableContent>(
 
 /**
  * Store a world's copy as a new library item owned by the author, and describe the item so the copy can
- * link to it. The item gets its own id: the world keeps the copy it already has.
+ * link to it. The item gets its own id: the world keeps the copy it already has. `vrmStore` is the world's
+ * Avatar store, which the copy's Avatar pick names; the item picks the library Avatar with the same file.
  */
 export async function saveCopyToLibrary(
   item: LinkableContent, available: Placeholder[], worldLocations: readonly GameLocation[] = [],
-  libraryDetails?: LibraryDetails, traitWorld?: TraitWorld,
+  libraryDetails?: LibraryDetails, traitWorld?: TraitWorld, vrmStore?: WorldVrmStore,
 ): Promise<LibrarySource> {
   const id = randomUUID();
-  const data = { ...toLibraryItem(item, available, worldLocations, traitWorld), id };
+  const data = { ...await withLibraryPick(toLibraryItem(item, available, worldLocations, traitWorld), vrmStore), id };
   const now = new Date().toISOString();
   await LIBRARIES[kindOf(item)].store({ id, name: data.name, createdAt: now, data, libraryDetails });
   // `store` stamps `lastAccessed` itself and leaves `editedAt` unset, so the revision this link holds is
@@ -240,7 +243,7 @@ export async function saveDownloadToLibrary(
   }
   const id = held?.id ?? randomUUID();
   const now = new Date().toISOString();
-  const shared = splitLibraryContent(content, listing.authorName);
+  const shared = splitLibraryContent(await adoptListingVrm(kind, content), listing.authorName);
   const data = { ...shared.content, id };
   const name = data.name?.trim() || listing.name?.trim() || 'Untitled';
   await LIBRARIES[kind].store({

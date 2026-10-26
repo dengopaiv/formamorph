@@ -1,10 +1,10 @@
 /**
  * Registry for the in-app help pop-outs (`HelpButton`). One topic per surface that needs explaining —
  * what it does and why it exists — kept out of the components so the copy is editable in one place and
- * the mechanism stays generic. Topic ids are namespaced by surface (`worldEditor.dictionary`) so other
+ * the mechanism stays generic. Topic ids are namespaced by surface (`worldEditor.scriptBox`) so other
  * screens can register their own without collision.
  *
- * Copy rules: written for an author who has never opened the tab. Lead with what it is, then why it
+ * Copy rules: written for an author who has never opened the section. Lead with what it is, then why it
  * exists, then the controls that aren't self-evident from the UI. Only claim what the code actually
  * does — placement inside the prompt is author-editable, so don't promise an order the chips don't fix.
  */
@@ -16,6 +16,9 @@ const WIKI_BASE = 'https://github.com/JakeJamesDev/formamorph/wiki';
 export function wikiPageUrl(id: string): string {
   return `${WIKI_BASE}/${id}`;
 }
+
+/** The wiki's home page. */
+export const WIKI_HOME_URL = WIKI_BASE;
 
 export interface HelpTopic {
   /** Dialog title. */
@@ -39,6 +42,57 @@ export function helpWikiUrl(topic: HelpTopic): string | null {
   if (!topic.wikiPage) return null;
   return wikiPageUrl(docTargetId({ page: topic.wikiPage, anchor: topic.wikiAnchor }));
 }
+
+const SCRIPTS_TOPIC: HelpTopic = {
+  title: 'Scripts',
+  wikiPage: 'ScriptsGuide',
+  wikiAnchor: '-scripts-guide',
+  tabs: [
+    {
+      label: 'Overview',
+      body: `A script is one box of JavaScript with a timing. It belongs to a stat, a trait, or the world. A returned number replaces the stat's value. A script with no return can still set \`self\`, write another stat, pin a placeholder, or switch a trait. Leave a script empty and the manual value stands.
+
+**Whose script it is.** A stat's script runs with the stat as \`self\`. A trait's script runs only while the trait is active, with the trait as \`self\`. A world script has an empty \`self\`. The world's **Scripts** tab lists every script by timing, in run order. Drag a script to change when it runs in its timing.
+
+**Test Code** under each box runs that box alone. It runs the code, and the editor underlines are static analysis only. A script that throws or times out changes nothing. **Templates** inserts common code shapes for the box's timing.`,
+    },
+    {
+      label: 'Timings',
+      body: `Each script has one timing, and a script runs only at its timing:
+
+| Timing | Runs |
+|---|---|
+| **Before the AI** | At the start of the turn, before the prompt is built. Its writes are in the prompt. |
+| **After the AI** | After the AI's changes and Regen apply. It reads what the AI asked for. |
+| **During AI Output** | Once for each narration sentence, when it completes. It can rewrite the sentence. |
+| **At Game Start** | Once, on the opening turn of a new game, before the Before the AI scripts. |
+| **When a Trait Switches** | Each time a trait turns on or off in play. |
+
+Turn order: At Game Start, Before the AI, the AI's stat changes, Regen, After the AI. **During AI Output** runs while the narration streams.`,
+    },
+    {
+      label: 'Variables',
+      body: `A script gets a copy of every stat, the world's placeholders and traits, the entities, the dictionaries and the clock. Each timing adds one name:
+
+- \`narration\` in **During AI Output**. Assign \`narration.sentence\`, or return a string, to rewrite the sentence.
+- \`trait\` in **When a Trait Switches**. It is the trait that switched, and \`trait.enabled\` is its new state.
+- \`player\` in every other timing. \`player.tell\`, \`player.toast\`, \`player.confirm\`, \`player.ask\` and \`player.input\` show the player a message or a question. The script waits for the answer, with no \`await\`. Closing a question fails the script.
+
+\`\`\`js
+const health = stats.Health.value;
+return health / 2;
+\`\`\`
+
+A name with a space needs brackets: \`stats["Hit Points"]\`. \`stats\` is the global stats in every script. An entity's own stats are \`owner.stats\`.`,
+    },
+    {
+      label: 'Stat Writes',
+      body: `Set \`self.value\`, \`self.min\`, \`self.max\` or \`self.regen\` and the stat takes that number this turn. Write \`value\`, \`min\`, \`max\` or \`regen\` on any stat to move it from this script.
+
+Two writes to one field land in run order, and the later write wins.`,
+    },
+  ],
+};
 
 export const HELP_TOPICS: Record<string, HelpTopic> = {
   'game.howToPlay': {
@@ -122,13 +176,12 @@ Memories under the **Recent** line are still fresh enough that the story has the
     wikiPage: 'Memory',
     wikiAnchor: 'the-memory-manager',
   },
-  // Deliberately separate from `worldEditor.entities`: that copy is for an author choosing fields, this
-  // is for a player mid-story wondering who a name in their scene list is.
+  // For a player mid-story wondering who a name in their scene list is.
   'game.entities': {
-    title: 'Entities in Play',
+    title: 'Entities in Game',
     wikiPage: 'Entities',
-    wikiAnchor: '-entities-in-play',
-    body: `Who the story counts as being here with you right now. The list changes as the scene does. Your persona always heads the list, marked **(You)**.
+    wikiAnchor: '-entities-in-game',
+    body: `Who the story counts as being here with you right now. The list changes as the scene does. Your persona always heads the list, marked **You**.
 
 Most of these are entities the world's author wrote. Some you added from your library under **Library Additions** at Enter World. Some the story **invented on the spot**: ask a shopkeeper for directions and it may answer with a name nobody wrote down. Those are remembered from the moment they're named, so the story can keep them consistent and offer you things to do with them.
 
@@ -143,95 +196,6 @@ Only story-invented entries and Library Additions can be removed. The world's ow
 **Descriptions**
 
 **Settings** → **Output** → **Characters** → **Describe New Characters** gives each invented entity a written description you can open from here. The **Characters** section shows in **Advanced** mode. Everything else on this list works whether that's on or off.`,
-  },
-  'worldEditor.overview': {
-    title: 'Overview',
-    wikiPage: 'World-Editor-Overview',
-    wikiAnchor: '-world-editor-overview',
-    body: `Sets how your world is listed and the text the AI reads on every turn
-
-**The left column** sets how players find your world: **World Name**, **Author**, **Tags** and the **Thumbnail**. **3D Player Avatar** gives the world a 3D avatar that the player can customize. **Background Music** sets the track the world plays.
-
-**The right column** holds what you write:
-
-- **Player-Facing Description** shows on the library card and the community listing. The AI never reads it.
-- **Readme** has two tabs. **Introduction** shows before the player's setup choices, and **Gameplay** shows when they enter the world.
-- **AI-Facing Description** is sent to the AI on every turn. Players never see it, so it's where a secret belongs.
-
-**Simple mode hides** Custom Player Avatar, Allowed Personas, Starts On and Custom Prompts. **Custom Prompts** replaces the player's narration, choices or stats prompt. Its **Openings** item holds the world's openings.`,
-  },
-  'worldEditor.locations': {
-    title: 'Locations',
-    wikiPage: 'World-Editor-Locations',
-    wikiAnchor: '\u{FE0F}-world-editor-locations',
-    body: `The places your story happens. The player is always in exactly one, and it decides what the AI is told about the scene: the description, who's there, and where the story might go next.
-
-Locations keep the story in one place. Without a fixed place the narrator loses track of where the scene is. The tavern becomes a street, then a forest, and nothing stays put. A location is sent to the AI again every turn, so the scene stays where you put it.
-
-**Nesting is the AI's map, not the player's.** The player can travel anywhere at any time. The in-game location list offers every location in your world, unfiltered.
-
-Nesting decides where *the story* can take them. When the AI reads an action as movement, it only considers places connected to where they are: down into a sub-location, or up and sideways from one. It then offers the move, *Move to the Eelhouse?*, and the player takes it or dismisses it. Nest your places and the story starts proposing journeys through them. Leave them flat and travel only happens when the player asks for it.
-
-**Making one.** A new location starts at the top level. Nesting it is a second move.
-
-- **List.** Drag a row by its grip. Up and down change the order. Sideways changes the level.
-- **Keyboard.** Focus a grip and press Space to pick up the row. Up and Down move it through the list. Left and Right move it out of or into the row above. Press Space to drop it, or Escape to cancel.
-- **Canvas.** Drag a box onto a box that has sub-locations. To nest into a box with none, hold the drag still until the box is highlighted, then release.
-
-Deleting a parent does not delete its children. They move up one level.
-
-**What the AI sees**
-
-- The **AI-Facing Description** field is the full text the AI works from. The player never sees it, so it's where a secret belongs.
-- The **AI-Facing Summary** field is a one-line version for slots where the full text is too long. The default prompt uses it for sub-locations and reachable places. Left blank, the full description is used instead.
-- The **Player-Facing Description** field is what the player reads in the location panel. It's never sent to the AI, so whatever you write here, the player knows.
-- The **Entities** list is who's here. It's the same list an entity's own Locations picker writes to, from the other end.
-
-**Starting Location** marks where a new game can begin, and the checkbox does more than it looks:
-
-- Tick none and the game starts at random, in *any* location in the world
-- Tick one and every game starts there
-- Tick several and the player chooses between them before starting
-
-The background image, image tags and ambient sound are for the player's screen. The narrator never sees them.
-
-**Simple mode hides** AI-Facing Summary, Ambient Sound, Image Tags, and the Pins and Openings tabs. Switch the editor to Advanced to use them.
-
-Write the AI-Facing Description first, since it's the one doing the work. Nest locations when you want the story to move the player on its own.`,
-  },
-  'worldEditor.entities': {
-    title: 'Entities',
-    wikiPage: 'World-Editor-Entities',
-    wikiAnchor: '-world-editor-entities',
-    body: `The people, creatures and things that populate your world: a ferryman, an eel-smoker, a barred door. An entity belongs to one or more **Locations**, and the AI is handed the ones that could turn up wherever the player currently is.
-
-Entities give the AI a cast it can't lose track of. Left to itself the narrator invents a stranger, gives them a name, and forgets both by the next turn. An entity is fixed and reusable, so the story can keep returning to it.
-
-**What the AI sees.** An entity only reaches the AI when the player is somewhere it's assigned to. That assignment is the only condition.
-
-- The **Name** field is always sent
-- The **AI-Facing Description** field is the full description, and the main thing the AI knows. **The player never sees this field**, so it's where a secret belongs: who the ferryman really works for, what's behind the door. The default prompt does ask the narrator to hold a name back until the player would have learned it, but that's a request to the AI, not a guarantee.
-- The **AI-Facing Summary** field is a one-line version for prompt slots where the full text is too long. The default prompt uses it for entities in reachable locations. Left blank, the full description is used instead.
-- The **Player-Facing Description** field is what the player reads when they look at this entity. It's **never sent to the AI**, so it costs no context, and anything you write here, the player knows.
-- The **Pronouns** field is sent beside the name, so the AI refers to the entity the right way
-- The **Type** field is sent as a plain field
-- The entity's active traits are sent after its description
-
-The **Locations** picker decides where the entity can appear. Assign it to as many as you like. An entity in no location never reaches the AI at all.
-
-**The entity holds its own locations.** A location's **Entities** picker shows the same link from the other side. **Deleting a location drops it from its entities.** They aren't deleted, but one that was only in that location now appears nowhere, and nothing warns you.
-
-The **Persona** control decides whether the player can play as this entity: **Cast**, **Playable**, **Persona-Only** or **Custom Persona**.
-
-The **Traits** tab holds the entity's own traits. The **Openings** tab holds openings that start the game in this entity's voice.
-
-**Groups** are organizational. Nesting and order are editor-only and never reach the AI, so grouping never changes the story.
-
-Image, Image Tags and the 3D model are for the player's screen and for image generation. The narrator never sees them.
-
-**Simple mode hides** Aliases, the Persona control, Type, Image Tags, the 3D model, AI-Facing Summary, and the Traits, Placeholders and Openings tabs. It adds entities without groups. Switch the editor to Advanced to use them.
-
-Give a location the two or three entities the scene genuinely depends on. Everything at the player's location is sent every turn, so a crowded location costs context on every turn.`,
   },
   'worldEditor.aliases': {
     title: 'Aliases',
@@ -256,64 +220,6 @@ Aliases apply in every mode, and they travel with the world and with an exported
 
 Give an entity the one or two names the story will actually use. Each alias is also a line the AI reads whenever the entity is in scene, so a long list is extra prompt for no gain.`,
   },
-  'worldEditor.traits': {
-    title: 'Traits',
-    wikiPage: 'World-Editor-Traits',
-    wikiAnchor: '-world-editor-traits',
-    tabs: [
-      {
-        label: 'Basics',
-        body: `The choices that make one playthrough different from the next: *Scarred*, *Silver-Tongued*, *Afraid of Water*. The player picks their traits before the story starts, and the ones they take are described to the AI on every turn.
-
-A trait is a durable fact about the player. Stats move constantly and the story moves with them. A trait stays fixed, so the narrator is handed the same fact on turn one and turn ninety. A stat says *how much*, a trait says *who you are*.
-
-**Only chosen traits count.** A trait the player didn't take isn't sent to the AI and changes nothing. Everything below applies to the ones they picked.
-
-**What the AI sees**
-
-- The **AI-Facing Description** field is what the AI is told this trait means. Leave it blank and the AI gets only the trait's name, which is often enough for something like *Left-Handed*.
-- The **Player-Facing Description** field is what the player reads while choosing. It's never sent to the AI.
-- **Stat Changes are invisible to the AI.** It's told you're *Sickly*. It's never told that cost you 20 Vigor. The number does its work through the stat itself.
-
-**The Availability tab** holds **Mode**, two checkboxes and **Requires**.
-
-- **Mode** sets who controls the trait. **Optional** lets the player choose it. **Always On** turns it on whenever its requirements hold, and the player can't switch it. **Hidden** works like **Always On**, and the player never sees it.
-- **Enabled by Default** pre-checks an Optional trait on the selection screen. The player can still uncheck it.
-- **Player Can Toggle In-Game** lets the player turn an Optional trait on or off during play.
-- **Requires** makes the trait available only while one of its targets holds. The **Links & Blueprints** tab explains whose trait counts.
-
-**Stat Changes** adjust a stat when the trait is taken. The section's own **?** explains each property and how the numbers stack.
-
-**Groups** organize the list, and they also speak to the AI: give a group an AI-Facing Description and it becomes a header above its chosen traits, so you can frame a whole set at once (*"Origin: where this life began"*). A group with nothing chosen inside it is skipped entirely.
-
-**Pick Count** on a group sets how many of its traits the player must and can pick: **Any**, **Exactly One**, **Up to One**, or **Custom** with **At Least** and **At Most**. **Start game** waits until every group has its minimum.
-
-**Simple mode hides** Stat Availability and Placeholder Pins, and adds traits without groups. Switch the editor to Advanced to use them.
-
-Write the AI-Facing Description as a fact about the person the narrator can act on, not a stat note. *"Flinches at open water"* beats *"-20 swimming"*.`,
-      },
-      {
-        label: 'Links & Blueprints',
-        body: `Links, Blueprints and Custom Persona need Advanced mode to create.
-
-**Requires** on the **Availability** tab makes a trait available only while one of its targets holds: a trait, any trait in a group, or a persona the player plays. It checks whoever has the trait, unless you pick another bearer. *Smite* requires *Paladin* means Paladin on the same bearer.
-
-**Entities can have traits.** Each entity with traits shows as a node below the world's traits. Its active traits describe it to the AI, and they become the player's when the player plays that entity. Type \`{{char}}\` in a trait's text to name whoever has it.
-
-**Links share one trait.** Drag a Blueprints trait or group onto an entity node, or select it and use **Link To…** in the footer. The entity gets that trait, its **original**, without a copy. Drag a top-level trait onto an entity node, and it moves to that entity instead. A link reads the original live until you change a field on it. Each field you change is an override for that link only: Mode, Enabled by Default, Requires, Placeholder Pins, Player Can Toggle In-Game and Stat Changes.
-
-- **Reset** returns one field to the original. **Reset to Blueprint** returns them all.
-- **Edit Blueprint** jumps to the original, so the change reaches every link.
-- **Detach** turns the link into the entity's own trait, which no longer follows the original.
-
-**Blueprints** holds originals that only some entities get, like classes and races. Add it from **+**. Traits under it are never offered to the player directly. They reach play only through links.
-
-**Custom Persona** is a mark on one entity, set on its **Profile** tab. It takes None's place at Enter World. Its traits are the player's when they play with no world persona, or with a persona from their library. Use it to give a race and a class to a player who brings their own persona.
-
-**Pins by blueprint.** A trait can pin a blueprint placeholder. On each bearer the pin lands on that bearer's own copy, so Albus's class never changes your description. The Placeholders tab's **?** explains copies.`,
-      },
-    ],
-  },
   'worldEditor.statChanges': {
     title: 'Stat Changes',
     wikiPage: 'World-Editor-Traits',
@@ -335,7 +241,7 @@ Write the AI-Facing Description as a fact about the person the narrator can act 
     wikiAnchor: 'stat-availability',
     body: `Switches a stat on or off while this trait is active, overriding the stat's own default. Each row names a stat and whether taking the trait enables or disables it.
 
-A stat that is off is gone, not just hidden: the player doesn't see it, the AI isn't told about it, and its regen and stat code pause until something turns it back on. The stat's own **Enabled** checkbox sets the default. A trait's switch overrides it only while the trait is active.
+A stat that is off is gone, not just hidden: the player doesn't see it, the AI isn't told about it, and its regen and scripts pause until something turns it back on. The stat's own **Enabled** checkbox sets the default. A trait's switch overrides it only while the trait is active.
 
 When two active traits switch the same stat, the one lower in the trait list wins. The row says so whenever that applies.`,
   },
@@ -349,7 +255,7 @@ The pinned value doesn't have to come from the placeholder's own list. The box s
 
 A value that is a chip pins that part. Pin a Wildcard to the value holding *isAsian* and every chip of it takes that variant. The box names such a value after the part it holds, exactly as the Values list does, so you pick by the thing rather than by the words it joins to. A chip inside a longer value is prose, so that one reads as what it will resolve to.
 
-**Pin a blueprint** to reach every bearer's own copy of it. Albus's *Paladin* pins his copy of *Class Garb*, and nobody else's. A link can replace this list for one bearer.
+**Pin a blueprint** to reach every owner's own copy of it. Albus's *Paladin* pins his copy of *Class Garb*, and nobody else's. A link can replace this list for one owner.
 
 When two active traits pin the same placeholder, the one lower in the trait list wins. The row says so whenever that applies. A location's pin outranks a trait's, and a stat band's outranks both. A placeholder value's pin ranks under all three.`,
   },
@@ -373,197 +279,9 @@ Rows are in the order the game settles them: a stat band outranks a location, a 
 
 The **Add Pin** button picks the kind of source, then the source, and writes an empty pin there for you to fill in. A row's first box re-aims its pin at another source of the same kind. The value box suggests this placeholder's values, but anything you type is used as written.`,
   },
-  'worldEditor.placeholders': {
-    title: 'Placeholders',
-    wikiPage: 'World-Editor-Placeholders',
-    wikiAnchor: '-world-editor-placeholders',
-    tabs: [
-      {
-        label: 'Basics',
-        body: `Reusable bits of world text you define once and drop into your writing as chips: an eye color, a street name, a deity. Each has a **Name** and a list of **Values**, and everywhere you place its chip, it resolves to one of those values when the story runs.
-
-Placeholders let a world vary without being rewritten. Author *"the {{Eye Color}} stranger"* once, and it reads as a real detail every playthrough. Sometimes it's the same detail on purpose, sometimes a fresh one each time.
-
-**The Kind row says what a placeholder is:**
-
-- **Wildcard** randomizes. One of its values is picked, and every chip of it shows that pick. Good for variety, like a crowd of strangers who aren't all identical.
-- **Object** holds. All of its values apply, joined together wherever it's placed. Good for a thing made of parts.
-- **Variable** names either kind while it has one value. It always resolves to that value, so changing it here updates every chip.
-
-New placeholders start as Wildcards, and one you have never touched reads as the kind its value count already implies.
-
-**Parts.** A value that is exactly one chip is a **part** of the placeholder holding it, addressable as \`Name › Part\`. That is how an Object is built out of other placeholders.
-
-**World vs. Unique** (Wildcards only). Each chip you place chooses how its roll is shared:
-
-- **World** rolls once for every World chip of this placeholder and shows the *same* value everywhere. One randomly chosen town name, used consistently across the whole world.
-- **Unique** rolls on its own for each placement. Ten Unique chips of *Eye Color* give ten independent eyes.
-
-**The roll is frozen for the playthrough.** A Wildcard is rolled once, when a game begins, and stored in that save. The stranger who had gray eyes on turn one still has them on turn ninety, and reloading the save changes nothing. A new game rolls fresh.
-
-**Where chips work.** Anywhere with the chip picker: entity, location and dictionary descriptions, the readme, the world's AI-Facing Description. They resolve both in what the AI reads and in what the player sees. The world's **Player-Facing Description is the exception.** It's read in the library before any game exists, so there are no rolls yet, and it takes no chips.
-
-**Built-in chips.** The \`{\` menu also offers **Player Name** and, in an entity's own fields, **Character Name**. They need no placeholder of their own.
-
-**Placeholders are Advanced-only.** The editor's mode switch has to be on Advanced for this tab and the chip palette to appear.
-
-Define a placeholder here, then place its chip from any field that offers them. A placeholder with no values resolves to nothing, so give it at least one.`,
-      },
-      {
-        label: 'Blueprints & Copies',
-        body: `A **blueprint** is a placeholder that exists to be copied, like *Class Garb*. Add the **Blueprints** group from **+**, then move a placeholder into it. Each entity that needs the blueprint gets its own **copy**, so one *Class Garb* reads a different value on each character.
-
-**Copies appear by themselves.** When a trait on an entity pins or places a blueprint, that entity gets a copy, named like *Albus.Class Garb*. A top-level trait makes one for every Persona entity and for the Custom Persona entity. An untouched copy goes away with its last use. One you edited stays.
-
-**A copy follows its blueprint until you edit it.** You can reword a value, change its weight, add a value only this entity has, or remove one. Values the blueprint gains later reach every copy. **Reset** returns one value, and **Reset to Blueprint** returns them all.
-
-**Blueprint chips** read the bearer's own copy, and they show a link glyph. Write one *Paladin* description with a *Class Garb* chip, and each Paladin reads their own garb. They work only in an original trait's text and in blueprint and copy values, because the chip needs a bearer to read.
-
-**A blueprint is never a World placeholder.** A move out of the group is refused while a trait, a value or a copy uses it, and the notice names each use.`,
-      },
-    ],
-  },
-  'worldEditor.stats': {
-    title: 'Stats',
-    wikiPage: 'World-Editor-Stats',
-    wikiAnchor: '-world-editor-stats',
-    body: `The numbers that describe your player: health, coin, reputation, whatever your world needs. Each stat has a value between a **Min** and **Max**, and the AI sees them every turn and lets them color how each action turns out.
-
-Stats give the story a memory with consequences. Prose alone forgets. A stat is a fact the AI has to write around: a low one shows up as effort and cost, a high one as ease. The narrator is told to work them into events rather than announce them, so stats shape the story without reading like a spreadsheet.
-
-**What the AI sees.** Each stat's **Name** is always sent. The Stats chip in your prompt picks what is sent with it:
-
-- **Range** sends the current number and its ceiling, like \`62/100\` (or \`62%\` for a percentage stat)
-- **Descriptor** sends the matching **Stat Descriptor**, a word for the current level
-- **Description** sends the stat's **Description**, what it represents
-
-**The fields**
-
-- **Type** is **Number** or **Percentage**. A Number stat spans a range you set. A Percentage stat is pinned from 0 to 100 and shown everywhere as \`N%\`. Everything below works the same for both. A percentage stat fixes the range for you and drops the Max, so you only set its **Initial Value (%)**.
-- **Min / Max / Initial Value** set the range and where the stat starts. (A percentage stat locks Min/Max at 0/100 and shows just Initial Value.)
-- **Regen** is added for each hour of story time, then clamped to the range. With **Measured Clock** off, each turn is one hour. A positive number heals over time, a negative one drains.
-- **Availability** has **Enabled**, which keeps the stat active, and **Hidden**, which hides it from the player while the AI still reads it
-- **Stat Descriptors** turn a number into a word. A threshold is a **value of this stat** (on a 0–10 stat, \`3\` means 3) and it is the *top* of its band, so the lowest band the value fits in wins, whatever order you list them in. Give the highest one a threshold of your **Max**, or a value above it gets no descriptor at all. The coverage bar draws every band's real extent with the gap above them in red, and each row says what it covers. Switch **Thresholds in** to **% of Max** if you'd rather the bands rescale when you change the range. Your numbers are converted as you switch, so nothing moves.
-- **Prevent AI Changes** locks a stat against the AI in one direction. Useful for anything only your world's rules should move.
-- **Body Sliders** bind a body morph to the stat, so its value sets the slider from Min to Max
-- **Dynamic Value Calculation** runs a small script that can set the value, Min, Max, or Regen, pin a placeholder, or switch a trait. It has a **?** of its own beside it.
-
-**Simple mode hides** Availability, Stat Descriptors, Prevent AI Changes and Dynamic Value Calculation. Switch the editor to Advanced to use them.
-
-Start with two or three stats that the story would genuinely depend on. Every stat you add spends context on every turn, whether it matters to the scene or not.`,
-  },
-  'worldEditor.statCode': {
-    title: 'Dynamic Value Calculation',
-    wikiPage: 'StatCodeGuide',
-    wikiAnchor: '-stat-code-guide',
-    body: `A stat can run a small script. Write JavaScript. A returned number replaces the stat's value. A script with no return can still set \`self\`, pin a placeholder, or switch a trait. Leave a box empty and the manual value stands.
-
-**Two boxes, one turn.** Turn order:
-
-| | |
-|---|---|
-| 1 | **Before the AI** |
-| 2 | AI stat changes |
-| 3 | Regen |
-| 4 | **After the AI** |
-
-**Before the AI** runs at the start of the turn, before the prompt is built. A value it sets, a placeholder it pins, or a trait it switches is in the prompt for that turn. \`previous\` reads as the stat itself, every \`delta\` reads zero, and the clock reads turn start.
-
-**After the AI** runs after the AI's changes and Regen apply. It reads the values the before box set. Both boxes run every turn. An empty box is skipped. A bound set by one box persists until the other box writes it or both boxes are empty.
-
-The **Test Code** button under each box runs that box alone on that box's clock: the opening turn for Before the AI, a one-hour turn on day one for After the AI. Test Code executes the code. Editor underlines are static analysis only.
-
-**What the script can reach.** A copy of every stat, the world's placeholders, and the world's traits. The sandbox exposes nothing else. \`stats\` is a map keyed by name. \`self\` is the stat that owns the code. Each stat carries \`id\`, \`name\`, \`type\`, \`description\`, \`min\`, \`max\`, \`value\` and \`regen\`.
-
-\`\`\`js
-const health = stats.Health.value;
-return health / 2;
-\`\`\`
-
-A name with a space needs brackets: \`stats["Hit Points"]\`. \`Object.values(stats)\` iterates every stat. A name with a placeholder chip reads in code as that placeholder's name, so a stat named \`{{Beast}} Power\` is \`stats["Beast Power"]\` in every playthrough.
-
-**Writing to \`self\`.** Set \`self.value\`, \`self.min\`, \`self.max\` or \`self.regen\` and the stat takes that number this turn. A bound the code sets persists until the code writes it again or both boxes are empty. A field the code doesn't write keeps the turn's value, so a script can set the cap and leave the value to the AI. Only \`self\` accepts writes. Every other stat is read-only.
-
-\`\`\`js
-const level = stats.Level.value;
-self.max = level * 10;
-\`\`\`
-
-**Reading this turn.** Each stat carries the turn's state before the code ran. \`previous\`: the full stat (\`id\`, \`name\`, \`type\`, \`description\`, \`min\`, \`max\`, \`value\` and \`regen\`) at the start of the turn. \`delta\`: every change the turn made. \`delta.ai\` is the AI's requested change. \`delta.regen\` is the regen change. \`delta.total\` is their sum. \`delta.actual\` is current values minus \`previous\`. Each has \`value\`, \`min\`, \`max\` and \`regen\`. \`previous\` and \`delta\` are read-only. Use them to clamp or scale the AI's change before it applies.
-
-\`\`\`js
-self.value = self.previous.value + Math.min(self.delta.ai.value, 10);
-\`\`\`
-
-**Placeholders.** \`placeholders\` holds the world's own placeholders by name. An entity's or a dictionary's placeholders are on its entry: \`entities.Molly.placeholders\`, \`persona.placeholders\` and \`dictionaries.Weather.placeholders\`. Each entry has \`values\`, every authored value as text; \`value\`, the current value; \`text\`, the value the prompt sees; and \`roll()\`, one weighted draw. On a Wildcard or a Variable, \`value\` is one text and \`text\` is the same text. On an Object, \`value\` is the list of current values and \`text\` joins them with \`", "\`. Compare narration wording with \`text\`. \`pin(x)\` pins the placeholder until the code changes it again. \`unpin()\` restores the other pins and the roll. \`pin\` takes the same shape \`value\` reads: one text on a Wildcard, a list on an Object. One text on an Object pins a one-item list. A name with a space needs brackets: \`placeholders["Hair Color"]\`.
-
-**Paths.** Code reaches a placeholder by the path the editor shows. A placeholder that holds parts carries them as members, to any depth. Each placeholder has one path: a part's bare name doesn't reach it. Every placeholder has \`values\`, \`value\`, \`text\`, \`roll\`, \`pin\` and \`unpin\`, so a part with one of those names is shadowed by the member.
-
-\`\`\`js
-placeholders.Mood.pin(self.value < 20 ? 'furious' : 'calm');
-placeholders.Hair.pin(['gray', 'cropped short']);
-placeholders.Hair.Shade.pin('ash');
-entities["Old Molly"].placeholders["Eye Color"].pin('green');
-\`\`\`
-
-**Traits.** \`traits\` holds every trait in the world's own trait list by name, Blueprint items included. A trait an entity owns is not in it. Each entry has \`enabled\`, true when the player has the trait and it is on, and \`acquired\`, true when the player has the trait. Both read the player's state only. Set \`enabled\` to switch the trait on or off after the run, with the same effect as the player's checkbox, exclusive siblings included. Enabling a trait the player never took acquires it. Code ignores **Player Can Toggle In-Game**, so it can switch a trait the player can't toggle. A trait name with a placeholder chip reads in code as that placeholder's name, so a trait named \`{{Beast}} Fury\` is \`traits["Beast Fury"]\` in every playthrough.
-
-\`\`\`js
-traits.Cursed.enabled = self.value <= 0;
-\`\`\`
-
-**Clock.** \`clock\` is a read-only object that describes the story time:
-
-| | |
-|---|---|
-| \`clock.deltaHours\` | Story hours **this** turn consumed |
-| \`clock.elapsedHours\` | Total story hours so far, counting this turn |
-| \`clock.day\` | Day number at the **end** of the turn |
-| \`clock.daypart\` | Time of day at the **end** of the turn |
-| \`clock.previous.day\` | Day number at the **start** of the turn |
-| \`clock.previous.daypart\` | Time of day at the **start** of the turn |
-
-Both ends are given because a turn spans time: an eight-hour sleep begins in the afternoon and ends at night. Dayparts are \`night\`, \`dawn\`, \`morning\`, \`midday\`, \`afternoon\`, \`evening\`. With **Measured Clock** off, \`clock.deltaHours\` is \`1\`.
-
-This enables a per-hour drain (\`current + 2 * clock.deltaHours\`) or a stat that only rises after dark.
-
-**The code runs every turn.** Both boxes run on the opening turn and on a turn with no AI stat change. They run when the stat request is off or fails. On those turns \`delta.ai\` reads zero in the after box, as it always does in the before box.
-
-**A script that sets the value overrides the AI.** The AI's write is recomputed away. The AI still reads the value and description. A script that only writes a bound, a placeholder or a trait leaves the value to the AI.
-
-**A failed run changes nothing.** Code that throws or times out leaves the stat, the placeholders and the traits unchanged. A write to an unknown placeholder or trait name is ignored. Test Code and the Test Bench both report it.
-
-**Templates.** The **Templates** menu beside each Test Code button inserts common code shapes. Each box offers the templates that match its timing. Before the AI: a placeholder pin, a trait switch, an opening value. After the AI: a drain, a timer, a blend of two stats, a bound from another stat, a bonus or penalty from a persona's or an entity's trait. Each template asks only for its inputs and inserts plain code you can edit.`,
-  },
-  'worldEditor.dictionary': {
-    title: 'Dictionary',
-    wikiPage: 'World-Editor-Dictionary',
-    wikiAnchor: '-world-editor-dictionary',
-    body: `Your world's lorebook. Each **book** holds **entries**, and an entry injects its content into the AI's prompt whenever one of its keywords shows up in the scanned text.
-
-The AI can't hold your whole world in mind at once. Rather than spending context on every detail every turn, the Dictionary keeps lore on standby and pays for it only when it's relevant. Someone mentions the Gloamwater, and the AI knows what it is.
-
-**What gets scanned.** The rule is short: **if the AI is told it, it can fire a trigger.** Each turn the scan covers:
-
-- the **scene as the AI receives it**: your location and the entities present, plus any **nearby or sub-location** detail your prompt sends. Keywords match the exact wording the AI gets, so where a block is sent as a summary, the summary is what's matched;
-- your **notes** and the **action** you just took;
-- **earlier turns**, both your actions and the AI's replies, as far back as the entry's **Scan Depth** allows. All of them by default, none at 0.
-
-Text that's present every single turn is deliberately left out: your world's AI-Facing Description, stats, traits, and formatting guidance. Its terms would otherwise fire constantly.
-
-**The controls**
-
-- **Trigger Keywords** fire an entry. Press Enter after each keyword. List as many as you like, and any single match is enough.
-- **Always Inject** skips the scan and sends the entry every turn. Use it sparingly, since it costs context every turn.
-- **Secondary Keywords** add a condition: *bridge* fires only if *toll* also appears in the scanned text
-- **Background** and **Foreground** are two separate lore blocks placed in the system prompt. Drag an entry between a book's two groups to move it. By default, Background comes earlier than Foreground.
-- **Recursive** entries can also be fired by the content of entries that already activated, not just by the scene
-- **Books** group related entries: their order sets injection order, and disabling one mutes everything in it. Players may override those toggles before starting.
-
-**Simple mode hides** Always Inject, Regex, Recursive, Scan Depth and Secondary Keywords, along with the Background/Foreground split and the enable toggles. Switch the editor to Advanced to use them.
-
-Start with one book and a few entries. Use the extra controls only when an entry fires when it shouldn't.`,
-  },
+  // One topic for the stat, trait and world Scripts tabs. A saved help link to `worldEditor.statCode` still opens it.
+  'worldEditor.scriptBox': SCRIPTS_TOPIC,
+  'worldEditor.statCode': SCRIPTS_TOPIC,
   // Opened from the linked copy's footer menu in the World Editor, once on a profile's first link, and by
   // both update reviews. One topic for all: the dialog a reader opened decides which tab they read first,
   // so every tab stands alone.
@@ -578,7 +296,7 @@ Start with one book and a few entries. Use the extra controls only when an entry
 
 **Who owns the item decides what an edit does.** If the library item is your own, an edit to the copy stays **Linked**. Saving the world writes the edit to the library item, and every other world holding a copy receives it the next time you open that world. If the item is another author's, the first edit makes the copy a **Local replacement**: your change is kept, and their updates still reach you for review.
 
-**How a copy becomes linked.** **Save to Library** links the copy it saved. **Add Entity** and **Add Dictionary** add a copy from your library and offer **Link to Library**, on by default. **Import Entity…** and **Import Dictionary…** offer the same choice for a file. An independent copy's menu holds **Link to Library Item…**. All of these make the same link.
+**How a copy becomes linked.** **Save to Library** links the copy it saved. **Add From Library…** in the **+** menu on **Entities** and **Dictionary** adds a copy from your library and offers **Link to Library**, on by default. **Import Entity…** and **Import Dictionary…** in the same menu offer the same choice for a file. An independent copy's menu holds **Link to Library Item…**. All of these make the same link.
 
 **The three link states.** A linked row carries a 🔗 marker in the list, and the footer button reads **Open in Library**. Point at either one to read the state and the name of what the copy follows.
 
@@ -668,9 +386,3 @@ While a required source reads as removed, **Enter World**, **Quick Start**, and 
     ],
   },
 };
-
-/** The help topic id for a World Editor tab, or undefined when that tab has no copy yet. */
-export function worldEditorTopicId(tab: string): string | undefined {
-  const id = `worldEditor.${tab}`;
-  return HELP_TOPICS[id] ? id : undefined;
-}

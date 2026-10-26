@@ -21,16 +21,19 @@ describe('the Persona role', () => {
     for (const role of ['cast', 'playable', 'only', 'custom'] as const) expect(personaRole(personaRolePatch(role))).toBe(role);
   });
 
-  it('clears the Persona marks and the node placement when an entity takes the Custom Persona role', () => {
-    expect(personaRolePatch('custom')).toStrictEqual({ persona: undefined, personaOnly: undefined, customPersona: true, traitPlacement: undefined });
+  it('clears the Persona marks and both node placements when an entity takes the Custom Persona role', () => {
+    expect(personaRolePatch('custom')).toStrictEqual({
+      persona: undefined, personaOnly: undefined, customPersona: true, traitPlacement: undefined, statPlacement: undefined,
+    });
     expect(personaRolePatch('playable')).not.toHaveProperty('traitPlacement');
+    expect(personaRolePatch('playable')).not.toHaveProperty('statPlacement');
   });
 });
 
 describe('one Custom Persona per world', () => {
   const entities: Entity[] = [{ id: 'a', name: 'Ash' }, { id: 'cp', name: 'Newcomer', customPersona: true }];
 
-  it('names the holder to every other entity, and nobody to the holder', () => {
+  it('names the marked entity to every other entity, and nobody to the marked entity', () => {
     expect(customPersonaHeldElsewhere(entities, 'a')?.name).toBe('Newcomer');
     expect(customPersonaHeldElsewhere(entities, 'cp')).toBeUndefined();
     expect(customPersonaHeldElsewhere([entities[0]], 'a')).toBeUndefined();

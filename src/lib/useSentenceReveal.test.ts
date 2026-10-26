@@ -2,13 +2,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useSentenceReveal } from './useSentenceReveal';
-import { getRevealTiming } from './revealTimingStore';
+import { getRevealReleased, getRevealTiming } from './revealTimingStore';
 import { DEFAULT_STAGGER, TARGET_BUFFER_WORDS, STAGGER_MIN, STAGGER_MAX } from './narrationRevealConfig';
 
 function setup() {
   const onText = vi.fn();
   const { result } = renderHook(() => useSentenceReveal(onText));
-  return { onText, reveal: result.current };
+  // These cases pace text; the release count has cases of its own.
+  return { onText, reveal: { ...result.current, push: (prefix: string) => result.current.push(prefix, 0) } };
 }
 
 // Build a cumulative prefix of `n` single-char words ("w w w …") for easy word counting.
@@ -119,5 +120,135 @@ describe('useSentenceReveal', () => {
     act(() => { reveal.reset(); });
     act(() => { reveal.push(words(15) + '.'); });
     expect(getRevealTiming().stagger).toBeGreaterThan(DEFAULT_STAGGER * 2);
+  });
+
+  it('skipping shows everything queued at once, then each later sentence on arrival, and drains', async () => {
+    const { onText, reveal } = setup();
+    act(() => {
+      reveal.reset();
+      reveal.push('One two.');
+      reveal.push('One two. Three four.');
+      reveal.push('One two. Three four.\n\nFive six.');
+    });
+    expect(onText).toHaveBeenLastCalledWith('One two.');
+    act(() => { reveal.setSkipping(true); });
+    expect(onText).toHaveBeenLastCalledWith('One two. Three four.\n\nFive six.');
+    act(() => { reveal.push('One two. Three four.\n\nFive six. Seven.'); });
+    expect(onText).toHaveBeenLastCalledWith('One two. Three four.\n\nFive six. Seven.');
+    let drained = false;
+    const wait = reveal.drained().then(() => { drained = true; });
+    act(() => { reveal.finish('One two. Three four.\n\nFive six. Seven. Eight'); });
+    expect(onText).toHaveBeenLastCalledWith('One two. Three four.\n\nFive six. Seven. Eight');
+    await act(async () => { await wait; });
+    expect(drained).toBe(true);
+  });
+
+  it('paces again once skipping is off', () => {
+    const { onText, reveal } = setup();
+    act(() => { reveal.reset(); reveal.push('One two.'); reveal.setSkipping(true); });
+    expect(onText).toHaveBeenLastCalledWith('One two.');
+    act(() => { reveal.setSkipping(false); });
+    act(() => {
+      reveal.push('One two. Three four five.');
+      reveal.push('One two. Three four five. Six seven.');
+    });
+    expect(onText).toHaveBeenLastCalledWith('One two. Three four five.');
+    act(() => vi.advanceTimersByTime(3 * STAGGER_MAX));
+    expect(onText).toHaveBeenLastCalledWith('One two. Three four five. Six seven.');
+  });
+
+  it('reset ends skipping: the next turn paces again', () => {
+    const { onText, reveal } = setup();
+    act(() => { reveal.reset(); reveal.setSkipping(true); reveal.reset(); });
+    act(() => {
+      reveal.push('One two three.');
+      reveal.push('One two three. Four five.');
+    });
+    expect(onText).toHaveBeenLastCalledWith('One two three.');
+  });
+
+  it("times a turn's first sentence from the stream's start", () => {
+    const { reveal } = setup();
+    // 10 words over 2s: 200 ms/word, well above the 40ms seed.
+    act(() => { reveal.reset(); reveal.push(''); });
+    act(() => vi.advanceTimersByTime(2000));
+    act(() => { reveal.push(words(10) + '.'); });
+    expect(getRevealTiming().stagger).toBeGreaterThanOrEqual(200);
+  });
+
+  it('drains once the last words have faded in, not when they are released', () => {
+    const { reveal } = setup();
+    act(() => { reveal.reset(); reveal.finish('One two three.'); });
+    const { stagger, duration } = getRevealTiming();
+    act(() => vi.advanceTimersByTime(3 * stagger + 1));
+    expect(reveal.isDrained()).toBe(false);
+    act(() => vi.advanceTimersByTime(duration));
+    expect(reveal.isDrained()).toBe(true);
+  });
+
+  it('reads as drained only before any reveal and after one plays out', () => {
+    const { reveal } = setup();
+    expect(reveal.isDrained()).toBe(true);
+    act(() => { reveal.reset(); reveal.push('One two three.'); });
+    expect(reveal.isDrained()).toBe(false);
+    act(() => { reveal.finish('One two three.'); });
+    expect(reveal.isDrained()).toBe(false);
+    act(() => vi.advanceTimersByTime(3 * STAGGER_MAX));
+    expect(reveal.isDrained()).toBe(true);
+  });
+
+  describe('release count', () => {
+    const counted = () => renderHook(() => useSentenceReveal(() => {})).result.current;
+
+    it('publishes the sentences of each prefix as it releases it, not as it arrives', () => {
+      const reveal = counted();
+      act(() => {
+        reveal.reset();
+        reveal.push('One two.', 1);
+        reveal.push('One two. Three four. Five six.', 3);
+      });
+      expect(getRevealReleased()).toBe(1);
+      act(() => vi.advanceTimersByTime(2 * STAGGER_MAX));
+      expect(getRevealReleased()).toBe(3);
+    });
+
+    it('counts the final text as every sentence, and a reset as none', () => {
+      const reveal = counted();
+      act(() => { reveal.reset(); reveal.push('One two.', 1); reveal.finish('One two. Three'); });
+      act(() => vi.advanceTimersByTime(2 * STAGGER_MAX));
+      expect(getRevealReleased()).toBe(Number.POSITIVE_INFINITY);
+      act(() => { reveal.reset(); });
+      expect(getRevealReleased()).toBe(0);
+    });
+
+    it('counts a sentence that adds no text with the prefix before it', () => {
+      const reveal = counted();
+      act(() => {
+        reveal.reset();
+        reveal.push('One two.', 1);
+        reveal.push('One two.', 2);
+      });
+      expect(getRevealReleased()).toBe(2);
+      act(() => {
+        reveal.push('One two. Three four.', 3);
+        reveal.push('One two. Three four.', 4);
+      });
+      expect(getRevealReleased()).toBe(2);
+      act(() => vi.advanceTimersByTime(2 * STAGGER_MAX));
+      expect(getRevealReleased()).toBe(4);
+    });
+
+    it('publishes the deepest count at once while skipping', () => {
+      const reveal = counted();
+      act(() => {
+        reveal.reset();
+        reveal.push('One two.', 1);
+        reveal.push('One two. Three four.', 2);
+        reveal.push('One two. Three four. Five six.', 3);
+      });
+      expect(getRevealReleased()).toBe(1);
+      act(() => { reveal.setSkipping(true); });
+      expect(getRevealReleased()).toBe(3);
+    });
   });
 });

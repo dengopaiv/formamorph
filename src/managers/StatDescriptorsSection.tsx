@@ -9,12 +9,14 @@
 import { useLayoutEffect, useRef } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { WorldInput } from '@/components/editor/WorldField';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { PlaceholderNameField } from '@/components/prompt/PlaceholderField';
 import { PinPopoverButton } from '@/components/editor/PinPopoverButton';
-import { useGameData } from '@/contexts/GameDataContext';
+import { useGameDataOptional } from '@/contexts/GameDataContext';
+import { useStatEditorWorld } from '@/lib/useStatEditorWorld';
 import { useEditorMode } from '@/lib/editorMode';
 import { labelPlaceholders } from '@/lib/placementLetters';
 import { activeDescriptor } from '@/lib/statContext';
@@ -24,6 +26,7 @@ import {
 } from '@/lib/statDescriptorGeometry';
 import type { PlaceholderPin, Stat, StatDescriptor, ThresholdUnit } from '@/types';
 import { Tip } from '@/components/ui/tooltip';
+import { fieldFrame, fieldPath } from '@/lib/historyField';
 
 /** What one descriptor field can be written to: its threshold, its text, or its pin list. */
 export type DescriptorFieldValue = string | number | PlaceholderPin[] | undefined;
@@ -63,27 +66,38 @@ const ROW_TEXT = [
 const ROW_CONTROLS = 'flex items-center gap-2 ms-auto sm:ms-0 md:ms-auto xl:ms-0';
 
 /** A threshold input wearing its unit inside the right edge — a placeholder says it only until you type. */
-const UnitInput = ({ value, unit, onChange, onBlur, placeholder, ariaLabel }: {
+const UnitInput = ({ value, unit, onChange, onBlur, placeholder, ariaLabel, worldField = false, historyField }: {
   value: number | string; unit: string; placeholder?: string; ariaLabel: string;
   onChange: (v: string) => void; onBlur?: () => void;
-}) => (
-  <div className="relative flex-shrink-0" style={{ width: `${thresholdInputWidthRem(unit)}rem` }}>
-    <Input
-      type="number"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={onBlur}
-      placeholder={placeholder}
-      aria-label={ariaLabel}
-      // Width and padding both track the tag's length, so the tag never crowds out the value.
-      style={{ paddingRight: `${thresholdTagInsetRem(unit)}rem` }}
-      className="[appearance:textfield] [&::-webkit-inner-spin-button]:hidden [&::-webkit-outer-spin-button]:hidden"
-    />
-    <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-helper text-muted-foreground">
-      {unit}
-    </span>
-  </div>
-);
+  /** The box writes the world, so the world stack owns its undo. */
+  worldField?: boolean;
+  /** The box's field identity, for a box that writes the world. */
+  historyField?: string;
+}) => {
+  const Box = worldField ? WorldInput : Input;
+  return (
+    <div
+      className="relative flex-shrink-0"
+      style={{ width: `${thresholdInputWidthRem(unit)}rem` }}
+      {...(historyField !== undefined && fieldFrame(historyField))}
+    >
+      <Box
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        // Width and padding both track the tag's length, so the tag never crowds out the value.
+        style={{ paddingRight: `${thresholdTagInsetRem(unit)}rem` }}
+        className="[appearance:textfield] [&::-webkit-inner-spin-button]:hidden [&::-webkit-outer-spin-button]:hidden"
+      />
+      <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-helper text-muted-foreground">
+        {unit}
+      </span>
+    </div>
+  );
+};
 
 /** A band of the bar. Its label wraps to two centered lines and steps its font down until it fits, so long
  *  descriptor prose narrows the text rather than dictating it. */
@@ -149,8 +163,9 @@ export const StatDescriptorsSection = ({
   stat, newDescriptor, setNewDescriptor, onDescriptorChange, onDescriptorBlur, onAddDescriptor,
   onRemoveDescriptor, onUnitChange,
 }: StatDescriptorsSectionProps) => {
-  const world = useGameData();
-  const { placeholders, placementLetters, placeholderOwners } = world;
+  const { placeholders, placementLetters, placeholderOwners } = useStatEditorWorld();
+  // Off world, a pin has no rival placements to read.
+  const world = useGameDataOptional();
   const { advanced } = useEditorMode();
   // The bar and the tips are text surfaces: a chip reads there by its name and letter, as it does in a row.
   const chipText = (text: string) => labelPlaceholders(text, placeholders, { letters: placementLetters, owners: placeholderOwners });
@@ -190,6 +205,7 @@ export const StatDescriptorsSection = ({
               onValueChange={(v) => { if (v) switchUnit(v as ThresholdUnit); }}
               aria-label="Threshold units"
               className="h-8"
+              {...fieldFrame('descriptors', 'unit')}
             >
               <ToggleGroupItem value="raw" className="h-6 px-2 text-helper">Raw</ToggleGroupItem>
               <ToggleGroupItem value="percent" className="h-6 px-2 text-helper">% of Max</ToggleGroupItem>
@@ -230,13 +246,15 @@ export const StatDescriptorsSection = ({
           <div key={descriptor.id}>
             <div className={ROW}>
               <UnitInput
+                worldField
+                historyField={fieldPath('descriptors', String(descriptor.id), 'threshold')}
                 value={descriptor.threshold}
                 unit={tag}
                 ariaLabel={`Threshold for ${chipText(descriptor.description) || 'descriptor'}`}
                 onChange={(v) => onDescriptorChange(index, 'threshold', Number(v))}
                 onBlur={onDescriptorBlur}
               />
-              <div className={ROW_TEXT}>
+              <div className={ROW_TEXT} {...fieldFrame('descriptors', String(descriptor.id), 'description')}>
                 <PlaceholderNameField
                   value={descriptor.description}
                   onChange={(v) => onDescriptorChange(index, 'description', v)}
@@ -270,7 +288,7 @@ export const StatDescriptorsSection = ({
         );
       })}
 
-      <div className={ROW}>
+      <div className={ROW} {...fieldFrame('descriptors', 'new')}>
         <UnitInput
           value={newDescriptor.threshold}
           unit={tag}

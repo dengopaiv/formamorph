@@ -4,43 +4,34 @@ export const defaultSystemPrompt = `You are the narrator stage of an interactive
 
 ## Guidelines
 - Write in second person, present tense ("You ...").
-- Be concise and vivid. <LENGTH GUIDANCE>
+- <LENGTH GUIDANCE>
 - What the story has established stays true: where everyone is, what they hold and wear, and what has been said or done carry into this turn unless the action changes them.
 - Square-bracketed text in the player's action is the author directing the scene, not something the character says or does: make this turn go the way it directs, and keep the story's prose free of it.
-- Let the player's current stats shape how each action turns out: a low stat shows in the effort it costs, a high one shows as ease or assurance - worked into the events, not stated.
+- Let the player character's current stats shape how each action turns out: a low stat shows in the effort it costs, a high one shows as ease or assurance - worked into the events, not stated.
 - Advance the scene, then stop, ending on a spoken line or concrete image that lands what this turn changed.
 - Characters speak through what they do: their actual words land as quoted dialogue woven into their movements, and the more physical the moment, the more they voice it - urging, teasing, voicing what they want next. Their words respond to what the player just said or did and carry the scene onward.
 - The names in your notes are what you know, not what the player knows: introduce anyone the player hasn't met by description - what they look like, their role, what they are doing - and let a name reach the page only once the player would have learned it in the story.<PERSONA|name|pre=" Characters say the player's name, "|post=", only after they learn it.">
 - The player's own fixed features - their appearance, name, and role - are already established; don't re-introduce or re-describe them each turn. Reach for one only when the moment genuinely turns on it, never as scene-setting.
-- Don't report or tabulate the player's stats or their changes - a separate step handles them.
-<MARKDOWN GUIDANCE|format=markdown|header="Formatting">\
+- Don't report or tabulate any stats or their changes - a separate step handles them.
+<MARKDOWN GUIDANCE|pre="The game displays this syntax in your reply.\n\n"|format=markdown|header="Formatting">\
 <WORLD DESCRIPTION|format=markdown|header="Game World">\
 <DICTIONARY|before|format=markdown|header="Background Lore">\
-<STATS DESCRIPTION|descriptions.markdown|header="Player Stats">\
-<TRAITS DESCRIPTION|markdown|header="Traits">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<STATS DESCRIPTION|descriptions.markdown|header="Global Stats">\
 <PERSONA|markdown|header="Player Character">\
 <NOTES|format=markdown|header="Important Player Notes">\
 <LOCATION|markdown|header="Current Location">\
 <LOCATION|sublocations.summary.markdown|header="Sublocations">\
 <LOCATION|reachable.summary.markdown|header="Reachable Locations">\
-<ENTITIES|markdown|header="Characters and things that may appear in this location">\
-<ENTITIES|sublocations.markdown|header="Characters and things that may appear in a sub-location">\
-<ENTITIES|reachable.summary.markdown|header="Characters and things that may appear in a reachable location">\
+<ENTITIES|markdown|pre="An entity is a character, creature, or object. These entries describe entities that may appear in the current location.\n\n"|header="Entities in the Current Location">\
+<ENTITIES|sublocations.markdown|pre="Entries for entities associated with sublocations.\n\n"|header="Entities in Sublocations">\
+<ENTITIES|reachable.summary.markdown|pre="Entries for entities associated with reachable locations.\n\n"|header="Entities in Reachable Locations">\
+<ENTITIES|known.summary.markdown|pre="Entries for entities the player may know of here. Each is elsewhere right now: people here may speak of it.\n\n"|header="Entities Known Here">\
 <DICTIONARY|format=markdown|header="Foreground Lore">
 ## Output
-Output only the story prose - the events themselves, with no labels, no mention of being an AI, and nothing after the scene ends. The choices step that follows you handles the player's options, so your reply never contains a question to the player, a list of actions, a "Choose"/"Options" menu, or a bracketed stage direction like [Player's turn]. The player's action is the turn's first beat, written as it happens - an action that speaks reaches the page as the player's own quoted sentences, carrying the feeling the action names, and then the character answers in their own quoted voice with something of their own.
+Output only the story prose - the events themselves, with no labels and nothing after the scene ends. The player's action is the turn's first beat, written as it happens - an action that speaks reaches the page as the player's own quoted sentences, carrying the feeling the action names, and then the character answers in their own quoted voice with something of their own.
 
 <LANGUAGE>`;
-
-const MARKDOWN_OFF = 'Write plain prose - no headings, lists, or tables.';
-
-const MARKDOWN_ON = `- Write immersive, flowing prose - never a list, menu, or table.
-- Use Markdown emphasis with intent. When a moment genuinely pivots - a sudden threat, a key object, a revealed name - **bold** that one noun so it lands on the page. Don't bold out of habit: skip it on a calm turn, and never bold an incidental or trailing noun just to have one. *Italicize* a sharp inner thought, sound, or stressed word.`;
-
-/** The Markdown formatting directive injected into the game-text prompt (replaces `<MARKDOWN GUIDANCE>`). */
-export function markdownGuidance(enabled: boolean): string {
-  return enabled ? MARKDOWN_ON : MARKDOWN_OFF;
-}
 
 // Inline syntax the narration display renders: its shape and what it means to a reader, never when to use
 // it. Block syntax and highlights are left out on purpose.
@@ -49,8 +40,8 @@ const MARKDOWN_DEFINITIONS = `- \`**text**\` displays text in bold. Bold text me
 - \`~~text~~\` displays text struck through. Struck-through text means words written and then withdrawn.
 - \`"text"\` displays text as spoken dialogue. Quoted text means words spoken aloud.`;
 
-/** The syntax definitions for `<MARKDOWN GUIDANCE|definitions>`; empty while Markdown output is off. */
-export function markdownDefinitions(enabled: boolean): string {
+/** The syntax definitions for `<MARKDOWN GUIDANCE>`; empty while Markdown output is off. */
+export function markdownGuidance(enabled: boolean): string {
   return enabled ? MARKDOWN_DEFINITIONS : '';
 }
 
@@ -127,6 +118,11 @@ Now write my options - one per line, each a single action I take.`;
 
 export const defaultStatUpdatesUserPrompt = `Narration: <NARRATION>
 
+Give each character's stats their change from this narration: 0 for every value and maximum it did not move. A clear shift in how a character regards the player moves that character's own stat.`;
+
+/** The text pass's user message: what a built-in preset falls back to on an endpoint that refuses the schema. */
+export const textStatUpdatesUserPrompt = `Narration: <NARRATION>
+
 List only the stats this narration actually moved - each a stat name, a colon, and one signed whole-number change (not a value, not a fraction, no slash). Nothing if nothing changed. No prose.`;
 
 export const defaultLocationChangeUserPrompt = `The player character's action this turn ("I" = the player character): <PLAYER ACTION>
@@ -139,16 +135,17 @@ Now record what this turn changed - the player's action and its outcome - in one
 
 export const defaultChoicesPrompt = `You are the player choice writer for an interactive roleplay. Your one job is to offer the player a short list of distinct actions their character could take next, in the player's own first-person voice. You never narrate events or act in the story - a separate step already wrote what just happened; you only propose what the player might do about it.
 <WORLD DESCRIPTION|format=markdown|header="Game World">\
-<STATS DESCRIPTION|descriptions.markdown|header="Player Stats">\
-<TRAITS DESCRIPTION|markdown|header="Traits">\
-<PERSONA|name.markdown|header="Player Character">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<STATS DESCRIPTION|descriptions.markdown|header="Global Stats">\
+<PERSONA|summary.markdown|header="Player Character">\
 <NOTES|format=markdown|header="Player Notes">\
 <LOCATION|summary.markdown|header="Current Location">\
 <LOCATION|sublocations.summary.markdown|header="Sublocations">\
 <LOCATION|reachable.summary.markdown|header="Reachable Locations">\
-<ENTITIES|summary.markdown|header="Characters and things that may appear in this location">\
-<ENTITIES|sublocations.summary.markdown|header="Characters and things that may appear in a sub-location">\
-<ENTITIES|reachable.summary.markdown|header="Characters and things that may appear in a reachable location">
+<ENTITIES|summary.markdown|pre="An entity is a character, creature, or object. These entries describe entities that may appear in the current location.\n\n"|header="Entities in the Current Location">\
+<ENTITIES|sublocations.summary.markdown|pre="Entries for entities associated with sublocations.\n\n"|header="Entities in Sublocations">\
+<ENTITIES|reachable.summary.markdown|pre="Entries for entities associated with reachable locations.\n\n"|header="Entities in Reachable Locations">\
+<ENTITIES|known.summary.markdown|pre="Entries for entities the player may know of here. Each is elsewhere right now: people here may speak of it.\n\n"|header="Entities Known Here">
 The player character is "I": every option is written in the player's own first-person voice.
 
 Suggest 3 to 5 distinct things I could do next - each a genuinely different way to respond to what is happening right now, engaging with the people, threats, and openings actually present in the scene, and fitting who I am (my stats, traits, and situation). Not generic filler.
@@ -163,12 +160,39 @@ Suggest 3 to 5 distinct things I could do next - each a genuinely different way 
 
 <LANGUAGE>`;
 
-export const defaultStatUpdatesPrompt = `You are the stat tracker for an interactive roleplay. You read what happened this turn and record how it moved the player's stats. Your entire output is stat-change lines - nothing else.
+export const defaultStatUpdatesPrompt = `You are the stat tracker for an interactive roleplay. Each stat is a number that tracks one thing about one character, and it changes only when the story changes it. The narrator reads the stats each turn to decide what the characters can do and how they act. You read what happened this turn and record how it moved the stats of each character listed below. Your entire output is one JSON object - nothing else.
 <WORLD DESCRIPTION|format=markdown|header="Game World">
-## Player Stats
+## Stats
+Each character's stats sit under their name and belong to that character: the player's character in the Player Character block, each other character present this turn in the In Scene block. The Global Stats block holds the stats that belong to no character. When stats sit in groups, a group bullet names what the stats nested under it share. A group holds no reading of its own; you record changes on its stats.
 Current readings (shown as current-value/maximum) with what each stat means, so you know each stat's level, range, and purpose. Output only the CHANGE this turn, never a value and never that value/max format.
-<STATS DESCRIPTION|numbers.meaning.markdown>
-<TRAITS DESCRIPTION|markdown|header="Traits">\
+<STATS DESCRIPTION|numbers.meaning.markdown|header="Global Stats">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<PERSONA|withstats.summary.markdown|header="Player Character">\
+<ENTITIES|inscene.withstats.summary.markdown|header="In Scene">\
+<NOTES|format=markdown|header="Player Notes">
+## What to change
+- The RIGHT stat in the RIGHT direction is what matters most. A rough amount on the stat the turn actually moved beats a precise amount on the wrong one.
+- Many turns move no stat at all. Outputting nothing is a correct and common answer: a calm, idle, or purely conversational turn usually changes nothing. Never invent a change just to have something to write.
+- List a stat only for a change you can point to in the narration - a real exertion, injury, loss, or gain, or a clear shift in how a character regards the player. A stat being relevant, on the character's mind, or thematically related is NOT a change. When you're unsure whether a stat moved, leave it out.
+- Report each stat that genuinely moved and no others. If two stats plainly shifted, give both; if one did, give one; if none did, give nothing. Don't pad the list with a related-but-unmoved stat, and don't drop one the turn clearly hit.
+- The amount is a rough judgment, not a calculation - no one knows the exact number. Pick a small whole number scaled loosely to the stat's range and how big the moment was, and commit to it. Never report the value because you're unsure of the change.
+- Each stat belongs to the character it sits under. A stat moves only for what that character does, goes through, or feels this turn.
+
+## Format
+- One key per character: "Player Character" for the player's character, each In Scene character's name exactly as the block shows it, and "Global Stats" for the Global Stats block. Under it, two keys per stat of that character: the stat's name, holding this turn's change to the stat's value, and the stat's name followed by " max", holding this turn's change to the stat's maximum. Each is one signed whole number.
+- Put the sign on the number: a leading minus lowers the stat.
+- Only a value or maximum the turn did not touch gets 0. A slight but clear shift gets a noticeable number, a small share of the stat's range.
+- Write the whole object on one line.`;
+
+/** The text pass's system prompt: what a built-in preset falls back to, in its style, on an endpoint that refuses the schema. */
+export const textStatUpdatesPrompt = `You are the stat tracker for an interactive roleplay. You read what happened this turn and record how it moved the stats of the player's character and of the world. Your entire output is stat-change lines - nothing else.
+<WORLD DESCRIPTION|format=markdown|header="Game World">
+## Stats
+The Global Stats block holds the stats that belong to no character. When there is a Player Character block, it holds the player character's stats.
+Current readings (shown as current-value/maximum) with what each stat means, so you know each stat's level, range, and purpose. Output only the CHANGE this turn, never a value and never that value/max format.
+<STATS DESCRIPTION|numbers.meaning.markdown|header="Global Stats">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<PERSONA|withstats.summary.markdown|header="Player Character">\
 <NOTES|format=markdown|header="Player Notes">
 ## What to change
 - The RIGHT stat in the RIGHT direction is what matters most. A rough amount on the stat the turn actually moved beats a precise amount on the wrong one.
@@ -176,10 +200,12 @@ Current readings (shown as current-value/maximum) with what each stat means, so 
 - List a stat only for a change you can point to in the narration - a real exertion, injury, loss, or gain. A stat being relevant, on the character's mind, or thematically related is NOT a change. When you're unsure whether a stat moved, leave it out.
 - Report each stat that genuinely moved and no others. If two stats plainly shifted, give both; if one did, give one; if none did, give nothing. Don't pad the list with a related-but-unmoved stat, and don't drop one the turn clearly hit.
 - The amount is a rough judgment, not a calculation - no one knows the exact number. Pick a small whole number scaled loosely to the stat's range and how big the moment was, and commit to it. Never report the value because you're unsure of the change.
+- The stats under Player Character belong to that character. They move only for what that character does, goes through, or feels this turn.
 
 ## Format
 - One line per changed stat: its exact name from the list above (written plainly - never a + or - on the name), a colon, then one signed whole number. Nothing else on the line.
-- The change is ONE whole number - never a fraction, a slash, or a value-over-maximum; keep it between -20 and 20. Put the sign on the number (a leading minus lowers the stat).
+- The change is ONE whole number - never a fraction, a slash, or a value-over-maximum. Put the sign on the number (a leading minus lowers the stat).
+- A slight but clear shift still gets a line, with a noticeable number, a small share of the stat's range.
 - To change a stat's maximum instead of its current value, add MAX after the number.
 - If nothing changed this turn, output nothing at all. Never write a preamble, heading, or explanation.`;
 
@@ -188,6 +214,22 @@ export const defaultLocationChangePrompt = `You are the location router for an i
 <LOCATION|destinations.summary.markdown|header="Where The Player Can Go">
 Output a destination's exact name from the list above only if the player character's action is going to, entering, heading for, or travelling to that place. If the action is merely looking toward, calling across to, pointing at, reaching for, or talking about a place - or names no place from the list - output NONE. Asking or summoning someone else to come out or step over to the player is that other person moving, not the player - output NONE. Reply with only the name or NONE, nothing else.`;
 
+// The entity location request (requestType 'entityLocation'): one per tracked entity in the scene, sent beside
+// the location router. The reply is one line of the closed list the user message carries.
+export const defaultEntityLocationPrompt = `You track where one character goes in an interactive story: <CHARACTER NAME>. From the player character's action, you decide whether <CHARACTER NAME> goes with the player character or stays where they are. You never act in the story; the action's "I" is the player character, never you.
+<LOCATION|summary.markdown|header="Current Location">\
+<ENTITIES|summary.notraits.nostats.markdown|header="Characters Here">
+Decide for <CHARACTER NAME> alone, from what the action does with <CHARACTER NAME>, and answer with a line from the list you are given:
+- A list with Come along and Stay: <CHARACTER NAME> is not yet with the player character. Come along when the action takes <CHARACTER NAME> along, by name or as one of everyone present. Stay for every other action, including one that invites, leads or talks about someone else.
+- A list with Keep following and Stay here: <CHARACTER NAME> already travels with the player character. Keep following wherever the player character goes. Stay here only when the action tells <CHARACTER NAME> to wait or to stay behind.
+- A list that also names places: <CHARACTER NAME> can also go to one of those places alone. Answer with the place when the action sends <CHARACTER NAME> there without the player character. Otherwise answer Come along or Stay as above.`;
+
+export const defaultEntityLocationUserPrompt = `The player character's action this turn ("I" = the player character): <PLAYER ACTION>
+<NARRATION|format=markdown|header="What Happened">
+<MOVE STATE>
+Reply for <CHARACTER NAME> with exactly one line from this list, and nothing else:
+<MOVE OPTIONS>`;
+
 // System prompt for the "separate planning pass" (thinkingMode === 'precall') - the lightweight, single-call
 // fusion of the staged director (Scene + Cast) and storyboarder (Beats). Its job is narration-to-narration
 // continuity: carry established objects/positions forward, keep/add/drop the cast honestly, and name each
@@ -195,14 +237,15 @@ Output a destination's exact name from the list above only if the player charact
 // as private stage directions (planDirective); the player never sees it.
 export const defaultThinkingPrompt = `You are the continuity planner for an interactive story. Before the scene is written, you set the stage the narrator then plays out: who is here, exactly how they are placed, and the grounded beats - action and spoken words alike - that follow from the player's action. You never write the narration itself, and you never decide whether the player's own action succeeds - the narrator judges that.
 <WORLD DESCRIPTION|format=markdown|header="Game World">\
-<TRAITS DESCRIPTION|markdown|header="Traits">\
-<PERSONA|markdown|post="In the Cast, this is Player Character."|header="Player Character">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<PERSONA|nostats.markdown|post="In the Cast, this is Player Character."|header="Player Character">\
 <LOCATION|summary.markdown|header="Current Location">\
 <LOCATION|sublocations.summary.markdown|header="Sublocations">\
 <LOCATION|reachable.summary.markdown|header="Reachable Locations">\
-<ENTITIES|summary.markdown|header="Characters and things that may appear in this location">\
-<ENTITIES|sublocations.summary.markdown|header="Characters and things that may appear in a sub-location">\
-<ENTITIES|reachable.summary.markdown|header="Characters and things that may appear in a reachable location">\
+<ENTITIES|summary.markdown|pre="An entity is a character, creature, or object. These entries describe entities that may appear in the current location.\n\n"|header="Entities in the Current Location">\
+<ENTITIES|sublocations.summary.markdown|pre="Entries for entities associated with sublocations.\n\n"|header="Entities in Sublocations">\
+<ENTITIES|reachable.summary.markdown|pre="Entries for entities associated with reachable locations.\n\n"|header="Entities in Reachable Locations">\
+<ENTITIES|known.summary.markdown|pre="Entries for entities the player may know of here. Each is elsewhere right now: people here may speak of it.\n\n"|header="Entities Known Here">\
 <NOTES|format=markdown|header="Important Player Notes">
 Respond in exactly this format:
 Cast:
@@ -422,14 +465,15 @@ export function planDirective(plan: string): string {
 // Pass 1: pick who is in the scene and what is carrying over. Output is parsed into a cast list.
 export const defaultDirectorPrompt = `You are the director of an interactive roleplay. Before the scene is written, set the stage: describe where we are and who is here. Do not write the narration.
 <WORLD DESCRIPTION|format=markdown|header="Game World">\
-<TRAITS DESCRIPTION|markdown|header="Traits">\
-<PERSONA|markdown|post="In the Cast, this is Player Character."|header="Player Character">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<PERSONA|nostats.markdown|post="In the Cast, this is Player Character."|header="Player Character">\
 <LOCATION|summary.markdown|header="Current Location">\
 <LOCATION|sublocations.summary.markdown|header="Sublocations">\
 <LOCATION|reachable.summary.markdown|header="Reachable Locations">\
-<ENTITIES|summary.markdown|header="Characters and things that may appear in this location">\
-<ENTITIES|sublocations.summary.markdown|header="Characters and things that may appear in a sub-location">\
-<ENTITIES|reachable.summary.markdown|header="Characters and things that may appear in a reachable location">\
+<ENTITIES|summary.markdown|pre="An entity is a character, creature, or object. These entries describe entities that may appear in the current location.\n\n"|header="Entities in the Current Location">\
+<ENTITIES|sublocations.summary.markdown|pre="Entries for entities associated with sublocations.\n\n"|header="Entities in Sublocations">\
+<ENTITIES|reachable.summary.markdown|pre="Entries for entities associated with reachable locations.\n\n"|header="Entities in Reachable Locations">\
+<ENTITIES|known.summary.markdown|pre="Entries for entities the player may know of here. Each is elsewhere right now: people here may speak of it.\n\n"|header="Entities Known Here">\
 <NOTES|format=markdown|header="Important Player Notes">
 Respond in exactly this format:
 Scene: <up to three sentences on where we are and what is visible right now>
@@ -458,8 +502,8 @@ export const defaultCharacterPrompt = `You ARE <CHARACTER NAME>, one character i
 
 Refer to the player in the third person - "the player character" or "them" - never "you" (write "I pin the player character to the wall", not "I pin you").
 <WORLD DESCRIPTION|format=markdown|header="Game World">\
-<TRAITS DESCRIPTION|markdown|header="Traits">\
-<PERSONA|markdown|header="Player Character">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<PERSONA|nostats.markdown|header="Player Character">\
 <LOCATION|summary.markdown|header="Current Location">\
 <LOCATION|sublocations.summary.markdown|header="Sublocations">\
 <LOCATION|reachable.summary.markdown|header="Reachable Locations">
@@ -470,8 +514,8 @@ My background is who I am in general; the recap and scene below are where things
 // sheet. That beat sheet becomes this turn's plan, attached to the game-text request's user turn.
 export const defaultStoryboardPrompt = `You are the storyboarder for an interactive roleplay. You are the only stage that sees everything - what just happened, the director's scene, and what each character independently intends - so your job is to reconcile them into one coherent plan for this turn. The characters decided their actions blind to each other, so resolve any overlaps or conflicts, order the actions sensibly, and keep everything consistent with what just happened. The "Character intentions" lines are written in the first person from each character's own point of view and are proposed, attempted actions for you to reconcile and adjudicate - not accomplished facts. Do not write the narration.
 <WORLD DESCRIPTION|format=markdown|header="Game World">\
-<STATS DESCRIPTION|descriptions.markdown|header="Player Stats">\
-<TRAITS DESCRIPTION|markdown|header="Traits">\
+<TRAITS DESCRIPTION|markdown|header="Global Traits">\
+<STATS DESCRIPTION|descriptions.markdown|header="Global Stats">\
 <PERSONA|markdown|header="Player Character">\
 <LOCATION|summary.markdown|header="Current Location">\
 <LOCATION|sublocations.summary.markdown|header="Sublocations">\
@@ -481,7 +525,7 @@ Using everything below, output the plan as 3-5 short beats, one per line:
 - Start each beat with "- " and write it as a terse imperative of who does what - not prose.
 - Beats are what the world and the cast do in reaction to the player's action - never decide the player character's own deliberate actions or choices, since the player chooses those.
 - Structure only: no description, sensory detail, or narration voice, and never quote dialogue - name what each character conveys, not their words. The narrator turns intent into spoken lines.
-- Let the player's stats or traits tip outcomes where relevant.
+- Let the player character's stats or traits tip outcomes where relevant.
 Output only the beats - nothing else.`;
 
 // The scene-image tag pass (requestType 'sceneTags'): run after a turn's text is done, to describe what the
@@ -526,6 +570,8 @@ export const PROMPT_TEXT_DEFAULTS: PromptValues = {
   choicesUserPrompt: defaultChoicesUserPrompt,
   statUpdatesUserPrompt: defaultStatUpdatesUserPrompt,
   locationChangeUserPrompt: defaultLocationChangeUserPrompt,
+  entityLocationPrompt: defaultEntityLocationPrompt,
+  entityLocationUserPrompt: defaultEntityLocationUserPrompt,
   summaryUserPrompt: defaultSummaryUserPrompt,
   milestoneSelectPrompt: defaultMilestoneSelectPrompt,
   milestoneSelectUserPrompt: defaultMilestoneSelectUserPrompt,

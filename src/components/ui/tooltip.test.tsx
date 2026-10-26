@@ -1,11 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { onFakeClock } from '@/test/fakeClock';
 import * as React from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from './popover';
 import { Slot } from '@radix-ui/react-slot';
 import {
-  Tip, Tooltip, TooltipPopup, TooltipPortal, TooltipPositioner, TooltipProvider, TooltipTrigger,
+  FlashTip, Tip, TOOLTIP_DELAY_MS, Tooltip, TooltipPopup, TooltipPortal, TooltipPositioner, TooltipProvider, TooltipTrigger,
 } from './tooltip';
 
 /** Live Base UI tooltip roots and portals, counted by pass-through wrappers. */
@@ -34,6 +35,18 @@ vi.mock('@base-ui/react/tooltip', async (importOriginal) => {
 
 /** The app mounts the provider once at its root, so every case here runs through it. */
 const renderTip = (ui: React.ReactElement) => render(<TooltipProvider>{ui}</TooltipProvider>);
+
+
+/** Hovers on a fake clock and runs it through the open delay, so a tip that was going to open has done so. */
+const hoverPastOpenDelay = async (control: Element) => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    await onFakeClock((user) => user.hover(control));
+    await act(() => vi.advanceTimersByTimeAsync(TOOLTIP_DELAY_MS));
+  } finally {
+    vi.useRealTimers();
+  }
+};
 
 describe('a tip on a control', () => {
   it('shows its text when the control is focused', async () => {
@@ -67,6 +80,29 @@ describe('a tip on a control', () => {
     await userEvent.tab();
 
     expect(screen.queryByText('Delete world')).toBeNull();
+  });
+
+  it('opens nothing while disabled, and keeps the same control when it turns back on', async () => {
+    const view = renderTip(
+      <Tip tip="Expand" labelsChild={false} disabled>
+        <button type="button">x</button>
+      </Tip>,
+    );
+    const control = screen.getByRole('button');
+    await userEvent.tab();
+    expect(screen.queryByText('Expand')).toBeNull();
+
+    view.rerender(
+      <TooltipProvider>
+        <Tip tip="Expand" labelsChild={false}>
+          <button type="button">x</button>
+        </Tip>
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole('button')).toBe(control);
+    await userEvent.tab({ shift: true });
+    await userEvent.tab();
+    expect(screen.getByText('Expand')).toBeVisible();
   });
 
   it('leaves the control its own ref, which its call site is still using', () => {
@@ -196,6 +232,451 @@ describe('the accessible name', () => {
   });
 });
 
+describe('a tip when the page scrolls', () => {
+  it('closes on a scroll of the document', async () => {
+    renderTip(<Tip tip="Delete world"><button type="button">x</button></Tip>);
+    await userEvent.tab();
+    expect(screen.getByText('Delete world')).toBeVisible();
+
+    fireEvent.scroll(document);
+
+    expect(screen.queryByText('Delete world')).toBeNull();
+  });
+
+  it('closes on a scroll of a nested container', async () => {
+    renderTip(
+      <div data-testid="panel" style={{ overflow: 'auto' }}>
+        <Tip tip="Delete world"><button type="button">x</button></Tip>
+      </div>,
+    );
+    await userEvent.tab();
+    expect(screen.getByText('Delete world')).toBeVisible();
+
+    // A scroll event does not bubble, so only a capture listener hears the panel.
+    fireEvent.scroll(screen.getByTestId('panel'));
+
+    expect(screen.queryByText('Delete world')).toBeNull();
+  });
+
+  it('closes a hand-built tip on the exported root', async () => {
+    render(
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger aria-label="Undo" render={<button type="button" />} />
+          <TooltipPortal>
+            <TooltipPositioner>
+              <TooltipPopup>Undo step list</TooltipPopup>
+            </TooltipPositioner>
+          </TooltipPortal>
+        </Tooltip>
+      </TooltipProvider>,
+    );
+    await userEvent.tab();
+    expect(screen.getByText('Undo step list')).toBeVisible();
+
+    fireEvent.scroll(document);
+
+    expect(screen.queryByText('Undo step list')).toBeNull();
+  });
+
+  it('reports a close to the owner of a hand-built tip only when one was open', async () => {
+    const onOpenChange = vi.fn();
+    render(
+      <TooltipProvider>
+        <Tooltip onOpenChange={onOpenChange}>
+          <TooltipTrigger aria-label="Undo" render={<button type="button" />} />
+          <TooltipPortal>
+            <TooltipPositioner>
+              <TooltipPopup>Undo step list</TooltipPopup>
+            </TooltipPositioner>
+          </TooltipPortal>
+        </Tooltip>
+      </TooltipProvider>,
+    );
+
+    fireEvent.scroll(document);
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    await userEvent.tab();
+    expect(onOpenChange).toHaveBeenLastCalledWith(true, expect.anything());
+    fireEvent.scroll(document);
+
+    expect(onOpenChange).toHaveBeenLastCalledWith(false, expect.anything());
+    expect(onOpenChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens again once focus returns to the control', async () => {
+    renderTip(
+      <>
+        <Tip tip="Delete world"><button type="button">x</button></Tip>
+        <button type="button">elsewhere</button>
+      </>,
+    );
+    await userEvent.tab();
+    fireEvent.scroll(document);
+    expect(screen.queryByText('Delete world')).toBeNull();
+
+    await userEvent.tab();
+    await userEvent.tab({ shift: true });
+
+    expect(screen.getByText('Delete world')).toBeVisible();
+  });
+});
+
+describe('a tip when the pointer presses or drags', () => {
+  // Hover, not focus: Base UI already closes a focus-opened tip on an outside press.
+  const openOnHover = async () => {
+    renderTip(<Tip tip="Delete world"><button type="button">x</button></Tip>);
+    await userEvent.hover(screen.getByRole('button'));
+    expect(await screen.findByText('Delete world')).toBeVisible();
+  };
+
+  it.each([
+    ['a press anywhere', () => fireEvent.pointerDown(document.body)],
+    ['a right-click', () => fireEvent.contextMenu(document.body)],
+    ['a native drag', () => fireEvent.dragStart(document.body)],
+  ])('closes on %s', async (_label, fire) => {
+    await openOnHover();
+
+    fire();
+
+    expect(screen.queryByText('Delete world')).toBeNull();
+  });
+
+  it('closes on a press on the tip itself', async () => {
+    // Base UI counts a press inside the popup as no outside press, so it leaves the tip open.
+    await openOnHover();
+
+    fireEvent.pointerDown(screen.getByText('Delete world'));
+
+    expect(screen.queryByText('Delete world')).toBeNull();
+  });
+
+  it('opens nothing on hover while a pointer button is held, and again after release', async () => {
+    renderTip(<Tip tip="Delete world"><button type="button">x</button></Tip>);
+    const control = screen.getByRole('button');
+    fireEvent.pointerDown(document.body);
+
+    await hoverPastOpenDelay(control);
+    expect(screen.queryByText('Delete world')).toBeNull();
+
+    fireEvent.pointerUp(document.body);
+    await userEvent.unhover(control);
+    await userEvent.hover(control);
+
+    expect(await screen.findByText('Delete world')).toBeVisible();
+  });
+
+  it('opens on hover again after the browser cancels the press', async () => {
+    renderTip(<Tip tip="Delete world"><button type="button">x</button></Tip>);
+    const control = screen.getByRole('button');
+    fireEvent.pointerDown(document.body);
+    await hoverPastOpenDelay(control);
+    expect(screen.queryByText('Delete world')).toBeNull();
+
+    fireEvent.pointerCancel(document.body);
+    await userEvent.unhover(control);
+    await userEvent.hover(control);
+
+    expect(await screen.findByText('Delete world')).toBeVisible();
+  });
+
+  it('opens on hover again when the button was released outside the window', async () => {
+    // The release goes to another window, so no pointerup arrives. Losing focus ends the hold.
+    renderTip(<Tip tip="Delete world"><button type="button">x</button></Tip>);
+    const control = screen.getByRole('button');
+    fireEvent.pointerDown(document.body);
+    fireEvent.blur(window);
+
+    await userEvent.hover(control);
+
+    expect(await screen.findByText('Delete world')).toBeVisible();
+  });
+
+  describe('on a hand-built tip', () => {
+    const renderHandBuilt = () => render(
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger aria-label="Undo" render={<button type="button" />} />
+          <TooltipPortal>
+            <TooltipPositioner>
+              <TooltipPopup>Undo step list</TooltipPopup>
+            </TooltipPositioner>
+          </TooltipPortal>
+        </Tooltip>
+      </TooltipProvider>,
+    );
+
+    it.each([
+      ['a press', () => fireEvent.pointerDown(screen.getByText('Undo step list'))],
+      ['a right-click', () => fireEvent.contextMenu(document.body)],
+      ['a native drag', () => fireEvent.dragStart(document.body)],
+    ])('closes on %s', async (_label, fire) => {
+      renderHandBuilt();
+      await userEvent.hover(screen.getByRole('button'));
+      expect(await screen.findByText('Undo step list')).toBeVisible();
+
+      fire();
+
+      expect(screen.queryByText('Undo step list')).toBeNull();
+    });
+
+    it('opens nothing on hover while a pointer button is held, and again after release', async () => {
+      renderHandBuilt();
+      const control = screen.getByRole('button');
+      fireEvent.pointerDown(document.body);
+
+      await hoverPastOpenDelay(control);
+      expect(screen.queryByText('Undo step list')).toBeNull();
+
+      fireEvent.pointerUp(document.body);
+      await userEvent.unhover(control);
+      await userEvent.hover(control);
+
+      expect(await screen.findByText('Undo step list')).toBeVisible();
+    });
+  });
+
+  it('lets a keyboard focus open a tip while a pointer button is held', async () => {
+    renderTip(<Tip tip="Delete world"><button type="button">x</button></Tip>);
+    fireEvent.pointerDown(document.body);
+
+    await userEvent.tab();
+
+    expect(screen.getByText('Delete world')).toBeVisible();
+    fireEvent.pointerUp(document.body);
+  });
+});
+
+describe('a tip when focus or the window changes', () => {
+  /** Hover opens the tip with no focus on the control, so only the module's own rules can close it. */
+  const openOnHover = async (control: string, popup = control) => {
+    await userEvent.hover(screen.getByRole('button', { name: control }));
+    expect(await screen.findByText(popup, { selector: 'div' })).toBeVisible();
+  };
+  const focusOn = (el: HTMLElement) => act(() => el.focus());
+  const hideTab = (hidden: boolean) => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(hidden ? 'hidden' : 'visible');
+    fireEvent(document, new Event('visibilitychange'));
+  };
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  describe('on a Tip', () => {
+    const renderPair = () => renderTip(
+      <>
+        <Tip tip="Delete world"><button type="button">x</button></Tip>
+        <Tip tip="Rename world"><button type="button">r</button></Tip>
+        <input aria-label="Search" />
+      </>,
+    );
+
+    it('closes when focus moves outside its control', async () => {
+      renderPair();
+      await openOnHover('Delete world');
+
+      focusOn(screen.getByRole('textbox'));
+
+      expect(screen.queryByText('Delete world', { selector: 'div' })).toBeNull();
+    });
+
+    it('stays open when its own control takes focus', async () => {
+      renderPair();
+      await openOnHover('Delete world');
+
+      focusOn(screen.getByRole('button', { name: 'Delete world' }));
+
+      expect(screen.getByText('Delete world', { selector: 'div' })).toBeVisible();
+    });
+
+    it('opens the next control\'s tip when focus tabs to it', async () => {
+      renderPair();
+      await userEvent.tab();
+      expect(screen.getByText('Delete world', { selector: 'div' })).toBeVisible();
+
+      await userEvent.tab();
+
+      expect(screen.getByText('Rename world', { selector: 'div' })).toBeVisible();
+      expect(screen.queryByText('Delete world', { selector: 'div' })).toBeNull();
+    });
+
+    it('closes when the window loses focus', async () => {
+      renderPair();
+      await openOnHover('Delete world');
+
+      fireEvent.blur(window);
+
+      expect(screen.queryByText('Delete world', { selector: 'div' })).toBeNull();
+    });
+
+    it('stays open when one element on the page loses focus', async () => {
+      renderPair();
+      await openOnHover('Delete world');
+
+      // A blur does not bubble, but a capture listener on the window hears every element's.
+      fireEvent.blur(screen.getByRole('textbox'));
+
+      expect(screen.getByText('Delete world', { selector: 'div' })).toBeVisible();
+    });
+
+    it('closes when the tab is hidden, and stays open when it shows', async () => {
+      renderPair();
+      await openOnHover('Delete world');
+
+      hideTab(false);
+      expect(screen.getByText('Delete world', { selector: 'div' })).toBeVisible();
+
+      hideTab(true);
+      expect(screen.queryByText('Delete world', { selector: 'div' })).toBeNull();
+    });
+  });
+
+  it('keeps a pointer hold when a press moves focus off an element', async () => {
+    // A press blurs the focused element after its pointerdown. That blur is not the window losing focus.
+    renderTip(
+      <>
+        <Tip tip="Delete world"><button type="button">x</button></Tip>
+        <input aria-label="Search" />
+      </>,
+    );
+    fireEvent.pointerDown(document.body);
+    fireEvent.blur(screen.getByRole('textbox'));
+
+    await hoverPastOpenDelay(screen.getByRole('button', { name: 'Delete world' }));
+
+    expect(screen.queryByText('Delete world', { selector: 'div' })).toBeNull();
+  });
+
+  describe('on a hand-built tip', () => {
+    const renderHandBuilt = (onOpenChange?: () => void) => render(
+      <TooltipProvider>
+        <Tooltip onOpenChange={onOpenChange}>
+          <TooltipTrigger aria-label="Undo" render={<button type="button" />} />
+          <TooltipPortal>
+            <TooltipPositioner>
+              <TooltipPopup>Undo step list</TooltipPopup>
+            </TooltipPositioner>
+          </TooltipPortal>
+        </Tooltip>
+        <input aria-label="Search" />
+      </TooltipProvider>,
+    );
+
+    it.each([
+      ['focus moving outside its control', () => focusOn(screen.getByRole('textbox'))],
+      ['the window losing focus', () => fireEvent.blur(window)],
+      ['the tab being hidden', () => hideTab(true)],
+    ])('closes on %s', async (_label, fire) => {
+      renderHandBuilt();
+      await openOnHover('Undo', 'Undo step list');
+
+      fire();
+
+      expect(screen.queryByText('Undo step list')).toBeNull();
+    });
+
+    it('stays open, with no close and reopen, when its own control takes focus', async () => {
+      const onOpenChange = vi.fn();
+      renderHandBuilt(onOpenChange);
+      await openOnHover('Undo', 'Undo step list');
+
+      focusOn(screen.getByRole('button', { name: 'Undo' }));
+
+      expect(screen.getByText('Undo step list')).toBeVisible();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false, expect.anything());
+    });
+  });
+});
+
+describe('a flash tip while its owner passes open', () => {
+  /** Owns `open` the way a copy button does: the test flips it, the tip never sets it. */
+  const Owner = ({ open, cycle }: { open: boolean; cycle?: number }) => {
+    const anchor = React.useRef<HTMLButtonElement>(null);
+    return (
+      <>
+        <button type="button" ref={anchor}>copy</button>
+        <FlashTip anchor={anchor} tip="Copied" open={open} cycle={cycle} />
+      </>
+    );
+  };
+  const renderOwner = (open: boolean, cycle?: number) => {
+    const view = render(<TooltipProvider><Owner open={open} cycle={cycle} /></TooltipProvider>);
+    return (next: boolean, nextCycle = cycle) =>
+      view.rerender(<TooltipProvider><Owner open={next} cycle={nextCycle} /></TooltipProvider>);
+  };
+  const bubble = () => document.querySelector('[data-flash-tip]');
+
+  it('shows while its owner passes open', () => {
+    renderOwner(true);
+    expect(bubble()).toBeInTheDocument();
+  });
+
+  it('closes on a scroll of a nested element while its owner still passes open', () => {
+    renderOwner(true);
+    expect(bubble()).toBeInTheDocument();
+
+    // A scroll event does not bubble, so only a capture listener hears an element below the document.
+    fireEvent.scroll(screen.getByRole('button'));
+
+    expect(bubble()).toBeNull();
+  });
+
+  it.each([
+    ['a press anywhere', () => fireEvent.pointerDown(document.body)],
+    ['a right-click', () => fireEvent.contextMenu(document.body)],
+    ['a native drag', () => fireEvent.dragStart(document.body)],
+  ])('closes on %s', (_label, fire) => {
+    renderOwner(true);
+
+    fire();
+
+    expect(bubble()).toBeNull();
+  });
+
+  it('stays closed until its owner closes it and opens it again', () => {
+    const setOpen = renderOwner(true);
+    fireEvent.scroll(document.body);
+    expect(bubble()).toBeNull();
+
+    setOpen(true);
+    expect(bubble()).toBeNull();
+
+    setOpen(false);
+    setOpen(true);
+
+    expect(bubble()).toBeInTheDocument();
+  });
+
+  it('shows again when its owner changes cycle while open stays true', () => {
+    const setOpen = renderOwner(true, 1);
+    fireEvent.scroll(document.body);
+    expect(bubble()).toBeNull();
+
+    setOpen(true, 1);
+    expect(bubble()).toBeNull();
+
+    setOpen(true, 2);
+
+    expect(bubble()).toBeInTheDocument();
+  });
+
+  it('shows on its first open after a scroll that came while it was closed', () => {
+    const setOpen = renderOwner(false);
+    fireEvent.scroll(document.body);
+
+    setOpen(true);
+
+    expect(bubble()).toBeInTheDocument();
+  });
+
+  it('still announces its text to a live region after it is dismissed', () => {
+    renderOwner(true);
+    fireEvent.scroll(document.body);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Copied');
+  });
+});
+
 describe('a tip with no text', () => {
   const renderEmpty = (tip: string | null | undefined) =>
     renderTip(
@@ -227,21 +708,21 @@ describe('a tip with no text', () => {
 
 describe('a tip on a control another component already holds by ref', () => {
   /** The shape `TutorialPopover` uses: it anchors its explanation to whatever element it is handed. */
-  const AnchorHolder = ({ onAnchor, children }: {
+  const AnchorBox = ({ onAnchor, children }: {
     onAnchor: (el: HTMLElement | null) => void;
     children: React.ReactNode;
   }) => <Slot ref={onAnchor}>{children}</Slot>;
 
   it('leaves that component the real element, and still opens on focus', async () => {
-    // `Tip` is a plain function, so it cannot be the child here — the holder's ref would land on nothing
+    // `Tip` is a plain function, so it cannot be the child here — the box's ref would land on nothing
     // and the explanation would point at the page instead of the control. The parts compose instead.
     const anchors: (HTMLElement | null)[] = [];
     render(
       <TooltipProvider>
         <Tooltip>
-          <AnchorHolder onAnchor={(el) => anchors.push(el)}>
+          <AnchorBox onAnchor={(el) => anchors.push(el)}>
             <TooltipTrigger aria-label="Feedback" render={<button type="button" id="feedback" />} />
-          </AnchorHolder>
+          </AnchorBox>
           <TooltipPortal>
             <TooltipPositioner>
               <TooltipPopup>Feedback</TooltipPopup>

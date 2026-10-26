@@ -2,12 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { phMap, phNode } from '@/test/sandboxPlaceholders';
 import { executeStatCode, type CodeBoundField } from './statCodeExecutor';
 import {
-  BUILTIN_MEMBERS, CLOCK_MEMBERS, CLOCK_PREVIOUS_FIELDS, DELTA_FIELDS, DICTIONARY_FIELDS, DELTA_MEMBERS, ENTITY_FIELDS, LANGUAGE_NAMES, PERSONA_FIELDS, placeholderEntryFields, PREVIOUS_FIELDS, SANDBOX_BUILTINS, SANDBOX_GLOBALS,
+  BUILTIN_MEMBERS, CLOCK_MEMBERS, CLOCK_PREVIOUS_FIELDS, LOCATION_ENTRY_FIELDS, LOCATION_MEMBERS, DELTA_FIELDS, DICTIONARY_FIELDS, DELTA_MEMBERS, ENTITY_FIELDS, LANGUAGE_NAMES, PERSONA_FIELDS, placeholderEntryFields, PREVIOUS_FIELDS, SANDBOX_BUILTINS, SANDBOX_GLOBALS,
   SELF_WRITABLE_FIELDS, STAT_FIELDS, TRAIT_ENTRY_FIELDS, nearestSurfaceName,
 } from './statCodeSurface';
 import { runStatCodeTurn } from './statCodeTurn';
 import { STAT_CODE_TIMINGS, type StatCodeTiming } from './statCodeTiming';
 import type { PlayerStat, Stat } from '@/types';
+import { boxScripts } from '@/test/scriptFixtures';
+import { statCodeTurnOf } from '@/test/statCodeTurnFixture';
 
 const stat = (over: Partial<Stat>): Stat => ({
   id: 'a', name: 'Health', type: 'number', description: '', min: 0, max: 100, value: 50, regen: 0, ...over,
@@ -62,7 +64,7 @@ describe('the described surface against the sandbox that provides it', () => {
     },
   );
 
-  it.each([['clock', CLOCK_MEMBERS], ['clock.previous', CLOCK_PREVIOUS_FIELDS]] as const)(
+  it.each([['clock', CLOCK_MEMBERS], ['clock.previous', CLOCK_PREVIOUS_FIELDS], ['location', LOCATION_MEMBERS]] as const)(
     'describes every field on %s, and no field it does not',
     async (path, described) => {
       const expected = described.map(entry => entry.name).sort().join(',');
@@ -70,6 +72,13 @@ describe('the described surface against the sandbox that provides it', () => {
         .resolves.toEqual({ value: 1, error: null });
     },
   );
+
+  it('describes every field on a locations entry, and no field it does not', async () => {
+    const expected = LOCATION_ENTRY_FIELDS.map(entry => entry.name).sort().join(',');
+    const places = { locations: [{ id: 'l1', name: 'Mill' }], location: null };
+    await expect(executeStatCode(`return Object.keys(locations.Mill).sort().join(',') === ${JSON.stringify(expected)} ? 1 : 0;`, stats, stats[0], { places }))
+      .resolves.toEqual({ value: 1, error: null });
+  });
 
   // Retired routes; the load rewrite moves released code off them.
   it.each(['deltaHours', 'elapsedHours', 'day', 'daypart', 'startDay', 'startDaypart', 'currentStatId'])(
@@ -115,6 +124,7 @@ describe('the described surface against the sandbox that provides it', () => {
     ['persona', PERSONA_FIELDS],
     ['persona.traits.Scarred', TRAIT_ENTRY_FIELDS],
     ['entities.Ash', ENTITY_FIELDS],
+    ['owner', ENTITY_FIELDS],
     ['entities.Ash.traits.Loyal', TRAIT_ENTRY_FIELDS],
     ['entities.Ash.placeholders.Hair', placeholderEntryFields('Wildcard')],
     ['dictionaries.Weather', DICTIONARY_FIELDS],
@@ -124,7 +134,7 @@ describe('the described surface against the sandbox that provides it', () => {
     const expected = described.map(entry => entry.name).sort().join(',');
     await expect(executeStatCode(
       `return Object.keys(${path}).sort().join(',') === ${JSON.stringify(expected)} ? 1 : 0;`,
-      stats, stats[0], { persona, entities, dictionaries },
+      stats, stats[0], { persona, entities, dictionaries, owner: entities[0] },
     )).resolves.toEqual({ value: 1, error: null });
   });
 
@@ -145,6 +155,10 @@ describe('the described surface against the sandbox that provides it', () => {
 
   // A field listed as writable that the host never reads back is the editor promising a write that does nothing.
   it.each(SELF_WRITABLE_FIELDS)('reads a write to self.%s back out of the sandbox', async (field) => {
+    if (field === 'hidden') {
+      expect((await run('self.hidden = true;')).hidden).toBe(true);
+      return;
+    }
     const result = await run(`self.${field} = 7;`);
     expect(field === 'value' ? result.value : result.bounds?.[field as CodeBoundField]).toBe(7);
   });
@@ -188,8 +202,8 @@ describe('the described surface against the sandbox that provides it', () => {
  * before box that lost a global — or an after box that started reading zeros — would show up.
  */
 const turnProbe = async (timing: StatCodeTiming, code: string): Promise<number | undefined> => {
-  const probe: PlayerStat = { ...stats[0], value: 50, descriptors: [], ...(timing === 'before' ? { beforeCode: code } : { code }) };
-  const out = await runStatCodeTurn({
+  const probe: PlayerStat = { ...stats[0], value: 50, descriptors: [], scripts: boxScripts({ [timing]: code }) };
+  const out = await runStatCodeTurn(statCodeTurnOf({
     timing,
     stats: [probe],
     enabled: {},
@@ -197,10 +211,10 @@ const turnProbe = async (timing: StatCodeTiming, code: string): Promise<number |
     asks: [{ id: probe.id, value: 40, max: 0 }],
     regenApplied: { [probe.id]: 5 },
     clock: {},
-    bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+    ownerTraits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
     statNameOf: (stat) => stat.name,
     traitNameOf: (trait) => trait.name,
-  });
+  }));
   return out.stats[0].value;
 };
 
@@ -233,10 +247,10 @@ describe('the described surface in each of the two boxes', () => {
   // and not the other's, which is the one way the two surfaces could be right and still be swapped.
   it('runs the box the turn asked for on a stat that fills both', async () => {
     const both: PlayerStat = {
-      ...stats[0], value: 50, descriptors: [], beforeCode: 'return 11;', code: 'return 22;',
+      ...stats[0], value: 50, descriptors: [], scripts: boxScripts({ before: 'return 11;', after: 'return 22;' }),
     };
     const valueFrom = async (timing: StatCodeTiming) => {
-      const out = await runStatCodeTurn({
+      const out = await runStatCodeTurn(statCodeTurnOf({
         timing,
         stats: [both],
         enabled: {},
@@ -244,10 +258,10 @@ describe('the described surface in each of the two boxes', () => {
         asks: [],
         regenApplied: {},
         clock: {},
-        bearers: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
+        ownerTraits: { acquired: [], disabledTraitIds: [], appliedValues: {}, world: { traits: [], groups: [] } },
         statNameOf: (entry) => entry.name,
         traitNameOf: (entry) => entry.name,
-      });
+      }));
       return out.stats[0].value;
     };
     expect(await valueFrom('before')).toBe(11);

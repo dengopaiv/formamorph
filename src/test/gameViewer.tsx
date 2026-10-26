@@ -2,12 +2,14 @@
 // before anything touches `indexedDB`.
 import 'fake-indexeddb/auto';
 import { useEffect, useState, type ReactNode } from 'react';
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
+import { onTestFinished, vi } from 'vitest';
+import { stubReachableEndpoint } from '@/test/endpointProbe';
 import { ThemeProvider } from '@/components/theme-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SurfaceLayer, SurfaceReporterContext, type SurfaceReporter } from '@/components/ui/surface';
 import { SettingsProvider } from '@/contexts/SettingsContext';
-import { GameDataProvider, useGameData } from '@/contexts/GameDataContext';
+import { GameDataProvider, useGameDataActions } from '@/contexts/GameDataContext';
 import { PlaceholderSessionProvider } from '@/contexts/PlaceholderSessionContext';
 import { UserProfileProvider } from '@/contexts/UserProfileContext';
 import { AgeGateProvider } from '@/contexts/AgeGateContext';
@@ -15,12 +17,25 @@ import { PrivacyPolicyProvider } from '@/contexts/PrivacyPolicyContext';
 import { AccountDeletionProvider } from '@/contexts/AccountDeletionContext';
 import { GameplayProvider } from '@/contexts/GameplayContext';
 import GameViewer from '@/views/GameViewer';
-import type { World } from '@/types';
+import type { PersonaPick } from '@/lib/persona';
+import type { Entity, PlayerStat, World } from '@/types';
+
+/** A one-location world, for tests that play a turn. `entities` and `stats` fill what the test reads. */
+export function harborWorld({ stats = [], entities = [] }: { stats?: PlayerStat[]; entities?: Entity[] } = {}): World {
+  return {
+    id: 'w1',
+    worldOverview: {
+      name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
+      systemPrompt: '', tags: [],
+    },
+    stats, locations: [{ id: 'harbor', name: 'Harbor', isStarting: true }], entities, traits: [], statUpdates: [],
+  } as unknown as World;
+}
 
 /** Loads the world into GameData first, the way the main menu does before it enters the game. */
 // eslint-disable-next-line react-refresh/only-export-components -- test-only module; nothing is hot-reloaded
 function WithWorld({ world, children }: { world: World; children: ReactNode }) {
-  const { loadWorldData } = useGameData();
+  const { loadWorldData } = useGameDataActions();
   const [ready, setReady] = useState(false);
   useEffect(() => {
     loadWorldData(world);
@@ -29,19 +44,42 @@ function WithWorld({ world, children }: { world: World; children: ReactNode }) {
   return ready ? children : null;
 }
 
+/** Holds the game view, so a test can unmount it while the providers around it stay. */
+// eslint-disable-next-line react-refresh/only-export-components -- test-only module; nothing is hot-reloaded
+function ViewGate({ gate, children }: { gate: { hide: () => void }; children: ReactNode }) {
+  const [shown, setShown] = useState(true);
+  gate.hide = () => setShown(false);
+  return shown ? children : null;
+}
+
 /**
  * Render the real game view under the real app providers, in `App.tsx`'s order, on a loaded world.
- * The calling file mocks what jsdom cannot run: `@/views/VRMViewer`, `kokoro-js`, and the toast module.
+ * The calling file mocks what jsdom cannot run: `@/views/VRMViewer` and the toast module.
+ * The AI probe gets a reachable answer, so no test reaches a real server.
  */
 export function renderGameViewer(
   world: World,
-  { onExitToMenu = () => {}, registry = null, children }: {
+  { onExitToMenu = () => {}, registry = null, children, inGameplay, initialSaveId, initialTraits, initialPersona, initialOwnedTraits }: {
     onExitToMenu?: () => void;
+    /** A save record's id to enter on, as the main menu's Load does. */
+    initialSaveId?: string;
+    /** The trait ids the player picked at setup. */
+    initialTraits?: string[];
+    /** The persona the player picked at setup. */
+    initialPersona?: PersonaPick;
+    /** Each entity's owned trait picks at setup, by entity id. */
+    initialOwnedTraits?: Record<string, string[]>;
     registry?: SurfaceReporter | null;
     children?: ReactNode;
+    /** Rendered beside the game view, inside its Gameplay provider, so a probe can read play state. It stays
+     *  mounted after `unmountView`. */
+    inGameplay?: ReactNode;
   } = {},
 ) {
-  return render(
+  stubReachableEndpoint();
+  onTestFinished(() => { vi.unstubAllGlobals(); });
+  const gate = { hide: () => {} };
+  const rendered = render(
     <ThemeProvider>
       <TooltipProvider>
         <SettingsProvider>
@@ -56,7 +94,10 @@ export function renderGameViewer(
                         <SurfaceReporterContext.Provider value={registry}>
                           <SurfaceLayer id="gameViewer">
                             <GameplayProvider>
-                              <GameViewer initialCharacterData={null} onExitToMenu={onExitToMenu} />
+                              <ViewGate gate={gate}>
+                                <GameViewer initialCharacterData={null} onExitToMenu={onExitToMenu} initialSaveId={initialSaveId} initialTraits={initialTraits} initialPersona={initialPersona} initialOwnedTraits={initialOwnedTraits} />
+                              </ViewGate>
+                              {inGameplay}
                             </GameplayProvider>
                           </SurfaceLayer>
                         </SurfaceReporterContext.Provider>
@@ -71,4 +112,5 @@ export function renderGameViewer(
       </TooltipProvider>
     </ThemeProvider>,
   );
+  return { ...rendered, unmountView: () => act(() => gate.hide()) };
 }

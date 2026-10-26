@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { EntityVisual, hasEntityVisual } from './EntityVisual';
+import { EntityVisual } from './EntityVisual';
+import { hasEntityVisual } from '@/lib/entityVisual';
 import AudioPlayer from './AudioPlayer';
 import type { Entity } from '@/types';
 
@@ -29,21 +30,24 @@ export function EntityDescription({ text, resolveText = identity, children }: {
  * The entity card's body: the picture, then the description area and the entity's sound. `children` is
  * the description area. The visual props are the gameplay-held picture state `EntityVisual` takes.
  */
-export function EntityCardBody({ entity, children, preference, onPreferenceChange, imageIndex, onImageStep }: {
+export function EntityCardBody({ entity, children, images, avatar, preference, onPreferenceChange, imageIndex, onImageStep, morphValues }: {
   entity: Entity;
   children: ReactNode;
-} & Pick<ComponentProps<typeof EntityVisual>, 'preference' | 'onPreferenceChange' | 'imageIndex' | 'onImageStep'>) {
+} & Pick<ComponentProps<typeof EntityVisual>, 'images' | 'avatar' | 'preference' | 'onPreferenceChange' | 'imageIndex' | 'onImageStep' | 'morphValues'>) {
   return (
     <div className="flex-grow min-h-0 flex flex-col gap-4 p-4">
       {/* Picture takes 3/4 of the body height (aspect ratio preserved); description fills the rest. */}
-      {hasEntityVisual(entity) && (
+      {(hasEntityVisual(entity) || !!avatar) && (
         <div className="flex-[3] min-h-0 flex items-center justify-center">
           <EntityVisual
             entity={entity}
+            images={images}
+            avatar={avatar}
             preference={preference}
             onPreferenceChange={onPreferenceChange}
             imageIndex={imageIndex}
             onImageStep={onImageStep}
+            morphValues={morphValues}
           />
         </div>
       )}

@@ -2,7 +2,6 @@ import { useEffect, type ReactNode } from 'react';
 import { useDictionaryStore } from '@/contexts/DictionaryStoreContext';
 import { useEditingDraft } from '@/lib/useEditingDraft';
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PanelTabContent, PanelTabs } from "@/components/ui/panel-tabs";
 import type { SurfaceLedgerName } from "@/components/ui/surface";
@@ -15,6 +14,8 @@ import {
   dictionaryPanelTabsFor, dictionaryTabForField, type DictionaryPanelTab,
 } from '@/views/dictionaryPanelTabs';
 import type { DictionaryEntry, FocusFieldHint, Placeholder } from '@/types';
+import { WorldInput } from '@/components/editor/WorldField';
+import { fieldFrame } from '@/lib/historyField';
 
 /** The long form behind the Trigger Keywords ⓘ: the chip editor's own controls, which the field does not
  *  label. The line under the chips carries only what the keywords do. */
@@ -32,9 +33,9 @@ export const ACTIVATION_INFO = `**Always Inject** injects the Value into every p
 **Recursive** lets a Value injected by another entry activate this one`;
 
 /** A compact labeled checkbox for the entry panel's switch rows. */
-function CheckRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+function CheckRow({ field, label, checked, onChange }: { field: string; label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex items-center gap-2 text-label">
+    <label className="flex items-center gap-2 text-label" {...fieldFrame(field)}>
       <Checkbox checked={checked} onCheckedChange={(v) => onChange(v === true)} />
       {label}
     </label>
@@ -110,7 +111,7 @@ const DictionaryManager = ({ entry, placeholders = [], ownerId, tab, onTabChange
 
   const detailsPanel = (
     <>
-      <div className="space-y-2" data-tour-anchor="dictionary-name">
+      <div className="space-y-2" data-tour-anchor="dictionary-name" {...fieldFrame('name')}>
         <Label>Name</Label>
         <Hint>Names the entry in the list and prefixes the Value in the prompt. Blank uses the first Trigger Keyword.</Hint>
         <PlaceholderNameField
@@ -122,7 +123,7 @@ const DictionaryManager = ({ entry, placeholders = [], ownerId, tab, onTabChange
           ariaLabel="Name"
         />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2" {...fieldFrame('key')}>
         <div className="flex items-center gap-2">
           <Label>Trigger Keywords</Label>
           <HintInfo>{KEYWORDS_INFO}</HintInfo>
@@ -132,12 +133,13 @@ const DictionaryManager = ({ entry, placeholders = [], ownerId, tab, onTabChange
         {/* The two switches that modify these keywords, kept beside them: they are also the only matching
             switches Simple mode shows. */}
         <div className="flex flex-wrap gap-x-4 gap-y-2">
-          <CheckRow label="Whole Words" checked={!!editingEntry.matchWholeWords} onChange={(v) => handleChange('matchWholeWords', v)} />
-          <CheckRow label="Case-Sensitive" checked={!!editingEntry.caseSensitive} onChange={(v) => handleChange('caseSensitive', v)} />
+          <CheckRow field="matchWholeWords" label="Whole Words" checked={!!editingEntry.matchWholeWords} onChange={(v) => handleChange('matchWholeWords', v)} />
+          <CheckRow field="caseSensitive" label="Case-Sensitive" checked={!!editingEntry.caseSensitive} onChange={(v) => handleChange('caseSensitive', v)} />
         </div>
       </div>
       <PlaceholderField
         label="Value"
+        historyField="value"
         value={editingEntry.value || ''}
         onChange={(v) => handleChange('value', v)}
         placeholders={placeholders}
@@ -157,23 +159,23 @@ const DictionaryManager = ({ entry, placeholders = [], ownerId, tab, onTabChange
         </div>
         <Hint>Controls when this entry activates and how its keywords match</Hint>
         <div className="flex flex-wrap gap-x-4 gap-y-2">
-          <CheckRow label="Always Inject" checked={!!editingEntry.constant} onChange={(v) => handleChange('constant', v)} />
-          <CheckRow label="Regex" checked={!!editingEntry.useRegex} onChange={(v) => handleChange('useRegex', v)} />
-          <CheckRow label="Recursive" checked={!!editingEntry.recursive} onChange={(v) => handleChange('recursive', v)} />
+          <CheckRow field="constant" label="Always Inject" checked={!!editingEntry.constant} onChange={(v) => handleChange('constant', v)} />
+          <CheckRow field="useRegex" label="Regex" checked={!!editingEntry.useRegex} onChange={(v) => handleChange('useRegex', v)} />
+          <CheckRow field="recursive" label="Recursive" checked={!!editingEntry.recursive} onChange={(v) => handleChange('recursive', v)} />
         </div>
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2" {...fieldFrame('scanDepth')}>
         <Label>Scan Depth</Label>
         <Hint>Sets how many earlier messages are scanned for keywords. Blank scans all of them. 0 scans only the current scene.</Hint>
-        <Input type="number" min={0} value={editingEntry.scanDepth ?? ''} onChange={(e) => handleNumber('scanDepth', e.target.value)} placeholder="All history" />
+        <WorldInput type="number" min={0} value={editingEntry.scanDepth ?? ''} onChange={(e) => handleNumber('scanDepth', e.target.value)} placeholder="All history" />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2" {...fieldFrame('secondaryKeys')}>
         <Label>Secondary Keywords</Label>
         <Hint>{secondaryHint}</Hint>
         <KeywordChips keywords={secondaryKeywords} onChange={handleSecondaryChange} placeholders={chipPlaceholders} ownerId={ownerId} placeholder="e.g. red" offerCommaSplit={!editingEntry.useRegex} />
         <div className="flex flex-wrap gap-x-4 gap-y-2">
-          <CheckRow label="Require All" checked={!!editingEntry.secondaryAll} onChange={(v) => handleChange('secondaryAll', v)} />
-          <CheckRow label="Exclude" checked={!!editingEntry.secondaryExclude} onChange={(v) => handleChange('secondaryExclude', v)} />
+          <CheckRow field="secondaryAll" label="Require All" checked={!!editingEntry.secondaryAll} onChange={(v) => handleChange('secondaryAll', v)} />
+          <CheckRow field="secondaryExclude" label="Exclude" checked={!!editingEntry.secondaryExclude} onChange={(v) => handleChange('secondaryExclude', v)} />
         </div>
       </div>
     </>
@@ -183,7 +185,7 @@ const DictionaryManager = ({ entry, placeholders = [], ownerId, tab, onTabChange
 
 
   return (
-    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Entry Fields" surfaceTabs={surfaceTabs}>
+    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Entry Fields" surfaceTabs={surfaceTabs} focus={{ kind: 'entry', id: entry.id, name: entry.name }}>
       {tabs.map((t) => (
         <PanelTabContent key={t.value} value={t.value}>{panels[t.value]}</PanelTabContent>
       ))}

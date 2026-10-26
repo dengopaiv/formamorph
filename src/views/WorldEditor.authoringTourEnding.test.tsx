@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { benchEditorWorld, editorModeSelect, renderWorldEditorBench } from '@/test/worldEditorBench';
 import { AUTHORING_TOUR_OFFER_ID, markTutorialSeen, resetTutorials, TUTORIAL_APPEAR_DELAY_MS } from '@/lib/tutorials';
 import { readTourRecord, reloadTourProgress, writeTourRecord } from '@/lib/authoringTour/progress';
 import { TOUR_STEPS } from '@/lib/authoringTour/steps';
@@ -40,7 +40,7 @@ const getWorldMetadata = vi.mocked(WorldStorageService.getWorldMetadata);
 const NEW_WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
 } as unknown as Partial<World>);
 
@@ -51,10 +51,9 @@ const PLAY_STEP = 'Play Your World';
 
 const note = (title: string) => screen.getByRole('dialog', { name: title });
 const tourBar = () => screen.queryByRole('region', { name: 'Authoring Tour' });
-const saveButton = () => screen.getByRole('button', { name: 'Save' });
+/** The Save face, which reads Saved for a moment after the tour's own save. */
+const saveButton = () => screen.getByRole('button', { name: /^Saved?$/ });
 
-/** Waits out the tutorial layer's appear delay, so a note that was going to show has had its chance. */
-const pastAppearDelay = () => act(() => new Promise((r) => { setTimeout(r, TUTORIAL_APPEAR_DELAY_MS + 200); }));
 
 /** Opens the editor on a world whose tour stopped at `stepId`, the way a returning author finds it. */
 const resumeAt = (stepId: string, mode: 'simple' | 'advanced' = 'simple', props = {}) => {
@@ -67,7 +66,7 @@ const resumeAt = (stepId: string, mode: 'simple' | 'advanced' = 'simple', props 
 /** Starts the tour on a new world and names it, so the World Name step's Next is ready. */
 const startTour = async () => {
   const view = renderWorldEditorBench(NEW_WORLD, 'simple', { newWorld: true });
-  const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' }, { timeout: 2000 });
+  const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' });
   fireEvent.click(within(offer).getByRole('button', { name: 'Start Tour' }));
   const first = await screen.findByRole('dialog', { name: TOUR_STEPS[0].title });
   fireEvent.click(within(first).getByRole('button', { name: 'Use Example' }));
@@ -124,7 +123,7 @@ describe('Authoring Tour Save note', () => {
 });
 
 describe('Authoring Tour mode step', () => {
-  it('points at the mode switch and says Advanced shows more fields', async () => {
+  it('points at the mode select and says Advanced shows more fields', async () => {
     resumeAt('editor-mode');
     const step = await screen.findByRole('dialog', { name: MODE_STEP });
     expect(step).toHaveTextContent('Advanced mode shows more fields');
@@ -142,9 +141,15 @@ describe('Authoring Tour mode step', () => {
     fireEvent.click(within(tourBar()!).getByRole('button', { name: 'End Tour' }));
     touring.unmount();
 
-    renderWorldEditorBench(NEW_WORLD, 'simple');
-    await pastAppearDelay();
-    expect(screen.queryByRole('dialog', { name: 'Simple vs. Advanced' })).not.toBeInTheDocument();
+    // The whole appear delay on a clock that moves only when told, so a note that was going to show has.
+    vi.useFakeTimers();
+    try {
+      renderWorldEditorBench(NEW_WORLD, 'simple');
+      await act(() => vi.advanceTimersByTimeAsync(TUTORIAL_APPEAR_DELAY_MS));
+      expect(screen.queryByRole('dialog', { name: 'Simple vs. Advanced' })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaves the Simple vs. Advanced note for an author who ended the tour before it', async () => {
@@ -154,7 +159,7 @@ describe('Authoring Tour mode step', () => {
     touring.unmount();
 
     renderWorldEditorBench(NEW_WORLD, 'simple');
-    expect(await screen.findByRole('dialog', { name: 'Simple vs. Advanced' }, { timeout: 2000 })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Simple vs. Advanced' })).toBeInTheDocument();
   });
 });
 
@@ -173,14 +178,14 @@ describe('Authoring Tour final step', () => {
   it('Finish saves, ends the tour and gives back the author’s own mode', async () => {
     resumeAt('play', 'advanced');
     const step = await screen.findByRole('dialog', { name: PLAY_STEP });
-    expect(screen.getByRole('radio', { name: 'Simple' })).toHaveAttribute('data-state', 'on');
+    expect(editorModeSelect()).toHaveTextContent('Simple');
     fireEvent.click(within(step).getByRole('button', { name: 'Finish' }));
 
     await waitFor(() => expect(tourBar()).not.toBeInTheDocument());
     expect(storeWorld).toHaveBeenCalledTimes(1);
     expect(readTourRecord(NEW_WORLD.id)).toBeNull();
-    expect(screen.getByRole('radio', { name: 'Advanced' })).toHaveAttribute('data-state', 'on');
-    expect(screen.getByRole('radio', { name: 'Advanced' })).toBeEnabled();
+    expect(editorModeSelect()).toHaveTextContent('Advanced');
+    expect(editorModeSelect()).toBeEnabled();
     expect(readEditorMode()).toBe('advanced');
   });
 

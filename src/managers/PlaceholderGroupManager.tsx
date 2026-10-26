@@ -1,14 +1,15 @@
 import { useEditingDraft } from '@/lib/useEditingDraft';
-import { useGameData } from '@/contexts/GameDataContext';
-import { Input } from '@/components/ui/input';
+import { useGameDataActions } from '@/contexts/GameDataContext';
 import { Label } from '@/components/ui/label';
 import type { PlaceholderGroup } from '@/types';
 import { ListDetailFirstRow } from '@/components/ui/list-detail';
+import { WorldInput } from '@/components/editor/WorldField';
+import { fieldFrame } from '@/lib/historyField';
 
 /** Right-panel editor for a placeholder folder: just a name. Folders are editor-only and take no chips, so
  *  the name is a plain input rather than a chip field. The Blueprints group keeps its name. */
 const PlaceholderGroupManager = ({ group }: { group: PlaceholderGroup }) => {
-  const { updatePlaceholderGroup } = useGameData();
+  const { updatePlaceholderGroup } = useGameDataActions();
   const { draft: editingGroup, setField } = useEditingDraft(group, updatePlaceholderGroup);
 
   if (!editingGroup) return null;
@@ -17,9 +18,9 @@ const PlaceholderGroupManager = ({ group }: { group: PlaceholderGroup }) => {
   return (
     <div className="space-y-4">
       <ListDetailFirstRow>
-        <div className="space-y-2">
+        <div className="space-y-2" {...fieldFrame('name')}>
           <Label htmlFor={`group-name-${editingGroup.id}`}>Group Name</Label>
-          <Input
+          <WorldInput
             id={`group-name-${editingGroup.id}`}
             value={editingGroup.name || ''}
             onChange={(e) => setField('name', e.target.value)}

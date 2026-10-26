@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { buildAiContext, type AiContextData } from '@/lib/testBench/aiContext';
 import { buildLens, EMPTY_LENS, lensLocationOptions, lensPcOptions, type LensState } from '@/lib/testBench/lens';
@@ -13,6 +13,7 @@ import type {
   IssuesProps, LensBarProps, OpeningProps, PlacementControl, TestBenchProps, TriggersProps,
 } from '@/lib/testBench/benchProps';
 import { TestBench, TestBenchButton } from './TestBench';
+import { editorPromptRun } from '@/lib/editorScriptPrompts';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 import { phValues } from '@/test/placeholderValues';
@@ -63,15 +64,17 @@ const benchProps = (groups: FindingGroup[], over: BenchOver = {}): TestBenchProp
     newCount: 0,
     advancedOnlyCount: 0,
     advanced: true,
-    codedStatCount: 0,
+    scriptCount: 0,
+    codePrompts: null,
     codeCheckStatus: 'idle',
     fixingRuleId: null,
     publishBytes: null,
+    checking: false,
     onOpenItem: vi.fn(),
     onDismissRule: vi.fn(),
     onRestoreRule: vi.fn(),
     onMarkAllSeen: vi.fn(),
-    onCheckStatCode: vi.fn(),
+    onCheckScripts: vi.fn(),
     sources: { sourceCount: 0, status: 'idle', missing: [], onCheckSources: vi.fn(), onRepair: vi.fn() },
     ...over.issues,
   },
@@ -126,6 +129,12 @@ describe('TestBench panel', () => {
     await userEvent.hover(screen.getByRole('button', { name: 'Old Tobb' }));
 
     expect(await screen.findByText('Old Tobb', { selector: 'div' })).toBeVisible();
+  });
+
+  it('says it is checking, never clean, before the first pass lands', () => {
+    renderBench(world([{ id: 'e1', name: 'Maren', aliases: ['Wren'] }]), { issues: { checking: true } });
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+    expect(screen.queryByText('No Problems Found')).toBeNull();
   });
 
   it('reports a clean world as verified, with the number of rules that ran', () => {
@@ -354,40 +363,75 @@ describe('TestBench lens bar', () => {
   });
 });
 
-describe('TestBench stat-code check', () => {
-  const CHECK = { name: 'Check Stat Code' };
+describe('TestBench script check', () => {
+  const CHECK = { name: 'Check Scripts' };
+
+  it('shows a running check’s prompt as the inline prompt line, and answers it with the pick', async () => {
+    const prompts = editorPromptRun();
+    const answer = prompts.host.prompt({ kind: 'ask', question: 'Which door?', options: ['Left', 'Right'], multiple: false });
+    renderBench(world([]), { issues: { scriptCount: 1, codeCheckStatus: 'running', codePrompts: prompts.store } });
+    expect(screen.getByTestId('script-prompt')).toHaveTextContent('Which door?');
+    await userEvent.click(screen.getByRole('button', { name: 'Right' }));
+    await expect(answer).resolves.toBe(1);
+  });
+
+  it('answers input, a long ask and a multiple ask of a running check through the same line', async () => {
+    const prompts = editorPromptRun();
+    const name = prompts.host.prompt({ kind: 'input', question: 'Your name?' });
+    renderBench(world([]), { issues: { scriptCount: 1, codeCheckStatus: 'running', codePrompts: prompts.store } });
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: 'Your name?' }), 'Ada{Enter}');
+    await expect(name).resolves.toBe('Ada');
+
+    let road!: Promise<number | number[]>;
+    act(() => { road = prompts.host.prompt({ kind: 'ask', question: 'Which road?', options: ['A', 'B', 'C', 'D', 'E'], multiple: false }); });
+    await user.click(screen.getByRole('combobox', { name: 'Which road?' }));
+    await user.click(await screen.findByRole('option', { name: 'B' }));
+    await user.click(screen.getByRole('button', { name: 'OK' }));
+    await expect(road).resolves.toBe(1);
+
+    let packed!: Promise<number | number[]>;
+    act(() => { packed = prompts.host.prompt({ kind: 'ask', question: 'Pack what?', options: ['Rope', 'Lamp'], multiple: true }); });
+    await user.click(screen.getByRole('button', { name: 'Rope' }));
+    await user.click(screen.getByRole('button', { name: 'Lamp' }));
+    await user.click(screen.getByRole('button', { name: 'OK' }));
+    await expect(packed).resolves.toEqual([0, 1]);
+  });
 
   it('offers nothing to run in a world whose stats carry no code', () => {
-    renderBench(world([]), { issues: { codedStatCount: 0 } });
-    expect(screen.queryByRole('button', { name: /Check Stat Code|Check Again/ })).toBeNull();
+    renderBench(world([]), { issues: { scriptCount: 0 } });
+    expect(screen.queryByRole('button', { name: /Check Scripts|Check Again/ })).toBeNull();
   });
 
   it('runs the check on demand and never on its own', async () => {
-    const { issues } = renderBench(world([]), { issues: { codedStatCount: 2 } });
-    expect(screen.getByText('2 stats have code, run separately')).toBeInTheDocument();
+    const { issues } = renderBench(world([]), { issues: { scriptCount: 2 } });
+    expect(screen.getByText('2 scripts run separately')).toBeInTheDocument();
     // Rendering alone must not have run anything — a VM per stat is exactly what the badge can't afford.
-    expect(issues.onCheckStatCode).not.toHaveBeenCalled();
+    expect(issues.onCheckScripts).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', CHECK));
-    expect(issues.onCheckStatCode).toHaveBeenCalledTimes(1);
+    expect(issues.onCheckScripts).toHaveBeenCalledTimes(1);
   });
 
   it('closes the button while a run is in flight', () => {
-    renderBench(world([]), { issues: { codedStatCount: 2, codeCheckStatus: 'running' } });
+    renderBench(world([]), { issues: { scriptCount: 2, codeCheckStatus: 'running' } });
     expect(screen.getByRole('button', { name: /Running/ })).toBeDisabled();
   });
 
   it('says what it checked once a run has finished, and offers another', () => {
-    renderBench(world([]), { issues: { codedStatCount: 1, codeCheckStatus: 'done' } });
-    expect(screen.getByText('Checked 1 coded stat')).toBeInTheDocument();
+    renderBench(world([]), { issues: { scriptCount: 1 } });
+    expect(screen.getByText('1 script runs separately')).toBeInTheDocument();
+    cleanup();
+    renderBench(world([]), { issues: { scriptCount: 1, codeCheckStatus: 'done' } });
+    expect(screen.getByText('Checked 1 script')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check Again' })).toBeEnabled();
   });
 
   it('offers nothing to run in Simple mode, which would fold every verdict away', () => {
-    // Stat Code is an Advanced-only field, so its failures are among the rows Simple hides — a button whose
+    // Scripts are an Advanced-only field, so its failures are among the rows Simple hides — a button whose
     // whole result disappears into the fold is a button that reads as broken.
-    renderBench(world([]), { issues: { codedStatCount: 2, advanced: false } });
-    expect(screen.queryByRole('button', { name: /Check Stat Code|Check Again/ })).toBeNull();
-    expect(screen.queryByText(/stats have code/)).toBeNull();
+    renderBench(world([]), { issues: { scriptCount: 2, advanced: false } });
+    expect(screen.queryByRole('button', { name: /Check Scripts|Check Again/ })).toBeNull();
+    expect(screen.queryByText(/scripts run separately/)).toBeNull();
   });
 });
 
@@ -612,12 +656,24 @@ describe('TestBench Opening instrument', () => {
 
   it('shows the fresh game: cost, start, stats with their band, and the rolls', () => {
     renderOpening();
-    expect(screen.getByText(/Turn one as the default character ≈ ~\d/)).toBeInTheDocument();
+    expect(screen.getByText(/Turn one with no persona ≈ ~\d/)).toBeInTheDocument();
     expect(screen.getByText(/Starts at Harbor Steps/)).toBeInTheDocument();
     expect(screen.getByText('Nerve')).toBeInTheDocument();
     expect(screen.getByText('Shaky')).toBeInTheDocument();
     expect(screen.getByText('Coin Bird')).toBeInTheDocument();
     expect(screen.getByText('gull')).toBeInTheDocument();
+  });
+
+  it('marks the lens pick among the Active Traits', () => {
+    const picked: RuleWorld = {
+      ...openingWorld,
+      traitGroups: [{ id: 'g-origin', name: 'Origin', parentId: null, maxPicks: 1 }],
+      traits: [{ id: 't-sedge', name: 'Sedge-Born', groupId: 'g-origin', statChanges: [], order: 0 }],
+    };
+    const data = buildOpening(picked, buildLens(picked, { pcTraitId: 't-sedge', locationId: null }), {});
+    renderBench(picked, { tab: 'opening', opening: { data } });
+    expect(screen.getByText('Lens Pick')).toBeInTheDocument();
+    expect(screen.getByText('defaults plus the lens pick')).toBeInTheDocument();
   });
 
   it('re-bands live as the slider scrubs, without touching the world', async () => {
@@ -629,6 +685,34 @@ describe('TestBench Opening instrument', () => {
     expect(screen.getByText('Iron')).toBeInTheDocument();
     expect(screen.getByText('26/100')).toBeInTheDocument();
     expect(screen.queryByText('Shaky')).toBeNull();
+  });
+
+  it('lists an entity’s own stats under its name, banded and scrubbable like the player’s', async () => {
+    const withMaren: RuleWorld = {
+      ...openingWorld,
+      entities: [{
+        id: 'e1', name: 'Maren', locations: ['harbor'],
+        stats: [{
+          id: 's-trust', name: 'Trust', type: 'number', description: '', min: 5, max: 100, value: 20, regen: 2,
+          descriptors: [{ id: 'b1', threshold: 25, description: 'Wary' }, { id: 'b2', threshold: 100, description: 'Warm' }],
+        }, {
+          id: 's-doubt', name: 'Doubt', type: 'number', description: '', min: 0, max: 10, value: 0, regen: 0, descriptors: [], enabled: false,
+        }],
+      }],
+    };
+    const data = buildOpening(withMaren, buildLens(withMaren, EMPTY_LENS), {});
+    renderBench(withMaren, { tab: 'opening', opening: { data } });
+    expect(screen.getByText('Maren')).toBeInTheDocument();
+    expect(screen.getByText('Trust')).toBeInTheDocument();
+    expect(screen.getByText('Wary')).toBeInTheDocument();
+    expect(screen.getByText('Min 5 · Regen +2')).toBeInTheDocument();
+    expect(screen.getByText('Off at game start: Doubt.')).toBeInTheDocument();
+    // The player's row says the zeros too, so an absent field is never mistaken for a hidden one.
+    expect(screen.getByText('Min 0 · Regen 0')).toBeInTheDocument();
+    screen.getByRole('slider', { name: 'Scrub Trust' }).focus();
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}');
+    expect(screen.getByText('Warm')).toBeInTheDocument();
+    expect(screen.getByText('Shaky')).toBeInTheDocument();
   });
 
   it('opens the assembled first prompt on request', async () => {
@@ -697,6 +781,17 @@ describe('TestBench Opening instrument', () => {
     await userEvent.click(screen.getByRole('combobox', { name: 'Persona' }));
     await userEvent.click(screen.getByRole('option', { name: 'Wren' }));
     expect(opening.onPersonaChange).toHaveBeenCalledWith('e-wren');
+  });
+
+  it('names the picked persona in the preview line', () => {
+    renderBench(personaWorld, { tab: 'opening', opening: { data: personaData('e-wren') } });
+    expect(screen.getByText(/^Turn one as Wren/)).toBeInTheDocument();
+    expect(screen.getByText('Sets the persona')).toBeInTheDocument();
+  });
+
+  it('says no persona in the preview line under None', () => {
+    renderBench(personaWorld, { tab: 'opening', opening: { data: personaData() } });
+    expect(screen.getByText(/^Turn one with no persona/)).toBeInTheDocument();
   });
 
   it('hands None back as null', async () => {

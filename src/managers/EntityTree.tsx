@@ -1,10 +1,11 @@
 import { useGameData } from '@/contexts/GameDataContext';
-import { Folder } from 'lucide-react';
+import { GroupIcon } from '@/lib/elementIcons';
 import {
   buildEntityTree, flattenEntityTree, removeChildrenOf, getEntityDropProjection, applyEntityDrop,
   duplicateEntityNode, type FlatEntityNode,
 } from '@/lib/entityGroupTree';
 import { SortableTree, type SortableTreeAdapter } from './SortableTree';
+import { chipInput } from './chipInput';
 import { TREE_INDENT } from '@/components/EditorRow';
 import { useEditorMode } from '@/lib/editorMode';
 import { EmptyListHint } from '@/components/EmptyListHint';
@@ -20,6 +21,10 @@ const EntityTree = ({ selectedId, onSelect }: { selectedId: string | null; onSel
   const { ask: askRemoveEntity, dialog: removeEntityDialog } = useRemoveEntity();
 
   const adapter: SortableTreeAdapter<FlatEntityNode> = {
+    visibleDeps: [entityGroups, entities],
+    rowDeps: [],
+    rowInputs: (node) => [chipInput(placeholders, node.kind === 'group' ? node.group?.name : node.leaf?.name)],
+    placeholders,
     getVisible: (collapsed) => removeChildrenOf(flattenEntityTree(buildEntityTree(entityGroups, entities)), collapsed),
     project: (visible, activeId, overId, offsetLeft) =>
       getEntityDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT),
@@ -34,7 +39,7 @@ const EntityTree = ({ selectedId, onSelect }: { selectedId: string | null; onSel
         // Only groups collapse; entities get no leading slot (matching the flat list layout).
         lead: isGroup ? 'chevron' : 'none',
         collapseLabels: ['Expand group', 'Collapse group'],
-        icon: isGroup ? <Folder className="h-4 w-4 shrink-0" /> : <ContentLinkIcon link={node.leaf?.link} />,
+        icon: isGroup ? <GroupIcon className="h-4 w-4 shrink-0" /> : <ContentLinkIcon link={node.leaf?.link} />,
         label: <PlaceholderText text={isGroup ? node.group?.name ?? '' : node.leaf?.name ?? ''} placeholders={placeholders} />,
         name: (isGroup ? node.group?.name : node.leaf?.name) || 'Untitled',
         labelClass: isGroup ? 'font-medium' : undefined,

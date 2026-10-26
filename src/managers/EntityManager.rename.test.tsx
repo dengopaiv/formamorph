@@ -7,6 +7,7 @@ import type { Entity, Placeholder, Stat } from '@/types';
 import type { PlaceholderOwnerRef } from '@/lib/placeholderHomes';
 import { CodeRenameProvider } from '@/components/editor/CodeRenameOffer';
 import EntityManager from './EntityManager';
+import { boxScripts, codeAt } from '@/test/scriptFixtures';
 
 /**
  * The entity panel's own wiring to the rename offer. An entity that owns placeholders opens a path, so its
@@ -25,6 +26,7 @@ const store: { entity: Entity; stats: Stat[]; rerender: () => void } = {
 
 const world = () => ({
   entities: [store.entity],
+  entityGroups: [],
   locations: [],
   stats: store.stats,
   traits: [],
@@ -88,7 +90,7 @@ const Harness = () => {
   store.rerender = () => setTick((n) => n + 1);
   return (
     <CodeRenameProvider>
-      <EntityManager entity={store.entity} tab="profile" onTabChange={() => {}} traitId={null} onTraitIdChange={() => {}} placeholderId={null} onPlaceholderIdChange={() => {}} onOpenWorldPlaceholder={() => {}} />
+      <EntityManager entity={store.entity} tab="profile" onTabChange={() => {}} traitId={null} onTraitIdChange={() => {}} statId={null} onStatIdChange={() => {}} placeholderId={null} onPlaceholderIdChange={() => {}} onOpenWorldPlaceholder={() => {}} />
       <button type="button">elsewhere</button>
     </CodeRenameProvider>
   );
@@ -98,7 +100,7 @@ beforeEach(() => {
   store.entity = { id: 'e1', name: 'Molly' } as unknown as Entity;
   store.stats = [
     { id: 's1', name: 'Health', type: 'number', description: '', min: 0, max: 100, value: 0, regen: 0,
-      code: `return entities.Molly.placeholders.Hair.text.length;` } as unknown as Stat,
+      scripts: boxScripts({ after: `return entities.Molly.placeholders.Hair.text.length;` }) } as unknown as Stat,
   ];
 });
 
@@ -116,6 +118,6 @@ describe('the entity panel’s rename offer', () => {
     // author renamed is the entity, and naming the wrong one sends them looking in the wrong tab.
     expect(screen.getByText(/names the entity “Molly” 1 time\./)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Update Code' }));
-    expect(store.stats[0].code).toBe('return entities.Maud.placeholders.Hair.text.length;');
+    expect(codeAt(store.stats[0])).toBe('return entities.Maud.placeholders.Hair.text.length;');
   });
 });

@@ -6,7 +6,7 @@ import { CONTINUE_CHOICE } from '@/lib/choices';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { defaultSystemPrompt } from './GamePrompts';
 import openChat from '@/defaultworlds/open-chat.json';
-import { readTurn, renderLeftPanel, renderMiddlePanel, renderRightPanel, statFixture, type PanelHarness, type TurnFixture } from '@/test/gamePanels';
+import { readTurn, renderLeftPanel, renderMiddlePanel, renderRightPanel, statFixture, worldFixture, type Gameplay, type PanelHarness, type TurnFixture } from '@/test/gamePanels';
 import { resetTtsPlayback, setTtsPlayback } from '@/test/stubs/ttsPlayback';
 import { lastVrmViewerProps, resetVrmViewerStub } from '@/test/stubs/vrmViewer';
 
@@ -162,14 +162,15 @@ describe('MiddlePanel — the audio row', () => {
 });
 
 describe('LeftPanel', () => {
-  it('draws the player model for a world that has one', () => {
+  it('draws the player model for a world that has one', async () => {
     renderLeftPanel({}, {
+      world: { worldOverview: { ...worldFixture().worldOverview, legacyVrmFallback: { kind: 'default' } } },
       seed: (gameplay) => gameplay.setCharacterData({
-        bodyMorphs: { Belly: 0.25 }, currentHairStyle: 'long', hairLength: 0.5,
+        bodyMorphs: { Belly: 0.25 }, currentHairStyle: 'long', hairLength: 0.5, chosenVrm: null,
       }),
     });
 
-    expect(screen.getByTestId('vrm-viewer')).toBeInTheDocument();
+    expect(await screen.findByTestId('vrm-viewer')).toBeInTheDocument();
     expect(lastVrmViewerProps()?.bodyMorphValues).toMatchObject({ Belly: 0.25 });
   });
 
@@ -195,24 +196,6 @@ describe('LeftPanel', () => {
     expect(view.gameplay().playerNotes).toBe('the dock is rotten');
   });
 
-  // The Avatar/Entities swap picks which view shows; it never switched a tab panel, so it's a radio group.
-  // Re-clicking the active one must be a no-op — a single toggle group otherwise clears its own value.
-  it('swaps between the avatar and the entity list without ever clearing the choice', () => {
-    renderLeftPanel({}, { seed: (gameplay) => gameplay.setCharacterData({ bodyMorphs: {}, currentHairStyle: 'long', hairLength: 0.5 }) });
-
-    const swap = screen.getByRole('radiogroup');
-    const player = within(swap).getByRole('radio', { name: 'Avatar' });
-    const entities = within(swap).getByRole('radio', { name: 'Entities' });
-    expect(player).toHaveAttribute('data-state', 'on');
-
-    fireEvent.click(entities);
-    expect(entities).toHaveAttribute('data-state', 'on');
-    expect(player).toHaveAttribute('data-state', 'off');
-
-    fireEvent.click(entities);
-    expect(entities).toHaveAttribute('data-state', 'on');
-  });
-
   // The bug this guards: the list resolved a scene name to an entity by bare substring, either way round,
   // so "Wolf" and "Direwolf" were interchangeable — the row label came from whichever was authored first.
   it('labels two present entities whose names share a word with their own names', () => {
@@ -228,6 +211,22 @@ describe('LeftPanel', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: /Entities/i }));
     expect(screen.getByText('Wolf')).toBeInTheDocument();
     expect(screen.getByText('Direwolf')).toBeInTheDocument();
+  });
+
+  it('marks the entities following the player, and no one else', () => {
+    const cast = [{ id: 'e1', name: 'Bram' }, { id: 'e2', name: 'Hesk' }];
+    renderLeftPanel({ entities: cast as never }, {
+      world: { entities: cast } as never,
+      seed: (gameplay) => {
+        gameplay.setVisibleEntities([{ name: 'Bram', revealed: true }, { name: 'Hesk', revealed: true }]);
+        gameplay.setEntityFollowers(['e1']);
+      },
+    });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Entities/i }));
+    const mark = screen.getByRole('img', { name: 'Following you' });
+    expect(screen.getByText('Bram').closest('div')!.contains(mark)).toBe(true);
+    expect(screen.getAllByRole('img', { name: 'Following you' })).toHaveLength(1);
   });
 
   it('labels a lone longer-named entity as itself, not as the shorter name it contains', () => {
@@ -251,10 +250,23 @@ describe('LeftPanel', () => {
     });
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /Entities/i }));
-    expect(screen.getByText('Kira (You)')).toBeInTheDocument();
+    const name = screen.getByText('Kira');
+    expect(name.parentElement).toHaveTextContent(/^KiraYou$/);
     expect(screen.queryByText('No entity visible.')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText('Kira (You)'));
+    fireEvent.click(name);
     expect(onEntityClick).toHaveBeenCalledWith('Kira');
+  });
+
+  it('lists no persona and no You mark under None in a world without a Custom Persona', () => {
+    const world = [{ id: 'e1', name: 'Wolf' }];
+    renderLeftPanel({ entities: world as never }, {
+      world: { entities: world } as never,
+      seed: (gameplay) => gameplay.setPersonaRef({ source: 'none' }),
+    });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Entities/i }));
+    expect(screen.getByText('No entity visible.')).toBeInTheDocument();
+    expect(screen.queryByText('You')).toBeNull();
   });
 });
 
@@ -314,6 +326,20 @@ describe('MiddlePanel — editing a turn\'s narration', () => {
     expect(readTurn(view.gameplay().fullMessageHistory, 2).entities).toEqual(['Sedge']);
   });
 
+  it('leaves a character out of the turn when the edit only quotes them', async () => {
+    const view = setup();
+    await rewriteAs('Sedge waits and says, "Marrow will be late."');
+
+    expect(readTurn(view.gameplay().fullMessageHistory, 2).entities).toEqual(['Sedge']);
+  });
+
+  it('stores a new character the edit names, so discovery can find them', async () => {
+    const view = setup();
+    await rewriteAs('Captain Halric Dune ties off the line.');
+
+    expect(readTurn(view.gameplay().fullMessageHistory, 2).entities).toContain('Captain Halric Dune');
+  });
+
   it("drops the turn's digest and diaries so they rebuild from the edit", async () => {
     const view = setup();
     await rewriteAs('Marrow turns back before the bridge.');
@@ -348,6 +374,49 @@ describe('MiddlePanel — editing a turn\'s narration', () => {
     expect(readTurn(history, 2).narration).toBe('Marrow follows the path.');
     // Only the latest page feeds the live reveal text, so editing history must not touch it.
     expect(getGameplayText()).toBe('Marrow follows the path.');
+  });
+
+  describe('the scene list', () => {
+    const SEDGE_ROW = { name: 'Sedge', revealed: true };
+    const MARROW_ROW = { name: 'Marrow', revealed: true };
+    const DUNE = { entity: { id: 'd1', name: 'Captain Halric Dune' }, sourceTurnId: 't2' };
+    const SCENE_TURNS = [
+      { ...EDITED_TURNS[0], scene: [SEDGE_ROW] },
+      { ...EDITED_TURNS[1], scene: [MARROW_ROW, { name: DUNE.entity.name, revealed: true }] },
+    ];
+    const sceneSetup = (page?: number) => renderMiddlePanel({}, {
+      turns: SCENE_TURNS,
+      page,
+      world: WORLD as never,
+      seed: (gameplay) => {
+        gameplay.setVisibleEntities(SCENE_TURNS[1].scene);
+        gameplay.setDiscoveredEntities([DUNE]);
+      },
+    });
+
+    it("rebuilds the latest page's snapshot and the live list", async () => {
+      const view = sceneSetup();
+      await rewriteAs('Sedge waits alone; the path stays empty.');
+
+      expect(view.gameplay().gameStates[1].visibleEntities).toEqual([SEDGE_ROW]);
+      expect(view.gameplay().visibleEntities).toEqual([SEDGE_ROW]);
+    });
+
+    it("rebuilds an older page's snapshot and leaves the live list", async () => {
+      const view = sceneSetup(1);
+      await rewriteAs('Sedge and Marrow wait at the dock.');
+
+      expect(view.gameplay().gameStates[0].visibleEntities).toEqual([SEDGE_ROW, MARROW_ROW]);
+      expect(view.gameplay().visibleEntities).toEqual(SCENE_TURNS[1].scene);
+    });
+
+    it('keeps a discovered entity the edit removed, off the list', async () => {
+      const view = sceneSetup();
+      await rewriteAs('Marrow follows the path.');
+
+      expect(view.gameplay().visibleEntities).toEqual([MARROW_ROW]);
+      expect(view.gameplay().discoveredEntities).toEqual([DUNE]);
+    });
   });
 });
 
@@ -392,6 +461,51 @@ describe('RightPanel', () => {
     renderRightPanel({}, { turns: TURNS, stats: [] });
     expect(screen.queryByRole('tab', { name: 'Stats' })).toBeNull();
     expect(screen.getByRole('tab', { name: 'Traits' })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('RightPanel — the You mark', () => {
+  const mira = { id: 'mira', name: 'Mira', persona: true };
+  const asMira = {
+    world: { entities: [mira] } as never, turns: TURNS, stats: STATS,
+    seed: (gameplay: Gameplay) => {
+      gameplay.setEntityStats({ mira: [statFixture('Trust', 60)] });
+      gameplay.setPersonaRef({ source: 'world', entityId: 'mira' });
+    },
+  };
+
+  it('follows the persona’s name on the persona row', () => {
+    renderRightPanel({}, asMira);
+    const row = screen.getByTestId('persona-row');
+    expect(within(row).getByText('Mira').parentElement).toHaveTextContent(/^MiraYou$/);
+  });
+
+  it('shows no mark on the persona row under None', () => {
+    renderRightPanel({}, { turns: TURNS, stats: STATS, seed: (gameplay) => gameplay.setPersonaRef({ source: 'none' }) });
+    const row = screen.getByTestId('persona-row');
+    expect(within(row).getByText('None')).toBeInTheDocument();
+    expect(within(row).queryByText('You')).toBeNull();
+  });
+
+  it('follows the persona’s name on its stat section heading', () => {
+    renderRightPanel({}, asMira);
+    const section = screen.getByRole('region', { name: 'Mira stats' });
+    expect(within(section).getByRole('heading')).toHaveTextContent(/^MiraYou$/);
+    expect(within(screen.getByRole('region', { name: 'Global stats' })).queryByText('You')).toBeNull();
+  });
+
+  it('marks the Custom Persona entity’s stat heading under None', () => {
+    const custom = { id: 'w-you', name: 'Wanderer', customPersona: true };
+    renderRightPanel({}, {
+      world: { entities: [custom] } as never, turns: TURNS, stats: STATS,
+      seed: (gameplay) => {
+        gameplay.setEntityStats({ 'w-you': [statFixture('Trust', 70)] });
+        gameplay.setPersonaRef({ source: 'none' });
+      },
+    });
+    const section = screen.getByRole('region', { name: 'Wanderer stats' });
+    expect(within(section).getByRole('heading')).toHaveTextContent(/^WandererYou$/);
+    expect(within(screen.getByTestId('persona-row')).getByText('Wanderer').parentElement).toHaveTextContent(/^WandererYou$/);
   });
 });
 
@@ -531,7 +645,7 @@ describe('RightPanel — typing a stat value', () => {
     return view;
   };
   const field = () => screen.getByRole('spinbutton', { name: 'Vigor' });
-  const value = (view: PanelHarness<unknown>) => view.gameplay().playerStats[0].value;
+  const value = (view: PanelHarness<unknown>) => view.gameplay().globalStats[0].value;
 
   it('leaves the readout as plain text until edit mode is on', () => {
     renderRightPanel({}, { turns: TURNS, stats: [banded(20)] });
@@ -583,7 +697,7 @@ describe('RightPanel — typing a stat value', () => {
     const view = renderEditing();
     expect(screen.getByRole('slider')).toBeInTheDocument();
 
-    act(() => { view.gameplay().setPlayerStats([banded(80)]); });
+    act(() => { view.gameplay().setGlobalStats([banded(80)]); });
     expect(field()).toHaveValue(80);
   });
 
@@ -616,7 +730,7 @@ describe('RightPanel — the traits tab against an edited world', () => {
       turns: TURNS,
       world: { traits: [{ id: 't-brave', name: 'Brave', statChanges: [], playerToggle: authoredToggle }] },
       seed: (gameplay) => {
-        gameplay.setPlayerTraits([{ id: 't-brave', name: 'Brave', statChanges: [] }]);
+        gameplay.setGlobalTraits([{ id: 't-brave', name: 'Brave', statChanges: [] }]);
         gameplay.setActiveTab('traits');
       },
     });
@@ -630,7 +744,7 @@ describe('RightPanel — the traits tab against an edited world', () => {
     expect(box).toBeEnabled();
 
     fireEvent.click(box);
-    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-brave', false, 'world');
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-brave', false, null);
   });
 
   it('offers no switch when the author has not marked it switchable', () => {
@@ -638,7 +752,7 @@ describe('RightPanel — the traits tab against an edited world', () => {
     renderTraits(false);
     expect(screen.queryByRole('checkbox')).toBeNull();
     // Scoped to the list itself, since the active-traits summary line names it too.
-    expect(within(screen.getByRole('group', { name: 'Traits' })).getByText(/Brave/)).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Global' })).getByText(/Brave/)).toBeInTheDocument();
   });
 });
 
@@ -663,7 +777,7 @@ describe('RightPanel — acquirable traits in the traits tab', () => {
       turns,
       world: { traits: AUTHORED },
       seed: (gameplay) => {
-        gameplay.setPlayerTraits([{ id: 't-last', name: 'Brave', statChanges: [], playerToggle: true }]);
+        gameplay.setGlobalTraits([{ id: 't-last', name: 'Brave', statChanges: [], playerToggle: true }]);
         gameplay.setActiveTab('traits');
       },
     });
@@ -685,7 +799,7 @@ describe('RightPanel — acquirable traits in the traits tab', () => {
     const view = renderPanel();
     openDisabled();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Switch on Feral' }));
-    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-first', true, 'world');
+    expect(view.props.onToggleTrait).toHaveBeenCalledWith('t-first', true, null);
   });
 
   it('leaves a trait the author never marked switchable out of the panel entirely', () => {
@@ -888,12 +1002,12 @@ describe('placeholder names reach the panels resolved', () => {
         traits: [{ id: 't-native', name: `${CHIP} Native`, statChanges: [] }],
       },
       seed: (gameplay) => {
-        gameplay.setPlayerTraits([{ id: 't-native', name: `${CHIP} Native`, statChanges: [] }]);
+        gameplay.setGlobalTraits([{ id: 't-native', name: `${CHIP} Native`, statChanges: [] }]);
         gameplay.setActiveTab('traits'); // traits live behind their own tab, as in the app
       },
     });
 
-    expect(within(screen.getByRole('group', { name: 'Traits' })).getByText(/Sedge Native/)).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Global' })).getByText(/Sedge Native/)).toBeInTheDocument();
     expect(container.textContent).not.toContain('{{ph:');
   });
 
@@ -911,7 +1025,7 @@ describe('placeholder names reach the panels resolved', () => {
       world: { placeholders: [WILD], traits: [PINNER] },
       seed: (gameplay) => {
         gameplay.setPlaceholderRolls({ world: { 'ph-town': 'Sedge' }, unique: {} });
-        gameplay.setPlayerTraits([PINNER]);
+        gameplay.setGlobalTraits([PINNER]);
       },
     });
 
@@ -941,7 +1055,7 @@ describe('placeholder names reach the panels resolved', () => {
       seed: (gameplay) => {
         // Freeze the roll, as a real session would have: the toggle-off step below reads it.
         gameplay.setPlaceholderRolls({ world: { 'ph-town': 'Sedge' }, unique: {} });
-        gameplay.setPlayerTraits([NATIVE, SWORN]);
+        gameplay.setGlobalTraits([NATIVE, SWORN]);
       },
     });
 
@@ -949,7 +1063,7 @@ describe('placeholder names reach the panels resolved', () => {
     expect(screen.getByText('Marrow Standing')).toBeInTheDocument();
     // …but on the Traits tab each card still names its own pin, name and description alike.
     act(() => { view.gameplay().setActiveTab('traits'); });
-    const list = within(screen.getByRole('group', { name: 'Traits' }));
+    const list = within(screen.getByRole('group', { name: 'Global' }));
     expect(list.getByText(/Native of Sedge/)).toBeInTheDocument();
     expect(list.getByText(/Home is Sedge\./)).toBeInTheDocument();
     expect(list.getByText(/Sworn to Marrow/)).toBeInTheDocument();
@@ -982,7 +1096,7 @@ describe('placeholder names reach the panels resolved', () => {
         gameplay.setPlaceholderRolls({ world: { 'ph-town': 'Sedge' }, unique: {} });
         // Arrived before the trait was on — this is the stale copy the panel used to render.
         gameplay.setCurrentLocation({ ...HERE, name: 'Sedge Square' });
-        gameplay.setPlayerTraits([SWORN]);
+        gameplay.setGlobalTraits([SWORN]);
         gameplay.setActiveTab('location');
       },
     });
@@ -1035,11 +1149,11 @@ describe('pins from the location and the stat bands reach the panels', () => {
 
     expect(screen.getByText('Marrow Standing')).toBeInTheDocument();
 
-    act(() => { view.gameplay().setPlayerStats([STANDING, vigor(80)]); });
+    act(() => { view.gameplay().setGlobalStats([STANDING, vigor(80)]); });
     expect(screen.getByText('Sedge Standing')).toBeInTheDocument();
     expect(view.gameplay().placeholderRolls.world?.['ph-town']).toBe('Sedge');
 
-    act(() => { view.gameplay().setPlayerStats([STANDING, vigor(10)]); });
+    act(() => { view.gameplay().setGlobalStats([STANDING, vigor(10)]); });
     expect(screen.getByText('Marrow Standing')).toBeInTheDocument();
   });
 });

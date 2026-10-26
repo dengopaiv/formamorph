@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, within } from '@testing-library/react';
-import { benchEditorWorld, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { benchEditorWorld, renderWorldEditorBench, pickEditorMode } from '@/test/worldEditorBench';
 import type { World } from '@/types';
 
 /**
  * What the World Editor's trait panel puts on screen, driven through the real editor.
  *
  * The panel splits its field groups across its own tabs, so a group that loses a field, gains a duplicate,
- * lands out of order, or lands on the wrong tab shows up here as a changed label list. Pins is Advanced only,
- * so Simple mode shows the other three.
+ * lands out of order, or lands on the wrong tab shows up here as a changed label list. Pins and Scripts are
+ * Advanced only, so Simple mode shows the other three.
  */
 
 vi.mock('../services/WorldStorageService', () => ({
@@ -60,9 +60,8 @@ const panelLabels = () =>
     .filter((el) => !el.closest('[role="tablist"]'))
     .map((el) => el.textContent);
 
-/** The checkbox captions the panel shows, which are spans rather than labeled fields. */
-const panelSwitches = () =>
-  screen.getAllByText(/^(Enabled by Default|Player Can Toggle In-Game)$/).map((el) => el.textContent);
+/** The segmented rows the panel shows, in document order. */
+const panelRows = () => screen.getAllByRole('radiogroup').map((el) => el.getAttribute('aria-label'));
 
 /** The trait panel's own strip. The editor's top-level strip carries a Stats tab of its own, so every read
  *  and click here is taken from the named strip rather than by tab name. */
@@ -86,10 +85,10 @@ const selectTrait = (name: string) => {
 beforeEach(() => { localStorage.clear(); });
 
 describe('the World Editor trait panel tabs', () => {
-  it('offers four tabs in Advanced mode and opens on Details', () => {
+  it('offers five tabs in Advanced mode and opens on Details', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectTrait('Sedge-Born');
-    expect(panelTabNames()).toEqual(['Details', 'Availability', 'Stats', 'Pins']);
+    expect(panelTabNames()).toEqual(['Details', 'Availability', 'Stats', 'Pins', 'Scripts']);
     expect(panelTab('Details')).toHaveAttribute('aria-selected', 'true');
   });
 
@@ -97,15 +96,15 @@ describe('the World Editor trait panel tabs', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectTrait('Sedge-Born');
     expect(panelLabels()).toEqual(['Name', 'Player-Facing Description', 'AI-Facing Description']);
-    expect(screen.queryByText('Enabled by Default')).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Starts' })).toBeNull();
   });
 
-  it('puts both switches and Requires on Availability, and nothing else', () => {
+  it('puts the Mode, Starts and In Game rows and Requires on Availability, and nothing else', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectTrait('Sedge-Born');
     openPanelTab('Availability');
     expect(panelLabels()).toEqual(['Requires']);
-    expect(panelSwitches()).toEqual(['Enabled by Default', 'Player Can Toggle In-Game']);
+    expect(panelRows()).toEqual(['Mode', 'Starts', 'In Game']);
   });
 
   it('puts both stat sections whole on Stats, each with its Add button', () => {
@@ -126,6 +125,28 @@ describe('the World Editor trait panel tabs', () => {
     expect(panelLabels()).toEqual(['Placeholder Pins']);
     expect(screen.getByRole('button', { name: 'About Placeholder Pins' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Pinned Value' })).toHaveValue('copper');
+  });
+
+  it('puts the script section on Scripts, where Add Script gives the trait a Before the AI script', async () => {
+    const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
+    selectTrait('Sedge-Born');
+    openPanelTab('Scripts');
+    // The help topic keeps its stat code title until the help catches up.
+    expect(screen.getByRole('button', { name: 'About Scripts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Script' }));
+
+    const sedge = ctx().traits.find((trait) => trait.id === 't1');
+    expect(sedge?.scripts?.map(({ timing, code }) => ({ timing, code }))).toEqual([{ timing: 'before', code: '' }]);
+    const row = screen.getByRole('group', { name: 'Sedge-Born · Before the AI' });
+    expect(within(row).getByRole('button', { name: 'Test Code Sedge-Born · Before the AI' })).toBeDisabled();
+    // A trait's self is no stat, so its box offers no stat templates.
+    expect(within(row).queryByRole('button', { name: /^Templates/ })).toBeNull();
+    expect(within(row).getByRole('textbox', { name: 'Name' })).toHaveValue('');
+    // The editor arrives on its own chunk, then takes the focus.
+    await waitFor(() => {
+      const editor = within(row).getAllByRole('textbox').find((el) => el.closest('.cm-editor'));
+      expect(editor && (editor === document.activeElement || editor.contains(document.activeElement))).toBe(true);
+    });
   });
 
   it('leaves Simple mode three tabs, with Stat Availability gone from Stats', () => {
@@ -153,14 +174,14 @@ describe('the World Editor trait panel tabs', () => {
     selectTrait('Sedge-Born');
     openPanelTab('Pins');
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Simple' }));
+    pickEditorMode('Simple');
     expect(panelTabNames()).toEqual(['Details', 'Availability', 'Stats']);
     expect(panelTab('Details')).toHaveAttribute('aria-selected', 'true');
     expect(panelLabels()).toEqual(['Name', 'Player-Facing Description', 'AI-Facing Description']);
 
     // The switch wears the hidden-data marker, whose own label joins its accessible name.
-    fireEvent.click(screen.getByRole('radio', { name: /^Advanced/ }));
-    expect(panelTabNames()).toEqual(['Details', 'Availability', 'Stats', 'Pins']);
+    pickEditorMode('Advanced');
+    expect(panelTabNames()).toEqual(['Details', 'Availability', 'Stats', 'Pins', 'Scripts']);
   });
 
   it('shows a trait group its own panel with no strip', () => {

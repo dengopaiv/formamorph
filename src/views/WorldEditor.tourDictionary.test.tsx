@@ -9,7 +9,7 @@ import type { World } from '@/types';
 
 /**
  * The Authoring Tour's Dictionary steps, driven through the real editor: the entry the tour adds to the
- * Default book, and In Play's test line, which fires the entry through the Activation Tester's scan.
+ * Default book, and In Game's test line, which fires the entry through the Activation Tester's scan.
  */
 
 vi.mock('@/lib/authoringTour/tourImages', () => ({
@@ -28,21 +28,10 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
 }));
-
-// The dev route replays every earlier step, which outlasts the default window under the whole suite's load.
-vi.setConfig({ testTimeout: 15_000 });
 
 const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 
@@ -50,7 +39,7 @@ const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 const WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   dictionaries: [{ id: 'default-book', name: 'Default', enabled: true, entries: [] }],
 } as unknown as Partial<World>);
@@ -66,7 +55,7 @@ const stepNumber = () => Number(/(\d+) \//.exec(within(tourBar()).getByText(/^Au
 const stepNote = () => screen.getAllByRole('dialog').find((d) => within(d).queryByText(`${stepNumber()} / ${TOTAL}`))!;
 const noteButton = (name: string) => within(stepNote()).queryByRole('button', { name });
 
-const inPlay = () => screen.getByRole('region', { name: 'In Play' });
+const inPlay = () => screen.getByRole('region', { name: 'In Game' });
 const playerSees = () => within(inPlay()).getByRole('region', { name: 'Player Sees' });
 const narration = () => within(inPlay()).getByRole('region', { name: 'Narration Prompt Reads' });
 const testLine = () => within(inPlay()).getByRole<HTMLInputElement>('textbox', { name: 'Test Line' });

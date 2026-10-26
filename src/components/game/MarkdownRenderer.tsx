@@ -1,4 +1,4 @@
-import { memo, useMemo, type ComponentProps } from 'react';
+import { memo, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type RefObject } from 'react';
 import { Streamdown, defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown';
 import { createCodePlugin } from '@streamdown/code';
 import { markdownCodeThemes } from '@/lib/markdownCodeTheme';
@@ -6,10 +6,12 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import remarkFlexibleMarkers from 'remark-flexible-markers';
 import { remarkSubSuper } from '@/lib/remarkSubSuper';
+import { remarkNoIndentedCode } from '@/lib/remarkNoIndentedCode';
 import { rehypePreviewTint } from '@/lib/previewTint';
 import { rehypeQuoteSpans } from '@/lib/rehypeQuoteSpans';
 import { getRevealTiming, type RevealTiming } from '@/lib/revealTimingStore';
 import { cn } from '@/lib/utils';
+import { ExternalLinkDialog } from './ExternalLinkDialog';
 import 'streamdown/styles.css';
 
 // `singleTilde: false` hands `~x~` to remarkSubSuper (subscript); GFM keeps `~~strike~~`.
@@ -19,6 +21,7 @@ import 'streamdown/styles.css';
 // block renderer.
 const REMARK_PLUGINS: ComponentProps<typeof Streamdown>['remarkPlugins'] = [
   [remarkGfm, { singleTilde: false }],
+  remarkNoIndentedCode,
   remarkBreaks,
   remarkSubSuper,
   [remarkFlexibleMarkers, { actionForEmptyContent: 'remove' }],
@@ -33,6 +36,12 @@ const REMARK_PLUGINS: ComponentProps<typeof Streamdown>['remarkPlugins'] = [
 // palette so a fence matches the stat-code editor.
 const PLUGINS: ComponentProps<typeof Streamdown>['plugins'] = {
   code: createCodePlugin({ themes: markdownCodeThemes }),
+};
+
+/** Streamdown memoizes on this object's identity, so it stays a module constant. */
+const LINK_SAFETY: ComponentProps<typeof Streamdown>['linkSafety'] = {
+  enabled: true,
+  renderModal: (props) => <ExternalLinkDialog {...props} />,
 };
 
 /** The fields of Streamdown's sanitize schema we extend. It ships as an opaque plugin tuple. */
@@ -114,26 +123,39 @@ const COMPONENTS: MarkdownComponents = {
  *
  * `timing` is the word timing of a reveal with its own pace, such as a help answer. Without it the
  * renderer reads the narration timing store.
+ *
+ * `resume` shows the text present at mount as already revealed, for a reveal that remounts mid-stream.
+ * Only its value at mount counts.
+ *
+ * `fitShown` holds the block to the words that have started their entrance while it animates, so the
+ * chrome around it grows with the text rather than to the whole released sentence at once.
  */
 export const MarkdownRenderer = memo(function MarkdownRenderer(
-  { text, animate = false, animation = 'fadeIn', easing, timing, tinted = false, dialogue = false, components }: { text: string; animate?: boolean; animation?: string; easing?: string; timing?: RevealTiming; tinted?: boolean; dialogue?: boolean; components?: MarkdownComponents },
+  { text, animate = false, animation = 'fadeIn', easing, timing, tinted = false, dialogue = false, components, resume = false, fitShown = false }: { text: string; animate?: boolean; animation?: string; easing?: string; timing?: RevealTiming; tinted?: boolean; dialogue?: boolean; components?: MarkdownComponents; resume?: boolean; fitShown?: boolean },
 ) {
+  const root = useRef<HTMLDivElement>(null);
+  useFitShown(root, animate && fitShown, text);
   const allComponents = useMemo(() => (components ? { ...COMPONENTS, ...components } : COMPONENTS), [components]);
+  // Fixed at mount: Streamdown keys its reveal state on the animated options, so a change would replay it.
+  const [skipInitial] = useState(resume);
   // Read the current fade timing at render (a new sentence's release re-renders us via the text prop),
   // so the words just added animate at the model's current smoothed rate.
   return (
-    <div className="[overflow-wrap:anywhere] [&_ul]:list-outside [&_ul]:pl-6 [&_ol]:list-outside [&_ol]:pl-6">
+    <div ref={root} className="relative [overflow-wrap:anywhere] [&_ul]:list-outside [&_ul]:pl-6 [&_ol]:list-outside [&_ol]:pl-6">
       <Streamdown
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={rehypePluginsFor(tinted, dialogue)}
         components={allComponents}
         plugins={PLUGINS}
+        linkSafety={LINK_SAFETY}
         controls={false}
         // Committed text renders straight from the parsed blocks. Streamdown's `streaming` mode routes
         // them through state committed in a transition, which leaves finished text a render behind —
         // visible when paging history, where nothing follows to flush it.
         mode={animate ? 'streaming' : 'static'}
-        animated={animate ? { animation, sep: 'word', easing, ...(timing ?? getRevealTiming()) } : false}
+        // The sentence pacer owns catch-up, so narration lifts Streamdown's backlog cap; help sets its own.
+        // patches/streamdown+*.patch reads duration and stagger live; a change there would otherwise re-fade shown words.
+        animated={animate ? { animation, sep: 'word', easing, maxBacklogMs: Number.POSITIVE_INFINITY, skipInitial, ...(timing ?? getRevealTiming()) } : false}
         isAnimating={animate}
       >
         {text}
@@ -141,4 +163,58 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(
     </div>
   );
 });
+/** Whether a word's entrance has begun: no animation, or its delay has passed. */
+function started(word: HTMLElement): boolean {
+  return word.getAnimations().every((animation) => {
+    const delay = Number(animation.effect?.getTiming().delay ?? 0);
+    return Number(animation.currentTime ?? 0) >= delay;
+  });
+}
+
+/**
+ * Holds `root`'s height to the bottom of its last started word until every word has started. One scan per
+ * text change finds the words already started; after that each word's `animationstart` moves the edge, so
+ * nothing polls per frame. A width change re-fits, since it moves the words.
+ */
+function useFitShown(root: RefObject<HTMLDivElement | null>, enabled: boolean, text: string) {
+  useLayoutEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    if (!enabled || typeof el.getAnimations !== 'function') { el.style.height = ''; return; }
+    let edge: HTMLElement | null = null;
+    let done = false;
+    const fitTo = (word: HTMLElement | null) => {
+      const words = el.querySelectorAll<HTMLElement>('[data-sd-animate]');
+      edge = word;
+      if (words.length === 0 || word === words[words.length - 1]) { done = true; el.style.height = ''; return; }
+      // The root is the words' offset parent, and offsets ignore the entrance's own motion.
+      el.style.height = word ? `${word.offsetTop + word.offsetHeight}px` : '0px';
+    };
+    const words = el.querySelectorAll<HTMLElement>('[data-sd-animate]');
+    let i = words.length - 1;
+    while (i >= 0 && !started(words[i])) i--;
+    fitTo(i < 0 ? null : words[i]);
+    if (done) return;
+
+    const onStart = (event: AnimationEvent) => {
+      const word = event.target;
+      if (done || !(word instanceof HTMLElement) || !word.matches('[data-sd-animate]')) return;
+      // Words start in document order; a later event never moves the edge back.
+      if (edge && edge.compareDocumentPosition(word) & Node.DOCUMENT_POSITION_PRECEDING) return;
+      fitTo(word);
+    };
+    let width = el.offsetWidth;
+    const resize = new ResizeObserver(() => {
+      if (done || el.offsetWidth === width) return;
+      width = el.offsetWidth;
+      fitTo(edge);
+    });
+    el.addEventListener('animationstart', onStart);
+    resize.observe(el);
+    return () => {
+      el.removeEventListener('animationstart', onStart);
+      resize.disconnect();
+    };
+  }, [root, enabled, text]);
+}
 // scroll-guard: allow horizontal: wide tables scroll sideways

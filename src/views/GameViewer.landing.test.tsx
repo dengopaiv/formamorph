@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderGameViewer } from '@/test/gameViewer';
 import { createSurfaceRequester } from '@/test/surfaceRequest';
 import { stubReducedMotion } from '@/test/reducedMotion';
-import { frames, recordScrolls, rowOf } from '@/test/landing';
+import { endLanding, frames, recordScrolls, ringOn, rowOf } from '@/test/landing';
 import { LANDING_PULSE_CLASS, LANDING_RING_CLASS } from '@/lib/landingPulse';
 import type { World } from '@/types';
 
@@ -14,7 +14,6 @@ import type { World } from '@/types';
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
 
 vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
-vi.mock('kokoro-js', () => ({ KokoroTTS: { from_pretrained: vi.fn() } }));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,
@@ -24,7 +23,7 @@ const WORLD = {
   id: 'w1',
   worldOverview: {
     name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   stats: [], locations: [{ id: 'harbor', name: 'Harbor', isStarting: true }], entities: [], traits: [], statUpdates: [],
 } as unknown as World;
@@ -35,10 +34,6 @@ const STORY_FORMAT = 'export#story-format';
 
 let requester: ReturnType<typeof createSurfaceRequester>;
 const scrolled = recordScrolls();
-
-const endPulse = (row: HTMLElement) => row.dispatchEvent(
-  Object.assign(new Event('animationend', { bubbles: true }), { animationName: LANDING_PULSE_CLASS }),
-);
 
 /** Enter the game and dismiss the AI setup gate the default endpoint raises, as a player does. */
 async function enterGame() {
@@ -64,38 +59,38 @@ describe('Take Me There landing on the game screen', () => {
     expect(document.activeElement).toBe(screen.getByPlaceholderText(/Type your action/));
   });
 
-  it('pulses the row once, and the class leaves when the animation ends', async () => {
+  it('pulses the row once, and the ring leaves when the animation ends', async () => {
     await enterGame();
     requester.send('gameViewer', 'action-box');
-    await waitFor(() => expect(rowOf(ACTION_BOX)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true));
+    await waitFor(() => expect(ringOn(rowOf(ACTION_BOX), LANDING_PULSE_CLASS)).toBe(true));
     expect(document.querySelectorAll(`.${LANDING_PULSE_CLASS}`)).toHaveLength(1);
-    endPulse(rowOf(ACTION_BOX)!);
-    expect(rowOf(ACTION_BOX)!.classList.contains(LANDING_PULSE_CLASS)).toBe(false);
+    endLanding(rowOf(ACTION_BOX)!);
+    expect(ringOn(rowOf(ACTION_BOX), LANDING_PULSE_CLASS)).toBe(false);
   });
 
   it('draws the still ring without the pulse under reduced motion', async () => {
     stubReducedMotion();
     await enterGame();
     requester.send('gameViewer', 'action-box');
-    await waitFor(() => expect(rowOf(ACTION_BOX)!.classList.contains(LANDING_RING_CLASS)).toBe(true));
-    expect(rowOf(ACTION_BOX)!.classList.contains(LANDING_PULSE_CLASS)).toBe(false);
+    await waitFor(() => expect(ringOn(rowOf(ACTION_BOX), LANDING_RING_CLASS)).toBe(true));
+    expect(ringOn(rowOf(ACTION_BOX), LANDING_PULSE_CLASS)).toBe(false);
   });
 
   it('lands again on a repeat request for the same target', async () => {
     await enterGame();
     requester.send('gameViewer', 'action-box');
     await waitFor(() => expect(scrolled).toHaveLength(1));
-    endPulse(rowOf(ACTION_BOX)!);
+    endLanding(rowOf(ACTION_BOX)!);
     requester.send('gameViewer', 'action-box');
     await waitFor(() => expect(scrolled).toHaveLength(2));
-    expect(rowOf(ACTION_BOX)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+    expect(ringOn(rowOf(ACTION_BOX), LANDING_PULSE_CLASS)).toBe(true);
   });
 
   it('lands on the pager and focuses its first enabled button', async () => {
     await enterGame();
     requester.send('gameViewer', 'pager');
     await waitFor(() => expect(scrolled).toContain(rowOf(PAGER)));
-    expect(rowOf(PAGER)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+    expect(ringOn(rowOf(PAGER), LANDING_PULSE_CLASS)).toBe(true);
     // One page: Previous and Next are dead, so the current page's button takes focus.
     expect(document.activeElement).toBe(screen.getByRole('link', { current: 'page' }));
   });
@@ -105,7 +100,7 @@ describe('Take Me There landing on the game screen', () => {
     requester.send('export', 'story-format');
     await screen.findByText('Export story');
     await waitFor(() => expect(scrolled).toContain(rowOf(STORY_FORMAT)));
-    expect(rowOf(STORY_FORMAT)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+    expect(ringOn(rowOf(STORY_FORMAT), LANDING_PULSE_CLASS)).toBe(true);
     expect(rowOf(STORY_FORMAT)!.contains(screen.getByRole('button', { name: 'Markdown (.md)' }))).toBe(true);
   });
 

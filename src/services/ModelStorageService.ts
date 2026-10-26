@@ -1,5 +1,5 @@
 import { randomUUID } from '@/lib/uuid';
-import { promisifyRequest } from '@/lib/idb';
+import { promisifyRequest, transactionDone, writeAfterRead } from '@/lib/idb';
 import { blobHash } from '@/lib/blobHash';
 import { readVrmMeta } from '@/lib/vrmMeta';
 import { optimizeImageDataUrl, IMAGE_CAPS } from '@/lib/imageOptim';
@@ -128,18 +128,14 @@ class ModelStorageService {
    */
   private async updateDataIfPresent(id: string, data: VrmData): Promise<boolean> {
     await this.store.ensureInitialized();
-    return new Promise<boolean>((resolve, reject) => {
-      const store = this.store.db!.transaction(['models'], 'readwrite').objectStore('models');
-      const get = store.get(id);
-      get.onsuccess = () => {
-        const existing = get.result as StoredModelRecord | undefined;
-        if (!existing) return resolve(false); // deleted meanwhile — leave it gone
-        const put = store.put({ ...existing, data });
-        put.onsuccess = () => resolve(true);
-        put.onerror = () => reject(put.error);
-      };
-      get.onerror = () => reject(get.error);
+    const store = this.store.db!.transaction(['models'], 'readwrite').objectStore('models');
+    let present = false;
+    await writeAfterRead(store.transaction, store.get(id), (existing: StoredModelRecord | undefined) => {
+      if (!existing) return; // deleted meanwhile — leave it gone
+      present = true;
+      store.put({ ...existing, data });
     });
+    return present;
   }
 
   /** One stored record with its wrapper, or null. */
@@ -197,10 +193,9 @@ class ModelStorageService {
     const occupied = !!(await this.getRecord(DEFAULT_AVATAR_ID));
     await this.store.ensureInitialized();
     const store = this.store.db!.transaction(['models'], 'readwrite').objectStore('models');
-    await Promise.all([
-      promisifyRequest(store.delete(LEGACY_DEFAULT_AVATAR_ID)),
-      occupied ? Promise.resolve() : promisifyRequest(store.put({ ...legacy, id: DEFAULT_AVATAR_ID })),
-    ]);
+    store.delete(LEGACY_DEFAULT_AVATAR_ID);
+    if (!occupied) store.put({ ...legacy, id: DEFAULT_AVATAR_ID });
+    await transactionDone(store.transaction);
   }
 
   /**
@@ -280,6 +275,30 @@ class ModelStorageService {
     const records = await this.allRecords();
     const match = records.find((record) => record.data?.hash === hash);
     return match ? toMetadata(match) : null;
+  }
+
+  /** Each model's name and content hash by id. A record stored before hashing gets its hash now, and keeps it. */
+  async getModelHashes(): Promise<Map<string, { name: string; hash: string }>> {
+    await this.ensureMigrated();
+    const records = await this.allRecords();
+    const hashed = await Promise.all(records.filter((record) => record.data?.blob).map(async (record) => {
+      let hash = record.data.hash;
+      if (!hash) {
+        hash = await blobHash(record.data.blob);
+        await this.updateDataIfPresent(record.id, { ...record.data, hash });
+      }
+      return [record.id, { name: record.name, hash }] as const;
+    }));
+    return new Map(hashed);
+  }
+
+  /** The id of the model holding `blob`'s bytes: an existing record with the same hash, else a new one. */
+  async importModelBlob(blob: Blob, fileName: string): Promise<string> {
+    const [hash, held] = await Promise.all([blobHash(blob), this.getModelHashes()]);
+    const duplicate = [...held].find(([, model]) => model.hash === hash);
+    if (duplicate) return duplicate[0];
+    const file = new File([blob], fileName, { type: blob.type });
+    return (await this.addModel(file)).id;
   }
 
   /**
@@ -432,23 +451,14 @@ class ModelStorageService {
     // The count, the existence check, and the delete share one readwrite transaction. IndexedDB serializes
     // transactions over the store, so two concurrent deletes can't both see count > 1 and then both delete —
     // which a read-then-delete across separate transactions would allow, emptying the library.
-    return new Promise<void>((resolve, reject) => {
-      const store = this.store.db!.transaction(['models'], 'readwrite').objectStore('models');
-      const countReq = store.count();
-      countReq.onsuccess = () => {
-        const total = countReq.result;
-        const getReq = store.get(id);
-        getReq.onsuccess = () => {
-          if (total <= 1 && getReq.result) {
-            return reject(new Error('Cannot delete the last player avatar: the library must always have at least one.'));
-          }
-          const del = store.delete(id);
-          del.onsuccess = () => resolve();
-          del.onerror = () => reject(del.error);
-        };
-        getReq.onerror = () => reject(getReq.error);
-      };
-      countReq.onerror = () => reject(countReq.error);
+    const store = this.store.db!.transaction(['models'], 'readwrite').objectStore('models');
+    // Requests in one transaction run in order, so the count has its result when the get's arrives.
+    const count = store.count();
+    return writeAfterRead(store.transaction, store.get(id), (record) => {
+      if (count.result <= 1 && record) {
+        throw new Error('Cannot delete the last player avatar: the library must always have at least one.');
+      }
+      store.delete(id);
     });
   }
 }

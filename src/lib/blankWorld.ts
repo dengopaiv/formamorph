@@ -13,7 +13,6 @@ export function newBlankWorld(): World {
       name: NEW_WORLD_NAME,
       description: 'A blank world ready for editing',
       thumbnail: null,
-      use3DModel: false,
       bgm: null,
       systemPrompt: '',
       author: '',
@@ -36,7 +35,7 @@ export const NEW_LOCATION_NAME = 'New Location';
 
 /** A location as the editor's Add button makes it. */
 export function newLocation(id: string, name = NEW_LOCATION_NAME): GameLocation {
-  return { id, name, playerDescription: '', aiDescription: '', aiSummary: '' };
+  return { id, name, playerDescription: '', aiDescription: '', aiSummary: '', nearbyUsesConnections: true };
 }
 
 /** How many entities and entity groups sit at the entity tree's root: the `order` a new root item takes. */

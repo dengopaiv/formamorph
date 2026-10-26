@@ -1,5 +1,5 @@
 import { randomUUID } from "@/lib/uuid";
-import { openDatabase, promisifyRequest } from '@/lib/idb';
+import { cachedConnection, promisifyRequest } from '@/lib/idb';
 import type { SaveRecord } from '@/types';
 
 export const DB_NAME = 'FORMAMORPH_DB';
@@ -15,17 +15,11 @@ export const DB_VERSION = 2;
  *  record store and the ordering store (existing `saves` rows are migrated in `migrateLegacySaves`).
  *  The connection is cached — autosave issues several ops per turn, and a fresh connection each time
  *  leaks handles that would block a future `DB_VERSION` bump. */
-let dbPromise: Promise<IDBDatabase> | null = null;
-export const initDB = (): Promise<IDBDatabase> => {
-  if (!dbPromise) {
-    dbPromise = openDatabase(DB_NAME, DB_VERSION, [
-      { name: LEGACY_STORE, keyPath: 'name' },
-      { name: STORE_NAME, keyPath: 'id' },
-      { name: ORDER_STORE, keyPath: 'key' },
-    ]).catch((err) => { dbPromise = null; throw err; }); // let a later call retry the open
-  }
-  return dbPromise;
-};
+export const initDB = cachedConnection(DB_NAME, DB_VERSION, [
+  { name: LEGACY_STORE, keyPath: 'name' },
+  { name: STORE_NAME, keyPath: 'id' },
+  { name: ORDER_STORE, keyPath: 'key' },
+]);
 
 const store = async (name: string, mode: IDBTransactionMode) =>
   (await initDB()).transaction([name], mode).objectStore(name);
@@ -37,8 +31,27 @@ export const putSaveRecord = async (record: SaveRecord) => {
 export const getSaveRecord = async (id: string) =>
   promisifyRequest((await store(STORE_NAME, 'readonly')).get(id)) as Promise<SaveRecord | undefined>;
 
-export const getAllSaveRecords = async () =>
-  promisifyRequest((await store(STORE_NAME, 'readonly')).getAll()) as Promise<SaveRecord[]>;
+/** Keys of unreadable rows already warned about this session. */
+const warnedUnreadable = new Set<IDBValidKey>();
+
+/** Every save the browser can read. A row that reads back as a non-object (a value it failed to load) is
+ *  skipped and left in place, since the stored bytes may still be recoverable. */
+export const getAllSaveRecords = async (): Promise<SaveRecord[]> => {
+  const values = await promisifyRequest((await store(STORE_NAME, 'readonly')).getAll() as IDBRequest<unknown[]>);
+  const readable = values.filter((value): value is SaveRecord => value !== null && typeof value === 'object');
+  if (readable.length < values.length) void warnUnreadable(values);
+  return readable;
+};
+
+/** Warns once per key for each unreadable row; keys come in getAll's order. */
+async function warnUnreadable(values: unknown[]): Promise<void> {
+  const keys = await promisifyRequest((await store(STORE_NAME, 'readonly')).getAllKeys());
+  values.forEach((value, i) => {
+    if ((value !== null && typeof value === 'object') || warnedUnreadable.has(keys[i])) return;
+    warnedUnreadable.add(keys[i]);
+    console.warn(`Skipped an unreadable save record (id ${String(keys[i])})`);
+  });
+}
 
 export const deleteSaveRecord = async (id: string) => {
   await promisifyRequest((await store(STORE_NAME, 'readwrite')).delete(id));

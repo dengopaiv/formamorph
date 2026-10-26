@@ -12,7 +12,6 @@ import type { World } from '@/types';
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
 
 vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
-vi.mock('kokoro-js', () => ({ KokoroTTS: { from_pretrained: vi.fn() } }));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,
@@ -22,7 +21,7 @@ const WORLD = {
   id: 'w1',
   worldOverview: {
     name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   stats: [], locations: [{ id: 'harbor', name: 'Harbor', isStarting: true }], entities: [], traits: [], statUpdates: [],
 } as unknown as World;

@@ -1,9 +1,10 @@
 import { useId, useRef, useState, type ReactNode } from 'react';
-import { Copy, Maximize2, Minimize2, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Copy, Maximize2, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { toastError } from '@/lib/linkToast';
 import type { AIRequestType, Tool, ToolEnabledMap, ToolParam } from '@/types';
 import { Button } from '@/components/ui/button';
+import { CompactSelectionRow } from '@/components/ui/compact-selection-row';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,7 +17,7 @@ import { DEFAULT_TOOL_CALL_LIMIT } from '@/contexts/settingsDefaults';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ActionIcon } from '@/lib/actionIcons';
 import { downloadBlob } from '@/lib/downloadBlob';
-import { filesFrom } from '@/lib/importFiles';
+import { importPackFile } from '@/lib/importFiles';
 import { randomUUID } from '@/lib/uuid';
 import { cn } from '@/lib/utils';
 import { isCatalogToolId } from '@/lib/tools/toolCatalog';
@@ -25,7 +26,8 @@ import { userCanStore } from '@/lib/tools/toolValidation';
 import { blankTool, finishDraft } from '@/lib/tools/toolDraft';
 import type { OfferedFunction } from '@/lib/tools/toolSchema';
 import type { TargetAttribute } from '@/lib/surface/surfaceTargets';
-import { sampleToolSnapshot, type ToolSnapshot } from '@/lib/tools/toolSnapshot';
+import type { ToolSnapshot } from '@/lib/tools/toolSnapshot';
+import { sampleToolSnapshot } from '@/lib/tools/sampleToolSnapshot';
 import { toolSummary, type ToolsView } from './toolsView';
 import { ToolEditor } from './ToolEditor';
 import { ToolTryIt, type TryItWorld } from './ToolTryIt';
@@ -69,7 +71,7 @@ function CallLimitField({ callLimit, defaultLimit, maxLimit, onChange }: {
 }
 
 /** Offered To and Max Calls per Request, written on each change. Where one request takes every Tool, the limit alone. */
-function AvailabilityFields({ tool, onChange, offeredTo }: { tool: Tool; onChange: (tool: Tool) => void; offeredTo: boolean }) {
+export function AvailabilityFields({ tool, onChange, offeredTo }: { tool: Tool; onChange: (tool: Tool) => void; offeredTo: boolean }) {
   const id = useId();
   const setLimit = (limit: number | undefined) => {
     const { callLimit: _, ...rest } = tool;
@@ -193,10 +195,10 @@ export function ToolsTab({
   const select = (selectedId: string | null) => onViewChange({ ...view, selectedId });
 
   // Named like the prompt panel's toggle: the full-screen shell hands focus back by this label.
-  const fullscreenButton = onToggleFullscreen && (
-    <Tip tip={fullscreen ? 'Exit full screen' : 'View full screen'}>
-      <button type="button" aria-label={fullscreen ? 'Exit full screen' : 'View full screen'} onClick={onToggleFullscreen} className={cn(iconButton, 'p-1.5')}>
-        {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+  const fullscreenButton = onToggleFullscreen && !fullscreen && (
+    <Tip tip="View full screen">
+      <button type="button" aria-label="View full screen" onClick={onToggleFullscreen} className={cn(iconButton, 'p-1.5')}>
+        <Maximize2 className="h-4 w-4" />
       </button>
     </Tip>
   );
@@ -234,12 +236,7 @@ export function ToolsTab({
     }
   };
 
-  const importPack = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const [file] = filesFrom(event);
-    // Clearing the input lets the same file be chosen twice.
-    event.target.value = '';
-    if (file) void importPackText(() => file.text());
-  };
+  const importPack = (event: React.ChangeEvent<HTMLInputElement>) => importPackFile(event, importPackText);
 
   const requestImport = () => {
     if (my?.fileTransfer) void importPackText(my.fileTransfer.readImportPack);
@@ -272,21 +269,29 @@ export function ToolsTab({
     );
   }
 
-  const toolButton = (tool: OfferedFunction) => (
-    <button
-      key={tool.id}
-      type="button"
-      onClick={() => select(tool.id)}
-      aria-current={tool.id === selectedId ? 'true' : undefined}
-      className={cn(
-        'flex items-center gap-2 text-left text-label rounded px-2 py-1.5',
-        tool.id === selectedId ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
-      )}
-    >
-      <span aria-hidden className={cn('h-2 w-2 flex-shrink-0 rounded-full', enabledTools[tool.id] === true ? 'bg-primary' : 'bg-muted-foreground/40')} />
-      <span className="font-mono truncate">{tool.name}</span>
-    </button>
-  );
+  const toolButton = (tool: OfferedFunction) => {
+    const isSelected = tool.id === selectedId;
+    const isEnabled = enabledTools[tool.id] === true;
+    // The dot sits on the primary fill when selected, so it takes the foreground tone.
+    const dotTone = isSelected
+      ? (isEnabled ? 'bg-primary-foreground' : 'bg-primary-foreground/40')
+      : (isEnabled ? 'bg-primary' : 'bg-muted-foreground/40');
+    return (
+      <CompactSelectionRow
+        key={tool.id}
+        selected={isSelected}
+        showCheck={false}
+        aria-pressed={undefined}
+        aria-current={isSelected ? 'true' : undefined}
+        onClick={() => select(tool.id)}
+      >
+        <span className="flex items-center gap-2">
+          <span aria-hidden className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotTone)} />
+          <span className="font-mono truncate">{tool.name}</span>
+        </span>
+      </CompactSelectionRow>
+    );
+  };
 
   const builtInSelected = !!selected && isCatalogToolId(selected.id);
 

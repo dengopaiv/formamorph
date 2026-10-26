@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, ArrowLeftRight, Plus, X } from 'lucide-react';
 import { useGameData } from '@/contexts/GameDataContext';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Hint } from '@/components/ui/typography';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SelectOptions } from '@/components/SelectOptions';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { labelPlaceholders } from '@/lib/placementLetters';
 import {
@@ -18,6 +19,7 @@ import {
 import { otherLeg } from '@/lib/locationGraph';
 import type { Connection, GameLocation, LegKey } from '@/types';
 import { Tip } from '@/components/ui/tooltip';
+import { fieldFrame } from '@/lib/historyField';
 import { TravelHintPair } from '@/components/editor/TravelHintPair';
 
 /** The direction control's options in the order they're offered, worded from the panel that's open. */
@@ -51,7 +53,7 @@ function legsAt(connection: Connection, locationId: string): { key: LegKey; word
  * Connection exists, it is the pair's whole travel rule — which is why the direction control offers the
  * one-way orientations rather than hiding a flip behind a second gesture.
  */
-const LocationConnections = ({ location }: { location: GameLocation }) => {
+const LocationConnections = ({ location, children }: { location: GameLocation; children?: ReactNode }) => {
   const { locations, connections, addConnection, updateConnection, removeConnection, placeholders, placementLetters, placeholderOwners } = useGameData();
   const [target, setTarget] = useState('');
 
@@ -64,6 +66,10 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
   const targets = useMemo(
     () => connectionTargets(location.id, locations, connections),
     [location.id, locations, connections],
+  );
+  const targetOptions = useMemo(
+    () => targets.map((l) => ({ value: l.id, label: labelPlaceholders(l.name, placeholders, { letters: placementLetters, owners: placeholderOwners }) })),
+    [targets, placeholders, placementLetters, placeholderOwners],
   );
 
   const handleAdd = () => {
@@ -79,6 +85,7 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
         Sets the travel rule for a pair of locations. Without one, a location still connects to its parent,
         its children, and its siblings.
       </Hint>
+      {children}
       {views.map(({ connection, partnerId, direction }) => {
         const Icon = DIRECTION_ICONS[direction];
         const partnerName = nameOf(partnerId);
@@ -103,6 +110,7 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
               className="w-full"
               value={direction}
               aria-label={`Direction of the Connection to ${partnerName}`}
+              {...fieldFrame('connections', connection.id, 'direction')}
               // A single ToggleGroup clears its value when the active item is clicked again; a Connection
               // always runs some direction, so an empty result is ignored rather than stored.
               onValueChange={(v) => {
@@ -121,6 +129,7 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
                 name: `Travel Hint ${word.toLowerCase()} ${partnerName}`,
               }))}
               idPrefix={`connection-${connection.id}`}
+              placeholders={placeholders}
               onChange={updateConnection}
             />
           </div>
@@ -132,9 +141,7 @@ const LocationConnections = ({ location }: { location: GameLocation }) => {
             <SelectValue placeholder={targets.length ? 'Connect to…' : 'No locations left to connect'} />
           </SelectTrigger>
           <SelectContent>
-            {targets.map((l) => (
-              <SelectItem key={l.id} value={l.id}>{labelPlaceholders(l.name, placeholders, { letters: placementLetters, owners: placeholderOwners })}</SelectItem>
-            ))}
+            <SelectOptions options={targetOptions} />
           </SelectContent>
         </Select>
         <Tip tip="Add Connection">

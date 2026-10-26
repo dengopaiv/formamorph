@@ -9,6 +9,7 @@ import { SAMPLE_PREVIEW_VALUES, derivedPreviewValues } from './previewValuePool'
 import { runsTile } from './requestAnatomy';
 import { buildNarrationPrompt } from './turnPipeline/narrationPrompt';
 import { personaContextValues } from './personaContext';
+import { layerValues } from './promptValues';
 import { buildSharedPreset, serializeSharedJson, serializeSharedCode, parseSharedJson, parseSharedCode } from './promptPresetShare';
 
 describe('built-in Header adoption', () => {
@@ -49,10 +50,12 @@ describe('built-in Header adoption', () => {
         expect(runsTile(gameplay.prompt, gameplay.runs)).toBe(true);
         const name = placement.includes('Presentation') ? 'Presentation' : 'Formatting';
         const body = values['<MARKDOWN GUIDANCE>'];
-        const expected = placement === '<MARKDOWN GUIDANCE>' ? body
-          : style === 'markdown' ? `\n## ${name}\n${body}\n`
-            : style === 'labels' ? `\n${name.toUpperCase()}:\n${body}\n`
-              : `\n<${name.toLowerCase()}>\n${body}\n</${name.toLowerCase()}>\n`;
+        // An empty value drops the whole placement, header and Prepend included.
+        const shown = body && `${splitToken(placement)?.pre ?? ''}${body}`;
+        const expected = placement === '<MARKDOWN GUIDANCE>' || !body ? shown
+          : style === 'markdown' ? `\n## ${name}\n${shown}\n`
+            : style === 'labels' ? `\n${name.toUpperCase()}:\n${shown}\n`
+              : `\n<${name.toLowerCase()}>\n${shown}\n</${name.toLowerCase()}>\n`;
         expect(preview).toBe(expected);
         expect(body).not.toMatch(/^(?:## |FORMATTING:|<formatting>)/m);
       }
@@ -83,9 +86,9 @@ describe('built-in Header adoption', () => {
       const settings = { paragraphLimit: 'none' as const, maxTokens: 400, markdownOutput: true, sectionStyle: style,
         limitActiveCharacters: false, activeCharacterLimit: 4, language: 'English' };
       const template = buildStyledValues(PROMPT_TEXT_DEFAULTS, style).systemPrompt;
-      const ctx = { ...SAMPLE_PREVIEW_VALUES, ...derivedPreviewValues(settings),
-        ...personaContextValues({ source: 'library', entity: { id: 'wren', name: 'Wren', pronouns: 'they/them' } }),
-        '<DICTIONARY>': 'After: Foreground lore.', '<DICTIONARY|before>': 'Before: Background lore.' };
+      const ctx = layerValues(SAMPLE_PREVIEW_VALUES, derivedPreviewValues(settings),
+        personaContextValues({ source: 'library', entity: { id: 'wren', name: 'Wren', pronouns: 'they/them' } }),
+        { 'header:{{user}}': 'Wren', '<DICTIONARY>': 'After: Foreground lore.', '<DICTIONARY|before>': 'Before: Background lore.' });
       const gameplay = buildNarrationPrompt({ ...settings, template, ctx, action: 'look', history: [],
         dictionary: [{ id: 'before', name: 'Before', key: [], constant: true, position: 'before', value: 'Background lore.' },
           { id: 'after', name: 'After', key: [], constant: true, value: 'Foreground lore.' }],
@@ -102,7 +105,7 @@ describe('built-in Header adoption', () => {
         expect(xml.querySelector('parsererror')).toBeNull();
         expect(xml.querySelector('root > guidelines')).not.toBeNull();
         expect(xml.querySelector('root > game_world')).not.toBeNull();
-        expect(xml.querySelector('root > traits')).not.toBeNull();
+        expect(xml.querySelector('root > global_traits')).not.toBeNull();
         expect(xml.querySelector('root > player_character')).not.toBeNull();
         expect(xml.querySelector('root > output')).not.toBeNull();
       }
@@ -110,8 +113,8 @@ describe('built-in Header adoption', () => {
 
     it.each(PROMPT_TEXT_KEYS)(`${style}: renders %s and omits each empty adopted placement`, key => {
       const template = buildStyledValues(PROMPT_TEXT_DEFAULTS, style)[key];
-      const ctx = { ...SAMPLE_PREVIEW_VALUES, ...derivedPreviewValues({ paragraphLimit: 'none', maxTokens: 400,
-        markdownOutput: true, sectionStyle: style, limitActiveCharacters: false, activeCharacterLimit: 4, language: 'English' }) };
+      const ctx = layerValues(SAMPLE_PREVIEW_VALUES, derivedPreviewValues({ paragraphLimit: 'none', maxTokens: 400,
+        markdownOutput: true, sectionStyle: style, limitActiveCharacters: false, activeCharacterLimit: 4, language: 'English' }));
       const runs = renderPromptTemplateRuns(template, ctx, { source: 'system-template' });
       expect(runs.content).toBe(renderPromptTemplate(template, ctx));
       expect(runsTile(runs.content, runs.runs)).toBe(true);
@@ -119,12 +122,15 @@ describe('built-in Header adoption', () => {
         if (seg.type !== 'variable') continue;
         const parts = splitToken(seg.token)!;
         if (!parts.header) continue;
-        const populated = renderPromptTemplate(seg.token, { [parts.key]: 'Body line one\nBody line two' });
+        // The Header reads the scene's Persona Name, as the whole template does.
+        const populated = renderPromptTemplate(seg.token, { 'header:{{user}}': ctx('header:{{user}}')!, [parts.key]: 'Body line one\nBody line two' });
         expect(populated).toContain('Body line one\nBody line two');
-        expect(runs.content.split(populated.trimStart().split('\n')[0]), `${key}: ${parts.header}`).toHaveLength(2);
+        // The header line renders once; a whole-line match, since one header's words can sit inside another's.
+        const headerLine = populated.trimStart().split('\n')[0];
+        expect(runs.content.split('\n').filter((line) => line === headerLine), `${key}: ${parts.header}`).toHaveLength(1);
         for (const value of ['', ' \n\t', 'N/A']) {
           expect(renderPromptTemplate(seg.token, { [parts.key]: value })).toBe('');
-          const empty = renderPromptTemplateRuns(template, { ...ctx, [parts.key]: value }, { source: 'system-template' });
+          const empty = renderPromptTemplateRuns(template, layerValues(ctx, { [parts.key]: value }), { source: 'system-template' });
           expect(runsTile(empty.content, empty.runs)).toBe(true);
           expect(empty.runs.filter(run => run.chip === parts.key).every(run => run.start === run.end)).toBe(true);
         }
@@ -147,7 +153,7 @@ describe('built-in Header adoption', () => {
       expect(template).toContain('header="player notes"');
       if (style === 'xml') {
         for (const persona of ['Wren', 'N/A']) {
-          const output = renderPromptTemplate(template, { ...ctx, '<PERSONA|name.xml>': persona });
+          const output = renderPromptTemplate(template, layerValues(ctx, { '<PERSONA|name.xml>': persona }));
           const xml = new DOMParser().parseFromString(`<root>${output}</root>`, 'application/xml');
           expect(xml.querySelector('parsererror')).toBeNull();
           expect(Array.from(xml.documentElement.children, node => node.tagName)).toEqual(

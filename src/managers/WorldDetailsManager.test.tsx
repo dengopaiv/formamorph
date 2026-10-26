@@ -1,12 +1,14 @@
 import { useState } from 'react';
+import { readValue, type TokenValues } from '@/lib/promptValues';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Dictionary, Entity, FocusFieldHint, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
+import type { Dictionary, Entity, FocusFieldHint, GameLocation, Placeholder, Stat, StatGroup, Trait, WorldOverview } from '@/types';
 import { EditorModeContext } from '@/lib/editorMode';
 import { OPENING_SCENE_CUE } from '@/components/game/GamePrompts';
 import { openingFieldKey } from '@/lib/openings';
 import WorldDetailsManager from './WorldDetailsManager';
+import type { OverviewPanel } from '@/views/overviewPanels';
 
 const PRESET_NARRATION = 'PRESET narration prompt';
 const PRESET_CHOICES = 'PRESET choices prompt';
@@ -37,9 +39,10 @@ const entities = [
   { id: 'ent1', name: 'Wren', aiDescription: 'A lamp-keeper who does not sleep.', locations: ['loc1'] },
 ] as unknown as Entity[];
 const stats = [{
-  id: 's1', name: 'Warmth', type: 'number', value: 7, min: 0, max: 10,
+  id: 's1', name: 'Warmth', type: 'number', value: 7, min: 0, max: 10, groupId: 'g1',
   descriptors: [{ threshold: 40, description: 'chilled' }, { threshold: 100, description: 'warm' }],
 }] as unknown as Stat[];
+const statGroups: StatGroup[] = [{ id: 'g1', name: 'Body', aiDescription: 'What the cold takes.', parentId: null }];
 const traits = [
   { id: 't1', name: 'Saltborn', aiDescription: 'The tide reads you as its own.', isDefault: true },
   { id: 't2', name: 'Landlocked', aiDescription: 'You have never seen the sea.', isDefault: false },
@@ -72,7 +75,7 @@ vi.mock('@/contexts/GameDataContext', () => ({
       world.rerender();
     },
     entities: world.entities, locations: world.locations,
-    stats, traits, traitGroups: [], dictionaries, placeholders,
+    stats, statGroups, traits, traitGroups: [], dictionaries, placeholders,
   }),
 }));
 vi.mock('@/contexts/SettingsContext', () => ({
@@ -90,7 +93,7 @@ vi.mock('@/lib/useDanbooruTags', () => ({ useDanbooruTags: () => [] }));
 // a test can drive an edit through the same `onChange` the real field fires.
 const fieldProps = vi.hoisted(() => ({ byLabel: {} as Record<string, Record<string, unknown>> }));
 vi.mock('@/components/prompt/PromptField', () => ({
-  default: (props: { ariaLabel?: string; previewValues?: Record<string, string> }) => {
+  default: (props: { ariaLabel?: string; previewValues?: TokenValues }) => {
     if (props.ariaLabel) fieldProps.byLabel[props.ariaLabel] = props;
     return <div data-testid={props.ariaLabel ?? 'prompt-field'} />;
   },
@@ -110,8 +113,14 @@ const Harness = ({ focusField, onOpenEntity, onOpenLocation }: {
   focusField?: FocusField; onOpenEntity?: OpenItem; onOpenLocation?: OpenItem;
 }) => {
   const [, setTick] = useState(0);
+  // The World Editor holds the open panel in the app.
+  const [panel, setPanel] = useState<OverviewPanel | null>(null);
   world.rerender = () => setTick((n) => n + 1);
-  return <WorldDetailsManager focusField={focusField} onOpenEntity={onOpenEntity} onOpenLocation={onOpenLocation} />;
+  return (
+    <WorldDetailsManager
+      focusField={focusField} panel={panel} onPanelChange={setPanel} onOpenEntity={onOpenEntity} onOpenLocation={onOpenLocation}
+    />
+  );
 };
 
 const renderManager = (advanced = true, focusField?: FocusField, onOpenEntity?: OpenItem, onOpenLocation?: OpenItem) => render(
@@ -124,7 +133,7 @@ const renderManager = (advanced = true, focusField?: FocusField, onOpenEntity?: 
 const field = (label: string) => fieldProps.byLabel[label];
 /** The prompt-variable half of a custom prompt field: its toolbar chips and what they preview as. */
 const promptChips = (label: string) => field(label).promptChips as {
-  variables: Array<{ token: string }>; previewValues: Record<string, string>; sampleData?: boolean | string;
+  variables: Array<{ token: string }>; previewValues: TokenValues; sampleData?: boolean | string;
 };
 const edit = (label: string, text: string) =>
   act(() => (field(label).onChange as (v: string) => void)(text));
@@ -324,9 +333,11 @@ describe('resetting a kind', () => {
   });
 });
 
+/** What the open narration field previews each token as. */
 const previewValues = async () => {
   await openNarration();
-  return promptChips('World narration prompt').previewValues;
+  const values = promptChips('World narration prompt').previewValues;
+  return (token: string) => readValue(values, token);
 };
 
 describe('the world narration prompt field', () => {
@@ -338,48 +349,52 @@ describe('the world narration prompt field', () => {
     // resolve chips against. Without these the field is a bare textarea.
     expect(props).toBeDefined();
     const chips = promptChips('World narration prompt');
-    expect(Object.keys(chips.previewValues).length).toBeGreaterThan(0);
+    expect(readValue(chips.previewValues, '<LOCATION>')).toBeTruthy();
     expect(chips.sampleData).toBe('Your world, sample turn');
   });
 
   it('previews the world being edited, not the shared sample world', async () => {
     const values = await previewValues();
 
-    expect(values['<LOCATION>']).toContain('The Jetty');
-    expect(values['<ENTITIES>']).toContain('Wren');
-    expect(values['<WORLD DESCRIPTION>']).toContain('drowned coast');
+    expect(values('<LOCATION>')).toContain('The Jetty');
+    expect(values('<ENTITIES>')).toContain('Wren');
+    expect(values('<WORLD DESCRIPTION>')).toContain('drowned coast');
     // The sample pool's own location must not show through where the world can answer.
-    expect(values['<LOCATION>']).not.toContain('The Landing');
+    expect(values('<LOCATION>')).not.toContain('The Landing');
   });
 
   it('previews the stats and default traits the world actually starts with', async () => {
     const values = await previewValues();
 
-    expect(values['<STATS DESCRIPTION>']).toContain('Warmth');
-    expect(values['<TRAITS DESCRIPTION>']).toContain('Saltborn');
+    expect(values('<STATS DESCRIPTION>')).toContain('Warmth');
+    expect(values('<TRAITS DESCRIPTION>')).toContain('Saltborn');
     // Not chosen at character creation, so it is not part of the opening the author is previewing.
-    expect(values['<TRAITS DESCRIPTION>']).not.toContain('Landlocked');
+    expect(values('<TRAITS DESCRIPTION>')).not.toContain('Landlocked');
+  });
+
+  it('previews the stats under their stat groups', async () => {
+    expect((await previewValues())('<STATS DESCRIPTION|numbers>')).toBe('Body:\n  What the cold takes.\n  Warmth: 7/10');
   });
 
   it('carries every format variant, not just the plain one', async () => {
     const values = await previewValues();
 
-    expect(values['<LOCATION|markdown>']).toContain('**name:**');
-    expect(values['<LOCATION|xml>']).toContain('<name>');
-    expect(values['<ENTITIES|name>']).toBe('Wren');
+    expect(values('<LOCATION|markdown>')).toContain('**name:**');
+    expect(values('<LOCATION|xml>')).toContain('<name>');
+    expect(values('<ENTITIES|name>')).toBe('Wren');
   });
 
   it('previews the world’s own lore, split into the two blocks the game fills', async () => {
     const values = await previewValues();
 
     // Nothing has been typed, so no keyword has fired — the preview shows what this world could inject.
-    expect(values['<DICTIONARY>']).toContain('It takes and does not give back.');
-    expect(values['<DICTIONARY|before>']).toContain('No lamps after dusk.');
+    expect(values('<DICTIONARY>')).toContain('It takes and does not give back.');
+    expect(values('<DICTIONARY|before>')).toContain('No lamps after dusk.');
     // Position decides the block; an entry must not appear in both.
-    expect(values['<DICTIONARY>']).not.toContain('No lamps after dusk.');
+    expect(values('<DICTIONARY>')).not.toContain('No lamps after dusk.');
     // A disabled entry never reaches a prompt, so it must not reach the preview either.
-    expect(values['<DICTIONARY>']).not.toContain('Never injected.');
-    expect(values['<DICTIONARY|before>']).not.toContain('Never injected.');
+    expect(values('<DICTIONARY>')).not.toContain('Never injected.');
+    expect(values('<DICTIONARY|before>')).not.toContain('Never injected.');
   });
 
   it('falls back to the samples for what only a turn can answer', async () => {
@@ -387,15 +402,15 @@ describe('the world narration prompt field', () => {
 
     // No playthrough exists, so these have no authored answer — they must still resolve to something
     // rather than rendering as a raw token in the preview.
-    expect(values['<PLAYER ACTION>']).toBeTruthy();
-    expect(values['<NARRATION>']).toBeTruthy();
+    expect(values('<PLAYER ACTION>')).toBeTruthy();
+    expect(values('<NARRATION>')).toBeTruthy();
   });
 
   it('previews the guidance built from the player’s own settings, not a stand-in', async () => {
     const values = await previewValues();
 
     // The mocked setting above is 'single'; a hardcoded sample would not track it.
-    expect(values['<LENGTH GUIDANCE>']).toBe('Write a single paragraph.');
+    expect(values('<LENGTH GUIDANCE>')).toBe('Write a single paragraph.');
   });
 
   it('hands the field the world’s placeholders, so their chips work in a custom prompt', async () => {
@@ -419,7 +434,7 @@ describe('the world narration prompt field', () => {
 
   it('previews the language chip in the wording the open kind will actually send', async () => {
     const languageOf = (label: string) =>
-      promptChips(label).previewValues['<LANGUAGE>'];
+      readValue(promptChips(label).previewValues, '<LANGUAGE>');
     const user = await openNarration();
     expect(languageOf('World narration prompt')).toBe('Write all narration in French.');
     await user.click(picker('Choices'));

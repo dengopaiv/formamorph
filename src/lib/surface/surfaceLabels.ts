@@ -11,13 +11,14 @@ import { HUB_LABEL, OVERVIEW_LABEL, PROMPT_LABELS, SURFACE_LABELS as PROMPT_SURF
 import { BENCH_TABS } from '@/lib/testBench/benchTabs';
 import type { SurfaceId } from '@/lib/docs/surfaceMap';
 import { FORMAQUESTION_TABS } from '@/components/formaquestion/formaquestionTabs';
-import { FORMAQUESTION_SETTINGS_TABS } from '@/components/formaquestion/formaquestionSettingsTabs';
+import { FORMAQUESTION_SETTINGS_TABS, WIKI_CONFIRM_COPY } from '@/components/formaquestion/formaquestionSettingsTabs';
 import { SETTINGS_ENDPOINT_TABS, SETTINGS_TABS } from '@/components/modals/settingsTabs';
 import { TOOL_EDIT_TABS } from '@/components/modals/toolsView';
 import { DICTIONARY_BOOK_PANEL_TABS } from '@/views/dictionaryBookPanelTabs';
+import { PLACEHOLDER_PANEL_TABS } from '@/views/placeholderPanelTabs';
 import { DICTIONARY_EDITOR_TABS } from '@/views/dictionaryEditorTabs';
 import { DICTIONARY_PANEL_TABS } from '@/views/dictionaryPanelTabs';
-import { ENTITY_EDITOR_TABS, ENTITY_PANEL_TABS } from '@/views/entityPanelTabs';
+import { ENTITY_EDITOR_SUBTABS, ENTITY_EDITOR_TABS, ENTITY_PANEL_TABS } from '@/views/entityPanelTabs';
 import { LOCATION_PANEL_TABS } from '@/views/locationPanelTabs';
 import { STAT_PANEL_TABS } from '@/views/statPanelTabs';
 import { TRAIT_PANEL_TABS } from '@/views/traitPanelTabs';
@@ -43,6 +44,12 @@ const ENTRIES: [string, string][] = [
   ['memoryManager', 'Memories'],
   ['persona', 'Change Persona'],
   ['replaceSource', 'Replace Source'],
+  ['imageReplace', 'Replace Which Image'],
+  ['codeRename', 'Update Code References'],
+  ['replaceAll', 'Replace All'],
+  ['deleteWorldAvatar', 'Delete Avatar'],
+  ['savedElsewhere', 'World Saved in Another Tab'],
+  ['deletedElsewhere', 'World Deleted in Another Tab'],
   ['settings', 'Settings'],
   ['worldEditor', 'World Editor'],
   ['worldUpdate', 'Update This World'],
@@ -52,6 +59,7 @@ const ENTRIES: [string, string][] = [
   ['entity', 'Entity'],
   ['enterWorld', 'Enter World'],
   ['errorDetails', 'Error Details'],
+  ['imageSetup', 'Image Setup'],
   ['export', 'Export story'],
   ['intro', 'Introduction'],
   ['location', 'Change Location'],
@@ -77,7 +85,9 @@ const ENTRIES: [string, string][] = [
   ['formaquestionSettings', 'Formaquestion Settings'],
   ['formaquestionCompare', 'Compare'],
   ['settingsCompare', 'Compare'],
+  ['chipOptions', 'Chip Options'],
   ['formaquestionAiContext', 'AI Context'],
+  ['formaquestionWikiConfirm', WIKI_CONFIRM_COPY.title],
   ['designSystemGroupPicker.picker', 'Add To Group'],
   ['designSystemGroupPicker.create', 'Create New Group'],
 
@@ -97,10 +107,11 @@ const ENTRIES: [string, string][] = [
   ...tabsOf('worldEditorTrait', TRAIT_PANEL_TABS),
   ...tabsOf('worldEditorEntry', DICTIONARY_PANEL_TABS),
   ...tabsOf('worldEditorBook', DICTIONARY_BOOK_PANEL_TABS),
+  ...tabsOf('worldEditorPlaceholder', PLACEHOLDER_PANEL_TABS),
   ...tabsOf('worldEditorBench', BENCH_TABS),
   ...tabsOf('worldEditorTour', TOUR_STEPS.map((step) => ({ value: step.id, label: step.title }))),
   ...tabsOf('entityEditor', ENTITY_EDITOR_TABS),
-  ...tabsOf('entityEditorEntity', ENTITY_PANEL_TABS.filter((tab) => tab.value !== 'traits' && tab.value !== 'placeholders')),
+  ...tabsOf('entityEditorEntity', ENTITY_EDITOR_SUBTABS),
   ...tabsOf('dictionaryEditor', DICTIONARY_EDITOR_TABS),
   ...tabsOf('formaquestion', FORMAQUESTION_TABS),
   ...tabsOf('formaquestionSettings', FORMAQUESTION_SETTINGS_TABS),
@@ -115,6 +126,7 @@ const ENTRIES: [string, string][] = [
   ['publish.prompt', KIND_LABELS.prompt.one],
   ['feedbackHub.bugs', FEEDBACK_TYPE_LABELS.bug.many],
   ['feedbackHub.suggestions', FEEDBACK_TYPE_LABELS.suggestion.many],
+  ['feedbackHub.questions', FEEDBACK_TYPE_LABELS.question.many],
   ['profile.messages', 'Messages'],
   ['profile.notifications', 'Notifications'],
   ['profile.terms', 'Terms'],

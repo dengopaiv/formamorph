@@ -97,6 +97,11 @@ Pick a suggestion or type your own. A **style** works too, like *formal English*
     label: 'Markdown Formatting',
     description: 'Allows bold, lists, and tables in narration',
   },
+  stripLinksAndImages: {
+    label: 'Strip Links And Images',
+    description: 'Sends past narration to the AI without markdown links and images',
+    info: 'A link keeps its text and an image is removed. Covers the last story, memory summaries, diary entries and recall results. You still see them in the story, and your world’s own text is never changed. Turn off if your model should keep writing links it sees.',
+  },
 
   // ── Display · Accessibility ─────────────────────────────────────────────────
   narrationFont: {
@@ -162,6 +167,12 @@ Useful for world authoring and debugging.`,
     description: 'Resolves the move before the scene is written',
     info: 'Applies your action\'s move first, so the scene is narrated in the new location. Skips the **Move to…?** confirmation.',
   },
+  entityMovement: {
+    label: 'Entity Movement',
+    description: 'Asks the AI each turn whether entities here come with you',
+    info: `- Each entity that can follow you adds its **own request**
+- Without it, followers still follow and fixed entities keep their places`,
+  },
 
   // ── Output · Reasoning ──────────────────────────────────────────────────────
   thinking: {
@@ -178,7 +189,7 @@ Useful for world authoring and debugging.`,
     label: 'Native Reasoning',
     description: 'Sets whether reasoning models think, and how hard',
     // The caveat that used to close all eight effort levels, said once for the whole control.
-    info: 'Some models think privately before they answer. Uncheck to stop that. The dropdown sets how much effort they spend, and **Model Default** sends no hint. Every prompt set to **Global** follows this row. Models without native reasoning ignore it.',
+    info: 'Some models think privately before they answer. Uncheck to stop that on every prompt. Each prompt keeps its own setting for when you check it again. The dropdown sets how much effort they spend, and **Model Default** sends no hint. Every prompt set to **Global** uses this strength. Models without native reasoning ignore it.',
   },
 
   // ── Output · Tools ──────────────────────────────────────────────────────────
@@ -241,10 +252,19 @@ Runs one extra request per turn. Edit its prompt under **Prompts → Summaries**
     label: 'Measured Clock',
     description: 'Measures how much story time each turn takes',
     experimental: true,
-    info: `Lets the turn's events set how much story time passes. Without it, every action costs a flat **one hour**.
+    info: `Lets the turn's events set how much story time passes. Without it, each action costs the **Time Per Turn** below.
 
 - A few spoken words cost minutes; a night's rest costs hours; *"three weeks later"* costs three weeks
 - Adds one small request per turn, next to choices and stat updates
+- Feeds the **Log** panel's clock, stat regeneration, and **Time in Memory**`,
+  },
+  timePerTurn: {
+    label: 'Time Per Turn',
+    description: 'Sets how much story time each turn adds',
+    info: `Moves the clock this far each turn. The default is 1 hour.
+
+- Enter an amount, then pick minutes, hours, days or weeks
+- Enter 0 to hold the clock still, so short scenes don't run days ahead
 - Feeds the **Log** panel's clock, stat regeneration, and **Time in Memory**`,
   },
   semanticLore: {
@@ -262,7 +282,7 @@ Runs one extra request per turn. Edit its prompt under **Prompts → Summaries**
     description: 'Writes a description for each character the story invents',
     info: `Adds a written description to each character the story invents, so you can open it like any authored character. Those characters already appear in the **Characters** panel on their own.
 
-Runs one extra request the first time a new character is named. Remove any you don't want from the **Characters** panel during play.`,
+Runs one extra request the first time a new character is named. Remove any you don't want from the **Characters** panel during the game.`,
   },
   characterDiaries: {
     label: 'Character Diaries',
@@ -303,7 +323,7 @@ Runs one extra request per participant. Edit its prompt under **Prompts → Diar
   concurrentRequests: {
     label: 'Concurrent Requests',
     description: 'Runs each turn’s follow-up requests at the same time',
-    info: `Sends choices, stat updates, and the location change together instead of one after another.
+    info: `Sends choices, stat updates, and the location change together instead of one after another. Requests between turns, like memory summaries, run together too.
 
 - Faster turns on endpoints that handle parallel requests (e.g. LM Studio's **Parallel** setting)
 - Turn off if a memory-tight local model slows down under the load`,
@@ -339,6 +359,17 @@ Runs one extra request per participant. Edit its prompt under **Prompts → Diar
   endpointTopP: { label: 'Top-p', description: 'Overrides this endpoint’s Top-p setting' },
   endpointTopK: { label: 'Top-k', description: 'Overrides this endpoint’s Top-k setting' },
   endpointMinP: { label: 'Min-p', description: 'Overrides this endpoint’s Min-p setting' },
+  extraParams: {
+    label: 'Extra Parameters',
+    description: 'Adds JSON fields to every request to this endpoint',
+    info: `Write one JSON object, for example a vendor's reasoning switch, \`top_a\`, \`chat_template_kwargs\` or a routing block.
+
+A field the app sets for a request wins over the same field here. These fields only add what the app does not set.
+
+You can't set \`model\`, \`messages\`, \`stream\`, \`tools\`, \`tool_choice\`, \`response_format\`, \`n\` or \`stop\`.
+
+If the text has an error, requests go out without these fields.`,
+  },
 
   // ── Endpoints · Image ───────────────────────────────────────────────────────
   enableImageGeneration: {
@@ -392,9 +423,23 @@ You can still generate a single scene yourself from the button above the story.`
     label: 'Sampler',
     description: 'Selects the sampling algorithm',
   },
+  cleanTags: {
+    label: 'Clean Up Tags',
+    description: 'Rewrites scene and generated tags as plain lowercase words',
+    info: 'Also removes weights and other prompt syntax, such as NovelAI’s `{tag}` or `1.5::tag ::`. Turn off to send your entity and location tags as you wrote them. Never changes the **Prompt Prefix** or **Negative Prompt**.',
+  },
   faceFix: {
     label: 'Face Fix',
     description: 'Re-renders faces in a second pass',
+  },
+  imageFileName: {
+    label: 'File Name',
+    description: 'Sets where ComfyUI saves each image in its output folder',
+    info: `A \`/\` makes a folder. ComfyUI adds a counter and \`.png\`.
+
+\`{world}\` \`{subject}\` (an entity's or location's name, or \`turn-12-scene\`) \`{turn}\` \`{preset}\`
+
+A custom workflow takes it where its save node's prefix is \`%prefix%\`.`,
   },
   imageWorkflow: {
     label: 'Workflow (API Format)',
@@ -471,7 +516,44 @@ Turn it off only if an old GPU or backend can't run it.`,
     description: 'Sets how many requests the model answers at once',
     info: `After the narration, a turn sends several follow-up requests: choices, stat changes, the location check. Sets how many of them the model answers at the same time instead of one after another.
 
-A higher value speeds up a turn, but the requests split the context between them, and each uses more VRAM.`,
+A higher value speeds up a turn. With **Unified KV Cache** on, the requests share one context, so a long request leaves less room for the others. With it off, each request gets the full **Context Size**, and the context uses more VRAM.`,
+  },
+  localUnifiedKvCache: {
+    label: 'Unified KV Cache',
+    description: 'Lets parallel requests share one context',
+    info: `Keeps one context that all parallel requests share, so extra requests add no VRAM. A long request leaves less room for the others.
+
+Turn it off to give each request the full **Context Size**. The context then uses **Parallel Requests** times more VRAM.`,
+  },
+  localKCacheType: {
+    label: 'K Cache Type',
+    description: 'Trades a little quality for a longer context',
+    info: `Sets the precision of the context's key half. **Q8_0** and **Q4_0** shrink it, so a longer **Context Size** fits in the same VRAM.
+
+**F16** is full precision. Lower values can make the story read a little worse over a long context.`,
+  },
+  localVCacheType: {
+    label: 'V Cache Type',
+    description: 'Trades a little quality for a longer context',
+    info: `Sets the precision of the context's value half. **Q8_0** and **Q4_0** shrink it, so a longer **Context Size** fits in the same VRAM.
+
+A lower value needs **Flash Attention** on.`,
+  },
+  localKvCacheInRam: {
+    label: 'KV Cache in RAM',
+    description: 'Frees VRAM, but replies get much slower as the story grows',
+    info: `Moves the context from VRAM to system RAM, so the model's weights get the VRAM. Replies get much slower, and the slowdown grows as the context fills.
+
+Try a smaller **K Cache Type** and **V Cache Type** first. Use this only when the model still doesn't fit.`,
+  },
+  localContextOverflow: {
+    label: 'Context Overflow',
+    description: 'Chooses what happens when the story is longer than the context',
+    info: `- **Truncate Middle** keeps the system prompt and your first message, and drops messages from the middle
+- **Rolling Window** keeps the system prompt and drops the oldest messages first
+- **Stop at Limit** drops nothing and stops the request with an error
+
+The model never sees part of a message.`,
   },
   localAutoLoad: {
     label: 'Auto-Load',
@@ -541,7 +623,7 @@ Small steps matter: 1.05 to 1.15 is typical. High values can break names and pun
   promptNativeReasoning: {
     label: 'Native Reasoning',
     description: 'Sets whether this prompt reasons, and how hard',
-    info: 'Uncheck and this prompt does no reasoning. **Global** follows the **Native Reasoning** row under Settings → Output, its switch included. **Model Default** sends no hint. Only applies to models with native reasoning.',
+    info: 'Uncheck and this prompt does no reasoning. The **Native Reasoning** row under Settings → Output turns reasoning off on every prompt, and **Global** uses its strength. **Model Default** sends no hint. Only applies to models with native reasoning.',
   },
   promptEndpoint: {
     label: 'Endpoint',
@@ -579,7 +661,7 @@ Small steps matter: 1.05 to 1.15 is typical. High values can break names and pun
     label: 'Direction Message',
     description: 'Marks bracketed text as your direction, not speech',
     sentWhen: 'Sent with your action whenever it contains [square brackets]',
-    info: 'Tells the AI the bracketed text is you directing the scene as the author, not something your character says',
+    info: 'Tells the AI the bracketed text is you directing the scene as the author, not something your persona says',
   },
 
   // ── Prompts · Overview ──────────────────────────────────────────────────────
@@ -603,13 +685,31 @@ Small steps matter: 1.05 to 1.15 is typical. High values can break names and pun
   // ── Data · Saves ────────────────────────────────────────────────────────────
   autosave: {
     label: 'Autosave',
-    description: 'Saves after every turn to a per-world Autosave slot',
-    info: `- Never touches your manual saves
+    description: 'Saves after every turn to the world\'s autosaves',
+    info: `- Named by turn
+- Never touches your manual saves
 - Appears under **Load Game** with an **Auto** tag
 - Starts once the opening scene finishes`,
   },
+  autosaveSlots: {
+    label: 'Autosaves Kept',
+    description: 'Keeps this many autosaves per world, replacing the oldest',
+  },
 
   // ── Data · Authoring ────────────────────────────────────────────────────────
+  editorAutoSave: {
+    label: 'Autosave',
+    description: 'Saves your world while you edit it',
+    info: `- Saves after a large run of edits or a short pause
+- **Save** and **Ctrl+S** still save right away
+- A new world waits for your first save
+- The **Save** menu in the World Editor has the same switch`,
+  },
+  editorAutoSavePause: {
+    label: 'Autosave Pause',
+    description: 'Waits this long after your last edit before saving',
+    info: 'A longer pause writes less often but leaves more unsaved',
+  },
   authoringTour: {
     label: 'Authoring Tour',
     description: 'Walks you through building a new world, one field at a time',
@@ -638,6 +738,8 @@ export const SETTINGS_BUTTONS = {
 /** Status text the modal draws where a group of controls would be. */
 export const SETTINGS_NOTES = {
   imageGenerationOff: 'Image generation is off. Select “Enable Image Generation” to turn it on.',
+  imageModelFromWorkflow: `Shows the model the workflow loads. Change it in **${SETTINGS_COPY.imageWorkflow.label}** under **Advanced**.`,
+  imageFileNameNoPrefix: `Add \`%prefix%\` to the save node in **${SETTINGS_COPY.imageWorkflow.label}** to use this setting`,
 } as const;
 
 /** Every confirmation the modal raises. Bodies are sentences and carry their own punctuation. */
@@ -660,7 +762,7 @@ export const SETTINGS_CONFIRMS = {
   },
   resetAiEndpoint: {
     title: 'Reset AI Endpoint',
-    description: 'Are you sure you want to reset the endpoint URL, model name, API token, and limits to their default values?',
+    description: 'Are you sure you want to reset the endpoint URL, model name, API token, limits, and Extra Parameters to their default values?',
   },
   resetWorkflow: {
     title: 'Reset Workflow',
@@ -729,11 +831,18 @@ export const SETTINGS_OPTIONS = {
 export const REASONING_NOTES = {
   never: 'This model doesn’t support reasoning, so there’s nothing to configure',
   always: 'This model always reasons, so it can’t be switched off',
-  noBudgetBase: 'Set “Max Output Tokens” on this prompt’s endpoint to use this budget',
+  globalOff: 'Off on every prompt while Native Reasoning under Settings → Output is unchecked',
 } as const;
 
 export const TOOLS_NOTES = {
   unsupported: 'Your text endpoint doesn’t support Tools, or support isn’t confirmed yet',
+} as const;
+
+/** The Recheck control on the muted Native Reasoning and Tools rows. */
+export const CAPABILITY_RECHECK = {
+  checkedFor: (model: string) => `Checked for ${model}`,
+  recheck: 'Recheck',
+  checking: 'Checking…',
 } as const;
 
 /**

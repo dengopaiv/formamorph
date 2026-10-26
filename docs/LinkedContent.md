@@ -3,7 +3,7 @@
 
 How a world's entities and dictionaries follow a library item, and what that link does at each step: editing, updating, publishing, downloading, and repair.
 
-> The same story, in short, is the `?` beside the **Linked** badge in the [World Editor](WorldEditor) and in the title bar of **Update Available** and **Update This World**.
+> The same story, in short, opens from **About Linked Content…** in a linked copy's menu in the [World Editor](WorldEditor), and from the `?` in the title bar of **Update Available** and **Update This World**.
 
 ## How to Link a Copy to Your Library
 <!-- keywords: save entity, sync, connect, share between worlds, reuse, item, attach to original, use character elsewhere, same character two worlds, store for later, bind to master, keep copies matching, reattach -->
@@ -89,8 +89,8 @@ A **linked copy** follows a **library item**. When you save the library item, ev
 | Action | Result |
 |---|---|
 | **Save to Library** | Saves the copy as a library item and links the copy to it. |
-| **Add Entity**, **Add Dictionary** | Adds a copy of a library item. **Link to Library** is on by default. |
-| **Import Entity…**, **Import Dictionary…** | Adds a copy from a file, with the same **Link to Library** choice. |
+| **Add From Library…** | In the **+** menu on **Entities** and **Dictionary**. Adds a copy of a library item. **Link to Library** is on by default. |
+| **Import Entity…**, **Import Dictionary…** | In the same **+** menu. Adds a copy from a file, with the same **Link to Library** choice. |
 | **Link to Library Item…** | In an independent copy's menu. Links the copy to a library item you pick. |
 
 All four make the same link.

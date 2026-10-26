@@ -94,7 +94,6 @@ describe('removing a system node', () => {
     fireEvent.click(within(blueprints).getByRole('button', { name: 'Remove Blueprints' }));
     expect(screen.getByText(
       "Its 3 links become each entity's own trait, and the linked originals are deleted. "
-      + 'The copies on Vex lose their stat changes and stat toggles. '
       + 'The other traits move to the top level, where the player can pick them.',
     )).toBeInTheDocument();
     confirm();
@@ -103,7 +102,7 @@ describe('removing a system node', () => {
     expect(marked(ctx)).not.toHaveProperty('traitLinks');
     expect(marked(ctx).traits?.map((t) => t.name).sort()).toEqual(['Paladin', 'Wizard']);
     const vex = ctx().entities.find((e) => e.id === 'e-vex')!;
-    expect(vex.traits).toMatchObject([{ name: 'Wizard', statChanges: [] }]);
+    expect(vex.traits).toMatchObject([{ name: 'Wizard', statChanges: [{ statId: 'hp', value: 1, type: 'max' }] }]);
   });
 
   it('removes Blueprints with no links without mentioning them', () => {
@@ -141,8 +140,7 @@ describe('removing a system node', () => {
       .find((row) => within(row).queryByRole('button', { name: 'Open Paladin' }))!;
     fireEvent.click(within(link).getByText('Paladin'));
     openTraitFieldsTab('Availability');
-    expect(screen.getByText('Selected when a new game starts')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Enabled by Default/ }));
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Starts' })).getByRole('radio', { name: 'On' }));
     expect(marked(ctx).traitLinks?.[0].overrides).toEqual({ 't-paladin': { isDefault: { value: true, blueprint: false } } });
   });
 });
@@ -159,7 +157,7 @@ describe('system nodes in Basic', () => {
     expect(marked(ctx).traitLinks?.map((l) => l.id)).toEqual(['l-wizard']);
   });
 
-  it('hides an empty Blueprints group and a Custom Persona entity that bears nothing', () => {
+  it('hides an empty Blueprints group and a Custom Persona entity that has nothing', () => {
     renderWorldEditorBench({ ...BARE, traitGroups: FULL.traitGroups, entities: [{ id: 'e-you', name: 'Wanderer', customPersona: true }] }, 'simple');
     openTab(/Traits/);
     expect(treeRow('Brave')).toBeDefined();

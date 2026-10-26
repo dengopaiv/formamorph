@@ -1,8 +1,12 @@
-import type { AIRequestType, ChatMessage, Entity, ImageAttachment, RequestMessage } from '@/types';
+import type { AIRequestType, ChatMessage, Entity, GameLocation, ImageAttachment, RequestMessage } from '@/types';
 import type { AnatomyRun, RequestAnatomy } from '@/lib/requestAnatomy';
 import type { ThinkingMode } from '@/contexts/SettingsContext';
 import type { StatRequestSnapshot } from '@/lib/statRequest';
+import type { StatText } from '@/lib/statTextPrompts';
+import type { TokenValues } from '@/lib/promptValues';
+import type { ResponseSchema } from '@/lib/aiRequest/responseSchema';
 import type { PromptAttachmentsMap } from '@/lib/promptAttachments';
+import type { EntityMoveReply } from '@/lib/entityFollowing';
 
 /**
  * The Turn Plan: what one turn will ask the model, decided before any request is sent.
@@ -16,6 +20,7 @@ import type { PromptAttachmentsMap } from '@/lib/promptAttachments';
 /** Every pass one turn can dispatch. */
 export type TurnPassId =
   | 'locationAuto'
+  | 'entityLocationAuto'
   | 'thinking'
   | 'director'
   | 'character'
@@ -24,6 +29,7 @@ export type TurnPassId =
   | 'choices'
   | 'statUpdates'
   | 'locationSuggest'
+  | 'entityLocationSuggest'
   | 'summary'
   | 'timePassed'
   | 'openingTime'
@@ -45,10 +51,13 @@ export interface TurnSettings {
   concurrentTurnRequests: boolean;
   choicesEnabled: boolean;
   statUpdatesEnabled: boolean;
-  /** Live stats in this world; with none, the stat pass would only invent names that match nothing. */
+  /** Live stats the request could hold: the player's and every entity's that can be present. With none, the
+   *  stat pass would only invent names that match nothing. */
   statCount: number;
   locationChangeEnabled: boolean;
   locationAutoApply: boolean;
+  /** The Entity Movement setting, which governs the entity location requests. */
+  entityMovement: boolean;
   aiClock: boolean;
   memoryDigests: boolean;
   characterDiaries: boolean;
@@ -60,12 +69,17 @@ export interface TurnSettings {
   promptAttachments: PromptAttachmentsMap;
   /** Narration language or style; anything but English appends a language directive to some prompts. */
   language: string;
+  /** The Strip Links And Images setting. On, the diary entries and digests a pass reads lose their
+   *  markdown links and images (see lib/stripLinksAndImages). */
+  stripLinksAndImages: boolean;
 }
 
 /** The prompt texts a turn renders — the active preset's, already placeholder-resolved. */
 export interface TurnPrompts {
   locationChange: string;
   locationChangeUser: string;
+  entityLocation: string;
+  entityLocationUser: string;
   thinking: string;
   director: string;
   directorUser: string;
@@ -80,6 +94,8 @@ export interface TurnPrompts {
   choicesUser: string;
   statUpdates: string;
   statUpdatesUser: string;
+  /** The built-in preset's text pass prompts. */
+  statText: StatText;
   summary: string;
   summaryUser: string;
   milestoneSelect: string;
@@ -122,11 +138,17 @@ export interface TurnPassSubject {
   stance?: string;
   /** The defined entity this name resolves to; absent for an ad-hoc, planner-invented name. */
   entity?: Entity;
+  /** The character's own stats field, as the narration's Entities chip renders it this turn. Absent for none. */
+  stats?: string;
   /** The character's own diary entries, oldest first, as the motivation pass is fed them. */
   diary?: string[];
   /** What the story showed of a noted character after their first passage, oldest first. Only a rewrite
    *  of the note carries it. */
   laterMaterial?: string[];
+  /** The replies an entity location request offers this subject, in offer order. */
+  moves?: EntityMoveReply[];
+  /** The places an entity location request offers this subject to walk to, after `moves`. */
+  destinations?: GameLocation[];
 }
 
 /**
@@ -135,17 +157,20 @@ export interface TurnPassSubject {
  */
 export interface TurnMaterial {
   statRequest?: StatRequestSnapshot;
+  /** The context values the stat pass renders from: `ctx` over a scene whose stats carry their request keys.
+   *  The stat pass reads `ctx` when absent. */
+  statCtx?: TokenValues;
   /** The player's action verbatim — what the location router and the narration are fed. */
   action: string;
   /** The action every other consumer sees ("START GAME" on the opening turn). */
   effectiveAction: string;
   turnId: string;
   /** Context values scoped to this turn's location (after any auto-resolved move). */
-  ctx: Record<string, string>;
+  ctx: TokenValues;
   /** Context values scoped to the location the turn began in — what the digest and diary passes see. */
-  baseCtx: Record<string, string>;
+  baseCtx: TokenValues;
   /** Entity chips narrowed to who is actually in the scene, for the choices pass. */
-  sceneEntityTokens: Record<string, string>;
+  sceneEntityTokens: TokenValues;
   /** Names the location router may answer with. */
   destinations: string[];
   /**
@@ -218,6 +243,10 @@ export function emptyTurnMaterial(seed: TurnMaterialSeed): TurnMaterial {
  *  turn's images to the passes that include them. */
 export interface TurnPassRequest<TMessage extends RequestMessage = RequestMessage> {
   statRequest?: StatRequestSnapshot;
+  /** A schema the reply must follow. */
+  responseSchema?: ResponseSchema;
+  /** What the request sends instead, with no schema, when the endpoint refuses the schema. */
+  textFallback?: Pick<TurnPassRequest<TMessage>, 'systemPrompt' | 'messages' | 'maxTokens' | 'anatomy'>;
   type: AIRequestType;
   systemPrompt: string;
   messages: TMessage[];
@@ -252,6 +281,11 @@ export interface TurnPassRecord<TParsed = unknown> {
    * nothing to ask about. Absent means always ready.
    */
   isReady?(material: TurnMaterial): boolean;
+  /**
+   * Sent in the same dispatch as its stage's other passes when the concurrency is parallel, after them when
+   * it is serial. A failed request is dropped instead of ending the turn.
+   */
+  companion?: boolean;
   buildRequest(input: TurnPlanInput, material: TurnMaterial): TurnPassRequest<ChatMessage>;
   parseResponse(raw: string, material: TurnMaterial): TParsed;
 }

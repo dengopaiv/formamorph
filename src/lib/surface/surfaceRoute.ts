@@ -40,8 +40,10 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
   formaquestion: { host: 'any' },
   formaquestionSettings: { host: 'any' },
   formaquestionAiContext: { host: 'any' },
+  formaquestionWikiConfirm: { ancestor: 'formaquestion' },
   formaquestionCompare: { ancestor: 'formaquestionSettings.prompts' },
   settingsCompare: { ancestor: 'settings.prompts' },
+  chipOptions: { ancestor: 'settings.prompts' },
 
   menu: { host: 'mainMenu' },
   intro: { host: 'mainMenu' },
@@ -72,6 +74,13 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
   deleteAccount: { ancestor: 'profile.settings' },
   connectReferences: { ancestor: 'worldEditor' },
   replaceSource: { ancestor: 'worldEditorBench.issues' },
+  // Asked partway through an edit, so help lands on the editor that asks them.
+  imageReplace: { ancestor: 'worldEditor' },
+  codeRename: { ancestor: 'worldEditor' },
+  replaceAll: { ancestor: 'worldEditor' },
+  deleteWorldAvatar: { ancestor: 'worldEditor.overview' },
+  savedElsewhere: { ancestor: 'worldEditor' },
+  deletedElsewhere: { ancestor: 'worldEditor' },
 
   export: { host: 'gameViewer' },
   location: { host: 'gameViewer' },
@@ -82,10 +91,12 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
   persona: { ancestor: 'gameViewer' },
   editText: { ancestor: 'gameViewer' },
   likePrompt: { ancestor: 'gameViewer' },
+  scriptPrompt: { ancestor: 'gameViewer' },
 
   // Raised by the app itself, never by the player: a refused build, an error toast, the Android back button.
   updateRequired: { ancestor: null },
   errorDetails: { ancestor: null },
+  imageSetup: { ancestor: null },
   exitApp: { ancestor: null },
   designSystem: { ancestor: null },
 
@@ -98,6 +109,7 @@ const LEDGERS: Record<TabKey, LedgerRoute> = {
   gameViewer: { parent: 'gameViewer' },
   gameViewerLayout: { ancestor: 'gameViewer' },
   gameViewerAttach: { ancestor: 'gameViewer' },
+  scriptPrompt: { ancestor: 'gameViewer' },
   designSystemGroupPicker: { ancestor: 'mainMenu' },
 
   settings: { parent: 'settings' },
@@ -110,6 +122,7 @@ const LEDGERS: Record<TabKey, LedgerRoute> = {
   worldEditor: { parent: 'worldEditor' },
   worldEditorBench: { parent: 'worldEditor' },
   worldEditorTour: { ancestor: 'worldEditor' },
+  worldEditorHistory: { ancestor: 'worldEditor' },
   worldEditorLocations: { ancestor: 'worldEditor.locations' },
   worldEditorLocation: { ancestor: 'worldEditor.locations' },
   worldEditorEntity: { ancestor: 'worldEditor.entities' },
@@ -117,6 +130,7 @@ const LEDGERS: Record<TabKey, LedgerRoute> = {
   worldEditorTrait: { ancestor: 'worldEditor.traits' },
   worldEditorEntry: { ancestor: 'worldEditor.dictionary' },
   worldEditorBook: { ancestor: 'worldEditor.dictionary' },
+  worldEditorPlaceholder: { ancestor: 'worldEditor.placeholders' },
   entityEditor: { ancestor: 'entityEditor' },
   entityEditorEntity: { ancestor: 'entityEditor' },
   dictionaryEditor: { ancestor: 'dictionaryEditor' },

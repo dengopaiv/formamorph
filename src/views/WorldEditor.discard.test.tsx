@@ -3,8 +3,10 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { useEffect, type ReactNode } from 'react';
 import { GameDataProvider, useGameData } from '@/contexts/GameDataContext';
 import { SettingsProvider } from '@/contexts/SettingsContext';
+import { pickEditorMode } from '@/test/worldEditorBench';
 import WorldEditor from './WorldEditor';
 import type { World } from '@/types';
+import { codeAt } from '@/test/scriptFixtures';
 
 /**
  * Guards the "Exit Without Saving" contract end to end, through the real JSX.
@@ -42,7 +44,7 @@ const WORLD = {
   id: 'w1',
   worldOverview: {
     name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: true, tags: [],
+    systemPrompt: '', tags: [],
   },
   stats: [], locations: [], entities: [], traits: [], statUpdates: [],
 } as unknown as World;
@@ -102,6 +104,16 @@ describe('WorldEditor — exit without saving', () => {
     expect(ctx().worldOverview.name).toBe('Sedge Landing');
     expect(ctx().isWorldDirty).toBe(false);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the plain copy on a new world, which autosave never joined', async () => {
+    setup();
+    renameTo('Sedge Landing EDITED');
+
+    fireEvent.click(backArrow());
+
+    expect(await screen.findByText(/exit without saving, or keep editing/)).toBeInTheDocument();
+    expect(screen.queryByText(/Autosave kept the rest/)).toBeNull();
   });
 
   it('keeps the edit when the prompt is cancelled', async () => {
@@ -186,7 +198,7 @@ describe('WorldEditor — exit without saving, after a rename rewrote stat code'
     id: 'w2',
     worldOverview: {
       name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
-      systemPrompt: '', use3DModel: true, tags: [],
+      systemPrompt: '', tags: [],
     },
     stats: [{
       id: 's1', name: 'Health', type: 'number', description: '', min: 0, max: 100, value: 5, regen: 0,
@@ -219,7 +231,7 @@ describe('WorldEditor — exit without saving, after a rename rewrote stat code'
 
     // The Placeholders tab is Advanced only, and its panel opens on the row the author picks. A Radix tab
     // switches on the pointer press, not the click jsdom synthesizes after it.
-    fireEvent.click(screen.getByText('Advanced'));
+    pickEditorMode('Advanced');
     const tab = screen.getAllByRole('tab').find((t) => t.textContent === 'Placeholders')!;
     fireEvent.mouseDown(tab);
     fireEvent.pointerDown(tab, { pointerType: 'mouse', button: 0 });
@@ -232,16 +244,16 @@ describe('WorldEditor — exit without saving, after a rename rewrote stat code'
     fireEvent.blur(field);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Update Code' }));
-    expect(ctx.stats[0].beforeCode).toBe('placeholders.Temper.pin("bleak");');
-    expect(ctx.stats[0].code).toBe('return placeholders.Temper.text.length;');
+    expect(codeAt(ctx.stats[0], 'before')).toBe('placeholders.Temper.pin("bleak");');
+    expect(codeAt(ctx.stats[0])).toBe('return placeholders.Temper.text.length;');
 
     await exitVia('Exit Without Saving');
 
     // Both halves of one edit. The rewrite goes through the editor's ordinary write path, so a discard that
     // took back only the name would leave the code naming a placeholder the world no longer has.
     expect(ctx.placeholders[0].name).toBe('Mood');
-    expect(ctx.stats[0].beforeCode).toBe('placeholders.Mood.pin("bleak");');
-    expect(ctx.stats[0].code).toBe('return placeholders.Mood.text.length;');
+    expect(codeAt(ctx.stats[0], 'before')).toBe('placeholders.Mood.pin("bleak");');
+    expect(codeAt(ctx.stats[0])).toBe('return placeholders.Mood.text.length;');
     expect(ctx.isWorldDirty).toBe(false);
     expect(onClose).toHaveBeenCalled();
   });

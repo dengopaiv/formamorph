@@ -31,7 +31,7 @@ function SupporterRow({ supporter }: { supporter: Supporter }) {
       >
         {supporter.username}
       </a>
-      <SupporterBadge tier={supporter.tier} since={supporter.since} />
+      <SupporterBadge tier={supporter.tier} since={supporter.since} beatKey={supporter.id} />
     </li>
   );
 }
@@ -62,7 +62,7 @@ export function SupportersPage() {
   return (
     <SiteLayout
       title="Supporters"
-      subtitle="People who back Formamorph on Patreon. Thank you."
+      subtitle="Development on Formamorph is only possible thanks to the generous users below. Thank you!"
       width="page"
     >
       {state.status === 'loading' && <p className="text-helper text-muted-foreground">Loading the Supporters wall…</p>}

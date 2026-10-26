@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { gotoDev, openApp, openPromptEditor } from './app';
 
-/** A Tool defined in Settings reaches the model during play: its call runs, its result reaches the next
+/** A Tool defined in Settings reaches the model during the game: its call runs, its result reaches the next
  *  round, and the narration lands. */
 
 const TOOL_NAME = 'read_ledger';
@@ -73,7 +73,7 @@ async function act(page: Page, action: string) {
 
 const toolMessages = (body: WireBody) => body.messages.filter((m) => m.role === 'tool');
 
-test('a Tool defined in Settings is called during play, and AI Context shows its round', async ({ page }) => {
+test('a Tool defined in Settings is called during the game, and AI Context shows its round', async ({ page }) => {
   page.on('pageerror', (error) => console.error(error.message));
   const server = await mockServer(page);
   await openApp(page, { ...SETTINGS, FORMAMORPH_showSilentRequests: true });
@@ -112,11 +112,11 @@ test('a Tool defined in Settings is called during play, and AI Context shows its
 
   server.hold();
   await act(page, 'I ask the clerk what I owe.');
-  // Between the call and the reply, the silent status line names the lookup.
-  await expect(page.getByText('Looking up…')).toBeVisible();
+  // Between the call and the reply, the silent status line names the Tool.
+  await expect(page.getByText(`Calling ${TOOL_NAME}…`)).toBeVisible();
   server.release();
   await expect(page.getByText(REPLY).last()).toBeVisible();
-  await expect(page.getByText('Looking up…')).toHaveCount(0);
+  await expect(page.getByText(`Calling ${TOOL_NAME}…`)).toHaveCount(0);
 
   const [first, second] = server.bodies;
   expect(first.tools?.map((t) => t.function.name)).toEqual([TOOL_NAME]);
@@ -167,7 +167,7 @@ test('with Show Silent Requests off, a Tool round stays out of sight, and Stop e
   await act(page, 'I ask the clerk what I owe.');
   await expect.poll(() => server.bodies.length).toBe(2);
   await expect(page.getByText('Generating Narration…')).toBeVisible();
-  await expect(page.getByText('Looking up…')).toHaveCount(0);
+  await expect(page.getByText(/^Calling /)).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Stop generating' }).click();
   await expect(page.getByPlaceholder(/Type your action/)).toBeEnabled();

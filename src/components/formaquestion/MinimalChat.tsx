@@ -16,9 +16,12 @@ import { ASSISTANT_BUBBLE, BUBBLE, FLOATING, PILL_BUTTON, TOP_FADE } from './flo
 import { cn } from '@/lib/utils';
 import { Answer } from './AskParts';
 import { HELD_LINE, useAskSend, useFollowEnd } from './useAskParts';
-import { ResizeGrip } from './FormaquestionFrame';
+import { emptyRoomLine, speakerName } from '@/lib/formaquestion/helpSpeaker';
+import { ResizeHandles, type ResizeHandlers } from './FormaquestionFrame';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { ScrollArrow } from './ScrollArrow';
+import { SemanticOfferCard } from './SemanticOfferCard';
+import type { SemanticSearch } from './useSemanticSearch';
 import type { PillFade } from './usePillFade';
 import { FormaquestionMenu, type MenuActions } from './FormaquestionMenu';
 import type { HelpChat } from './useHelpChat';
@@ -62,7 +65,7 @@ export function Pill({ move, large, headToggle, menu, onClose, fade }: {
       <FormaquestionMenu {...menu} onOpenChange={fade?.onMenuOpenChange} large={large} round />
       <Tip tip={large ? 'Close' : 'Close (F1)'}>
         <button type="button" aria-label="Close Formaquestion" onClick={onClose} className={cn(PILL_BUTTON, large ? 'h-12 w-12' : 'h-8 w-8')}>
-          <X aria-hidden className="h-4 w-4" />
+          <X aria-hidden className="h-5 w-5" />
         </button>
       </Tip>
     </div>
@@ -118,12 +121,14 @@ export function AskPill({ draft, onDraftChange, chat }: { draft: string; onDraft
  * The minimal chrome's chat column: a pill, the conversation as floating bubbles, and the ask field. No frame,
  * no title bar, no tabs. Older bubbles fade out at the top, and no scroll bar draws.
  */
-export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettingsChange, draft, onDraftChange, onOpen, onGo, move, resize, large, head, headSide = 'left', headToggle, menu, onClose, height }: {
+export function MinimalChat({ guide, failed, onRetry, chat, semantic, settings, onSettingsChange, draft, onDraftChange, onOpen, onGo, move, resize, large, head, headSide = 'left', headToggle, menu, onClose, height }: {
   /** Null until the docs load. */
   guide: Guide | null;
   failed: boolean;
   onRetry: () => void;
   chat: HelpChat;
+  /** The Semantic Search switch and its offer card. */
+  semantic: SemanticSearch;
   settings: HelpSettings;
   onSettingsChange: (change: HelpSettingsChange) => void;
   draft: string;
@@ -134,8 +139,8 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
   onGo: (route: SurfaceRoute) => void;
   /** Pointer handlers for the pill, where the window moves. */
   move?: DragHandlers;
-  /** Pointer handlers for the corner grip under the ask field. */
-  resize?: DragHandlers;
+  /** Pointer handlers for the resize handles on the column's edges. */
+  resize?: ResizeHandlers;
   /** Sheet-size controls. */
   large: boolean;
   /** The Mascot's head view, drawn at the pill's end on the Mascot's side. */
@@ -149,9 +154,8 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
   height?: number;
 }) {
   const { viewportRef, onScroll, away, toEnd } = useFollowEnd(chat.exchanges);
-  // The grip takes a strip under the ask field, clear of the Send button.
   return (
-    <div data-fq-piece="column" className={cn('relative flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2', resize && 'pb-3')} style={height === undefined ? undefined : { height }}>
+    <div data-fq-piece="column" className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2" style={height === undefined ? undefined : { height }}>
       {/* The Scrim: a panel of the app background, inset past the column. It sits behind every piece of the window, whose section is its own stacking context. */}
       {settings.scrimOpacity > 0 && (
         <div
@@ -166,14 +170,16 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
         <Pill move={move} large={large} headToggle={headToggle} menu={menu} onClose={onClose} />
         {headSide === 'right' && head}
       </div>
+      <SemanticOfferCard semantic={semantic} variant="floating" />
       <div className="relative min-h-0 flex-1">
       {/* A grid content wrapper lets the log fill a short column, so the bubbles sit at its foot. */}
       <ScrollArea
+        data-fq-fade=""
         className={cn('h-full', TOP_FADE)}
         viewportRef={viewportRef}
         viewportProps={{ 'data-fq-scroll': 'conversation', onScroll, className: '[&>div]:!grid [&>div]:min-h-full' }}
       >
-        <div role="log" aria-label="Conversation" aria-busy={chat.busy} className="flex min-h-full flex-col justify-end gap-2 px-1 pb-1 pt-8">
+        <div role="log" aria-label="Conversation" aria-busy={chat.busy} className="flex min-h-full flex-col justify-end gap-2 px-1 py-1">
           {!guide && (failed ? (
             <div role="alert" className={cn(ASSISTANT_BUBBLE, 'flex flex-col items-start gap-2')}>
               <span>The guide did not load</span>
@@ -182,7 +188,7 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
           ) : (
             <Hint role="status" className={ASSISTANT_BUBBLE}>Loading the guide…</Hint>
           ))}
-          {guide && chat.exchanges.length === 0 && <Hint className={ASSISTANT_BUBBLE}>Ask how to do something in Formamorph</Hint>}
+          {guide && chat.exchanges.length === 0 && <Hint className={ASSISTANT_BUBBLE}>{emptyRoomLine(speakerName(settings))}</Hint>}
           {guide && chat.exchanges.map((exchange) => (
             <div key={exchange.id} className="flex flex-col gap-2">
               <div className="ml-10 flex flex-col items-end gap-2 self-end">
@@ -199,7 +205,7 @@ export function MinimalChat({ guide, failed, onRetry, chat, settings, onSettings
       <ScrollArrow shown={away} onClick={toEnd} />
       </div>
       <AskPill draft={draft} onDraftChange={onDraftChange} chat={chat} />
-      {resize && <ResizeGrip resize={resize} className="pointer-events-auto" />}
+      {resize && <ResizeHandles resize={resize} className="pointer-events-auto" />}
     </div>
   );
 }

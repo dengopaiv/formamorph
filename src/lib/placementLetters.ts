@@ -1,8 +1,9 @@
 import type {
-  Dictionary, Entity, EntityGroup, GameLocation, Placeholder, Stat, Trait, TraitGroup, WorldOverview,
+  Connection, Dictionary, DictionaryEntry, Entity, EntityGroup, GameLocation, Placeholder, Stat, Trait, TraitGroup, WorldOverview,
 } from '@/types';
 import { entitiesInTreeOrder } from './entityGroupTree';
 import { locationRows } from './locationTree';
+import { connectionHints } from './connectionEditing';
 import {
   decodePlaceholderToken, hasPlaceholders, lonePlaceholderToken, parsePlaceholderText, PLACEHOLDER_PATH_SEPARATOR,
 } from './placeholders';
@@ -13,6 +14,7 @@ import { qualifiedPlaceholderName } from './placeholderTree';
 import { sortedDescriptors } from './statDescriptorGeometry';
 import { inAuthoredOrder, traitOrderIndex } from './traitEffects';
 import { entityTexts as entityTextFields } from './entityTexts';
+import { memoByRecord } from './memoByRecord';
 import { openingTexts } from './openings';
 import { overviewTexts } from './overviewTexts';
 
@@ -48,21 +50,43 @@ export function placementLetter(index: number): string {
  * chips share one roll.
  */
 export function placementLetters(texts: Iterable<string>): PlacementLetters {
-  const letters = new Map<string, string>();
-  const counts = new Map<string, number>();
+  return lettersOf([uniquePlacements(texts)]);
+}
+
+/** A Unique placement: its placement id and its placeholder id. */
+type Placement = readonly [placementId: string, placeholderId: string];
+
+/** The Unique placements in `texts`, in the order the texts run and the chips sit in them. */
+function uniquePlacements(texts: Iterable<string>): Placement[] {
+  const out: Placement[] = [];
   for (const text of texts) {
     if (!text || !hasPlaceholders(text)) continue;
     for (const seg of parsePlaceholderText(text)) {
       if (seg.type !== 'variable') continue;
       const token = decodePlaceholderToken(seg.token);
-      if (!token || token.mode !== 'unique' || letters.has(token.placementId)) continue;
-      const n = counts.get(token.id) ?? 0;
-      counts.set(token.id, n + 1);
-      letters.set(token.placementId, placementLetter(n));
+      if (token?.mode === 'unique') out.push([token.placementId, token.id]);
+    }
+  }
+  return out;
+}
+
+function lettersOf(runs: Iterable<readonly Placement[]>): PlacementLetters {
+  const letters = new Map<string, string>();
+  const counts = new Map<string, number>();
+  for (const run of runs) {
+    for (const [placementId, placeholderId] of run) {
+      if (letters.has(placementId)) continue;
+      const n = counts.get(placeholderId) ?? 0;
+      counts.set(placeholderId, n + 1);
+      letters.set(placementId, placementLetter(n));
     }
   }
   return letters;
 }
+
+/** `texts` read as placements, once per record. */
+const cachedPlacements = <T extends object>(texts: (record: T) => string[]) =>
+  memoByRecord((record: T) => uniquePlacements(texts(record)));
 
 /** True when two indexes letter the same placements the same way — what lets a memo keep its instance. */
 export function sameLetters(a: PlacementLetters, b: PlacementLetters): boolean {
@@ -80,6 +104,7 @@ export interface PlacementWorld {
   entities?: Entity[];
   entityGroups?: EntityGroup[];
   locations?: GameLocation[];
+  connections?: Connection[];
   traits?: Trait[];
   traitGroups?: TraitGroup[];
   stats?: Stat[];
@@ -93,13 +118,14 @@ const locationTexts = (l: GameLocation) => present([l.name, l.playerDescription,
 const traitTexts = (t: Trait | TraitGroup) => present([t.name, t.playerDescription, t.aiDescription]);
 /** Bands run by threshold, the order the player meets them in, whatever order the author listed them. */
 const statTexts = (s: Stat) => present([s.name, s.description, ...sortedDescriptors(s).map((d) => d.description)]);
-const entryTexts = (b: Dictionary) => (b.entries ?? []).flatMap((en) => present([en.name, ...(en.key ?? []), ...(en.secondaryKeys ?? []), en.value]));
+const entryFieldTexts = (en: DictionaryEntry) => present([en.name, ...(en.key ?? []), ...(en.secondaryKeys ?? []), en.value]);
+const entryTexts = (b: Dictionary) => (b.entries ?? []).flatMap(entryFieldTexts);
 const valueTexts = (placeholders: Placeholder[] | undefined) => (placeholders ?? []).flatMap((p) => (p.values ?? []).map((v) => v.text));
 
 /**
- * Every chip-bearing text of a world in document order: entities, locations and traits as their trees list
- * them, then trait groups, stats, dictionaries, the overview's prompt fields, and last the placeholders'
- * own values. The same fields the gameplay priming pass rolls across, so every chip that can roll in play
+ * Every chip-bearing text of a world in document order: entities and locations as their trees list them,
+ * the connections' Travel Hints, traits as their tree lists them, then trait groups, stats, dictionaries,
+ * the overview's prompt fields, and last the placeholders' own values. The same fields the gameplay priming pass rolls across, so every chip that can roll in play
  * can carry a letter — and the letters run down the editor's lists, so `(A)` is always above `(B)`.
  */
 export function worldPlacementTexts(world: PlacementWorld): string[] {
@@ -108,6 +134,7 @@ export function worldPlacementTexts(world: PlacementWorld): string[] {
   return [
     ...entitiesInTreeOrder(world.entityGroups ?? [], world.entities ?? []).flatMap(entityTexts),
     ...locationRows(world.locations ?? []).flatMap((row) => locationTexts(row.location)),
+    ...(world.connections ?? []).flatMap(connectionHints),
     ...inAuthoredOrder(traits, traitOrderIndex(traits, world.traitGroups ?? [])).flatMap(traitTexts),
     ...(world.traitGroups ?? []).flatMap(traitTexts),
     ...(world.stats ?? []).flatMap(statTexts),
@@ -127,8 +154,32 @@ export function dictionaryPlacementTexts(book: Dictionary): string[] {
   return [...entryTexts(book), ...valueTexts(book.placeholders)];
 }
 
-/** The letter index of a whole world — what every surface inside the World Editor reads. */
-export const worldPlacementLetters = (world: PlacementWorld): PlacementLetters => placementLetters(worldPlacementTexts(world));
+const entityPlacements = cachedPlacements(entityTexts);
+const locationPlacements = cachedPlacements(locationTexts);
+const connectionPlacements = cachedPlacements(connectionHints);
+const traitPlacements = cachedPlacements(traitTexts);
+const statPlacements = cachedPlacements(statTexts);
+const entryPlacements = cachedPlacements(entryFieldTexts);
+const overviewPlacements = cachedPlacements((ov: WorldOverview) => present(overviewTexts(ov)));
+const valuePlacements = cachedPlacements((p: Placeholder) => (p.values ?? []).map((v) => v.text));
+
+/** The letter index of a whole world — what every surface inside the World Editor reads. The same walk as
+ *  {@link worldPlacementTexts}, record by record. */
+export function worldPlacementLetters(world: PlacementWorld): PlacementLetters {
+  const ov = world.worldOverview;
+  const traits = world.traits ?? [];
+  return lettersOf([
+    ...entitiesInTreeOrder(world.entityGroups ?? [], world.entities ?? []).map(entityPlacements),
+    ...locationRows(world.locations ?? []).map((row) => locationPlacements(row.location)),
+    ...(world.connections ?? []).map(connectionPlacements),
+    ...inAuthoredOrder(traits, traitOrderIndex(traits, world.traitGroups ?? [])).map(traitPlacements),
+    ...(world.traitGroups ?? []).map(traitPlacements),
+    ...(world.stats ?? []).map(statPlacements),
+    ...(world.dictionaries ?? []).flatMap((b) => (b.entries ?? []).map(entryPlacements)),
+    ov ? overviewPlacements(ov) : [],
+    ...allPlaceholders(world).map(valuePlacements),
+  ]);
+}
 /** The letter index of a library character, which is its own document. */
 export const entityPlacementLetters = (entity: Entity): PlacementLetters => placementLetters(entityPlacementTexts(entity));
 /** The letter index of a library book, which is its own document. */

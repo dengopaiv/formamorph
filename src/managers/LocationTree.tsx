@@ -1,5 +1,4 @@
-import { randomUUID } from "@/lib/uuid";
-import { remintPlaceholdersDeep } from "@/lib/placeholders";
+import { copyWithFreshRolls, duplicateAfter } from "@/lib/duplicateAfter";
 import { useMemo } from 'react';
 import { useGameData } from '@/contexts/GameDataContext';
 import {
@@ -7,6 +6,7 @@ import {
   applyLocationDrop, type FlatLocationNode,
 } from '@/lib/locationTree';
 import { SortableTree, type SortableTreeAdapter } from './SortableTree';
+import { chipInput } from './chipInput';
 import { TREE_INDENT } from '@/components/EditorRow';
 import { EmptyListHint } from '@/components/EmptyListHint';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
@@ -23,6 +23,10 @@ const LocationTree = ({ selectedId, onSelect }: { selectedId: string | null; onS
   );
 
   const adapter: SortableTreeAdapter<FlatLocationNode> = {
+    visibleDeps: [locations],
+    rowDeps: [],
+    rowInputs: (node) => [parentIds.has(node.id), chipInput(placeholders, node.location.name)],
+    placeholders,
     getVisible: (collapsed) => removeCollapsedChildren(locationRows(locations), collapsed),
     project: (visible, activeId, overId, offsetLeft) =>
       getLocationDropProjection(visible, activeId, overId, offsetLeft, TREE_INDENT),
@@ -38,12 +42,9 @@ const LocationTree = ({ selectedId, onSelect }: { selectedId: string | null; onS
       name: node.location.name,
       remove: () => removeLocation(node.id),
       duplicate: () => {
-        const index = locations.findIndex((l) => l.id === node.id);
-        if (index === -1) return;
-        // Re-mint chip placements: a copied Unique chip must not share the source location's roll.
-        const copy = { ...remintPlaceholdersDeep(structuredClone(locations[index])), id: randomUUID() };
-        copy.name = `${copy.name} (Copy)`;
-        setLocations([...locations.slice(0, index + 1), copy, ...locations.slice(index + 1)]);
+        const { list, copy } = duplicateAfter(locations, node.id, copyWithFreshRolls);
+        if (!copy) return;
+        setLocations(list);
         onSelect(copy.id);
       },
     }),

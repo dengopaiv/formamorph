@@ -11,7 +11,7 @@ import type { Stat, World } from '@/types';
 
 /**
  * The Authoring Tour's Stats steps, driven through the real editor: the add step and its tour stat, the two
- * field steps, and In Play's two readers of one stat.
+ * field steps, and In Game's two readers of one stat.
  */
 
 vi.mock('@/lib/authoringTour/tourImages', () => ({
@@ -30,20 +30,10 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
 }));
-
-vi.setConfig({ testTimeout: 15_000 });
 
 const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 
@@ -51,7 +41,7 @@ const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 const WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   // A New World overview carries no readme or openings, which the overview type calls required.
 } as unknown as Partial<World>);
@@ -68,7 +58,7 @@ const stepNote = () => screen.getAllByRole('dialog').find((d) => within(d).query
 const noteButton = (name: string) => within(stepNote()).queryByRole('button', { name });
 const addButton = () => screen.getByRole('button', { name: 'Add to Stats' });
 
-const inPlay = () => screen.getByRole('region', { name: 'In Play' });
+const inPlay = () => screen.getByRole('region', { name: 'In Game' });
 const playerSees = () => within(inPlay()).queryByRole('region', { name: 'Player Sees' });
 const reader = (prompt: string) => within(inPlay()).queryByRole('region', { name: `${prompt} Reads` });
 const marks = (el: HTMLElement) => Array.from(el.querySelectorAll('mark')).map((m) => m.textContent);
@@ -232,7 +222,7 @@ describe('Authoring Tour — Stats steps', () => {
   });
 });
 
-describe('In Play — Stats', () => {
+describe('In Game — Stats', () => {
   it('Add: shows nothing until there is a stat', async () => {
     await resumeAt('add-stat');
     expect(playerSees()).toBeNull();
@@ -253,10 +243,10 @@ describe('In Play — Stats', () => {
     // The default descriptors follow the rename, so narration names the stat in the descriptor too.
     expect(marks(narration)).toEqual(['Sea Change', 'Sea Change']);
     expect(marks(updates)).toEqual(['Sea Change']);
-    // The shipped Stat Updates prompt places its Stats chip with no Header.
-    expect(readText(updates)).toBe('- **Sea Change:** 0/100');
+    // The shipped Stat Updates prompt heads its Stats chip Global Stats.
+    expect(readText(updates)).toBe('## Global Stats\n- **Sea Change:** 0/100');
     // Narration reads the status the Add button's descriptors give the stat, and never the number, under its chip's Header.
-    expect(readText(narration)).toBe(`## Player Stats\n${narrationLine(onlyStat(ctx))}`);
+    expect(readText(narration)).toBe(`## Global Stats\n${narrationLine(onlyStat(ctx))}`);
     expect(readText(narration)).not.toMatch(/\d/);
   });
 
@@ -270,10 +260,10 @@ describe('In Play — Stats', () => {
     fireEvent.click(noteButton('Use Example')!);
     const updates = reader('Stat Updates Prompt')!;
     await waitFor(() => expect(marks(updates)).toEqual([SEA_CHANGE_DESCRIPTION]));
-    expect(readText(updates)).toBe(`- **Sea Change:** 0/100 — ${SEA_CHANGE_DESCRIPTION}`);
+    expect(readText(updates)).toBe(`## Global Stats\n- **Sea Change:** 0/100 — ${SEA_CHANGE_DESCRIPTION}`);
 
     const narration = reader('Narration Prompt')!;
-    expect(readText(narration)).toBe(`## Player Stats\n${narrationLine(onlyStat(ctx))}`);
+    expect(readText(narration)).toBe(`## Global Stats\n${narrationLine(onlyStat(ctx))}`);
     expect(readText(narration)).not.toMatch(/\d/);
     expect(readText(narration)).not.toContain(SEA_CHANGE_DESCRIPTION);
     expect(marks(narration)).toEqual([]);

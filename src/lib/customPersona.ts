@@ -10,21 +10,21 @@ export type PersonaRole = 'cast' | 'playable' | 'only' | 'custom';
 export const personaRole = (e: Pick<Entity, 'persona' | 'personaOnly' | 'customPersona'>): PersonaRole =>
   (e.customPersona ? 'custom' : !e.persona ? 'cast' : e.personaOnly ? 'only' : 'playable');
 
-/** The fields a role writes. The Custom Persona role clears the Persona marks, and its node's placement so it
- *  moves to the end of the Traits tab's top level. */
+/** The fields a role writes. The Custom Persona role clears the Persona marks, and its nodes' placements so
+ *  they move to the end of the Traits and Stats tabs' top level. */
 export function personaRolePatch(role: PersonaRole): Partial<Entity> {
   return {
     persona: role === 'playable' || role === 'only' ? true : undefined,
     personaOnly: role === 'only' ? true : undefined,
     customPersona: role === 'custom' ? true : undefined,
-    ...(role === 'custom' ? { traitPlacement: undefined } : {}),
+    ...(role === 'custom' ? { traitPlacement: undefined, statPlacement: undefined } : {}),
   };
 }
 
 /** The other entity that holds the mark, which keeps it off `id`. */
 export function customPersonaHeldElsewhere(entities: readonly Entity[], id: string): Entity | undefined {
-  const holder = customPersonaEntity(entities);
-  return holder && holder.id !== id ? holder : undefined;
+  const marked = customPersonaEntity(entities);
+  return marked && marked.id !== id ? marked : undefined;
 }
 
 /** What the confirmations count on the entity: its links, its own traits, its copies, and every placeholder

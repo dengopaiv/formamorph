@@ -1,4 +1,5 @@
 @import './styles/community.css';
+@import './styles/supporter-heart.css';
 
 @tailwind base;
 @tailwind components;
@@ -61,8 +62,8 @@
     --silver: 215 14% 40%;
     --bronze: 22 62% 36%;
     /* Supporter Flair tier colors: one pair per mode, never per palette. supporterTokens.test.ts checks contrast. */
-    --supporter: 12 80% 30%;
-    --supporter-plus: 318 75% 30%;
+    --supporter: 318 75% 30%;
+    --supporter-plus: 268 70% 32%;
     /* Theme-independent dark scrim for overlays on imagery + modal backdrops (light text must stay readable). */
     --overlay: 0 0% 0%;
     --border: 214.3 31.8% 91.4%;
@@ -106,8 +107,8 @@
     --gold: 45 92% 60%;
     --silver: 214 16% 76%;
     --bronze: 25 72% 58%;
-    --supporter: 12 85% 84%;
-    --supporter-plus: 318 75% 85%;
+    --supporter: 318 75% 85%;
+    --supporter-plus: 268 85% 87%;
     --overlay: 0 0% 0%;
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
@@ -674,6 +675,8 @@ b {
    to an edge via --rl-origin (set on the container); everything else uses center. */
 .narration-text [data-sd-animate] {
   display: inline-block;
+  /* Each word's span carries its trailing space; inline-block would drop it. */
+  white-space: pre;
   transform-origin: var(--rl-origin, center);
 }
 
@@ -744,19 +747,18 @@ b {
   animation: stat-fill-slide 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Landing Pulse: `pulseLanding` takes each class off on animationend, so each needs an animation that ends.
-   The ring is a pseudo-element moved by transform and opacity, so it animates on the compositor, sub-pixel,
-   and a busy main thread never stalls it. `pulseLanding` sets the scale that takes it from 4px to 10px out. */
+/* Landing Pulse: `pulseLanding` removes each ring on animationend, so each needs an animation that ends.
+   The ring sits in a fixed layer above its row's layer, which `pulseLanding` places and cuts each frame.
+   It animates only transform and opacity, so it runs on the compositor, sub-pixel, and a busy main thread
+   never stalls it. `pulseLanding` sets the scale that takes it from 4px to 10px out. */
+.landing-layer {
+  position: fixed;
+  overflow: hidden;
+  pointer-events: none;
+}
 .landing-pulse,
 .landing-ring {
-  position: relative;
-}
-.landing-pulse::after,
-.landing-ring::after {
-  content: '';
   position: absolute;
-  inset: -4px;
-  pointer-events: none;
   border: 2px solid hsl(var(--ring));
   border-radius: calc(var(--radius) + 2px);
   will-change: transform, opacity;
@@ -765,14 +767,14 @@ b {
   0%, 40% { transform: scale(1); opacity: 1; }
   100%    { transform: scale(var(--landing-sx, 1.02), var(--landing-sy, 1.3)); opacity: 0; }
 }
-.landing-pulse::after {
+.landing-pulse {
   animation: landing-pulse 1500ms ease-out;
 }
 /* Reduced motion: the same ring, still, for the same time. */
 @keyframes landing-ring {
   from, to { opacity: 1; }
 }
-.landing-ring::after {
+.landing-ring {
   animation: landing-ring 1500ms step-end;
 }
 /* A landing that scrolls its row to an edge leaves the pulse its 12px. */
@@ -951,6 +953,24 @@ b {
    joins — so its layer has to paint over them rather than under, as xyflow's DOM order would have it. */
 .react-flow__edgelabel-renderer {
   z-index: 100; /* above the node layer, whose nesting hands each node its own z-index */
+}
+
+/* Locations canvas while an entity is picked: Connections and their hints recede behind the marks. */
+.canvas-picking .react-flow__edges,
+.canvas-picking .react-flow__edgelabel-renderer {
+  opacity: 0.25;
+}
+
+/* Locations canvas while the Map Background is adjusted: the boxes and arrows draw over the map but take no
+   pointer, so a press anywhere on the map moves it. `!important` beats xyflow's own handle and edge rules.
+   LocationCanvas holds the same boxes still through its xyflow props. */
+.canvas-adjusting .react-flow__node,
+.canvas-adjusting .react-flow__node *,
+.canvas-adjusting .react-flow__edge,
+.canvas-adjusting .react-flow__edge *,
+.canvas-adjusting .react-flow__edgelabel-renderer *,
+.canvas-adjusting .react-flow__nodesselection-rect {
+  pointer-events: none !important;
 }
 
 /* The zoom controls: xyflow's base stylesheet leaves them unpainted, so they take the app's own button look
