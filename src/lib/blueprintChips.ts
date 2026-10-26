@@ -1,6 +1,6 @@
-// Blueprint chips read per bearer, so only text that always has a bearer takes one (acceptsBlueprintChips).
+// Blueprint chips read per owner, so only text that always has an owner takes one (acceptsBlueprintChips).
 
-import { blueprintIds } from './placeholderBlueprints';
+import { blueprintIds, rootPlaceholder } from './placeholderBlueprints';
 import type { PlaceholderHomesWorld } from './placeholderHomes';
 import { decodePlaceholderToken, PLACEHOLDER_TOKEN_SOURCE } from './placeholders';
 import type { Dictionary, Entity, Placeholder, PlaceholderValue } from '@/types';
@@ -19,15 +19,8 @@ export type ChipField =
 /** The top of `id`'s owner chain: the placeholder whose values hold it, or itself. */
 function rootOf(placeholders: readonly Placeholder[], id: string): Placeholder | undefined {
   const byId = new Map(placeholders.map((p) => [p.id, p]));
-  const seen = new Set<string>();
-  let at = byId.get(id);
-  while (at?.ownerId && !seen.has(at.id)) {
-    seen.add(at.id);
-    const up = byId.get(at.ownerId);
-    if (!up) break;
-    at = up;
-  }
-  return at;
+  const start = byId.get(id);
+  return start && rootPlaceholder(start, byId);
 }
 
 /** True where `field` takes a blueprint chip: a world trait's or group's text, and a blueprint's or copy's
@@ -93,6 +86,8 @@ export function dropEntityBlueprintChips(entity: Entity, blueprints: ReadonlySet
     aiDescription: d.one(entity.aiDescription),
     aiSummary: d.one(entity.aiSummary),
     imageTags: d.one(entity.imageTags),
+    pronouns: d.one(entity.pronouns),
+    ...(entity.relationships ? { relationships: entity.relationships.map((r) => ({ ...r, label: d.one(r.label) })) } : {}),
     ...(entity.openings ? { openings: entity.openings.map((o) => ({ ...o, text: d.one(o.text) })) } : {}),
     ...(entity.placeholders ? {
       placeholders: owned.map((p) => (acceptsBlueprintChips({ kind: 'values', placeholderId: p.id }, { placeholders: owned })

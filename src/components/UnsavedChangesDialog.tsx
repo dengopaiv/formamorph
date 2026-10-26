@@ -18,11 +18,14 @@ export function UnsavedChangesDialog({
   onOpenChange,
   onSave,
   onExit,
+  autoSaved = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: () => void;
   onExit: () => void;
+  /** An autosave wrote the world during this visit, so Exit drops only the changes since the last save. */
+  autoSaved?: boolean;
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -30,7 +33,9 @@ export function UnsavedChangesDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Unsaved changes</AlertDialogTitle>
           <AlertDialogDescription>
-            You have unsaved changes. Save them before leaving, exit without saving, or keep editing.
+            {autoSaved
+              ? 'You have unsaved changes. “Exit Without Saving” drops only the changes since the last save. Autosave kept the rest.'
+              : 'You have unsaved changes. Save them before leaving, exit without saving, or keep editing.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

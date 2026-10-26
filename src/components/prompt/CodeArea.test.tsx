@@ -1,16 +1,25 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useState } from 'react';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { useState, type ComponentProps } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CodeArea } from './CodeArea';
 import type { CodeSurface } from '@/lib/codeSurface';
-import { STAT_CODE_SURFACE } from '@/lib/statCodeSurface';
+import { scriptSurface, STAT_CODE_SURFACE, STAT_FIELDS, WORLD_SCRIPT_SURFACE } from '@/lib/statCodeSurface';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { SCRIPT_SURFACE as SCRIPT } from '@/test/scriptSurface';
+import { phValues } from '@/test/placeholderValues';
+import type { Dictionary, Entity, Placeholder, Trait } from '@/types';
+import { allPlaceholders, placeholderOwners } from '@/lib/placeholderHomes';
+import { codeDictionaries } from '@/lib/statCodePlaceholders';
+import { entityTraitNames, worldTraitPlaces } from '@/lib/statCodeTraits';
+import type { VariableTreeNames } from '@/lib/statCodeVariableTree';
 
 /** The field is controlled by its parent everywhere it's used, so the harness owns the value too —
  *  testing it uncontrolled would exercise a wiring nothing ships. */
-function Harness({ slots = false, preview = false, initial = '', statNames, surface = STAT_CODE_SURFACE }: {
-  slots?: boolean; preview?: boolean; initial?: string; statNames?: string[]; surface?: CodeSurface;
+function Harness({ slots = false, preview = false, initial = '', statNames, names, surface = STAT_CODE_SURFACE, extra }: {
+  slots?: boolean; preview?: boolean; initial?: string; statNames?: string[]; names?: VariableTreeNames; surface?: CodeSurface;
+  extra?: Partial<ComponentProps<typeof CodeArea>>;
 }) {
   const [value, setValue] = useState(initial);
   return (
@@ -21,6 +30,8 @@ function Harness({ slots = false, preview = false, initial = '', statNames, surf
         ariaLabel="Stat code"
         surface={surface}
         statNames={statNames}
+        {...names}
+        {...extra}
         slots={slots}
         preview={preview ? <p>what this makes</p> : undefined}
       />
@@ -66,7 +77,60 @@ async function type(
  *  run pushes the event later too. This is the beat a real author takes; nothing here polls for it. */
 const settle = () => new Promise(resolve => { setTimeout(resolve, 150); });
 
+/** A name level's row, by its name alone: the row's own name also carries its trail. */
+const nameRow = (name: string) => screen.getAllByRole('option').find((option) => within(option).queryByText(name));
+
+/** Opens the Variable menu and clicks down the named rows, the last one a field. */
+async function pick(user: ReturnType<typeof userEvent.setup>, ...rows: string[]) {
+  await user.click(screen.getByLabelText('Variable'));
+  for (const row of rows) {
+    // A plain row by its name, else a name level's row; the last lookup fails with the row's name.
+    await user.click(screen.queryByRole('button', { name: row }) ?? nameRow(row) ?? screen.getByRole('button', { name: row }));
+  }
+}
+
+const ph = (id: string, name: string, over: Partial<Placeholder> = {}): Placeholder =>
+  ({ id, name, values: phValues(['one']), ...over });
+const trait = (id: string, name: string): Trait => ({ id, name, statChanges: [] });
+
+/** A world with a name in each list. Iron Will and Mira sit in a group or folder, Mira holds a grouped trait, and
+ *  both entities are personas. */
+// The tests read only the fields the editor's name lists take, so the fixtures leave the rest out.
+const nameWorld = {
+  traits: [trait('t-brave', 'Brave'), { ...trait('t-iron', 'Iron Will'), groupId: 'tg-virtues' }],
+  traitGroups: [{ id: 'tg-virtues', name: 'Virtues', parentId: null }],
+  placeholders: [ph('mood', 'Mood')],
+  entityGroups: [{ id: 'g-crew', name: 'Crew', parentId: null }],
+  entities: [
+    {
+      id: 'mira', name: 'Mira', persona: true, groupId: 'g-crew',
+      traits: [{ ...trait('t-scar', 'Scarred'), groupId: 'tg-wounds' }, trait('t-keen', 'Keen')],
+      traitGroups: [{ id: 'tg-wounds', name: 'Wounds', parentId: null }],
+      placeholders: [ph('m-eye', 'Eye Color')],
+    },
+    { id: 'tom', name: 'Old Tom', persona: true, traits: [trait('t-grim', 'Grim')], placeholders: [ph('t-hat', 'Hat')] },
+  ] as unknown as Entity[],
+  dictionaries: [{ id: 'lore', name: 'Lore', entries: [], placeholders: [ph('era', 'Era')] }] as unknown as Dictionary[],
+};
+
+/** The names as the stat box hands them to the editor. */
+function worldNames(): VariableTreeNames {
+  const list = allPlaceholders(nameWorld);
+  return {
+    statNames: ['Health', 'Max Mana'],
+    traits: worldTraitPlaces(nameWorld, list),
+    entities: entityTraitNames(nameWorld, list),
+    placeholders: { list, owners: placeholderOwners(nameWorld), dictionaries: codeDictionaries(nameWorld.dictionaries, list) },
+  };
+}
+
+/** The Variable menu's current level, by its label. */
+const level = (label: string) => screen.queryByRole('group', { name: label });
+
 describe('CodeArea', () => {
+  // The editor chunk's first load is a cold module transform that grows with suite load; pay it once here,
+  // not inside whichever test's `editor()` wait happens to run first.
+  beforeAll(() => import('@/components/prompt/codeSession'));
   // The split preference is shared and persisted, so one test's toggle would otherwise decide the next.
   beforeEach(() => localStorage.clear());
 
@@ -120,8 +184,7 @@ describe('CodeArea', () => {
     // Put the caret back in the gap the snippet belongs in.
     await user.keyboard('{ArrowLeft>5/}');
 
-    await user.click(screen.getByLabelText('Variable'));
-    await user.click(screen.getByText('This stat’s value'));
+    await pick(user, 'This Stat', 'value');
 
     expect(owned()).toBe('return self.value + 1;');
   });
@@ -144,10 +207,12 @@ describe('CodeArea', () => {
     render(<Harness />);
     await user.click(await editor());
     await type(user, 'return ');
-    await user.click(screen.getByLabelText('Variable'));
-    await user.click(screen.getByText('This stat’s value'));
+    await pick(user, 'This Stat', 'value');
     expect(owned()).toBe('return self.value');
+    await type(user, ';', () => 'return self.value;');
 
+    await user.click(screen.getByLabelText('Undo'));
+    expect(owned()).toBe('return self.value');
     await user.click(screen.getByLabelText('Undo'));
     expect(owned()).toBe('return ');
   });
@@ -239,8 +304,8 @@ describe('CodeArea', () => {
       fields()[0].closest('.cm-editor')?.querySelector('.cm-gutter-lint'),
     ).toBeTruthy());
     const columns = [...fields()[0].closest('.cm-editor')!.querySelectorAll('.cm-gutters > .cm-gutter')]
-      .map(column => (column.classList.contains('cm-gutter-lint') ? 'lint' : 'numbers'));
-    expect(columns).toEqual(['lint', 'numbers']);
+      .map(column => (column.classList.contains('cm-gutter-lint') ? 'lint' : column.classList.contains('cm-gutter-fixes') ? 'fixes' : 'numbers'));
+    expect(columns).toEqual(['lint', 'fixes', 'numbers']);
   });
 
   // Whether the rule actually reaches the bottom is a layout fact, and jsdom has no layout — that part
@@ -411,6 +476,22 @@ describe('CodeArea', () => {
     expect(owned()).toBe('return clock');
   });
 
+  it('offers the owner’s stats after owner.stats. and the world’s after stats., from the box’s own lists', async () => {
+    const user = userEvent.setup();
+    const owner = { kind: 'entity', entity: { id: 'e', name: 'Ash', persona: false, traits: [], stats: ['Trust', 'Fury'] } } as const;
+    render(<Harness statNames={['Health', 'Stamina']} extra={{ owner }} />);
+    await user.click(await editor());
+    await type(user, 'return owner.stats.');
+    await waitFor(() => expect(popup()).toBeTruthy());
+    await waitFor(() => expect(within(popup()!).getByText('Fury')).toBeInTheDocument());
+    expect(within(popup()!).queryByText('Stamina')).toBeNull();
+
+    await user.clear(await editor());
+    await type(user, 'return stats.');
+    await waitFor(() => expect(within(popup()!).getByText('Stamina')).toBeInTheDocument());
+    expect(within(popup()!).queryByText('Fury')).toBeNull();
+  });
+
   it('offers the world’s stat names inside a string literal', async () => {
     const user = userEvent.setup();
     render(<Harness statNames={['Health', 'Stamina']} />);
@@ -438,6 +519,33 @@ describe('CodeArea', () => {
     await user.keyboard('{Escape}');
     await user.tab();
     expect(owned()).toBe('return cloc  ');
+  });
+
+  // A dialog takes Escape on the document in the capture phase, ahead of the editor's own keymap.
+  it('closes the popup inside a dialog without closing the dialog, and the next Escape closes it', async () => {
+    const user = userEvent.setup();
+    function InDialog() {
+      const [open, setOpen] = useState(true);
+      return (
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent>
+            <DialogTitle>Template</DialogTitle>
+            <Harness />
+          </DialogContent>
+        </Dialog>
+      );
+    }
+    render(<InDialog />);
+    await user.click(await editor());
+    await type(user, 'return cloc');
+    await waitFor(() => expect(popup()).toBeTruthy());
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(popup()).toBeNull());
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   it('takes the highlighted completion on Tab, the way every editor does', async () => {
@@ -489,19 +597,13 @@ describe('CodeArea', () => {
   it('underlines a name the sandbox does not provide', async () => {
     render(<Harness initial="return elapsedHrs;" />);
     const field = await editor();
-    await waitFor(
-      () => expect(field.querySelector('.cm-lintRange-error')?.textContent).toBe('elapsedHrs'),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(field.querySelector('.cm-lintRange-error')?.textContent).toBe('elapsedHrs'));
   });
 
   it('marks a warning as a warning, leaving the names it recognizes unflagged', async () => {
     render(<Harness initial="const total = clock.elapsedHours * 2;" />);
     const field = await editor();
-    await waitFor(
-      () => expect(field.querySelector('.cm-lintRange-warning')).toBeTruthy(),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(field.querySelector('.cm-lintRange-warning')).toBeTruthy());
     expect(field.querySelector('.cm-lintRange-error')).toBeNull();
   });
 
@@ -516,7 +618,7 @@ describe('CodeArea', () => {
     );
     await waitFor(() => expect(fields()).toHaveLength(2));
     const [sound, flawed] = fields();
-    await waitFor(() => expect(flawed.querySelector('.cm-lintRange-error')).toBeTruthy(), { timeout: 3000 });
+    await waitFor(() => expect(flawed.querySelector('.cm-lintRange-error')).toBeTruthy());
     expect(sound.querySelectorAll('[class*="cm-lintRange"]')).toHaveLength(0);
   });
 
@@ -524,33 +626,392 @@ describe('CodeArea', () => {
     const { rerender } = render(<Harness initial="return stats.Helth.value;" statNames={['Health']} />);
     const field = await editor();
     const marks = () => [...field.querySelectorAll('.cm-lintRange-error')].map(mark => mark.textContent);
-    await waitFor(() => expect(marks()).toEqual(['Helth']), { timeout: 3000 });
+    await waitFor(() => expect(marks()).toEqual(['Helth']));
     rerender(<Harness initial="return stats.Helth.value;" statNames={['Health', 'Helth']} />);
-    await waitFor(() => expect(marks()).toEqual([]), { timeout: 3000 });
+    await waitFor(() => expect(marks()).toEqual([]));
+  });
+
+  describe('the stat code Variable menu', () => {
+    it('drills Stats to a stat’s field and inserts its whole path, then closes', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health', 'Max Mana']} />);
+      await user.click(await editor());
+      await type(user, 'return ');
+
+      await pick(user, 'Stats', 'Health', 'value');
+      expect(owned()).toBe('return stats.Health.value');
+      expect(level('Health')).toBeNull();
+
+      // The caret sits after the path, back in the editor.
+      await type(user, ';', () => 'return stats.Health.value;');
+      await pick(user, 'Stats', 'Max Mana', 'max');
+      expect(owned()).toBe('return stats.Health.value;stats["Max Mana"].max');
+    });
+
+    it('lists the world’s stats under Stats and the owner’s under Owner in an owned box', async () => {
+      const user = userEvent.setup();
+      const owner = { kind: 'entity', entity: { id: 'e', name: 'Ash', persona: false, traits: [], stats: ['Trust'] } } as const;
+      render(<Harness statNames={['Health']} extra={{ owner }} />);
+      await user.click(await editor());
+      await type(user, 'return ');
+
+      await pick(user, 'Owner', 'Stats', 'Trust', 'value');
+      expect(owned()).toBe('return owner.stats.Trust.value');
+      await type(user, ';', () => 'return owner.stats.Trust.value;');
+      await pick(user, 'Stats', 'Health', 'value');
+      expect(owned()).toBe('return owner.stats.Trust.value;stats.Health.value');
+    });
+
+    it('has no Owner group in a world stat’s box', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} />);
+      await user.click(await editor());
+      await user.click(screen.getByLabelText('Variable'));
+      expect(screen.queryByRole('button', { name: 'Owner' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stats' })).toBeInTheDocument();
+    });
+
+    it('has no group for self in a world script’s box, where self is empty', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} surface={WORLD_SCRIPT_SURFACE} />);
+      await user.click(await editor());
+      await user.click(screen.getByLabelText('Variable'));
+      expect(screen.queryByRole('button', { name: 'This Stat' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stats' })).toBeInTheDocument();
+    });
+
+    it('goes back one level from the Back row', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} />);
+      await editor();
+      await pick(user, 'Stats', 'Health');
+      expect(level('Health')).toBeInTheDocument();
+
+      // The Back row names the level it leaves.
+      await user.click(screen.getByRole('button', { name: 'Health' }));
+      expect(level('Stats')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Stats' }));
+      expect(level('Variable')).toBeInTheDocument();
+    });
+
+    it('opens at the top level every time', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} />);
+      await editor();
+      await pick(user, 'Stats', 'Health');
+      await user.keyboard('{Escape}');
+      expect(level('Health')).toBeNull();
+
+      await user.click(screen.getByLabelText('Variable'));
+      expect(level('Variable')).toBeInTheDocument();
+    });
+
+    it('moves with the arrows, drills and inserts with Enter, and goes back with Backspace and Left', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} />);
+      await user.click(await editor());
+      await user.click(screen.getByLabelText('Variable'));
+      expect(screen.getByRole('button', { name: 'This Stat' })).toHaveFocus();
+
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByRole('button', { name: 'Stats' })).toHaveFocus();
+      await user.keyboard('{ArrowUp}{ArrowUp}');
+      expect(screen.getByRole('button', { name: 'notes' })).toHaveFocus();
+      await user.keyboard('{ArrowDown}{ArrowDown}{Enter}');
+      // A name level opens on its search box, its first row active.
+      expect(level('Stats')).toBeInTheDocument();
+      expect(screen.getByRole('combobox')).toHaveFocus();
+      await user.keyboard('{Enter}');
+      // Each other level opens on its Back row, which names the level.
+      expect(screen.getByRole('button', { name: 'Health' })).toHaveFocus();
+      await user.keyboard('{ArrowDown}');
+      expect(within(level('Health')!).getByRole('button', { name: 'id' })).toHaveFocus();
+
+      await user.keyboard('{Backspace}');
+      expect(level('Stats')).toBeInTheDocument();
+      expect(screen.getByRole('combobox')).toHaveFocus();
+      await user.keyboard('{ArrowLeft}');
+      expect(level('Variable')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'This Stat' })).toHaveFocus();
+
+      await user.keyboard('{ArrowDown}{Enter}{Enter}{ArrowDown}{Enter}');
+      expect(owned()).toBe('stats.Health.id');
+      expect(level('Health')).toBeNull();
+    });
+
+    it('closes on Escape without inserting', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} />);
+      await editor();
+      await user.click(screen.getByLabelText('Variable'));
+      await user.keyboard('{Enter}');
+      expect(level('This Stat')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      expect(level('This Stat')).toBeNull();
+      expect(owned()).toBe('');
+    });
+
+    it('describes a field in its tooltip and keeps the field name as its name', async () => {
+      const user = userEvent.setup();
+      render(<TooltipProvider><Harness /></TooltipProvider>);
+      await editor();
+      await pick(user, 'This Stat');
+
+      await user.hover(screen.getByRole('button', { name: 'regen' }));
+      const regen = STAT_FIELDS.find((entry) => entry.name === 'regen')!;
+      expect(await screen.findByText(`${regen.info}. Writable.`, { selector: 'div' })).toBeVisible();
+    });
+
+    it('shows each field’s type, marks a read-only field, and gives a method its function type', async () => {
+      const user = userEvent.setup();
+      render(<Harness names={worldNames()} surface={scriptSurface(WORLD_SCRIPT_SURFACE, 'before')} />);
+      await editor();
+      const row = (name: string) => screen.getByRole('button', { name });
+      const mark = (name: string) => within(row(name)).queryByRole('img', { name: 'Read-Only' });
+
+      await pick(user, 'Stats', 'Health');
+      expect(row('value')).toHaveTextContent(/^value\s*number$/);
+      expect(mark('value')).toBeNull();
+      expect(row('id')).toHaveTextContent(/^id\s*string$/);
+      expect(mark('id')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      await pick(user, 'Entities', 'Mira');
+      expect(row('diary')).toHaveTextContent('(line) => void');
+      expect(mark('diary')).toBeNull();
+      expect(mark('name')).toBeInTheDocument();
+    });
+
+    it('adds a cut type to the head of its row’s tooltip, whole', async () => {
+      const user = userEvent.setup();
+      const detail = '(nameOrId, description, options) => void';
+      const variables = () => [{ kind: 'field' as const, label: 'move', detail, info: 'Moves it.', insert: 'move()' }];
+      // jsdom lays nothing out, so the row's type is given the overflow a narrow menu gives it.
+      const spies = [
+        vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(400),
+        vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120),
+      ];
+      try {
+        render(<TooltipProvider><Harness surface={SCRIPT} extra={{ variables }} /></TooltipProvider>);
+        await editor();
+        await user.click(screen.getByLabelText('Variable'));
+
+        await user.hover(screen.getByRole('button', { name: 'move' }));
+        // The tip keeps its line break, so the match does too.
+        const tip = await screen.findByText(`${detail}\nMoves it.`, { selector: 'div', normalizer: (text) => text });
+        expect(tip).toBeVisible();
+      } finally {
+        spies.forEach((spy) => spy.mockRestore());
+      }
+    });
+
+    it('keeps an empty group, with its one marker row disabled', async () => {
+      const user = userEvent.setup();
+      render(<Harness statNames={['Health']} />);
+      await editor();
+      await pick(user, 'Traits');
+
+      expect(screen.getByRole('button', { name: 'No traits in this world' })).toBeDisabled();
+      // Focus lands on Back, the one row that can take it.
+      expect(screen.getByRole('button', { name: 'Traits' })).toHaveFocus();
+    });
+
+    it('leaves a template’s type-over name selected', async () => {
+      const user = userEvent.setup();
+      render(<Harness slots statNames={['Health']} />);
+      await editor();
+      await pick(user, 'Stats', 'Name', 'value');
+      expect(owned()).toBe('stats["Name"].value');
+
+      await type(user, 'Mood', (typed) => `stats["${typed}"].value`);
+    });
+
+    describe('at a name level', () => {
+      const rowNames = () => screen.queryAllByRole('option').map((option) => option.textContent);
+
+      it.each([
+        [['Stats'], 'Search stats', ['Health', 'Max Mana']],
+        // In Traits-tab order, a group's traits first, as the template slot picker lists them.
+        [['Traits'], 'Search traits', ['Iron WillVirtues', 'BraveWorld']],
+        [['Entities'], 'Search entities', ['MiraCrew', 'Old Tom']],
+        [['Placeholders'], 'Search placeholders', ['Mood']],
+        [['Dictionaries'], 'Search dictionaries', ['Lore']],
+        [['Entities', 'Mira', 'Traits'], 'Search traits', ['ScarredWounds', 'Keen']],
+        [['Entities', 'Mira', 'Placeholders'], 'Search placeholders', ['Eye Color']],
+        [['Persona', 'Traits'], 'Search traits', ['ScarredMira › Wounds', 'KeenMira', 'GrimOld Tom']],
+        [['Persona', 'Placeholders'], 'Search placeholders', ['Eye ColorMira', 'HatOld Tom']],
+      ])('%j shows a focused search box over its names and their trails', async (path, placeholder, rows) => {
+        const user = userEvent.setup();
+        render(<Harness names={worldNames()} />);
+        await editor();
+        await pick(user, ...path);
+
+        expect(screen.getByRole('combobox')).toHaveFocus();
+        expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', placeholder);
+        // The Back row still leads the level.
+        expect(screen.getByRole('button', { name: path[path.length - 1] })).toBeInTheDocument();
+        expect(rowNames()).toEqual(rows);
+      });
+
+      it('filters by name and by trail, and says so when nothing matches', async () => {
+        const user = userEvent.setup();
+        render(<Harness names={worldNames()} />);
+        await editor();
+        await pick(user, 'Entities');
+
+        await user.keyboard('crew');
+        expect(rowNames()).toEqual(['MiraCrew']);
+        await user.clear(screen.getByRole('combobox'));
+        await user.keyboard('tom');
+        expect(rowNames()).toEqual(['Old Tom']);
+        await user.keyboard('z');
+        expect(rowNames()).toEqual([]);
+        expect(screen.getByText('No matches')).toBeInTheDocument();
+      });
+
+      it('edits a search with Backspace and Left, and goes back once it is empty', async () => {
+        const user = userEvent.setup();
+        render(<Harness names={worldNames()} />);
+        await editor();
+        await pick(user, 'Stats');
+        const search = screen.getByRole('combobox');
+
+        await user.keyboard('He{ArrowLeft}');
+        expect(level('Stats')).toBeInTheDocument();
+        await user.keyboard('{ArrowRight}{Backspace}');
+        expect(search).toHaveValue('H');
+        await user.keyboard('{Backspace}');
+        expect(search).toHaveValue('');
+        expect(level('Stats')).toBeInTheDocument();
+
+        await user.keyboard('{Backspace}');
+        expect(level('Variable')).toBeInTheDocument();
+
+        await user.keyboard('{ArrowDown}{Enter}');
+        expect(level('Stats')).toBeInTheDocument();
+        await user.keyboard('{ArrowLeft}');
+        expect(level('Variable')).toBeInTheDocument();
+      });
+
+      it('drills into the active row with Enter and inserts its field', async () => {
+        const user = userEvent.setup();
+        render(<Harness names={worldNames()} />);
+        await user.click(await editor());
+        await pick(user, 'Stats');
+
+        await user.keyboard('mana{Enter}');
+        expect(level('Max Mana')).toBeInTheDocument();
+        await user.keyboard('{ArrowDown}{Enter}');
+        expect(owned()).toBe('stats["Max Mana"].id');
+      });
+
+      it('moves between the Back row and the search box with the arrows', async () => {
+        const user = userEvent.setup();
+        render(<Harness names={worldNames()} />);
+        await editor();
+        await pick(user, 'Stats');
+
+        await user.keyboard('{Shift>}{Tab}{/Shift}');
+        expect(screen.getByRole('button', { name: 'Stats' })).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(screen.getByRole('combobox')).toHaveFocus();
+        // In the search box the arrows move the list's active row.
+        await user.keyboard('{ArrowDown}');
+        expect(screen.getByRole('combobox')).toHaveFocus();
+        expect(nameRow('Max Mana')).toHaveAttribute('aria-selected', 'true');
+      });
+
+      it('closes on Escape from the search box', async () => {
+        const user = userEvent.setup();
+        render(<Harness names={worldNames()} />);
+        await editor();
+        await pick(user, 'Stats');
+        await user.keyboard('He');
+
+        await user.keyboard('{Escape}');
+        expect(level('Stats')).toBeNull();
+        expect(owned()).toBe('');
+      });
+    });
+  });
+
+  describe('the names a script’s timing adds to the Variable menu', () => {
+    it.each([
+      ['output', 'Narration', 'sentence', 'narration.sentence'],
+      ['before', 'Player', 'tell', 'player.tell("")'],
+      ['switch', 'Switched Trait', 'enabled', 'trait.enabled'],
+    ] as const)('lists the %s timing’s %s group and inserts its %s field', async (timing, group, field, insert) => {
+      const user = userEvent.setup();
+      render(<Harness names={worldNames()} surface={scriptSurface(STAT_CODE_SURFACE, timing)} />);
+      await user.click(await editor());
+      await pick(user, group, field);
+      expect(owned()).toBe(insert);
+    });
+
+    it('lists none of them on a surface with no timing', async () => {
+      const user = userEvent.setup();
+      render(<Harness names={worldNames()} />);
+      await editor();
+      await user.click(screen.getByLabelText('Variable'));
+      for (const group of ['Narration', 'Player', 'Switched Trait']) {
+        expect(screen.queryByRole('button', { name: group })).toBeNull();
+      }
+    });
   });
 
   describe('on a surface other than stat code', () => {
-    it('offers that surface’s inserts in the Variable menu, and none of stat code’s', async () => {
+    it('drills that surface’s own tree in the Variable menu, and none of stat code’s', async () => {
       const user = userEvent.setup();
-      render(<Harness surface={SCRIPT} />);
+      const variables = () => [{
+        kind: 'group' as const, label: 'Arguments',
+        children: [{ kind: 'field' as const, label: 'name', detail: 'string', info: 'Who.', insert: 'args.name' }],
+      }];
+      render(<Harness surface={SCRIPT} extra={{ variables }} />);
       await user.click(await editor());
 
       await user.click(screen.getByLabelText('Variable'));
-      expect(screen.queryByText('This stat’s value')).toBeNull();
-      await user.click(screen.getByText('An argument'));
+      expect(screen.queryByText('This Stat')).toBeNull();
+      await user.click(screen.getByText('Arguments'));
+      await user.click(screen.getByText('name'));
 
       expect(owned()).toBe('args.name');
+    });
+
+    it('lists a menu given beside stat maps first, with the stat tree after it', async () => {
+      const user = userEvent.setup();
+      const variables = () => [{
+        kind: 'group' as const, label: 'Arguments',
+        children: [{ kind: 'field' as const, label: 'name', detail: 'string', info: 'Who.', insert: 'args.name' }],
+      }];
+      render(<Harness names={worldNames()} surface={scriptSurface(WORLD_SCRIPT_SURFACE, 'after')} extra={{ variables }} />);
+      await user.click(await editor());
+
+      await user.click(screen.getByLabelText('Variable'));
+      const rows = screen.getAllByRole('button').map((button) => button.textContent ?? '');
+      expect(rows.findIndex((text) => text.startsWith('Arguments'))).toBeGreaterThanOrEqual(0);
+      expect(rows.findIndex((text) => text.startsWith('Arguments'))).toBeLessThan(rows.findIndex((text) => text.startsWith('Clock')));
+      expect(screen.queryByRole('button', { name: 'This Stat' })).toBeNull();
+      await user.click(screen.getByText('Arguments'));
+      await user.click(screen.getByText('name'));
+      expect(owned()).toBe('args.name');
+    });
+
+    it('shows no Variable menu when the surface gives no tree', async () => {
+      render(<Harness surface={SCRIPT} />);
+      await editor();
+      expect(screen.queryByLabelText('Variable')).toBeNull();
     });
 
     it('reads names against that surface, and re-reads them when the surface changes', async () => {
       const { rerender } = render(<Harness initial="return args.name + self.value;" surface={SCRIPT} />);
       const field = await editor();
       const marks = () => [...field.querySelectorAll('.cm-lintRange-error')].map(mark => mark.textContent);
-      await waitFor(() => expect(marks()).toEqual(['self']), { timeout: 3000 });
+      await waitFor(() => expect(marks()).toEqual(['self']));
 
       const widened = { ...SCRIPT, globals: [...SCRIPT.globals, { name: 'self', detail: 'object', info: 'Test.' }] };
       rerender(<Harness initial="return args.name + self.value;" surface={widened} />);
-      await waitFor(() => expect(marks()).toEqual([]), { timeout: 3000 });
+      await waitFor(() => expect(marks()).toEqual([]));
     });
   });
 

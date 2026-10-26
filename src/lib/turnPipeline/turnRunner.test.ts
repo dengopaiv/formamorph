@@ -4,7 +4,6 @@ import { computeTurnCommit } from './computeTurnCommit';
 import { runTurn, type TurnPassOutcome, type TurnRequestAdapter, type TurnResult } from './turnRunner';
 import { TEST_PROMPTS, testInput } from './turnTestInputs';
 import type { TurnMaterial, TurnPassId, TurnPassSubject, TurnPlanInput, TurnSettings } from './turnPlan';
-import type { AiStreamEvent } from '@/lib/aiRequest/aiStream';
 import type { ParsedDirector } from '@/lib/stagedPlanning';
 import { UNPARSEABLE_MESSAGE } from './turnErrors';
 import { navigableDestinations } from '@/lib/locationContext';
@@ -72,14 +71,13 @@ interface FakeOptions {
   answers?: Partial<Record<string, string | (() => string)>>;
   /** Called with each request type before it answers — where a test stops the turn mid-flight. */
   onDispatch?: (type: string) => void;
-  events?: AiStreamEvent[];
 }
 
 const makeFake = (options: FakeOptions = {}) => {
   const seen: Seen[] = [];
   let inFlight = 0;
   let peak = 0;
-  const adapter: TurnRequestAdapter = async (request, context) => {
+  const adapter: TurnRequestAdapter = async (request) => {
     inFlight += 1;
     peak = Math.max(peak, inFlight);
     seen.push({ id: request.type, type: request.type, inFlight });
@@ -89,9 +87,6 @@ const makeFake = (options: FakeOptions = {}) => {
       // genuinely overlaps rather than resolving in dispatch order by accident.
       await Promise.resolve();
       await Promise.resolve();
-      // Every request streams, so a runner that wired the sink to more than the narration would be visible.
-      for (const event of options.events ?? []) context.onEvent?.(event);
-      context.onEvent?.({ type: 'delta', delta: request.type, content: request.type });
       const override = options.answers?.[request.type];
       if (typeof override === 'function') return override();
       return override ?? ANSWERS[request.type] ?? request.type;
@@ -106,11 +101,15 @@ const makeFake = (options: FakeOptions = {}) => {
 const advanceLikeTheView = (subjects: Partial<Record<TurnPassId, TurnPassSubject[]>> = {}) => {
   const cast: TurnPassSubject[] = [];
   return (event: Parameters<NonNullable<Parameters<typeof runTurn>[0]['advance']>>[0]): Partial<TurnMaterial> | void => {
+    if (event.at === 'stage' && event.stage === 'preNarration' && subjects.entityLocationAuto) {
+      return { subjects: { entityLocationAuto: subjects.entityLocationAuto } };
+    }
     if (event.at === 'stage' && event.stage === 'postNarration') {
       return {
         subjects: {
           diary: subjects.diary ?? cast.map((c) => ({ name: c.name })),
           discoverEntity: subjects.discoverEntity ?? [{ name: 'the dockhand' }],
+          ...(subjects.entityLocationSuggest && { entityLocationSuggest: subjects.entityLocationSuggest }),
         },
       };
     }
@@ -143,7 +142,6 @@ interface RunOptions extends FakeOptions {
   material?: Partial<TurnMaterial>;
   subjects?: Partial<Record<TurnPassId, TurnPassSubject[]>>;
   signal?: AbortSignal;
-  onNarrationEvent?: (event: AiStreamEvent) => void;
 }
 
 const run = async (options: RunOptions = {}) => {
@@ -158,7 +156,6 @@ const run = async (options: RunOptions = {}) => {
     request: fake.adapter,
     signal: options.signal ?? new AbortController().signal,
     advance: advanceLikeTheView(options.subjects),
-    onNarrationEvent: options.onNarrationEvent,
     onPassSettled: (id, outcome) => settled.push(`${id}:${outcome.ok ? 'ok' : 'failed'}`),
   });
   return { result, types: fake.seen.map((s) => s.type), peakInFlight: fake.peakInFlight(), seen: fake.seen, settled };
@@ -259,7 +256,7 @@ describe('the concurrency knob', () => {
     const { result, types, peakInFlight } = await run({ settings: { concurrentTurnRequests: false } });
     ok(result);
     expect(peakInFlight).toBe(1);
-    // The digest, diaries and discoveries are the drainers' job outside the batch, so they are not due here.
+    // The digest, diaries and discoveries are the Background Pass Queue's job outside the batch, so they are not due here.
     expect(types).toEqual([
       'locationChange',
       'director',
@@ -283,6 +280,78 @@ describe('the concurrency knob', () => {
     const { result, seen } = await run();
     ok(result);
     expect(seen.filter((s) => s.type === 'character').map((s) => s.inFlight)).toEqual([1, 2]);
+  });
+});
+
+describe('the entity location requests', () => {
+  const movers: TurnPassSubject[] = [
+    { name: 'Sylvie', moves: ['stay', 'comeAlong'] },
+    { name: 'Albus', moves: ['keepFollowing', 'stayHere'] },
+  ];
+
+  it('go out with the player router, one per entity, when parallel', async () => {
+    const { result, seen } = await run({ subjects: { entityLocationAuto: movers } });
+    const finished = ok(result);
+    expect(seen.slice(0, 3).map((s) => [s.type, s.inFlight])).toEqual([
+      ['locationChange', 1], ['entityLocation', 2], ['entityLocation', 3],
+    ]);
+    expect(finished.passes.filter((p) => p.id === 'entityLocationAuto').map((p) => p.subject?.name)).toEqual(['Sylvie', 'Albus']);
+  });
+
+  it('go out one at a time after the player router when serial', async () => {
+    const { result, seen } = await run({ subjects: { entityLocationAuto: movers }, settings: { concurrentTurnRequests: false } });
+    ok(result);
+    expect(seen.slice(0, 3).map((s) => [s.type, s.inFlight])).toEqual([
+      ['locationChange', 1], ['entityLocation', 1], ['entityLocation', 1],
+    ]);
+  });
+
+  it('send nothing for a scene with no tracked entity', async () => {
+    const { result, types } = await run();
+    ok(result);
+    expect(types).not.toContain('entityLocation');
+  });
+
+  it('read each reply against its own entity’s options', async () => {
+    const { result } = await run({ subjects: { entityLocationAuto: movers }, answers: { entityLocation: 'Stay here' } });
+    const replies = ok(result).passes.filter((p) => p.id === 'entityLocationAuto').map((p) => p.parsed);
+    expect(replies).toEqual(['stay', 'stayHere']);
+  });
+
+  it.each([true, false])('drop a failed entity request and carry on with the turn (parallel: %s)', async (parallel) => {
+    const { result, types } = await run({
+      subjects: { entityLocationAuto: movers },
+      settings: { concurrentTurnRequests: parallel },
+      answers: { entityLocation: () => { throw new Error('network'); } },
+    });
+    const finished = ok(result);
+    expect(types).toContain('narration');
+    expect(finished.passes.filter((p) => p.id === 'entityLocationAuto').every((p) => p.error)).toBe(true);
+  });
+
+  it('still end the turn when the player router fails', async () => {
+    const { result } = await run({
+      subjects: { entityLocationAuto: movers },
+      answers: { locationChange: () => { throw new Error('network'); } },
+    });
+    expect(result.status).toBe('failed');
+  });
+
+  it('ask right after the suggest router when serial, ahead of the passes after it', async () => {
+    const { result, types } = await run({
+      subjects: { entityLocationSuggest: movers }, settings: { locationAutoApply: false, concurrentTurnRequests: false },
+    });
+    ok(result);
+    const after = types.slice(types.indexOf('narration') + 1);
+    expect(after).toEqual(['choices', 'statUpdates', 'locationChange', 'entityLocation', 'entityLocation', 'timePassed']);
+  });
+
+  it('ask after the narration in the suggest batch', async () => {
+    const { result, seen } = await run({ subjects: { entityLocationSuggest: movers }, settings: { locationAutoApply: false } });
+    ok(result);
+    const after = seen.slice(seen.findIndex((s) => s.type === 'narration') + 1);
+    expect(after.filter((s) => s.type === 'entityLocation')).toHaveLength(2);
+    expect(after.map((s) => s.inFlight)).toEqual(after.map((_, i) => i + 1));
   });
 });
 
@@ -410,30 +479,6 @@ describe('what the caller is asked to derive from', () => {
   });
 });
 
-describe('narration event forwarding', () => {
-  it('forwards exactly what the stream emitted, in order', async () => {
-    const events: AiStreamEvent[] = [
-      { type: 'debug', debug: { kind: 'response', status: 200, openedAt: 0 } },
-      { type: 'reasoning', text: 'thinking' },
-      { type: 'delta', delta: 'The ', content: 'The ' },
-      { type: 'delta', delta: 'gulls', content: 'The gulls' },
-    ];
-    const forwarded: AiStreamEvent[] = [];
-    const { result } = await run({ events, onNarrationEvent: (event) => forwarded.push(event) });
-    ok(result);
-    // The fake closes every stream with a delta naming its type, so the narration's is the tail here.
-    expect(forwarded).toEqual([...events, { type: 'delta', delta: 'narration', content: 'narration' }]);
-  });
-
-  it('forwards nothing for the passes that are not the narration', async () => {
-    // The fake streams from every request (each ends with a delta naming its own type), so a runner that
-    // wired the sink to more than the narration would show it here.
-    const forwarded: AiStreamEvent[] = [];
-    const { result } = await run({ onNarrationEvent: (event) => forwarded.push(event) });
-    ok(result);
-    expect(forwarded).toEqual([{ type: 'delta', delta: 'narration', content: 'narration' }]);
-  });
-});
 
 describe('stopping the turn', () => {
   const abortOn = (type: string) => {
@@ -649,7 +694,7 @@ describe('the request that ended the turn', () => {
   });
 
   it('is left unset when a batch absorbed the only failure', async () => {
-    // A batched failure is backfilled by an idle drainer; the turn finished, so nothing ended it.
+    // A batched failure is backfilled by the Background Pass Queue; the turn finished, so nothing ended it.
     const { result } = await run({
       answers: {
         diary: () => {
@@ -750,10 +795,21 @@ describe('a written page one', () => {
     expect(order).toEqual(['preNarration', 'planning', 'narration', 'written:true', 'postNarration']);
   });
 
-  it('streams nothing, so the page cannot imitate a model writing it', async () => {
-    const events: AiStreamEvent[] = [];
-    await written({ onNarrationEvent: (event) => events.push(event) });
-    expect(events).toEqual([]);
+  it('never calls the adapter in the page\'s slot, so nothing can stream it', async () => {
+    const order: string[] = [];
+    const fake = makeFake({ onDispatch: (type) => order.push(`send:${type}`) });
+    await runTurn({
+      plan: planTurn(testInput({ isGameStarted: false, action: 'START GAME', writtenNarration: WRITTEN })),
+      material: material(),
+      request: fake.adapter,
+      signal: new AbortController().signal,
+      advance: (event) => {
+        if (event.at === 'stage') order.push(event.stage);
+        if (event.at === 'written') order.push('written');
+      },
+    });
+    const slot = order.slice(order.indexOf('narration'), order.indexOf('written') + 1);
+    expect(slot).toEqual(['narration', 'written']);
   });
 
   it('lands through the normal Turn Commit with the authored text as page one', async () => {

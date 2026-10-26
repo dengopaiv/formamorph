@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useDeferredValue, useEffect, useMemo, useRef } from 'react';
+import { useRequestKey } from '@/lib/surface/useRequestKey';
 import { toast } from 'react-toastify';
 import { toastError } from '@/lib/linkToast';
 import { responseError } from '@/services/responseError';
@@ -8,20 +9,21 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Search, RotateCcw, ArrowDownWideNarrow, ArrowUpNarrowWide, ArrowLeft, X, SlidersHorizontal, ChevronDown,
-  Globe, ShieldAlert, Trophy,
+  RotateCcw, ArrowDownWideNarrow, ArrowUpNarrowWide, X, SlidersHorizontal, ChevronDown,
+  ShieldAlert, Trophy,
   type LucideIcon,
 } from "lucide-react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
-import { CATALOG_KINDS, KIND_ICONS, KIND_LABELS, kindOf, kindHasThumbnail, showsMorphArt, type CatalogKind } from "@/lib/catalogKinds";
-import { BROWSE_TABS, BROWSE_TAB_LABELS, type BrowseTab } from "@/lib/browseTabs";
+import { CATALOG_KINDS, KIND_TAB_ICONS, KIND_LABELS, kindOf, kindHasThumbnail, showsMorphArt, type CatalogKind } from "@/lib/catalogKinds";
+import { BROWSE_TABS, BROWSE_TAB_LABELS, COMMUNITY_NAV_RAIL_KEY, type BrowseTab } from "@/lib/browseTabs";
+import { NavRail, type NavRailGroup } from "@/components/NavRail";
 import { listingId, listingRef, type ListingRef } from "@/lib/worldDependencies";
 import { contestPhase, placementsBy, entriesOf, orderContestEntries, type ContestPlacement } from "@/lib/contests";
 import { isContestEvent } from "@/lib/serverEvents";
 import { useContests } from "@/lib/useContests";
 import { ContestBar, ContestPodium } from "@/components/community/ContestBar";
-import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Pager } from "@/components/ui/pagination";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TokenAutocomplete } from "@/components/TokenAutocomplete";
@@ -70,7 +72,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { TITLE_SCRIM, WorldCardShell } from "@/components/WorldCardShell";
 import { cardLayoutFor, thumbAspectFor } from "@/lib/thumbAspect";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { useBackStop } from "@/hooks/useBackStop";
@@ -85,6 +87,9 @@ import { RemoteWorldDetailsModal } from "@/components/community/RemoteWorldDetai
 import { RemoteWorldCard } from "@/components/community/RemoteWorldCard";
 import { CommunityFilterBar } from "@/components/community/CommunityFilterBar";
 import { TutorialPopover } from "@/components/TutorialPopover";
+import { BackButton } from "@/components/BackButton";
+import { EditorSectionsBar } from "@/components/editor/EditorSectionsBar";
+import { badgeVariants } from "@/components/ui/badge";
 import { useTutorial } from "@/lib/tutorials";
 import { likeStateOf, optimisticLikeState, type LikeState } from "@/lib/likeCount";
 
@@ -230,10 +235,11 @@ interface CommunityCreationsBrowserProps {
 const CommunityCreationsBrowser = ({
   open, onOpenChange, presentation = 'dialog', capabilities = APP_COMMUNITY_CAPABILITIES, filterPreferences, worlds, setWorlds, entities, dictionaries, models,
   refreshEntities, refreshDictionaries, refreshModels,
-  isAuthenticated, currentUser, onGuestLike, openImageViewer, initialTab, requestKey, openListing, onListingOpened, listing: controlledListing,
+  isAuthenticated, currentUser, onGuestLike, openImageViewer, initialTab, requestKey: landingKey, openListing, onListingOpened, listing: controlledListing,
   onListingChange, onListingUnavailable, detailsAction, promptLibrary,
   events = [], onOpenEvent, openLikersOnMount = false, openManageAddonsOnMount = false,
 }: CommunityCreationsBrowserProps) => {
+  const requestKey = useRequestKey(landingKey);
   // Stated here rather than in an effect, because the catalog request below goes out in an effect of
   // its own: a shell that sends its guests to sign-in is not an Install and must name none.
   setShellOffersGuestLikes(capabilities.guestLikes);
@@ -273,7 +279,8 @@ const CommunityCreationsBrowser = ({
     handleContextualDownload, handleChooseOverwrite, handleConfirmOverwrite, handleDownloadWorld,
     pendingDownload, retryDownload, dismissPendingDownload,
     worldUpdateReview, applyWorldUpdate, cancelWorldUpdate,
-  } = useDownloadCoordinator(worlds, setWorlds, (_id, data) => promptWorld(data));
+  } = useDownloadCoordinator(worlds, setWorlds, (_id, data, onProgress) =>
+    promptWorld(data, (done, total) => onProgress(total > 0 ? done / total : 0)));
 
   // Hold the failure report through the dialog's fade-out, as the copy-vs-overwrite decision does.
   const shownPending = useClosingSnapshot(!!pendingDownload, pendingDownload);
@@ -554,6 +561,7 @@ const CommunityCreationsBrowser = ({
   // On mobile the sort/filter controls collapse behind a "Filters" toggle; on desktop they stay inline.
   const isMobile = useIsMobile();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [sectionsOpen, setSectionsOpen] = useState(false);
 
   // The card that anchors the like tutorial: the first one on the page whose heart is a control rather
   // than a count. Your own listings can't be liked, and a signed-out reader can't like anything.
@@ -821,87 +829,60 @@ const CommunityCreationsBrowser = ({
     setManagingAddons(listingRef(first));
   }, [open, openManageAddonsOnMount, remoteWorlds, managingAddons]);
 
-  // Section switcher: a rail on landscape, a dropdown on portrait. Rows come from the kinds list; Contest
+  // Section switcher: a rail on landscape, the Sections bar on portrait. Rows come from the kinds list; Contest
   // is appended rather than generated (see browseTabs.ts), only while one exists to browse.
   const kindSections: SwitcherSection[] = CATALOG_KINDS.map((kind) => ({
     key: kind,
     label: BROWSE_TAB_LABELS[kind].many,
-    icon: KIND_ICONS[kind],
+    icon: KIND_TAB_ICONS[kind],
   }));
   const sections: SwitcherSection[] = contests.length > 0
     ? [...kindSections, { key: 'contest', label: 'Contest', icon: Trophy }]
     : kindSections;
-  const activeSectionMeta = sections.find((s) => s.key === browseTab) ?? sections[0];
 
-  // Landscape: a vertical rail beside the results, below the header. Its explanation opens to the right of
-  // the rows, not of the rail: the rail is as tall as the results, so above or below it is off the screen,
-  // and an arrow can't aim at the middle of a column that is mostly empty.
+  // Landscape: the Nav Rail beside the results, below the header.
+  const sectionTabs = (includes: (key: BrowseTab) => boolean) =>
+    sections.filter((s) => includes(s.key)).map(({ key, label, icon }) => ({ value: key, label, icon }));
+  const railGroups: NavRailGroup[] = [
+    { id: 'kinds', tabs: sectionTabs((key) => key !== 'prompt' && key !== 'contest') },
+    { id: 'presets', tabs: sectionTabs((key) => key === 'prompt') },
+    { id: 'contest', tabs: sectionTabs((key) => key === 'contest') },
+  ];
+  // The explanation points at the tab list, not the rail: the rail is as tall as the results, and an arrow
+  // can't aim at the middle of a column that is mostly empty.
+  const [railTabs, setRailTabs] = useState<HTMLElement | null>(null);
+  const findRailTabs = useCallback((column: HTMLDivElement | null) => {
+    setRailTabs(column?.querySelector<HTMLElement>('[role="tablist"]') ?? null);
+  }, []);
   const landscapeRail = (
-    <nav
-      className="flex flex-col w-48 shrink-0 border-r p-3"
-      onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}
-    >
-    <TutorialPopover
-      entry={tutorial?.id === 'community-kind-tabs' ? tutorial : null}
-      nav={tutorialNav}
-      side="right"
-      align="start"
-    >
-    <div className="flex flex-col gap-1">
-      {sections.map(({ key, label, icon: Icon }) => {
-        const active = browseTab === key;
-        return (
-          <React.Fragment key={key}>
-            {(key === 'prompt' || key === 'contest') && <div role="separator" className="my-2 h-hairline bg-border" />}
-            <button
-              onClick={() => setBrowseTab(key)}
-              aria-current={active ? 'true' : undefined}
-              className={cn(
-                "flex items-center gap-2 rounded-md px-3 py-2 text-label font-medium transition-colors shrink-0",
-                active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
-              )}
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {label}
-            </button>
-          </React.Fragment>
-        );
-      })}
+    <div ref={findRailTabs}className="flex shrink-0" onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}>
+      <NavRail label="Community Sections" groups={railGroups} value={browseTab} storageKey={COMMUNITY_NAV_RAIL_KEY} />
+      <TutorialPopover
+        entry={tutorial?.id === 'community-kind-tabs' && railTabs ? tutorial : null}
+        nav={tutorialNav}
+        anchor={railTabs}
+        side="right"
+        align="start"
+      />
     </div>
-    </TutorialPopover>
-    </nav>
   );
 
-  // Portrait: a dropdown carrying every section, icon mirrored onto the closed trigger itself.
-  const portraitDropdown = (
+  // Portrait: the Sections bar under the header, fed the rail's groups so both draw the same splits.
+  const portraitSections = (
     <TutorialPopover
       entry={tutorial?.id === 'community-kind-tabs' ? tutorial : null}
       nav={tutorialNav}
       align="start"
     >
-    <div onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}>
-    <Select value={browseTab} onValueChange={(v) => setBrowseTab(v as BrowseTab)}>
-      <SelectTrigger className="w-[170px] h-9">
-        {/* A `<div>`, not a `<span>`: the trigger's `[&>span]:line-clamp-1` style stacks a direct-child span's flex children instead of rowing them. */}
-        <div className="flex items-center gap-2 min-w-0">
-          <activeSectionMeta.icon className="h-4 w-4 shrink-0" />
-          <span className="truncate">{activeSectionMeta.label}</span>
-        </div>
-      </SelectTrigger>
-      <SelectContent>
-        {sections.map(({ key, label, icon: Icon }) => (
-          <React.Fragment key={key}>
-            {(key === 'prompt' || key === 'contest') && <SelectSeparator />}
-            <SelectItem value={key}>
-              <span className="flex items-center gap-2">
-                <Icon className="h-4 w-4 shrink-0" />
-                {label}
-              </span>
-            </SelectItem>
-          </React.Fragment>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="shrink-0" onPointerDownCapture={() => dismissIfShowing('community-kind-tabs')}>
+      <EditorSectionsBar
+        groups={railGroups}
+        label="Community Sections"
+        bodyId="community-sections"
+        value={browseTab}
+        open={sectionsOpen}
+        onOpenChange={setSectionsOpen}
+      />
     </div>
     </TutorialPopover>
   );
@@ -912,26 +893,25 @@ const CommunityCreationsBrowser = ({
       nav={tutorialNav}
       align="start"
     >
-    <div className="relative flex-grow min-w-[200px]">
-      <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-      {/* `author:`/`tag:`/`status:`/`model:` typed here become filter chips — see the hook's applySearchInput.
-          Enter finishes the token under the cursor, a space finishes it as you keep typing. */}
-      <Input
-        // The prefix hint is desktop-only: on mobile it outruns the field and hides the word "Search".
-        placeholder={isMobile
-          ? `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}…`
-          : `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}… or type author:, tag:, ${browseTab === 'prompt' ? 'model:, ' : ''}status:`}
-        className="pl-8"
-        value={searchQuery}
-        onChange={(e) => { dismissIfShowing('community-search-prefixes'); applySearchInput(e.target.value); }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            applySearchInput(e.currentTarget.value, true);
-          }
-        }}
-      />
-    </div>
+    {/* `author:`/`tag:`/`status:`/`model:` typed here become filter chips — see the hook's applySearchInput.
+        Enter finishes the token under the cursor, a space finishes it as you keep typing. The X clears the
+        typed text only; the chips stay. */}
+    <SearchField
+      // The prefix hint is desktop-only: on mobile it outruns the field and hides the word "Search".
+      placeholder={isMobile
+        ? `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}…`
+        : `Search ${BROWSE_TAB_LABELS[browseTab].many.toLowerCase()}… or type author:, tag:, ${browseTab === 'prompt' ? 'model:, ' : ''}status:`}
+      className="flex-grow min-w-[200px]"
+      value={searchQuery}
+      onChange={(next) => { dismissIfShowing('community-search-prefixes'); applySearchInput(next); }}
+      onClear={() => applySearchInput('')}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+          e.preventDefault();
+          applySearchInput(e.currentTarget.value, true);
+        }
+      }}
+    />
     </TutorialPopover>
   );
 
@@ -960,9 +940,9 @@ const CommunityCreationsBrowser = ({
   // A contest's entries are ordered by the contest, not by the reader: shuffled until results are announced,
   // then by likes. Offering a sort that the grid then overrides would be a control that lies.
   const sortControl = browseTab === 'contest' ? null : (
-    <div className="flex items-center gap-1">
+    <div className={cn('flex items-center gap-1', isMobile && 'min-w-0 flex-1')}>
       <Select value={sortField} onValueChange={(v) => { setSortField(v); setCurrentPage(1); }}>
-        <SelectTrigger className="w-[160px] h-9"><SelectValue /></SelectTrigger>
+        <SelectTrigger className={cn('h-9', isMobile ? 'min-w-0 flex-1' : 'w-[160px]')}><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="updated_at">Last Updated</SelectItem>
           <SelectItem value="created_at">Creation Date</SelectItem>
@@ -1021,14 +1001,16 @@ const CommunityCreationsBrowser = ({
         {hiddenWorldIds.length > 0 && (
           <div className="space-y-1">
             <span className="text-meta font-medium text-muted-foreground">Worlds</span>
-            <div className="flex flex-wrap gap-1">
-              {hiddenWorldIds.map((id) => (
-                <span key={`w-${id}`} className={cn(CHIP_BASE, "bg-secondary text-secondary-foreground")}>
-                  {hiddenWorldName(id)}
-                  <button onClick={() => unhideWorld(id)} className="hover:text-destructive" aria-label="Unhide world"><X className="h-3 w-3" /></button>
-                </span>
-              ))}
-            </div>
+            <ScrollArea className="max-h-48">
+              <div className="flex flex-wrap gap-1">
+                {hiddenWorldIds.map((id) => (
+                  <span key={`w-${id}`} className={cn(CHIP_BASE, "bg-secondary text-secondary-foreground")}>
+                    {hiddenWorldName(id)}
+                    <button onClick={() => unhideWorld(id)} className="hover:text-destructive" aria-label="Unhide world"><X className="h-3 w-3" /></button>
+                  </span>
+                ))}
+              </div>
+            </ScrollArea>
           </div>
         )}
         {hiddenWorldIds.length + hiddenTags.length + hiddenAuthors.length > 0 && (
@@ -1056,6 +1038,9 @@ const CommunityCreationsBrowser = ({
   // row for two controls reads as a second, unrelated set of filters.
   // The explanation anchors to the Add Filter control inside the bar, not the bar: the bar spans the
   // row, and a popover can't aim its arrow at the middle of something wider than itself.
+  // The same event banner the main menu carries — the two surfaces share no shell, so this is a second
+  // instance rather than a moved one. The header's own spacing places it, so the card's margins are dropped.
+  const eventBanner = <EventBanner banners={banners} onOpenEvent={openEventFromBanner} className="mx-0 mb-0" />;
   const filterBar = (
     <div onPointerDownCapture={() => dismissIfShowing('community-filters')}>
     <CommunityFilterBar
@@ -1143,80 +1128,93 @@ const CommunityCreationsBrowser = ({
       <BrowserShell presentation={presentation} open={open} onOpenChange={onOpenChange}>
           {/* The kind switcher lives in the header and its results below it, so one root spans both.
               `contents` on the root and each panel leaves the dialog's own flex column untouched. */}
-          <Tabs surfaceTabs="community" value={browseTab} onValueChange={(v) => setBrowseTab(v as BrowseTab)} className="contents">
-          {/* Header: back · title · search · refresh always visible. On mobile the sort/filter controls
-              collapse behind a "Filters" toggle; on desktop they stay inline. */}
+          <Tabs
+            surfaceTabs="community"
+            value={browseTab}
+            onValueChange={(v) => setBrowseTab(v as BrowseTab)}
+            orientation="vertical"
+            // Arrows browse the open Sections bar without switching; the rail switches as it moves.
+            activationMode={isMobile ? 'manual' : 'automatic'}
+            className="contents"
+          >
+          {/* Header: back · title · search always visible. On mobile sort, refresh and the filters collapse
+              behind the Filters toggle; on desktop they stay inline and the whole block spans the window
+              above the rail. */}
           <Collapsible open={filtersOpen} onOpenChange={setFiltersOpen} className="shrink-0 border-b">
-            <div className="px-6 py-4 space-y-4">
+            <header className={isMobile ? 'px-3 py-2 space-y-2' : 'px-3 pb-3 space-y-3'}>
               {isMobile ? (
-                // Two rows on mobile, not four. The title goes screen-reader-only the way the World
-                // Editor's does — the header it names is the only thing on screen — which frees its row
-                // for the search box, and the kind tabs drop to share a row with the Filters toggle.
+                // One row on mobile. The title goes screen-reader-only the way the World Editor's does — the
+                // header it names is the only thing on screen — which frees its row for the search box.
                 <>
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => onOpenChange(false)} aria-label="Back">
-                      <ArrowLeft className="h-5 w-5" />
-                    </Button>
+                    <BackButton onClick={() => onOpenChange(false)} />
                     <Heading className="sr-only">Community Creations</Heading>
                     {searchControl}
-                    {refreshControl}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {portraitDropdown}
-                    {quarantineControl}
                     <TutorialPopover entry={filtersToggleTutorial} nav={tutorialNav} align="end">
                     <CollapsibleTrigger asChild>
                       <Button
                         variant="outline"
                         size="sm"
-                        className="ml-auto shrink-0 gap-1"
+                        className="relative h-9 shrink-0 gap-1 px-2"
+                        aria-label={activeFilterCount > 0 ? `Filters, ${activeFilterCount} on` : 'Filters'}
                         onPointerDownCapture={() => {
                           dismissIfShowing('community-filters');
                           dismissIfShowing('community-hidden');
                         }}
                       >
                         <SlidersHorizontal className="h-4 w-4" />
-                        Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
-                        <ChevronDown className={`h-4 w-4 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={cn('h-4 w-4 transition-transform', filtersOpen && 'rotate-180')} />
+                        {activeFilterCount > 0 && (
+                          <span aria-hidden className={cn(badgeVariants(), 'absolute -right-2 -top-2 h-5 min-w-5 justify-center px-1.5')}>
+                            {activeFilterCount}
+                          </span>
+                        )}
                       </Button>
                     </CollapsibleTrigger>
                     </TutorialPopover>
                   </div>
+                  {quarantineControl && <div className="flex flex-wrap items-center gap-2">{quarantineControl}</div>}
                 </>
               ) : (
-                <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-                  <Button variant="ghost" size="icon" className="shrink-0" onClick={() => onOpenChange(false)} aria-label="Back">
-                    <ArrowLeft className="h-5 w-5" />
-                  </Button>
-                  <Heading className="flex items-center gap-2 whitespace-nowrap mr-2"><Globe className="h-4 w-4 shrink-0" /> Community Creations</Heading>
-                  {searchControl}
-                  {quarantineControl}
-                  {refreshControl}
-                  {sortControl}
+                // The title row fills its header, so the search box grows into the free space. Refresh ends
+                // the row, after the sort select and the order toggle.
+                <div className="flex min-h-14 items-center py-2">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-1">
+                      <BackButton onClick={() => onOpenChange(false)} />
+                      <Heading className="ml-1 whitespace-nowrap text-title font-semibold">Community Creations</Heading>
+                    </div>
+                    {searchControl}
+                    {quarantineControl}
+                    <div className="flex items-center gap-1">
+                      {sortControl}
+                      {refreshControl}
+                    </div>
+                  </div>
                 </div>
               )}
 
               {isMobile ? (
                 <CollapsibleContent className="space-y-3">
-                  {sortControl}
+                  <div className="flex items-center justify-end gap-1">
+                    {sortControl}
+                    {refreshControl}
+                  </div>
                   {filterBar}
                 </CollapsibleContent>
               ) : (
                 filterBar
               )}
 
-              {/* The same event banner the main menu carries — the two surfaces share no shell, so this
-                  is a second instance rather than a moved one. Margins come from the header's own
-                  padding, so the card's are dropped. */}
-              <EventBanner banners={banners} onOpenEvent={openEventFromBanner} className="mx-0 mb-0" />
-            </div>
+              {eventBanner}
+            </header>
           </Collapsible>
+          {isMobile && portraitSections}
 
-          {/* The section switcher's landscape rail sits beside the results; the pager stays with them in
-              the same column. */}
+          {/* The rail sits beside the results; the pager stays with them in the same column. */}
           <div className={cn("flex min-h-0 flex-1", !isMobile ? "flex-row" : "flex-col")}>
           {!isMobile && landscapeRail}
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* The contest's own header: which contest, where it stands, its rules, and — once several have
               been run — which archive is being read. Above the grid rather than inside it, so it stays put
               while the entries scroll. */}

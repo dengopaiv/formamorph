@@ -13,12 +13,29 @@ import type { AITurnResult, ChatMessage } from '@/types';
  * This slice only *generates and stores* digests. Nothing consumes them yet (see Slice 2: banding).
  */
 
-// The history is walked repeatedly — the context meter alone re-derives on every sentence boundary of
-// every turn — and each walk parses every assistant message again. Cache by the exact content string, so
-// only a turn that actually changed is re-parsed. Bounded: an entry is dropped once the map outgrows a
-// long session's history, and a parse is cheap enough that a miss costs nothing.
-const PARSE_CACHE_LIMIT = 400;
-const parseCache = new Map<string, AITurnResult | null>();
+// The history is walked repeatedly, and each walk parses every assistant message again. Cache by the exact
+// content string, so only a turn that actually changed is re-parsed. Two generations: a full one ages into
+// `previousParses`, and a hit there moves back, so a working set under the limit never misses and stale
+// strings (a streaming turn's partials, rolled-back turns) drop after two rotations.
+const PARSE_CACHE_LIMIT = 4000;
+let parseCache = new Map<string, AITurnResult>();
+let previousParses = new Map<string, AITurnResult>();
+
+function cachedParse(content: string): AITurnResult | undefined {
+  const hit = parseCache.get(content);
+  if (hit !== undefined) return hit;
+  const old = previousParses.get(content);
+  if (old !== undefined) storeParse(content, old);
+  return old;
+}
+
+function storeParse(content: string, parsed: AITurnResult) {
+  if (parseCache.size >= PARSE_CACHE_LIMIT) {
+    previousParses = parseCache;
+    parseCache = new Map();
+  }
+  parseCache.set(content, parsed);
+}
 
 /** Parse an assistant turn's JSON content, or `null` if it doesn't parse. Legacy v1.2 / pre-release 2.0
  *  saves stored the narration under `game_text`; normalize that to `narration` on read (non-destructive
@@ -28,7 +45,7 @@ const parseCache = new Map<string, AITurnResult | null>();
  *  the same string. json5 stays as the fallback for legacy and model-authored content, which is the only
  *  place its tolerance was ever needed. */
 export function parseTurnContent(content: string): AITurnResult | null {
-  const hit = parseCache.get(content);
+  const hit = cachedParse(content);
   if (hit !== undefined) return hit;
 
   let parsed: (AITurnResult & { game_text?: string }) | null = null;
@@ -46,16 +63,13 @@ export function parseTurnContent(content: string): AITurnResult | null {
     delete parsed.game_text;
   }
 
-  // Only successful parses are cached: a streaming turn hands every partial content string through here,
-  // and caching those misses would fill the map mid-turn until the cap wiped the whole history's parses.
-  // A failed parse exits fast, so re-failing on the next walk costs nothing.
+  // Only successful parses are cached; a failed parse exits fast, so re-failing on the next walk costs nothing.
   if (parsed) {
     // Every consumer shares this one object, so an in-place write would corrupt the cache and every
     // other reader at once. Frozen (shallowly — the hot path can't afford a deep walk) to make that
     // mistake throw here rather than surface as a wrong turn somewhere else. Callers spread to modify.
     Object.freeze(parsed);
-    if (parseCache.size >= PARSE_CACHE_LIMIT) parseCache.clear();
-    parseCache.set(content, parsed);
+    storeParse(content, parsed);
   }
   return parsed;
 }
@@ -82,26 +96,6 @@ export function pruneTurnMap<T>(map: Record<string, T>, history: ChatMessage[]):
   const kept = Object.keys(map).filter((id) => live.has(id));
   if (kept.length === Object.keys(map).length) return map;
   return Object.fromEntries(kept.map((id) => [id, map[id]]));
-}
-
-/**
- * Pick the `turnId`s of assistant turns that are due for a digest: those with a stable id and no
- * summary yet. `skipRecent` optionally excludes the N most recent assistant turns (default 0 — every
- * completed turn is digested, including the newest, since the drainer only runs once a turn is fully
- * committed). Pre-digest turns lacking a `turnId` are skipped (they can't be addressed by the
- * apply-guard). Returns ids most-recent-first; the drainer decides which end to process.
- */
-export function selectDueDigests(history: ChatMessage[], skipRecent = 0): string[] {
-  const due: string[] = [];
-  let assistantSeen = 0;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role !== 'assistant') continue;
-    assistantSeen += 1;
-    if (assistantSeen <= skipRecent) continue;
-    const parsed = parseTurnContent(history[i].content);
-    if (parsed?.turnId && !parsed.summary) due.push(parsed.turnId);
-  }
-  return due;
 }
 
 /**
@@ -161,36 +155,37 @@ export function applyImportance(history: ChatMessage[], byTurnId: Map<string, nu
   return found ? next : history;
 }
 
-/**
- * Pick the `turnId`s of assistant turns due for a character diary entry: those with a stable id and at
- * least one participant (`entities`) that has no diary entry yet. Turns with no participants are skipped
- * (no one to write). Returns ids most-recent-first; the drainer decides which end to process.
- */
-export function selectDueDiaries(history: ChatMessage[]): string[] {
-  const due: string[] = [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role !== 'assistant') continue;
-    const parsed = parseTurnContent(history[i].content);
-    if (!parsed?.turnId || !parsed.entities?.length) continue;
-    if (parsed.entities.some((name) => parsed.diaries?.[name] === undefined)) due.push(parsed.turnId);
-  }
-  return due;
-}
+/** Whether a trimmed diary entry carries a memory: a `nothing notable` entry does not. */
+export const diaryHoldsMemory = (text: string) => text.toLowerCase() !== 'nothing notable';
 
-/** The participant names on a turn still missing a diary entry (empty if the turn is fully covered). */
-export function pendingDiaryNames(history: ChatMessage[], turnId: string): string[] {
+/** The parsed assistant turn whose id is `turnId`, or undefined when the history holds none. */
+export function parsedTurnById(history: readonly ChatMessage[], turnId: string): AITurnResult | undefined {
   for (const message of history) {
     if (message.role !== 'assistant') continue;
     const parsed = parseTurnContent(message.content);
-    if (parsed?.turnId === turnId) {
-      return (parsed.entities ?? []).filter((name) => parsed.diaries?.[name] === undefined);
-    }
+    if (parsed?.turnId === turnId) return parsed;
   }
-  return [];
+  return undefined;
 }
 
-/** Whether a trimmed diary entry carries a memory: a `nothing notable` entry does not. */
-export const diaryHoldsMemory = (text: string) => text.toLowerCase() !== 'nothing notable';
+/** The turn's memory as recall reads it: the digest, then the `memories.add` lines. Undefined when it has neither. */
+export function turnMemory({ summary, codeMemory }: Pick<AITurnResult, 'summary' | 'codeMemory'>): string | undefined {
+  if (!codeMemory?.length) return summary;
+  return [summary?.trim(), ...codeMemory].filter(Boolean).join(' ');
+}
+
+/** The turn's diary entries by name as readers see them: the pass's entry, then that name's `diary` lines. A code
+ *  line replaces a `nothing notable` entry. Names match without case, under the entry's spelling. */
+export function turnDiaries({ diaries, codeDiaries }: Pick<AITurnResult, 'diaries' | 'codeDiaries'>): Record<string, string> {
+  if (!codeDiaries) return diaries ?? {};
+  const out: Record<string, string> = { ...diaries };
+  for (const [name, lines] of Object.entries(codeDiaries)) {
+    const key = Object.keys(out).find((known) => known.trim().toLowerCase() === name.trim().toLowerCase()) ?? name;
+    const entry = out[key]?.trim();
+    out[key] = [entry && diaryHoldsMemory(entry) ? entry : '', ...lines].filter(Boolean).join(' ');
+  }
+  return out;
+}
 
 /**
  * A character's own diary entries across the history, chronological (oldest first), capped to the last
@@ -203,8 +198,8 @@ export function collectCharacterDiary(history: ChatMessage[], name: string, max:
   for (const message of history) {
     if (message.role !== 'assistant') continue;
     const parsed = parseTurnContent(message.content);
-    if (!parsed?.diaries) continue;
-    const match = Object.entries(parsed.diaries).find(([k]) => k.trim().toLowerCase() === key);
+    if (!parsed?.diaries && !parsed?.codeDiaries) continue;
+    const match = Object.entries(turnDiaries(parsed)).find(([k]) => k.trim().toLowerCase() === key);
     const text = match?.[1]?.trim();
     if (text && diaryHoldsMemory(text)) entries.push(text);
   }
@@ -236,10 +231,10 @@ export function applyDiary(
 }
 
 /**
- * Drop a turn's derived-from-narration data so the drainers regenerate it. Editing a turn's narration
+ * Drop a turn's derived-from-narration data so the background passes regenerate it. Editing a turn's narration
  * makes its stored digest (`summary`) — and, when `diaries` is set, its character diary entries — disagree
- * with the visible text; nulling those fields makes `selectDueDigests`/`selectDueDiaries` re-select the
- * turn and the drainers rebuild lazily. Returns `null` if no turn matches the id (rolled back / regenerated
+ * with the visible text; nulling those fields makes the digest and diary passes re-select the
+ * turn and the background passes rebuild lazily. Returns `null` if no turn matches the id (rolled back / regenerated
  * away), mirroring the apply-guards. Other turns are untouched.
  */
 export function clearTurnDerived(

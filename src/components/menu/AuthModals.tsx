@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useRequestKey } from '@/lib/surface/useRequestKey';
 import { toast } from "react-toastify";
 import { AlertTriangle, Key, LogOut } from "lucide-react";
 import {
@@ -23,7 +24,7 @@ import PolicyService from "@/services/PolicyService";
 import AuthService from "@/services/AuthService";
 import UserService from "@/services/UserService";
 import { useResetOnOpen } from "@/lib/useResetOnOpen";
-import { parseServerDate } from "@/lib/serverDate";
+import { formatServerDate, parseServerDate } from "@/lib/serverDate";
 import { type WorldRecord } from "@/components/WorldDetails";
 import type { PublicProfile } from "@/types";
 import { ProfileStats } from "@/components/community/ProfileStats";
@@ -55,8 +56,9 @@ export function AuthModals({
   showProfileDialog, setShowProfileDialog,
   currentUser, onLogout,
   onUnreadChange, onAvatarChanged, onNotificationsRead, onOpenListing,
-  initialTab, requestKey,
+  initialTab, requestKey: landingKey,
 }: AuthModalsProps) {
+  const requestKey = useRequestKey(landingKey);
   // Held locally as well as on the host: the header has to change the moment the crop is saved, and the
   // host's copy arrives a render later.
   const [avatarUrl, setAvatarUrl] = useState<string | null>((currentUser?.avatarUrl as string | null) ?? null);
@@ -79,6 +81,9 @@ export function AuthModals({
   // A suspended account can sign in and read (that is how it reaches its suspension notice), but the
   // server refuses every write it could make from here.
   const isSuspended = currentUser?.status === 'suspended';
+  const suspensionEnd = isSuspended && currentUser?.suspendedUntil
+    ? formatServerDate(currentUser.suspendedUntil)
+    : '';
 
   // Asked once per opening. Failing quietly leaves the tab hidden, which is the state every install had
   // before an admin wrote a gate — never a reason to break the rest of the dialog.
@@ -201,7 +206,9 @@ export function AuthModals({
                 <AlertTriangle className="h-5 w-5 text-destructive mr-2 flex-shrink-0 mt-0.5" />
                 <div className="text-label">
                   <p className="font-bold text-destructive">Account Suspended</p>
-                  <p className="text-muted-foreground">Check your messages for details.</p>
+                  <p className="text-muted-foreground">
+                    {suspensionEnd ? `Ends ${suspensionEnd}. ` : ''}Check your messages for details.
+                  </p>
                 </div>
               </div>
             )}

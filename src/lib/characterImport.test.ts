@@ -30,7 +30,7 @@ afterEach(async () => {
 describe('SillyTavern JSON import', () => {
   it('imports a real file through the shared entry point and keeps library fields separate', async () => {
     const result = await importCharacterFile(file(card));
-    expect(result.entity).toMatchObject({ name: 'Mara', images: ['https://example.com/mara.png'] });
+    expect(result.entity).toMatchObject({ name: 'Mara', images: [{ data: 'https://example.com/mara.png' }] });
     expect(result.entity.aiDescription).toBe('{{char}} knows {{user}}.\n\nPersonality: Patient\n\nScenario: At the dock');
     expect(result.entity.openings?.map(({ text, kind }) => ({ text, kind }))).toEqual([
       { text: '*{{char}} waves.*', kind: 'narration' }, { text: 'Welcome back.', kind: 'narration' },
@@ -114,7 +114,7 @@ describe('Save to Library with owned traits', () => {
       traits: [
         { id: 't-tamed', name: 'Tamed', statChanges: [] },
         { id: 't-oath', name: 'Oath', statChanges: [], requires: [
-          { kind: 'trait', id: 't-tamed' }, { kind: 'group', id: 'g-class' }, { kind: 'playingAs', id: 'ash' },
+          { all: [{ kind: 'trait', id: 't-tamed' }] }, { all: [{ kind: 'group', id: 'g-class' }] }, { all: [{ kind: 'playingAs', id: 'ash' }] },
         ] },
       ],
     };
@@ -123,9 +123,9 @@ describe('Save to Library with owned traits', () => {
     const stored = await EntityStorageService.getEntityData(source.id);
     expect(stored).not.toHaveProperty('traitPlacement');
     expect(stored.traits![1].requires).toEqual([
-      { kind: 'trait', id: 't-tamed' },
-      { kind: 'group', id: 'g-class', name: 'Class' },
-      { kind: 'playingAs', id: SELF_ENTITY, name: 'Ash' },
+      { all: [{ kind: 'trait', id: 't-tamed' }] },
+      { all: [{ kind: 'group', id: 'g-class', name: 'Class' }] },
+      { all: [{ kind: 'playingAs', id: SELF_ENTITY, name: 'Ash' }] },
     ]);
   });
 });

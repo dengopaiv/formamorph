@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { GameDataProvider, useGameData } from './GameDataContext';
-import type { World } from '@/types';
+import type { Stat, Tool, World } from '@/types';
 
 import { phValueId, phValues } from '@/test/placeholderValues';
+import { boxScripts } from '@/test/scriptFixtures';
 // The provider initializes IndexedDB storage on mount; stub it out so these tests exercise only
 // loadWorldData's normalization.
 vi.mock('../services/WorldStorageService', () => ({
@@ -15,12 +16,116 @@ const world = (id: string, overview: Record<string, unknown>): World => ({
   id,
   worldOverview: {
     name: id, description: '', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: true, tags: [], ...overview,
+    systemPrompt: '', tags: [], ...overview,
   },
   stats: [], locations: [], entities: [], traits: [], statUpdates: [],
 } as unknown as World);
 
 const wrapper = ({ children }: { children: ReactNode }) => <GameDataProvider>{children}</GameDataProvider>;
+
+describe('entity stats in the world store', () => {
+  const trust: Stat = {
+    id: 's-trust', name: 'Trust', type: 'number', description: 'How far Ash trusts you', min: -5, max: 20, value: 3, regen: 1,
+    descriptors: [{ id: 'd1', threshold: 10, description: 'Wary' }], hidden: true, noDecrease: true, scripts: boxScripts({ after: 'return 1;' }),
+    morphBindings: ['Belly'],
+  };
+  const withStats = {
+    ...world('w', {}),
+    entities: [{ id: 'ash', name: 'Ash', stats: [trust] }, { id: 'vex', name: 'Vex' }],
+  } as unknown as World;
+
+  it('writes an entity\'s stats into the exported world, and an imported copy loads them whole', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(world('w', {})); });
+    act(() => { result.current.addEntity({ id: 'ash', name: 'Ash' }); });
+    act(() => { result.current.editEntity('ash', (e) => ({ ...e, stats: [trust] })); });
+    const exported = JSON.parse(JSON.stringify(result.current.getWorldData()));
+    expect(exported.entities[0].stats).toEqual([trust]);
+
+    // A different provider state stands in for the importing app.
+    act(() => { result.current.loadWorldData(world('other', {})); });
+    expect(result.current.entities).toEqual([]);
+    act(() => { result.current.loadWorldData(exported); });
+    expect(result.current.entities.find((e) => e.id === 'ash')?.stats).toEqual([trust]);
+    expect(result.current.entities.find((e) => e.id === 'vex')).toBeUndefined();
+    expect(result.current.stats).toEqual([]);
+  });
+
+  it('loads a world whose entities carry no stats with none, clean', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(world('w', {})); });
+    act(() => { result.current.addEntity({ id: 'vex', name: 'Vex' }); });
+    act(() => { result.current.loadWorldData(JSON.parse(JSON.stringify(result.current.getWorldData()))); });
+    expect(result.current.entities[0]).not.toHaveProperty('stats');
+    expect(result.current.isWorldDirty).toBe(false);
+  });
+
+  it('counts an entity stat edit as an unsaved change', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(withStats); });
+    expect(result.current.isWorldDirty).toBe(false);
+    act(() => { result.current.editEntity('ash', (e) => ({ ...e, stats: [{ ...trust, value: 9 }] })); });
+    expect(result.current.isWorldDirty).toBe(true);
+  });
+});
+
+describe('scripts in the world store', () => {
+  it('carries the world’s own scripts through load and export, and loads a stat’s boxes as scripts', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    const worldScripts = [{ id: 'w1', timing: 'after', code: 'stats.Health.value = 1;', order: 2 }];
+    const legacy = {
+      ...world('w', {}),
+      stats: [{ id: 'hp', name: 'Health', type: 'number', description: '', min: 0, max: 10, value: 5, regen: 0, descriptors: [], code: 'return 3;' }],
+      scripts: worldScripts,
+    } as unknown as World;
+    act(() => { result.current.loadWorldData(legacy); });
+    const exported = JSON.parse(JSON.stringify(result.current.getWorldData()));
+    expect(exported.scripts).toEqual(worldScripts);
+    expect(exported.stats[0]).not.toHaveProperty('code');
+    expect(exported.stats[0].scripts).toEqual([{ id: 'hp:after', timing: 'after', code: 'return 3;' }]);
+    expect(result.current.isWorldDirty).toBe(false);
+  });
+
+  it('exports no world script list when the world has none', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(world('w', {})); });
+    expect(result.current.getWorldData()).not.toHaveProperty('scripts');
+  });
+});
+
+describe('World Tools in the world store', () => {
+  const roll: Tool = {
+    id: 'w-roll', name: 'get_entity', description: 'Purpose: roll.', params: [],
+    handler: { kind: 'script', code: 'return 4;' }, emptyResult: '', offeredTo: ['narration'], callLimit: 2,
+  };
+
+  it('carries the world’s Tools through export and an import into another world, clean', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(world('w', {})); });
+    act(() => { result.current.setWorldTools([roll]); });
+    const exported = JSON.parse(JSON.stringify(result.current.getWorldData()));
+    expect(exported.tools).toEqual([roll]);
+
+    act(() => { result.current.loadWorldData(world('other', {})); });
+    expect(result.current.worldTools).toEqual([]);
+    act(() => { result.current.loadWorldData(exported); });
+    expect(result.current.worldTools).toEqual([roll]);
+    expect(result.current.isWorldDirty).toBe(false);
+  });
+
+  it('loads a world without Tools unchanged, and exports no Tool list for it', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData(world('w', {})); });
+    expect(result.current.worldTools).toEqual([]);
+    expect(result.current.getWorldData()).not.toHaveProperty('tools');
+  });
+
+  it('drops an unreadable Tool from an imported world and keeps the rest', () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    act(() => { result.current.loadWorldData({ ...world('w', {}), tools: [{ id: 'x', name: 'no handler' }, roll] } as unknown as World); });
+    expect(result.current.worldTools).toEqual([roll]);
+  });
+});
 
 describe('the Custom Persona entity in the world store', () => {
   const links = [
@@ -106,7 +211,7 @@ describe('placeholder copies in the world store', () => {
   const copies = (result: { current: ReturnType<typeof useGameData> }, id: string) =>
     (result.current.entities.find((e) => e.id === id)?.placeholders ?? []).map((p) => p.blueprintId);
 
-  it('gives a bearer its copies on load, clean, and writes them into the payload', () => {
+  it('gives an owner its copies on load, clean, and writes them into the payload', () => {
     const { result } = renderHook(() => useGameData(), { wrapper });
     act(() => { result.current.loadWorldData(pinned); });
     expect(copies(result, 'ash')).toEqual(['garb']);
@@ -126,7 +231,7 @@ describe('placeholder copies in the world store', () => {
     expect(copies(result, 'bob')).toEqual([]);
   });
 
-  it('creates a copy when a pin joins an original that already has a bearer', () => {
+  it('creates a copy when a pin joins an original that already has an owner', () => {
     const { result } = renderHook(() => useGameData(), { wrapper });
     const { placeholderPins: _p, ...bare } = pinned.traits[0];
     act(() => { result.current.loadWorldData({ ...pinned, traits: [bare] }); });
@@ -414,7 +519,7 @@ describe('discardChanges', () => {
       id: 'new',
       worldOverview: {
         name: '', description: '', author: '', thumbnail: null, bgm: null,
-        systemPrompt: '', use3DModel: true, tags: [],
+        systemPrompt: '', tags: [],
       },
       stats: [], locations: [], entities: [], traits: [], statUpdates: [],
       dictionaries: [{ id: 'seed', name: 'Default', enabled: true, entries: [] }],
@@ -444,7 +549,7 @@ describe('discardChanges', () => {
       id: 'w',
       worldOverview: {
         name: 'Legacy', description: '', author: '', thumbnail: null, bgm: null,
-        systemPrompt: '', use3DModel: true, tags: [],
+        systemPrompt: '', tags: [],
       },
       stats: [], locations: [], traits: [], statUpdates: [],
       entities: [{ id: 'e1', name: 'Sedge', inGameDescription: 'Seen', detailedDescription: 'Known' }],
@@ -551,6 +656,23 @@ describe('loadWorldData', () => {
     expect(result.current.worldOverview.openings).toEqual(OPENINGS);
     expect(result.current.worldOverview.openingWeights).toEqual({ o1: 3 });
     expect(result.current.worldOverview.openingsEnabled).toBe(false);
+  });
+
+  it("carries the Map Background's images, rules, frame and opacity through an export and load", () => {
+    const { result } = renderHook(() => useGameData(), { wrapper });
+    const mapBackground = {
+      images: [
+        { data: 'data:image/webp;base64,bWFw' },
+        { data: 'https://example.com/ruin.png', requires: [{ all: [{ kind: 'stat' as const, id: 'ruin', operator: '>' as const, value: 4, unit: 'raw' as const }] }] },
+      ],
+      frame: { x: -40, y: 12, width: 900, height: 500 },
+      opacity: 0.6,
+    };
+    act(() => { result.current.loadWorldData(JSON.parse(JSON.stringify(world('a', { mapBackground })))); });
+    expect(result.current.worldOverview.mapBackground).toEqual(mapBackground);
+
+    act(() => { result.current.loadWorldData(world('b', {})); });
+    expect(result.current.worldOverview.mapBackground).toBeUndefined();
   });
 
   it('loads an old single cue as the first row of the list', () => {
@@ -667,8 +789,8 @@ describe('placeholders an entity or a book carries', () => {
     expect(result.current.worldPlaceholders.map((p) => p.id)).toEqual(['shared', 'mood']);
   });
 
-  it('puts a part created from inside a scoped holder beside that holder, not on the world list', () => {
-    // What the typeahead's inline create writes: a placeholder born with its holder as owner.
+  it('puts a part created from inside a scoped parent placeholder beside that parent, not on the world list', () => {
+    // What the typeahead's inline create writes: a placeholder born with its parent placeholder as owner.
     const result = load();
     act(() => { result.current.phStore.addPlaceholder({ id: 'iris', name: 'Iris', values: phValues(['gold']), ownerId: 'eyes' }); });
     expect(result.current.entities[0].placeholders?.map((p) => p.id)).toEqual(['eyes', 'iris']);

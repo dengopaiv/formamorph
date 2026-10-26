@@ -73,6 +73,37 @@ export function readNarration(input: NarrationReadingInput): NarrationReading {
   return { prose, narratedNames, participants, visibleEntities };
 }
 
+export interface EditedNarrationInput {
+  narration: string;
+  /** Narration of the turns before the edited one. */
+  priorNarration: string;
+  entities: Entity[];
+  exclusions: CandidateExclusions;
+  /** The edited page's scene list before the edit; it stands in for the planner cast, which no turn stores. */
+  previousScene: SceneEntity[];
+}
+
+/**
+ * Who took part in an edited turn and who is on its scene, read the way a live turn reads its narration. No
+ * planner ran for an edit, so only the prose-based sources apply. A previous scene member stays while the
+ * prose still names them loosely, by name or alias; a reveal is never taken back.
+ */
+export function readEditedNarration(input: EditedNarrationInput): { participants: string[]; visibleEntities: SceneEntity[] } {
+  const { previousScene, ...reading } = input;
+  const { prose, participants, visibleEntities: parsed } = readNarration({
+    ...reading,
+    directorCandidates: [],
+    adHocCandidates: [],
+    sceneCast: null,
+  });
+  const revealedIn = `${input.priorNarration}\n${input.narration}`;
+  const kept = previousScene
+    .filter((se) => matchNamesLoose(prose, se.alias ? [se.name, se.alias] : [se.name]).length > 0)
+    .map((se) => ({ ...se, revealed: se.revealed || matchNames(revealedIn, [se.name]).length > 0 }));
+  const keptNames = new Set(kept.map((se) => se.name.toLowerCase()));
+  return { participants, visibleEntities: [...kept, ...parsed.filter((se) => !keptNames.has(se.name.toLowerCase()))] };
+}
+
 export interface VisitorInput {
   /** The narration prose — same corpus presence is read from. */
   prose: string;

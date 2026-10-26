@@ -1,7 +1,9 @@
 import {
-  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { getFeedbackState, subscribeFeedback } from '@/lib/feedbackOpener';
+import { getSignInState, subscribeSignIn } from '@/lib/signInStore';
 import { coverShieldedLayer, ensureShieldedLayer } from '@/components/ui/shielded-layer';
 import { useBackStop } from '@/hooks/useBackStop';
 import { useDevRoute } from '@/lib/devRouter';
@@ -11,31 +13,36 @@ import { docTargetId, type DocTarget } from '@/lib/docs/docsLinks';
 import { opensInHelpWindow, resolveSurface, stepTab, targetRoute, type SurfaceRoute } from '@/lib/surface/surfaceRoute';
 import { useRouteLanding } from '@/lib/surface/useLanding';
 import { registerDocsOpener } from '@/lib/formaquestion/docsOpener';
-import { onStatCodeInsert } from '@/lib/formaquestion/statCodeInsert';
+import { onScriptInsert } from '@/lib/formaquestion/scriptInsert';
 import { createGuide } from '@/lib/formaquestion/guide';
 import { cn } from '@/lib/utils';
 import { wikiPageUrl } from '@/lib/helpTopics';
+import { openExternal } from '@/lib/openExternal';
+import { pageNameOf, wikiTarget, type WikiTarget } from '@/lib/formaquestion/wikiTarget';
 import { isEdge, type Edge } from '@/lib/formaquestion/tabPlace';
 import {
-  boxOf, defaultWindow, type MascotSide, isWide, movePieces, readStoredHeadView, readStoredWindow, resizePieces, swapWidth, viewportOf, windowLayout, withBox,
+  boxOf, defaultWindow, type MascotSide, dragColumn, dragHandle, dragMascot, isWide, readStoredHeadView, readStoredWindow, swapWidth, viewportOf, windowLayout, withBox,
   headHeight, writeStoredHeadView, writeStoredWindow, HEAD_HEIGHT, NARROW_WIDTH, READER_GAP, SHEET_HEAD_HEIGHT, WIDE_WIDTH,
-  type BoxChrome, type StoredWindow, type Viewport, type WindowBox, type WindowChrome,
+  type BoxChrome, type ResizeHandle, type StoredWindow, type Viewport, type WindowBox, type WindowChrome,
 } from '@/lib/formaquestion/windowBox';
 import { bubbleLayout, resizeChat, resizeMascot, FALLBACK_BASE, type BubbleHeights, type BubbleInput, type BubbleLayout } from '@/lib/formaquestion/bubbleLayout';
 import { chatChrome } from '@/lib/formaquestion/helpSettings';
 import type { MenuActions } from './FormaquestionMenu';
 import { useIsMobile } from '@/lib/useIsMobile';
+import { useMorphFullscreen } from '@/lib/useMorphFullscreen';
 import { useMountedRef } from '@/lib/useMountedRef';
 import { EdgeTab } from './EdgeTab';
-import { FormaquestionFrame } from './FormaquestionFrame';
-import { FORMAQUESTION_TABS, openSectionChange, useGuideView, type GuideViewChange } from './formaquestionTabs';
+import { FormaquestionFrame, type ResizeHandlers } from './FormaquestionFrame';
+import { FORMAQUESTION_TABS, openSectionChange, stepChange, useGuideView, type GuideViewChange } from './formaquestionTabs';
+import { placementOptions } from './formaquestionSettingsTabs';
 import { asFormaquestionSettingsTab, type FormaquestionSettingsTab } from './formaquestionSettingsTabs';
+import { FormaquestionGuide } from './FormaquestionGuide';
 import { FormaquestionSettings } from './FormaquestionSettings';
 import { FormaquestionAiContext } from './FormaquestionAiContext';
 import { HELP_CHIP, helpChipVocabulary } from '@/lib/formaquestion/helpChips';
 import { composeMascot } from '@/lib/formaquestion/mascot';
 import { cropFrame, fitMask, headSize, type MascotSize } from '@/lib/formaquestion/mascotMask';
-import { activeMascotRig } from '@/lib/formaquestion/mascotPresets';
+import { activeMascotPreset } from '@/lib/formaquestion/mascotPresets';
 import { mascotImageRefs } from '@/lib/formaquestion/mascotRigEdits';
 import { MascotPiece } from './MascotPiece';
 import { ReaderPiece } from './ReaderPiece';
@@ -45,10 +52,15 @@ import { BubbleChat } from './BubbleChat';
 import { useBubblePage } from './useBubblePage';
 import { DEFAULT_HELP_PROMPTS, HELP_PROMPT_CHIPS } from '@/lib/formaquestion/helpPrompt';
 import { GuideBody } from './GuideBody';
+import { ReaderHistoryButtons } from './ReaderHistoryButtons';
+import { ReaderScrollContext, useReaderScroll } from './readerScroll';
+import { useReaderHistoryInput } from './useReaderHistoryInput';
 import { useHelpAi } from './useHelpAi';
 import { setMascotPlacement, setMascotScale, useMascotPlacement, useMascotScale } from './useMascotDevice';
 import { useHelpChat, type HelpExchange } from './useHelpChat';
 import { useHelpSettings } from './useHelpSettings';
+import { SemanticOfferCard } from './SemanticOfferCard';
+import { WikiConfirmDialog } from './WikiConfirmDialog';
 import { useSemanticSearch } from './useSemanticSearch';
 import { usePointerDrag, type PointerDrag } from './usePointerDrag';
 import { PromptCompareDialog } from '@/components/prompt/PromptCompareDialog';
@@ -85,6 +97,8 @@ interface BoxPress {
   chrome: BoxChrome;
   stored: StoredWindow;
   start: WindowBox;
+  /** Her side when the drag started: a flip is measured from here, so a crossing flips once and not on every move. */
+  side: MascotSide | undefined;
   latest: WindowBox;
 }
 
@@ -101,8 +115,10 @@ interface BubblePress {
 /** The pieces' heights before the first measure: a one-line question and input. */
 const FIRST_HEIGHTS: BubbleHeights = { content: 0, question: 36, input: 44 };
 
-/** Opens a docs section in the wiki, in a new browser tab. */
-const openInWiki = (id: string) => window.open(wikiPageUrl(id), '_blank', 'noopener,noreferrer');
+/** Opens a docs section in the wiki, in the browser. */
+const openInWiki = (id: string) => openExternal(wikiPageUrl(id));
+
+const ignoreStep = () => {};
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -130,6 +146,9 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
 
   const [open, setOpen] = useState(false);
   const [view, changeView] = useGuideView();
+  const readerScroll = useReaderScroll(view.history);
+  // The Guide full screen grows out of the window and shrinks back into it. The window waits under it.
+  const guideMorph = useMorphFullscreen(windowRef);
   const [stored, setStored] = useState<StoredWindow>(() => readStoredWindow() ?? defaultWindow(viewportOf(window)));
   const [viewport, setViewport] = useState<Viewport>(() => viewportOf(window));
   /** The Mascot base's natural size, once its image has loaded. */
@@ -164,7 +183,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
 
   // The conversation lives here, so it outlives the window. The AI check runs only while the window is open.
   const [settings, changeSettings] = useHelpSettings();
-  const semantic = useSemanticSearch(settings, changeSettings);
+  const semantic = useSemanticSearch(settings, changeSettings, open);
   const ai = useHelpAi(open, settings);
   const chat = useHelpChat(index, ai, settings);
   const sent = chat.exchanges.length > 0;
@@ -192,7 +211,13 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
   // On the desktop the window closes while the dialog is open, and opens again when the dialog closes.
   const [dialog, setDialog] = useState<FormaquestionDialog | null>(null);
   const [settingsTab, setSettingsTab] = useState<FormaquestionSettingsTab>('general');
-  const covered = sheet && dialog !== null;
+  // The Open Wiki confirm: where Open would go, while the dialog is up. It is an app dialog, so it covers the layer.
+  const [wikiAsk, setWikiAsk] = useState<WikiTarget | null>(null);
+  // The shared Feedback dialog and sign-in are app dialogs that Ask the Community opens over the window.
+  const feedbackOpen = useSyncExternalStore(subscribeFeedback, () => getFeedbackState().open);
+  const signingIn = useSyncExternalStore(subscribeSignIn, () => getSignInState().phase !== 'idle');
+  // The Guide full screen covers the screen on both, so the window stays where it is and sinks under it.
+  const covered = (sheet && dialog !== null) || guideMorph.mounted || wikiAsk !== null || feedbackOpen || signingIn;
   // Before paint, so the dialog's first frame already draws above the sheet.
   useLayoutEffect(() => {
     if (!covered) return;
@@ -360,13 +385,10 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     if (target) land(target);
   }, [requestSurface, sheet, closeWindow, openDialog, changeViewInWindow, land]);
 
-  // Insert: the sheet closes as for Take Me There; the desktop window steps aside for the replace confirm.
-  useEffect(() => onStatCodeInsert((event) => {
-    if (sheet) {
-      if (event !== 'settled') closeWindow();
-    } else if (event === 'confirming') stepAside();
-    else if (event === 'settled') comeBack();
-  }), [sheet, closeWindow, stepAside, comeBack]);
+  // Insert: the sheet closes as for Take Me There; the desktop window stays.
+  useEffect(() => onScriptInsert(() => {
+    if (sheet) closeWindow();
+  }), [sheet, closeWindow]);
 
   // A failed load drops the request, so a later Try Again does not jump the view.
   useEffect(() => {
@@ -378,7 +400,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     setTarget(null);
     // The coverage test keeps this case from shipping. The wiki is the way out if it ever does.
     if (!sectionId) {
-      window.open(wikiPageUrl(docTargetId(target)), '_blank', 'noopener,noreferrer');
+      openInWiki(docTargetId(target));
       return;
     }
     if (readsInPiece) setReaderId(sectionId);
@@ -390,12 +412,23 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     if (guide && document.activeElement === windowRef.current) focusWindow();
   }, [guide, focusWindow]);
 
+  const guideOpen = guideMorph.mounted;
+  // Back and Forward. The full screen passes over the entries it cannot show.
+  const stepHistory = useCallback((delta: -1 | 1, fullScreen: boolean) => (
+    changeViewInWindow(stepChange(delta, fullScreen, (sectionId) => guide?.section(sectionId)?.page))
+  ), [changeViewInWindow, guide]);
+  const stepInWindow = useCallback((delta: -1 | 1) => stepHistory(delta, false), [stepHistory]);
+  const stepInGuide = useCallback((delta: -1 | 1) => stepHistory(delta, true), [stepHistory]);
+  // Minimal and Bubble read in a piece that the history does not drive, so only the full screen steps there.
+  useReaderHistoryInput({ enabled: !suspended, windowRef, guideOpen, onStep: guideOpen ? stepInGuide : readsInPiece ? ignoreStep : stepInWindow });
   // F1 opens the window, then moves focus in when focus is elsewhere, then closes it.
   useEffect(() => {
     if (suspended) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'F1' || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
       event.preventDefault();
+      // The window waits under the full screen, which Escape closes.
+      if (guideOpen) return;
       // A held key repeats. One press is one step.
       if (event.repeat) return;
       if (!open) openWindow();
@@ -407,9 +440,23 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     // Capture: a prompt field stops keydown from bubbling.
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [suspended, open, openWindow, closeWindow, focusWindow]);
+  }, [suspended, open, guideOpen, openWindow, closeWindow, focusWindow]);
+
+  // The full screen opens on the section the window shows. The reader piece holds it under Minimal and Bubble.
+  // The sheet draws no reader piece, so it has no section to carry.
+  const hasReaderPiece = readsInPiece && !sheet;
+  const { open: openGuideMorph, phase: guidePhase } = guideMorph;
+  const openGuide = useCallback(() => {
+    if (hasReaderPiece && readerId && guide) changeViewInWindow(openSectionChange(readerId, guide.section(readerId)?.page));
+    openGuideMorph();
+  }, [hasReaderPiece, readerId, guide, changeViewInWindow, openGuideMorph]);
+  // It closes onto the section it shows, so the reader piece follows as the full screen shrinks.
+  useEffect(() => {
+    if (guidePhase === 'leaving' && hasReaderPiece && view.sectionId) setReaderId(view.sectionId);
+  }, [guidePhase, hasReaderPiece, view.sectionId]);
 
   // DEV: `#dev?modal=formaquestion&tab=guide&subtab=<section id>&mode=wide` opens the window in one jump.
+  // Add `fullscreen=1` to open the Guide full screen on top.
   // `#dev?modal=formaquestionSettings&tab=general` opens the window and its settings.
   const devRoute = useDevRoute();
   useEffect(() => {
@@ -437,31 +484,44 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     void import('@/lib/devHelpTraceSample').then(({ devHelpTraceSample }) => { if (mountedRef.current) setDevTrace([devHelpTraceSample(index), devHelpTraceSample(index, 'And how do I remove one?', 'dev-trace-2')]); });
   }, [devRoute, index, mountedRef]);
   const tracedExchanges = devTrace ?? chat.exchanges;
+  // `#dev?modal=formaquestionWikiConfirm`: waits for the guide, so its load cannot reopen a canceled confirm.
+  useEffect(() => {
+    if (!import.meta.env.DEV || devRoute?.modal !== 'formaquestionWikiConfirm') return;
+    setOpen(true);
+    if (!guide) return;
+    setWikiAsk(wikiTarget(devRoute.subtab ? guide.section(devRoute.subtab) : null));
+  }, [devRoute, guide]);
   useEffect(() => {
     if (!import.meta.env.DEV || devRoute?.modal !== 'formaquestion') return;
     setOpen(true);
     const tab = FORMAQUESTION_TABS.find((entry) => entry.value === devRoute.tab)?.value;
-    if (devRoute.subtab) changeView({ sectionId: devRoute.subtab, tab: 'guide', reading: true });
+    if (devRoute.subtab) changeView(openSectionChange(devRoute.subtab, undefined));
     else if (tab) changeView({ tab });
     if (devRoute.mode === 'wide' || devRoute.mode === 'narrow') {
       const w = devRoute.mode === 'wide' ? WIDE_WIDTH : NARROW_WIDTH;
       setStored((current) => (isWide(boxOf(current, 'full')) === (devRoute.mode === 'wide') ? current : { ...current, full: { ...current.full, w } }));
     }
-  }, [devRoute, changeView]);
+    if (devRoute.fullscreen) openGuideMorph();
+  }, [devRoute, changeView, openGuideMorph]);
 
   // Only the whole Mascot widens the box; under Full it ignores the head view, and the sheet draws none (Q25, Q26).
   const readerShown = guide !== null && readerId !== null;
   const showHead = sheet || headView;
   const mascotAspect = settings.mascot && mascotBase && !(minimal && showHead) ? mascotBase.width / mascotBase.height : null;
-  // The side flips once as the column crosses the middle; the last side decides a tie.
-  const sideRef = useRef<MascotSide>('left');
+  // The side flips only as the dragged piece crosses the middle: the column from the pill, she from her body (Q33). The first layout picks it.
+  const sideRef = useRef<MascotSide | undefined>(undefined);
+  // A new placement starts the side over from the column's place, in this same render (Q34).
+  const placementRef = useRef(placement);
+  if (placementRef.current !== placement) { placementRef.current = placement; sideRef.current = undefined; }
   const pieces = { mascotAspect, showReader: readerShown, side: sideRef.current, scale, baseHeight: mascotBase?.height, placement };
   const layout = sheet || bubble ? null : windowLayout(boxChrome, box, viewport, pieces);
   if (layout) sideRef.current = layout.side;
   const side = layout?.side ?? 'left';
+  const stacked = layout?.placement === 'below' || layout?.placement === 'above';
   const below = layout?.placement === 'below';
-  // Below, she centers under the column; beside, she takes the side the reader leaves.
-  const mascotSide = below ? null : side;
+  // Over or under the column she centers on it; beside, she takes the side the reader leaves.
+  const mascotSide = stacked ? null : side;
+
   const readerSide = layout?.readerSide ?? 'right';
   // Picking Below clamps the column to the cap at once and keeps that height (Q9).
   const shownPlacement = useRef(placement);
@@ -471,26 +531,39 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     if (shownPlacement.current === placement) return;
     shownPlacement.current = placement;
     const kept = boxOf(stored, boxChrome);
-    if (drawnPlacement !== 'below' || drawnHeight === undefined || drawnHeight === kept.h) return;
+    if ((drawnPlacement !== 'below' && drawnPlacement !== 'above') || drawnHeight === undefined || drawnHeight === kept.h) return;
     const next = withBox(stored, boxChrome, { ...kept, h: drawnHeight });
     setStored(next);
     writeStoredWindow(next);
   }, [placement, drawnPlacement, drawnHeight, stored, boxChrome]);
   // A drag starts from the box as drawn, which a small screen can shift.
   const drawn = layout?.column ?? box;
-  const boxDrag = (step: typeof movePieces): PointerDrag<BoxPress> => ({
+  const boxDrag = (step: typeof dragColumn): PointerDrag<BoxPress> => ({
     start: (event) => (event.button !== 0 || (event.target as HTMLElement).closest('button')
       ? null
-      : { x: event.clientX, y: event.clientY, chrome: boxChrome, stored, start: drawn, latest: drawn }),
+      : { x: event.clientX, y: event.clientY, chrome: boxChrome, stored, start: drawn, side: sideRef.current, latest: drawn }),
     move: (press, event) => {
-      press.latest = step(press.chrome, press.start, event.clientX - press.x, event.clientY - press.y, viewportOf(window), pieces);
+      const laid = step(press.chrome, press.start, event.clientX - press.x, event.clientY - press.y, viewportOf(window), { ...pieces, side: press.side });
+      press.latest = laid.column;
+      sideRef.current = laid.side;
       setStored(withBox(press.stored, press.chrome, press.latest));
     },
     // The device keeps the place and the chrome's size the player left the window at.
     end: (press) => writeStoredWindow(withBox(press.stored, press.chrome, press.latest)),
   });
-  const moveHandlers = usePointerDrag(boxDrag(movePieces));
-  const resizeHandlers = usePointerDrag(boxDrag(resizePieces));
+  const moveHandlers = usePointerDrag(boxDrag(dragColumn));
+  // One drag per handle, in a fixed order, so the hooks hold still across renders.
+  const resizeFrom = (handle: ResizeHandle): typeof dragColumn => (chrome, start, dx, dy, viewport, pieces) => dragHandle(chrome, start, dx, dy, viewport, pieces, handle);
+  const resizeHandlers: ResizeHandlers = {
+    n: usePointerDrag(boxDrag(resizeFrom('n'))),
+    e: usePointerDrag(boxDrag(resizeFrom('e'))),
+    s: usePointerDrag(boxDrag(resizeFrom('s'))),
+    w: usePointerDrag(boxDrag(resizeFrom('w'))),
+    nw: usePointerDrag(boxDrag(resizeFrom('nw'))),
+    ne: usePointerDrag(boxDrag(resizeFrom('ne'))),
+    sw: usePointerDrag(boxDrag(resizeFrom('sw'))),
+    se: usePointerDrag(boxDrag(resizeFrom('se'))),
+  };
   const wide = !sheet && isWide(drawn);
   const swap = () => {
     const toggled = swapWidth(drawn, viewportOf(window));
@@ -503,7 +576,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     writeStoredHeadView(!headView);
   };
 
-  const rig = activeMascotRig(settings.mascotPresets);
+  const { name: mascotName, rig } = activeMascotPreset(settings.mascotPresets);
   // Under Bubble her face follows the paged answer (Q8). Minimal and Full ignore the page and keep the newest.
   const spoken = bubble ? page.exchange : chat.exchanges.at(-1);
   const mascotImages = composeMascot(rig, mascotPhase(spoken), mascotFace(spoken));
@@ -519,6 +592,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     scale,
     viewport,
     headView,
+    placement,
     heights: bubbleHeights,
     width: stored.chat?.w ?? null,
     height: stored.chat?.h ?? null,
@@ -538,6 +612,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
   });
   // Her body and the pill move her.
   const bubbleMove = usePointerDrag(bubbleDrag(({ input, start }, dx, dy) => ({
+    // She is the dragged piece: her center sets her half of the screen, so only her crossing flips the group.
     bubble: bubbleLayout({ ...input, at: { x: start.at.x + dx, y: start.at.y + dy } }).at,
   })));
   // Her grip sets her scale in the device's Scale store, as the Mascot tab does; the bubble grip sets the chat size (Q19).
@@ -546,19 +621,41 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     if (resized.scale !== scale) setMascotScale(resized.scale);
     return { bubble: resized.at };
   }));
-  const chatResize = usePointerDrag(bubbleDrag(({ input, start }, dx, dy) => ({ chat: resizeChat(input, start, dx, dy) })));
+  const chatResize = usePointerDrag(bubbleDrag(({ input, start }, dx, dy) => {
+    const resized = resizeChat(input, start, dx, dy);
+    return { chat: resized.chat, bubble: resized.at };
+  }));
+  // Open Wiki goes to the section the reader shows: the full screen's, the reader piece's, or the Guide view's
+  // where it is on screen. With none open it goes to the wiki home.
+  const shownSectionId = guideOpen
+    ? (sheet && !view.reading ? null : view.sectionId)
+    : hasReaderPiece ? readerId
+      : readsInPiece ? null
+        : (wide ? view.tab !== 'ask' : view.tab === 'guide' && view.reading) ? view.sectionId : null;
+  const wikiOpener = useRef<HTMLElement | null>(null);
+  const openWiki = () => {
+    wikiOpener.current = focusedElement();
+    const section = guide && shownSectionId ? guide.section(shownSectionId) : null;
+    const target = wikiTarget(section);
+    if (!settings.wikiConfirm) openExternal(target.url);
+    else setWikiAsk(target);
+  };
   const menuActions: MenuActions = {
+    onOpenGuide: openGuide,
+    onOpenWiki: openWiki,
     onOpenAiContext: () => openDialog('aiContext'),
     onOpenSettings: () => openDialog('settings'),
     onClear: chat.exchanges.length > 0 ? chat.clear : undefined,
     chatStyle: settings.chatStyle,
     onChatStyleChange: (chatStyle) => changeSettings({ chatStyle }),
     // Bubble ignores Mascot Position (Q9).
-    ...(sheet || bubble ? {} : { mascotPlacement: placement, onMascotPlacementChange: setMascotPlacement }),
+    ...(sheet || !settings.mascot ? {} : { mascotPlacement: placement, onMascotPlacementChange: setMascotPlacement, mascotPlacements: placementOptions(chrome) }),
   };
 
+  // She is a drag target beside or under the box, as she is under Bubble, and stays under the pointer while the column flips sides (Q33); the sheet has no moves.
+  const mascotMoveHandlers = usePointerDrag(boxDrag(dragMascot));
   const wholeMascot = layout && settings.mascot && !(minimal && showHead) && (
-    <MascotPiece images={mascotImages} hold={mascotImageRefs(rig)} transition={rig.transition} size={layout.mascot} onBase={setMascotBase} />
+    <MascotPiece images={mascotImages} hold={mascotImageRefs(rig)} transition={rig.transition} size={layout.mascot} move={sheet ? undefined : mascotMoveHandlers} label={mascotName} onBase={setMascotBase} />
   );
   const readerSize = bubbleView?.reader ?? layout?.reader;
   const readerPiece = readerSize && guide && readerId && (
@@ -574,6 +671,8 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
       transition={rig.transition}
       size={crop && headSize(crop, sheet ? SHEET_HEAD_HEIGHT : headHeight(scale, crop.height, layout?.column.h ?? HEAD_HEIGHT))}
       frame={crop && mascotBase ? cropFrame(crop, mascotBase) : undefined}
+      move={sheet ? undefined : moveHandlers}
+      label={mascotName}
       onBase={setMascotBase}
     />
   );
@@ -587,6 +686,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
       transition={rig.transition}
       size={{ w: bubbleView.her.w, h: bubbleView.her.h }}
       frame={headView ? cropFrame(bubbleInput.mask, bubbleInput.base) : undefined}
+      label={mascotName}
       onBase={setMascotBase}
     />
   );
@@ -597,6 +697,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
       failed={failed}
       onRetry={load}
       chat={chat}
+      semantic={semantic}
       settings={settings}
       onSettingsChange={changeSettings}
       draft={view.draft}
@@ -638,7 +739,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
               // On the sheet a dim, blurred backdrop stands in for the frame, because the bubbles fill the screen.
               ? cn('app-viewport pointer-events-auto bg-background/80 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm', sheetMotion)
               // Only the pieces take presses; the gaps between them belong to the app.
-              : `pointer-events-none fixed ${below ? 'flex-col' : 'items-end'} ${windowMotion}`,
+              : `pointer-events-none fixed ${stacked ? 'flex-col' : 'items-end'} ${windowMotion}`,
           )}
           style={layout ? {
             left: layout.group.x,
@@ -648,10 +749,11 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
             transformOrigin: originFrom(layout.group.x, layout.group.y),
           } : undefined}
         >
-          {layout && below ? (
+          {layout && stacked ? (
             <>
+              {!below && <div className="flex" style={{ marginLeft: (layout.mascotAt?.x ?? 0) - layout.group.x }}>{wholeMascot}</div>}
               <div
-                className="flex shrink-0 items-end"
+                className={cn('flex shrink-0 items-end', !below && 'mt-auto')}
                 style={{
                   marginLeft: layout.column.x - (readerSide === 'left' ? readerSpace : 0) - layout.group.x,
                   width: layout.column.w + readerSpace,
@@ -662,7 +764,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
                 {chatColumn}
                 {readerSide === 'right' && readerPiece}
               </div>
-              <div className="mt-auto flex" style={{ marginLeft: (layout.mascotAt?.x ?? 0) - layout.group.x }}>{wholeMascot}</div>
+              {below && <div className="mt-auto flex" style={{ marginLeft: (layout.mascotAt?.x ?? 0) - layout.group.x }}>{wholeMascot}</div>}
             </>
           ) : (
             <>
@@ -701,11 +803,11 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
             layout={bubbleView}
             page={page}
             mascot={bubbleMascot}
-            headView={headView}
             guide={guide}
             failed={failed}
             onRetry={load}
             chat={chat}
+            semantic={semantic}
             settings={settings}
             onSettingsChange={changeSettings}
             draft={view.draft}
@@ -727,7 +829,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
         <div
           data-state={open ? 'open' : 'closed'}
           className={`pointer-events-none fixed flex items-end ${windowMotion}`}
-          style={below && layout.mascot && layout.mascotAt ? {
+          style={stacked && layout.mascot && layout.mascotAt ? {
             left: layout.mascotAt.x,
             top: layout.mascotAt.y,
             width: layout.mascot.w,
@@ -760,6 +862,7 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
           } : {
             wide,
             onSwapWidth: swap,
+            history: wide ? <ReaderHistoryButtons history={view.history} onStep={stepInWindow} /> : undefined,
             move: moveHandlers,
             resize: resizeHandlers,
             className: `pointer-events-auto fixed ${windowMotion}`,
@@ -772,9 +875,31 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
             },
           })}
         >
-          <GuideBody guide={guide} failed={failed} onRetry={load} view={view} onViewChange={changeViewInWindow} wide={wide} chat={chat} settings={settings} onSettingsChange={changeSettings} onGo={go} />
+          <div className="flex h-full min-h-0 flex-col">
+            <SemanticOfferCard semantic={semantic} variant="framed" />
+            <div className="min-h-0 flex-1">
+              <ReaderScrollContext.Provider value={readerScroll}>
+                <GuideBody guide={guide} failed={failed} onRetry={load} view={view} onViewChange={changeViewInWindow} wide={wide} chat={chat} settings={settings} onSettingsChange={changeSettings} onGo={go} />
+              </ReaderScrollContext.Provider>
+            </div>
+          </div>
         </FormaquestionFrame>
       )}
+      {!suspended && (
+        <ReaderScrollContext.Provider value={readerScroll}>
+          <FormaquestionGuide morph={guideMorph} guide={guide} failed={failed} onRetry={load} view={view} onViewChange={changeViewInWindow} onStep={stepInGuide} onOpenWiki={openWiki} semantic={settings.sources.semantic} sheet={sheet} />
+        </ReaderScrollContext.Provider>
+      )}
+      <WikiConfirmDialog
+        confirm={wikiAsk && { page: wikiAsk.page && pageNameOf(guide ? guide.titleOf(wikiAsk.page) : wikiAsk.page) }}
+        onOpen={(dontAskAgain) => {
+          if (wikiAsk) openExternal(wikiAsk.url);
+          if (dontAskAgain) changeSettings({ wikiConfirm: false });
+          setWikiAsk(null);
+        }}
+        onCancel={() => setWikiAsk(null)}
+        returnFocus={() => wikiOpener.current}
+      />
       <FormaquestionSettings
         open={dialog === 'settings' && !suspended}
         onOpenChange={(next) => (next ? setDialog('settings') : closeDialog())}

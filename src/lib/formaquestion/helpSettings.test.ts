@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '@/types';
-import { chatChrome, DEFAULT_HELP_SETTINGS, HELP_HISTORY_MAX, HELP_CALL_LIMIT_MAX, SAME_AS_ANSWER, helpSettingsCodec, helpSettingsOf } from './helpSettings';
+import { chatChrome, CHAT_STYLES, DEFAULT_HELP_SETTINGS, HELP_HISTORY_MAX, HELP_CALL_LIMIT_MAX, SAME_AS_ANSWER, helpSettingsCodec, helpSettingsOf } from './helpSettings';
 import { DEFAULT_HELP_REVEAL } from './helpReveal';
 import { duplicateHelpPreset, EMPTY_HELP_PRESET_STORE } from './helpPresets';
 import { DEFAULT_MASCOT_RIG } from './mascot';
@@ -13,12 +13,16 @@ describe('the default help settings', () => {
   it('equal the values the help session had as constants when the bar run measured it', () => {
     expect(DEFAULT_HELP_SETTINGS).toEqual({
       sources: { keyword: true, aiPicks: true, semantic: false },
+      semanticOffer: 'undecided',
       answerEndpoint: null,
       pickEndpoint: SAME_AS_ANSWER,
       lookup: false,
       lookupCallLimit: 3,
       roll: false,
       rollCallLimit: 4,
+      // Offered on code turns alone, and the bar run's endpoint takes no function calls.
+      codeTest: true,
+      codeTestCallLimit: 3,
       openScreen: true,
       historyLength: 4,
       reasoning: { enabled: false, level: 'global' },
@@ -34,6 +38,7 @@ describe('the default help settings', () => {
       mascotPresets: EMPTY_MASCOT_PRESET_STORE,
       chatStyle: 'auto',
       scrimOpacity: 60,
+      wikiConfirm: true,
     });
   });
 });
@@ -71,7 +76,7 @@ describe('the stored help settings', () => {
     expect(stored({})).toEqual(DEFAULT_HELP_SETTINGS);
   });
 
-  it.each(['lookupCallLimit', 'rollCallLimit'] as const)('keep a %s from 1 to the most the field takes, and take the default for anything else', (field) => {
+  it.each(['lookupCallLimit', 'rollCallLimit', 'codeTestCallLimit'] as const)('keep a %s from 1 to the most the field takes, and take the default for anything else', (field) => {
     expect(stored({ [field]: 1 })[field]).toBe(1);
     expect(stored({ [field]: HELP_CALL_LIMIT_MAX })[field]).toBe(HELP_CALL_LIMIT_MAX);
     for (const bad of [0, HELP_CALL_LIMIT_MAX + 1, 2.5, '2', null]) {
@@ -82,6 +87,11 @@ describe('the stored help settings', () => {
   it('keep the roll switch, and take off for anything else', () => {
     expect(stored({ roll: true }).roll).toBe(true);
     expect(stored({ roll: 'yes' }).roll).toBe(false);
+  });
+
+  it('keep the code test switch, and take on for anything else', () => {
+    expect(stored({ codeTest: false }).codeTest).toBe(false);
+    expect(stored({ codeTest: 'no' }).codeTest).toBe(true);
   });
 
   it('keep a preset id or Follow Active for each route, and take the default for anything else', () => {
@@ -103,6 +113,28 @@ describe('the stored help settings', () => {
 
   it('refuse text that is not a settings object, so the defaults stand', () => {
     for (const raw of ['not json', '[]', 'null', '4']) expect(() => helpSettingsCodec.parse(raw)).toThrow();
+  });
+});
+
+describe('the Semantic Search offer', () => {
+  const stored = (value: unknown) => helpSettingsCodec.parse(JSON.stringify(value));
+
+  it('reads as undecided for settings stored before the offer, and decided when their switch was on', () => {
+    expect(stored({ sources: { semantic: false } }).semanticOffer).toBe('undecided');
+    expect(stored({ historyLength: 2 }).semanticOffer).toBe('undecided');
+    expect(stored({ sources: { semantic: true } }).semanticOffer).toBe('decided');
+  });
+
+  it('keeps a stored answer over the switch, and reads a bad value like a missing one', () => {
+    expect(stored({ semanticOffer: 'decided', sources: { semantic: false } }).semanticOffer).toBe('decided');
+    expect(stored({ semanticOffer: 'undecided', sources: { semantic: false } }).semanticOffer).toBe('undecided');
+    expect(stored({ semanticOffer: 'maybe', sources: { semantic: true } }).semanticOffer).toBe('decided');
+    expect(stored({ semanticOffer: 4 }).semanticOffer).toBe('undecided');
+  });
+
+  it('survives the codec', () => {
+    const settings = helpSettingsOf({ semanticOffer: 'decided' });
+    expect(helpSettingsCodec.parse(helpSettingsCodec.serialize(settings))).toEqual(settings);
   });
 });
 
@@ -177,6 +209,19 @@ describe('the scrim opacity', () => {
   });
 });
 
+describe('the wiki confirm', () => {
+  const stored = (value: unknown) => helpSettingsCodec.parse(JSON.stringify(value));
+
+  it('is on for a player who stored nothing, and takes only a boolean', () => {
+    expect(stored({}).wikiConfirm).toBe(true);
+    for (const bad of ['false', 0, null]) expect(stored({ wikiConfirm: bad }).wikiConfirm).toBe(true);
+  });
+
+  it('keeps an off switch across a save and a load', () => {
+    expect(helpSettingsCodec.parse(helpSettingsCodec.serialize(helpSettingsOf({ wikiConfirm: false }))).wikiConfirm).toBe(false);
+  });
+});
+
 describe('the chat style', () => {
   const stored = (value: unknown) => helpSettingsCodec.parse(JSON.stringify(value));
 
@@ -195,16 +240,12 @@ describe('the chat style', () => {
   it('gives the chrome: Auto follows the Mascot switch, the others pin', () => {
     expect(chatChrome(helpSettingsOf({ chatStyle: 'auto', mascot: true }))).toBe('bubble');
     expect(chatChrome(helpSettingsOf({ chatStyle: 'auto', mascot: false }))).toBe('full');
-    expect(chatChrome(helpSettingsOf({ chatStyle: 'bubble', mascot: true }))).toBe('bubble');
     expect(chatChrome(helpSettingsOf({ chatStyle: 'minimal', mascot: false }))).toBe('minimal');
     expect(chatChrome(helpSettingsOf({ chatStyle: 'full', mascot: true }))).toBe('full');
   });
 
-  it('draws Minimal for a pinned Bubble with the Mascot off, since Bubble has no speaker', () => {
-    expect(chatChrome(helpSettingsOf({ chatStyle: 'bubble', mascot: false }))).toBe('minimal');
-  });
-
-  it('keeps a stored Bubble style', () => {
-    expect(helpSettingsCodec.parse(JSON.stringify({ chatStyle: 'bubble' })).chatStyle).toBe('bubble');
+  it('offers no Bubble style by hand: Auto alone draws it, with the Mascot on', () => {
+    expect(CHAT_STYLES).not.toContain('bubble');
+    expect(helpSettingsCodec.parse(JSON.stringify({ chatStyle: 'bubble' })).chatStyle).toBe('auto');
   });
 });

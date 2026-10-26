@@ -4,7 +4,8 @@ import { readLibraryDetails } from './contentAuthor';
 import { embedEntityCard, readEntityCard } from './entityCard';
 import { PLAYER_NAME } from './builtinPlaceholders';
 import { SELF_ENTITY, adoptOwnedTraits } from './portableTraits';
-import type { Entity } from '@/types';
+import type { Entity, Stat } from '@/types';
+
 import { phValues } from '@/test/placeholderValues';
 
 const entity: Entity = {
@@ -16,7 +17,7 @@ const entity: Entity = {
   aiDescription: 'Wren knows every channel of the fen.',
   aiSummary: 'marsh guide',
   imageTags: 'woman, cloak, reeds',
-  images: ['data:image/webp;base64,AAAA', 'data:image/webp;base64,BBBB'],
+  images: [{ data: 'data:image/webp;base64,AAAA' }, { data: 'data:image/webp;base64,BBBB' }],
   model: { data: 'data:model', type: 'model/gltf-binary' },
   sound: { data: 'data:sound', type: 'audio/mpeg' },
 };
@@ -77,6 +78,12 @@ describe('buildEntityCardData', () => {
     expect(card.name).toBe('Bram');
   });
 
+  it('reads a 3.3.3 card’s stat scripts with diary on the entity entry', () => {
+    const stats = [{ id: 's', name: 'Mood', type: 'number', description: '', min: 0, max: 1, regen: 0, descriptors: [],
+      scripts: [{ id: 'a', timing: 'after', code: 'diary("Tor", "Hm.");' }] }];
+    expect(parseEntityCardData({ formamorphKind: 'entity', name: 'X', stats }).stats![0].scripts![0].code).toBe('entities.Tor.diary("Hm.");');
+  });
+
   it('round-trips aliases, dropping empty/blank ones', () => {
     const card = buildEntityCardData({ id: 'z', name: 'Synthia', aliases: ['Matron', 'Em'] });
     expect(card.aliases).toEqual(['Matron', 'Em']);
@@ -113,6 +120,14 @@ describe('buildEntityCardData', () => {
     const card = buildEntityCardData(named, [town, beast, unused]);
     expect(card.sharedPlaceholders).toEqual([town, beast]);
     expect(parseEntityCardData(card).name).toContain('{{ph:town:world:p1}}');
+  });
+
+  it('bundles the placeholders the pronouns use', () => {
+    const pair = { id: 'pair', name: 'Pronouns', values: phValues(['she/her', 'he/him']) };
+    const unused = { id: 'unused', name: 'Weather', values: phValues(['Rain']) };
+    const card = buildEntityCardData({ id: 'p', name: 'Guard', pronouns: '{{ph:pair:world:p1}}' }, [pair, unused]);
+    expect(card.sharedPlaceholders).toEqual([pair]);
+    expect(parseEntityCardData(card).pronouns).toBe('{{ph:pair:world:p1}}');
   });
 
   it('writes the entity’s own placeholders as they are, and the shared defs they and its chips reach', () => {
@@ -174,7 +189,7 @@ describe('parseEntityCardData', () => {
     expect(a.id).not.toBe('orig-id');
     expect(a.id).not.toBe(b.id);
     // Only the carried extras come back; the primary is the card's own pixels, added by the importer.
-    expect(a.images).toEqual(['data:image/webp;base64,BBBB']);
+    expect(a.images).toEqual([{ data: 'data:image/webp;base64,BBBB' }]);
     expect(a.name).toBe('Wren');
     expect(a.imageTags).toBe('woman, cloak, reeds');
   });
@@ -185,6 +200,30 @@ describe('parseEntityCardData', () => {
     expect(() => parseEntityCardData({ formamorphKind: 'dictionary' })).toThrow(/dictionary/i);
     expect(() => parseEntityCardData({ foo: 1 })).toThrow(/not a character card/i);
     expect(() => parseEntityCardData(null)).toThrow();
+  });
+
+  it('loads a `player` row target as `global`, keeps `global`, and keeps a stored owner (Q5, Q19)', () => {
+    const owner = { kind: 'entity', id: 'w-ash', name: 'Ash' };
+    const card = {
+      formamorphKind: 'entity', name: 'Mara',
+      traits: [{
+        id: 't', name: 'Oath', requires: [{ all: [{ kind: 'trait', id: 'w-brave', owner }] }],
+        statChanges: [{ statId: 'rage', value: 2, target: 'player' }, { statId: 'rage', value: 1, target: 'global' }, { statId: 'rage', value: 3 }],
+        statToggles: [{ statId: 'rage', enabled: false, target: 'player' }],
+      }],
+      traitLinks: [{
+        id: 'l', originalId: 'smite', kind: 'trait', originalName: 'Smite', groupId: null,
+        overrides: { smite: { statChanges: { value: [{ statId: 'rage', value: 1, target: 'player' }], blueprint: [] } } },
+      }],
+    };
+    const parsed = parseEntityCardData(card);
+    expect(parsed.traits![0].statChanges).toEqual([
+      { statId: 'rage', value: 2, target: 'global' }, { statId: 'rage', value: 1, target: 'global' }, { statId: 'rage', value: 3 },
+    ]);
+    expect(parsed.traits![0].statToggles).toEqual([{ statId: 'rage', enabled: false, target: 'global' }]);
+    expect(parsed.traitLinks![0].overrides!.smite.statChanges).toEqual({ value: [{ statId: 'rage', value: 1, target: 'global' }], blueprint: [] });
+    expect(parsed.traits![0].requires).toEqual([{ all: [{ kind: 'trait', id: 'w-brave', owner }] }]);
+    expect(parseEntityCardData(JSON.parse(JSON.stringify(buildEntityCardData(parsed)))).traits![0].statChanges[0].target).toBe('global');
   });
 
   it('defaults a missing name', () => {
@@ -354,6 +393,54 @@ describe('a character card’s openings', () => {
   });
 });
 
+/** Owned stats on a character card: stats, stat groups and stat links travel; a link names its Blueprint. */
+describe('a character card’s owned stats', () => {
+  const trust: Stat = { id: 'trust', name: 'Trust', type: 'number', description: '', min: 0, max: 50, value: 5, regen: 0, descriptors: [], groupId: 'bp' };
+  const origin = { stats: [trust], statGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' as const }] };
+  const mood: Stat = { id: 'mood', name: 'Mood', type: 'number', description: '', min: 0, max: 10, value: 3, regen: 1, descriptors: [] };
+  const ash: Entity = {
+    id: 'ash', name: 'Ash',
+    stats: [mood],
+    statGroups: [{ id: 'g-feel', name: 'Feelings', parentId: null }],
+    statLinks: [{ id: 'l1', originalId: 'trust', kind: 'stat', originalName: 'Old Name', groupId: null, overrides: { trust: { value: { value: 9, blueprint: 5 } } } }],
+  };
+  const roundTrip = (card: unknown) => parseEntityCardData(JSON.parse(JSON.stringify(card)));
+
+  it('carries the owned stats, groups and links through the card, naming each link’s Blueprint', () => {
+    const parsed = roundTrip(buildEntityCardData(ash, undefined, {}, undefined, { traits: [], traitGroups: [], entities: [ash], ...origin }));
+    expect(parsed.stats).toEqual(ash.stats);
+    expect(parsed.statGroups).toEqual(ash.statGroups);
+    expect(parsed.statLinks).toEqual([{ ...ash.statLinks![0], originalName: 'Trust' }]);
+  });
+
+  it('adds to a world whose Blueprint has other ids by binding the link to the one carrying its name', () => {
+    const parsed = roundTrip(buildEntityCardData(ash, undefined, {}, undefined, { traits: [], traitGroups: [], entities: [ash], ...origin }));
+    const world = { traits: [], traitGroups: [], entities: [], stats: [{ ...trust, id: 'n-trust' }], statGroups: origin.statGroups };
+    const added = adoptOwnedTraits(parsed, world);
+    expect(added.statLinks![0]).toMatchObject({ originalId: 'n-trust', overrides: { 'n-trust': ash.statLinks![0].overrides!.trust } });
+    expect(added.stats).toEqual(ash.stats);
+  });
+
+  it('fills a card that carries no stats with none', () => {
+    const parsed = roundTrip(buildEntityCardData({ id: 'x', name: 'X' }));
+    expect(parsed).not.toHaveProperty('stats');
+    expect(parsed).not.toHaveProperty('statGroups');
+    expect(parsed).not.toHaveProperty('statLinks');
+  });
+
+  it('keeps each list to the records it can hold and drops a malformed one', () => {
+    const parsed = parseEntityCardData({
+      formamorphKind: 'entity', name: 'X',
+      stats: [mood, null, 'x', { name: 'No Id' }],
+      statGroups: 'feelings',
+      statLinks: [ash.statLinks![0], { id: 'no-original' }],
+    });
+    expect(parsed.stats).toEqual([mood]);
+    expect(parsed).not.toHaveProperty('statGroups');
+    expect(parsed.statLinks).toEqual([ash.statLinks![0]]);
+  });
+});
+
 /** Owned traits on a character card: the card names what a requirement points at outside the entity. */
 describe('a character card’s owned traits', () => {
   const tamer: Entity = {
@@ -364,9 +451,8 @@ describe('a character card’s owned traits', () => {
       {
         id: 't-oath', name: 'Oath', statChanges: [],
         requires: [
-          { kind: 'trait', id: 't-tamed' },
-          { kind: 'trait', id: 'w-paladin' },
-          { kind: 'playingAs', id: 'ash' },
+          { all: [{ kind: 'trait', id: 't-tamed' }, { kind: 'trait', id: 'w-paladin' }] },
+          { all: [{ kind: 'playingAs', id: 'ash' }] },
         ],
       },
     ],
@@ -380,10 +466,15 @@ describe('a character card’s owned traits', () => {
     expect(parsed.traits!.map((t) => t.id)).toEqual(['t-tamed', 't-oath']);
     expect(parsed.traits![0].isDefault).toBe(true);
     expect(parsed.traits![1].requires).toEqual([
-      { kind: 'trait', id: 't-tamed' },
-      { kind: 'trait', id: 'w-paladin', name: 'Paladin' },
-      { kind: 'playingAs', id: SELF_ENTITY, name: 'Ash' },
+      { all: [{ kind: 'trait', id: 't-tamed' }, { kind: 'trait', id: 'w-paladin', name: 'Paladin' }] },
+      { all: [{ kind: 'playingAs', id: SELF_ENTITY, name: 'Ash' }] },
     ]);
+  });
+
+  it('keeps a group hidden from the AI hidden through the card', () => {
+    const hidden = { ...tamer, traitGroups: [{ ...tamer.traitGroups![0], aiVisible: false }] };
+    const parsed = roundTrip(buildEntityCardData(hidden, undefined, {}, undefined, { ...origin, entities: [hidden] }));
+    expect(parsed.traitGroups).toEqual(hidden.traitGroups);
   });
 
   it('binds on import to the one trait in the new world carrying the name', () => {
@@ -391,10 +482,23 @@ describe('a character card’s owned traits', () => {
     const world = { traits: [{ id: 'n-paladin', name: 'Paladin', statChanges: [] }], traitGroups: [], entities: [] };
     const adopted = adoptOwnedTraits(parsed, world);
     expect(adopted.traits![1].requires).toEqual([
-      { kind: 'trait', id: 't-tamed' },
-      { kind: 'trait', id: 'n-paladin', name: 'Paladin' },
-      { kind: 'playingAs', id: parsed.id, name: 'Ash' },
+      { all: [{ kind: 'trait', id: 't-tamed' }, { kind: 'trait', id: 'n-paladin', name: 'Paladin' }] },
+      { all: [{ kind: 'playingAs', id: parsed.id, name: 'Ash' }] },
     ]);
+  });
+
+  it('reads a card that stores the flat list as one row per entry, on owned traits and link overrides', () => {
+    const paladin = { kind: 'trait', id: 'w-paladin', name: 'Paladin' };
+    const parsed = parseEntityCardData({
+      formamorphKind: 'entity', name: 'Old',
+      traits: [{ id: 'o', name: 'Oath', statChanges: [], requires: [paladin, { kind: 'playingAs', id: 'ash' }] }],
+      traitLinks: [{
+        id: 'l', originalId: 'smite', kind: 'trait', originalName: 'Smite', groupId: null,
+        overrides: { smite: { requires: { value: [paladin], blueprint: [] } } },
+      }],
+    });
+    expect(parsed.traits![0].requires).toEqual([{ all: [paladin] }, { all: [{ kind: 'playingAs', id: 'ash' }] }]);
+    expect(parsed.traitLinks![0].overrides!.smite.requires).toEqual({ value: [{ all: [paladin] }], blueprint: [] });
   });
 
   it('reads stat effects as stored (Q9) and drops junk rows', () => {
@@ -406,13 +510,14 @@ describe('a character card’s owned traits', () => {
           statChanges: [{ statId: 's', value: 5, type: 'min' }, { statId: 7, value: 1 }],
           statToggles: [{ statId: 's', enabled: true }, { statId: 's' }],
         },
-        { id: 7, name: 'B' }, 'junk', { id: 'c', name: 'C', requires: [{ kind: 'weird', id: 'x' }, { kind: 'group', id: 'g' }] },
+        { id: 7, name: 'B' }, 'junk',
+        { id: 'c', name: 'C', requires: [{ kind: 'weird', id: 'x' }, { all: [{ kind: 'weird' }] }, { all: [null, { kind: 'group', id: 'g' }] }] },
       ],
       traitGroups: [{ id: 'g', name: 'G', parentId: 5 }, null],
     });
     expect(parsed.traits).toEqual([
       { id: 'a', name: 'A', statChanges: [{ statId: 's', value: 5, type: 'min' }], statToggles: [{ statId: 's', enabled: true }] },
-      { id: 'c', name: 'C', statChanges: [], requires: [{ kind: 'group', id: 'g' }] },
+      { id: 'c', name: 'C', statChanges: [], requires: [{ all: [{ kind: 'group', id: 'g' }] }] },
     ]);
     expect(parsed.traitGroups).toEqual([{ id: 'g', name: 'G', parentId: null }]);
   });
@@ -422,5 +527,27 @@ describe('a character card’s owned traits', () => {
     const parsed = parseEntityCardData({ formamorphKind: 'entity', name: 'Old' });
     expect(parsed).not.toHaveProperty('traits');
     expect(parsed).not.toHaveProperty('traitGroups');
+  });
+});
+
+describe('Not Conditions on a character card', () => {
+  it('carries the Not flag on owned traits and link overrides, and drops a flag that is not true', () => {
+    const not = { kind: 'trait', id: 'w-paladin', name: 'Paladin', not: true } as const;
+    const parsed = parseEntityCardData(JSON.parse(JSON.stringify({
+      formamorphKind: 'entity', name: 'Rebel',
+      traits: [{
+        id: 'o', name: 'Oath', statChanges: [],
+        requires: [{ all: [not, { kind: 'playingAs', id: 'ash', not: true }] }, { all: [{ kind: 'group', id: 'g', not: 'yes' }] }],
+      }],
+      traitLinks: [{
+        id: 'l', originalId: 'smite', kind: 'trait', originalName: 'Smite', groupId: null,
+        overrides: { smite: { requires: { value: [{ all: [not] }], blueprint: [] } } },
+      }],
+    })));
+    expect(parsed.traits![0].requires).toEqual([
+      { all: [not, { kind: 'playingAs', id: 'ash', not: true }] },
+      { all: [{ kind: 'group', id: 'g' }] },
+    ]);
+    expect(parsed.traitLinks![0].overrides!.smite.requires).toEqual({ value: [{ all: [not] }], blueprint: [] });
   });
 });

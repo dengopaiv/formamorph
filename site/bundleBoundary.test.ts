@@ -152,7 +152,20 @@ describe('the site entry stays out of the game bundle', () => {
     // even when nothing it pulls is named. Raise the ceiling deliberately, having looked at what moved.
     // 57: the Patreon section and the leaves it reads (its service, `supporterFlair`, `useMountedRef`, the checkbox).
     // 58: the Supporter badge on the profile page.
-    expect(reachableFromSite().size).toBeLessThanOrEqual(58);
+    // 59: `elementIcons`, a lucide-only leaf that `catalogKinds` reads for its kind icons.
+    // 60: `gesture-group`, the leaf the slider and color picker read to group a drag into one undo Step.
+    // 61: `authRequest`, the one auth header and error helper the age gate, user and Patreon services read.
+    // 62: `uuid`, the one ID helper, which the age gate flow now reads.
+    // 63: `filesFrom`, the file-input reset the profile image picker reads; a type-only leaf, no toast.
+    // 64: `responseBody`, the string-only leaf `responseError` reads to cut an HTML error page to its title.
+    // 66: `listingModeration` and the `quarantine` date helpers it reads, for the review badges in the creations list.
+    expect(reachableFromSite().size).toBeLessThanOrEqual(66);
+  });
+
+  it('reaches the gesture group helper through the slider and color picker, and nothing behind it', () => {
+    // The site provides no groups, so it must stay a leaf: the world's history belongs to the game.
+    expect(reachableFromSite().has('@/components/ui/gesture-group')).toBe(true);
+    expect(appImports(readFileSync(resolveApp('@/components/ui/gesture-group')!, 'utf-8'))).toEqual([]);
   });
 
   it('reaches the shielded layer helper through the dialog wrappers, and nothing behind it', () => {

@@ -37,7 +37,7 @@ describe('authoredChipScene and the Character Name chip', () => {
   const keeper: Entity = { ...wren, aiDescription: '{{char}} keeps the lamps.' };
 
   it("resolves each entity's text with that entity as its owner", () => {
-    expect(chipValues(authoredChipScene(world({ entities: [keeper, harrow] })))['<ENTITIES>'])
+    expect(chipValues(authoredChipScene(world({ entities: [keeper, harrow] })))('<ENTITIES>'))
       .toContain('Wren keeps the lamps.');
   });
 
@@ -52,6 +52,62 @@ describe('authoredChipScene and the Character Name chip', () => {
   it("leaves entity text to a caller's resolve that brings no entity resolution", () => {
     const scene = authoredChipScene(world({ entities: [keeper, harrow] }), { resolve: (text) => text });
     expect(scene.entities[0]).toBe(keeper);
+  });
+});
+
+describe('authoredChipScene and entity stats', () => {
+  const trust: Stat = { id: 'trust', name: 'Trust', type: 'number', description: '', min: 0, max: 100, value: 30, regen: 0, descriptors: [] };
+  const dread: Stat = { ...trust, id: 'dread', name: 'Dread', enabled: false };
+  const stock: Stat = { id: 'stock', name: 'Stock', type: 'number', description: '', min: 5, max: 50, regen: 0, descriptors: [] };
+
+  it('holds each entity’s switched-on stats at their starting values', () => {
+    const scene = authoredChipScene(world({ entities: [{ ...wren, stats: [trust, dread, stock] }, harrow] }));
+    expect(scene.ownedStats?.wren.map((s) => [s.name, s.value])).toEqual([['Trust', 30], ['Stock', 5]]);
+    expect(scene.ownedStats).not.toHaveProperty('harrow');
+    expect(chipValues(scene)('<ENTITIES>')).toContain('Trust: 30/100');
+  });
+
+  it("switches each entity's stats with its default traits", () => {
+    const grim: Trait = { id: 'grim', name: 'Grim', isDefault: true, statChanges: [], statToggles: [{ statId: 'trust', enabled: false }, { statId: 'dread', enabled: true }] };
+    const scene = authoredChipScene(world({ entities: [{ ...wren, stats: [trust, dread], traits: [grim] }, harrow] }));
+    expect(scene.ownedStats?.wren.map((s) => s.name)).toEqual(['Dread']);
+  });
+
+  it('holds none when no entity owns a stat', () => {
+    expect(authoredChipScene(world()).ownedStats ?? {}).toEqual({});
+  });
+
+  it('carries the Custom Persona entity’s name as the Persona Name, and the player without one', () => {
+    const you: Entity = { id: 'you', name: 'Sylvie', customPersona: true };
+    expect(chipValues(authoredChipScene(world({ entities: [wren, { ...wren, id: 'p', name: 'Odd', persona: true }, you] })))('header:{{user}}'))
+      .toBe('Sylvie');
+    expect(chipValues(authoredChipScene(world()))('header:{{user}}')).toBe('the player');
+  });
+
+  it("nests the Custom Persona entity's switched-on stats in its block, and no other entity's", () => {
+    const you: Entity = { id: 'you', name: 'You', customPersona: true, stats: [stock, dread] };
+    const scene = authoredChipScene(world({ entities: [{ ...wren, stats: [trust] }, harrow, you] }));
+    const values = chipValues(scene);
+    expect(scene.persona).toEqual({ source: 'custom', entity: expect.objectContaining({ id: 'you' }) });
+    expect(values('<STATS DESCRIPTION|numbers>')).toBe('Warmth: 40/100\nNerve: 10/100');
+    expect(values('<PERSONA>')).toBe('You\n  stats:\n    Stock: 5/50\n');
+    expect(values('<PERSONA|nostats>')).toBe('You\n');
+  });
+
+  it('reads a linked Blueprint per owner, and never as a player stat', () => {
+    const blueprint: Stat = { ...trust, groupId: 'bp' };
+    const link = (id: string) => ({ id, originalId: 'trust', kind: 'stat' as const, originalName: 'Trust', groupId: null });
+    const scene = authoredChipScene(world({
+      stats: [warmth, blueprint],
+      statGroups: [{ id: 'bp', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+      entities: [
+        { ...wren, statLinks: [{ ...link('l1'), overrides: { trust: { value: { value: 60, blueprint: 30 } } } }] },
+        { ...harrow, statLinks: [link('l2')] },
+      ],
+    }));
+    expect(scene.stats.map((s) => s.name)).toEqual(['Warmth']);
+    expect(scene.ownedStats?.wren.map((s) => [s.name, s.value])).toEqual([['Trust', 60]]);
+    expect(scene.ownedStats?.harrow.map((s) => [s.name, s.value])).toEqual([['Trust', 30]]);
   });
 });
 
@@ -70,6 +126,22 @@ describe('authoredChipScene', () => {
     expect(scene.stats.map((s) => [s.name, s.value])).toEqual([['Warmth', 40], ['Nerve', 10]]);
   });
 
+  it('opens a stat through the seed rule: an authored zero stays zero, then clamps to the range (Q8)', () => {
+    const scene = authoredChipScene(world({ stats: [
+      { ...warmth, min: -10, value: 0 }, { ...nerve, value: 0 }, { ...warmth, id: 'w2', name: 'Chill', value: 5, starting: 10 },
+    ] }));
+    expect(scene.stats.map((s) => [s.name, s.value])).toEqual([['Warmth', 0], ['Nerve', 10], ['Chill', 5]]);
+  });
+
+  it("nests the Stats chips under the world's stat groups, loose stats first", () => {
+    const grouped = world({
+      stats: [{ ...warmth, groupId: 'body' }, nerve],
+      statGroups: [{ id: 'body', name: 'Body', aiDescription: 'What the cold takes.', parentId: null, order: 0 }],
+    });
+    expect(chipValues(authoredChipScene(grouped))('<STATS DESCRIPTION|numbers>'))
+      .toBe('Nerve: 10/100\nBody:\n  What the cold takes.\n  Warmth: 40/100');
+  });
+
   it('holds the default traits in force and leaves the others out', () => {
     expect(authoredChipScene(world()).traits).toEqual([saltborn]);
   });
@@ -79,7 +151,7 @@ describe('authoredChipScene', () => {
     const idle: Trait = { id: 'idle', name: 'Idle', aiDescription: 'Sits all day.', statChanges: [] };
     const scene = authoredChipScene(world({ entities: [{ ...wren, traits: [keen, idle] }, harrow] }));
     expect(scene.ownedTraits).toEqual({ wren: ['keen'] });
-    expect(chipValues(scene)['<ENTITIES>']).toContain('Keen-Eyed: Wren sees the far shore.');
+    expect(chipValues(scene)('<ENTITIES>')).toContain('Keen-Eyed: Wren sees the far shore.');
   });
 
   it("resolves an owned trait's text with its owner and its own pins", () => {
@@ -89,7 +161,7 @@ describe('authoredChipScene', () => {
       statChanges: [], placeholderPins: [{ placeholderId: 'coat', value: 'crimson' }],
     };
     const scene = authoredChipScene(world({ entities: [{ ...wren, traits: [worn] }, harrow], placeholders: [coat] }));
-    expect(chipValues(scene)['<ENTITIES>']).toContain('Red Coat: Wren wears a crimson coat.');
+    expect(chipValues(scene)('<ENTITIES>')).toContain('Red Coat: Wren wears a crimson coat.');
   });
 
   describe('linked traits', () => {
@@ -115,22 +187,22 @@ describe('authoredChipScene', () => {
       const scene = authoredChipScene(linked({ entities: [knight, harrow] }));
       expect(scene.ownedTraits).toEqual({ wren: ['paladin'] });
       const values = chipValues(scene);
-      expect(values['<ENTITIES>']).toContain('Paladin: Wren swore the oath in silver plate.');
-      expect(values['<ENTITIES|summary>']).toContain('traits: Paladin');
+      expect(values('<ENTITIES>')).toContain('Paladin: Wren swore the oath in silver plate.');
+      expect(values('<ENTITIES|summary>')).toContain('traits: Paladin');
     });
 
     it("names a cast entity's linked trait for that entity in the summary", () => {
       const vow: Trait = { id: 'vow', name: '{{char}}’s Vow', groupId: 'blueprints', isDefault: true, statChanges: [] };
       const knight = { ...wren, traitLinks: [link('l1', { originalId: 'vow', originalName: 'Vow' })] };
       const values = chipValues(authoredChipScene(linked({ traits: [saltborn, vow], entities: [knight, harrow] })));
-      expect(values['<ENTITIES|summary>']).toContain('traits: Wren’s Vow');
+      expect(values('<ENTITIES|summary>')).toContain('traits: Wren’s Vow');
     });
 
     it("names the player in the player's group text", () => {
       const oaths: TraitGroup = { id: 'oaths', name: 'Oaths', aiDescription: '{{char}} is sworn.', parentId: null };
       const sworn: Trait = { id: 'sworn', name: 'Sworn', groupId: 'oaths', isDefault: true, statChanges: [] };
       const values = chipValues(authoredChipScene(linked({ traits: [sworn], traitGroups: [blueprints, oaths] })));
-      expect(values['<TRAITS DESCRIPTION>']).toBe('Oaths:\n  The player is sworn.\n  Sworn');
+      expect(values('<TRAITS DESCRIPTION>')).toBe('Oaths:\n  The player is sworn.\n  Sworn');
     });
 
     it("reads a link's own default-on over the original's", () => {
@@ -140,7 +212,7 @@ describe('authoredChipScene', () => {
 
     it("reads a cast entity's linked trait with the original's pins when the link reads them live", () => {
       const knight = { ...wren, traitLinks: [link('l1')] };
-      expect(chipValues(authoredChipScene(linked({ entities: [knight, harrow] })))['<ENTITIES>'])
+      expect(chipValues(authoredChipScene(linked({ entities: [knight, harrow] })))('<ENTITIES>'))
         .toContain('Paladin: Wren swore the oath in robes.');
     });
 
@@ -153,11 +225,11 @@ describe('authoredChipScene', () => {
       };
       const knight = { ...wren, placeholders: [copy], traitLinks: [link('l1', { originalId: 'vow', originalName: 'Vow' })] };
       const values = chipValues(authoredChipScene(linked({ traits: [saltborn, vow], entities: [knight, harrow] })));
-      expect(values['<ENTITIES>']).toContain('Vow: Wren wears sackcloth.');
+      expect(values('<ENTITIES>')).toContain('Vow: Wren wears sackcloth.');
     });
 
     it("never counts a default Blueprints trait as the player's", () => {
-      expect(chipValues(authoredChipScene(linked()))['<TRAITS DESCRIPTION>']).toBe('Saltborn: Raised on the coast.');
+      expect(chipValues(authoredChipScene(linked()))('<TRAITS DESCRIPTION>')).toBe('Saltborn: Raised on the coast.');
     });
 
     it("holds a Custom Persona entity's default link under the entity, and never folds it into the root", () => {
@@ -185,7 +257,7 @@ describe('authoredChipScene', () => {
   it('reads nowhere for a world with no locations', () => {
     const scene = authoredChipScene(world({ locations: [], entities: [] }));
     expect(scene.location).toBeNull();
-    expect(chipValues(scene)['<LOCATION>']).toBe(NONE_PLACEHOLDER);
+    expect(chipValues(scene)('<LOCATION>')).toBe(NONE_PLACEHOLDER);
   });
 
   it('resolves a placeholder chip against a fresh roll, so a Wildcard shows a value and not its token', () => {
@@ -193,7 +265,7 @@ describe('authoredChipScene', () => {
       worldOverview: { name: 'Sedge Landing', description: '', systemPrompt: 'The tide is {{ph:tide:world:p1}}.' } as WorldOverview,
       placeholders: [{ id: 'tide', name: 'Tide', values: phValues(['out']) }],
     });
-    expect(chipValues(authoredChipScene(w))['<WORLD DESCRIPTION>']).toBe('The tide is out.');
+    expect(chipValues(authoredChipScene(w))('<WORLD DESCRIPTION>')).toBe('The tide is out.');
   });
 
   it('takes the Opening instrument’s overrides: traits, settled stats, location and resolution', () => {
@@ -208,7 +280,7 @@ describe('authoredChipScene', () => {
     expect(scene.stats).toBe(settled);
     expect(scene.location).toBe(landing);
     expect(scene.presentIds).toEqual(['harrow']);
-    expect(chipValues(scene)['<ENTITIES|name>']).toBe('Peddler');
+    expect(chipValues(scene)('<ENTITIES|name>')).toBe('Peddler');
   });
 
   it('treats a null location override as nowhere, not as a missing field', () => {

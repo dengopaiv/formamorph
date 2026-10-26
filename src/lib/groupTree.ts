@@ -4,9 +4,9 @@
 // pure and never mutates its inputs. The dnd-kit "sortable tree" recipe drives drag: one flat list where the
 // horizontal pointer offset during a drag decides drop depth (and thus parent); leaves can't be parents.
 
-import { arrayMove } from '@dnd-kit/sortable';
+import { ancestors, parentLookup } from "@/lib/ancestors";
 import { randomUUID } from "@/lib/uuid";
-import { clamp } from "@/lib/utils";
+import { knownParent, planTreeDrop, projectDrop, removeCollapsedRows } from "@/lib/treeProjection";
 import { remintPlaceholdersDeep } from "@/lib/placeholders";
 
 /** A nestable folder. `parentId` null = top-level. */
@@ -27,27 +27,18 @@ export interface FlatTreeNode<G extends TreeGroup, L extends TreeLeaf> {
   leaf?: L;
 }
 
-/**
- * Effective parent of a raw `parentId`/`groupId`: null (top-level) if the reference is null/absent OR points
- * at a group id that doesn't exist. Orphan-referenced items surface at the root rather than vanishing — a
- * dangling reference (missing `entityGroups`, deleted group) must never make an item unreachable.
- */
-function effectiveParent(ref: string | null | undefined, knownGroupIds: ReadonlySet<string>): string | null {
-  return ref != null && knownGroupIds.has(ref) ? ref : null;
-}
-
 /** Direct children (subgroups + leaves) of `parentId`, ordered by `order` (falling back to array index). */
 function childrenOf<G extends TreeGroup, L extends TreeLeaf>(
   groups: readonly G[], leaves: readonly L[], parentId: string | null, knownGroupIds: ReadonlySet<string>,
 ): GroupTreeNode<G, L>[] {
   const entries: { node: GroupTreeNode<G, L>; sort: number }[] = [];
   groups.forEach((g, i) => {
-    if (effectiveParent(g.parentId, knownGroupIds) === parentId) {
+    if (knownParent(g.parentId, knownGroupIds) === parentId) {
       entries.push({ node: { kind: 'group', id: g.id, group: g, children: [] }, sort: g.order ?? i });
     }
   });
   leaves.forEach((l, i) => {
-    if (effectiveParent(l.groupId, knownGroupIds) === parentId) {
+    if (knownParent(l.groupId, knownGroupIds) === parentId) {
       entries.push({ node: { kind: 'leaf', id: l.id, leaf: l }, sort: l.order ?? i });
     }
   });
@@ -64,15 +55,71 @@ export function buildTree<G extends TreeGroup, L extends TreeLeaf>(groups: reado
   return build(null);
 }
 
+/** Whether the AI reads a group's name and description. */
+export const headingReachesAi = (group: { aiVisible?: boolean }): boolean => group.aiVisible !== false;
+
+/** The tree as the AI reads it: a group whose heading the AI can't see gives its slot to its children. */
+export function aiVisibleTree<G extends TreeGroup & { aiVisible?: boolean }, L extends TreeLeaf>(
+  nodes: GroupTreeNode<G, L>[],
+): GroupTreeNode<G, L>[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === 'leaf') return [node];
+    const children = aiVisibleTree(node.children);
+    return headingReachesAi(node.group) ? [{ ...node, children }] : children;
+  });
+}
+
 /** True if `candidateId` is `ancestorId` itself or nested anywhere beneath it — guards illegal moves. */
 export function isDescendantGroup<G extends TreeGroup>(groups: G[], ancestorId: string, candidateId: string): boolean {
-  const byId = new Map(groups.map((g) => [g.id, g]));
-  let cur: string | null | undefined = candidateId;
-  while (cur) {
-    if (cur === ancestorId) return true;
-    cur = byId.get(cur)?.parentId ?? null;
+  return candidateId === ancestorId
+    || ancestors(candidateId, parentLookup(groups, (g) => g.parentId)).includes(ancestorId);
+}
+
+const findGroupNode = <G extends TreeGroup, L extends TreeLeaf>(
+  nodes: GroupTreeNode<G, L>[], id: string,
+): Extract<GroupTreeNode<G, L>, { kind: 'group' }> | undefined => {
+  for (const node of nodes) {
+    if (node.kind !== 'group') continue;
+    if (node.id === id) return node;
+    const inner = findGroupNode(node.children, id);
+    if (inner) return inner;
   }
-  return false;
+  return undefined;
+};
+
+/** How a tree's leaves take a new group. `orderLeaves: false` is for a tree whose leaves have no `order` (their
+ *  array order is the sibling order): only the groups are renumbered. `placeLeaf` writes a leaf's new group
+ *  where absence, not null, means ungrouped. */
+export interface PromoteOptions<L extends TreeLeaf> {
+  orderLeaves?: boolean;
+  placeLeaf?: (leaf: L, groupId: string | null) => L;
+}
+
+/**
+ * Delete a group. Its subgroups and leaves move up to its parent, into the slot the group held, and the
+ * parent's items are renumbered from there. Leaves come back in the order they went in. Unchanged inputs keep
+ * identity: a missing id returns both arrays as given.
+ */
+export function removeGroupPromotingChildren<G extends TreeGroup, L extends TreeLeaf>(
+  groups: G[], leaves: L[], id: string, { orderLeaves = true, placeLeaf }: PromoteOptions<L> = {},
+): { groups: G[]; leaves: L[] } {
+  const doomed = groups.find((g) => g.id === id);
+  if (!doomed) return { groups, leaves };
+  const tree = buildTree(groups, leaves);
+  const above = doomed.parentId === null ? undefined : findGroupNode(tree, doomed.parentId);
+  const siblings = above ? above.children : tree;
+  const parentId = above ? above.id : null;
+  const slots = siblings
+    .flatMap((node) => (node.id === id && node.kind === 'group' ? node.children : [node]))
+    .filter((node) => orderLeaves || node.kind === 'group');
+  const orderOf = new Map(slots.map((node, i) => [node.id, i]));
+  const nextGroups = groups.filter((g) => g.id !== id).map((g) => (orderOf.has(g.id) ? { ...g, parentId, order: orderOf.get(g.id) } : g));
+  const nextLeaves = leaves.map((leaf) => {
+    if (orderLeaves) return orderOf.has(leaf.id) ? { ...leaf, groupId: parentId, order: orderOf.get(leaf.id) } : leaf;
+    if (leaf.groupId !== id) return leaf;
+    return placeLeaf ? placeLeaf(leaf, parentId) : { ...leaf, groupId: parentId };
+  });
+  return { groups: nextGroups, leaves: nextLeaves };
 }
 
 /**
@@ -170,47 +217,15 @@ export function flattenTree<G extends TreeGroup, L extends TreeLeaf>(tree: Group
 export function removeChildrenOf<G extends TreeGroup, L extends TreeLeaf>(
   items: FlatTreeNode<G, L>[], ids: Iterable<string>,
 ): FlatTreeNode<G, L>[] {
-  const exclude = new Set(ids);
-  const out: FlatTreeNode<G, L>[] = [];
-  for (const item of items) {
-    if (item.parentId !== null && exclude.has(item.parentId)) {
-      if (item.kind === 'group') exclude.add(item.id);
-      continue;
-    }
-    out.push(item);
-  }
-  return out;
+  return removeCollapsedRows(items, ids);
 }
 
-/** Projected drop `{depth, parentId}` for the active row, given the pointer's horizontal drag offset. */
+/** Projected drop `{depth, parentId}` for the active row. Only a group can take children. */
 export function getDropProjection<G extends TreeGroup, L extends TreeLeaf>(
   items: FlatTreeNode<G, L>[], activeId: string, overId: string,
   dragOffset: number, indentationWidth: number,
 ): { depth: number; parentId: string | null } {
-  const overIndex = items.findIndex((i) => i.id === overId);
-  const activeIndex = items.findIndex((i) => i.id === activeId);
-  if (overIndex === -1 || activeIndex === -1) return { depth: 0, parentId: null };
-
-  const activeItem = items[activeIndex];
-  const newItems = arrayMove(items, activeIndex, overIndex);
-  const prev = newItems[overIndex - 1];
-  const next = newItems[overIndex + 1];
-
-  const dragDepth = Math.round(dragOffset / indentationWidth);
-  const projectedDepth = activeItem.depth + dragDepth;
-  // A leaf can't be a parent, so you can only descend a level past a group.
-  const maxDepth = prev ? prev.depth + (prev.kind === 'group' ? 1 : 0) : 0;
-  const minDepth = next ? next.depth : 0;
-  const depth = clamp(projectedDepth, minDepth, maxDepth);
-
-  const parentId = (() => {
-    if (depth === 0 || !prev) return null;
-    if (depth === prev.depth) return prev.parentId;
-    if (depth > prev.depth) return prev.id; // prev is a group (maxDepth cap guarantees it)
-    return newItems.slice(0, overIndex).reverse().find((i) => i.depth === depth)?.parentId ?? null;
-  })();
-
-  return { depth, parentId };
+  return projectDrop(items, activeId, overId, dragOffset, indentationWidth, (row) => row.kind === 'group');
 }
 
 /**
@@ -222,32 +237,18 @@ export function applyDrop<G extends TreeGroup, L extends TreeLeaf>(
   groups: G[], leaves: L[], collapsedIds: Iterable<string>,
   activeId: string, overId: string, dragOffset: number, indentationWidth: number,
 ): { groups: G[]; leaves: L[] } {
-  const full = flattenTree(buildTree(groups, leaves));
-  const visible = removeChildrenOf(full, [...collapsedIds, activeId]);
-  // The drop target must be a visible row; dropping onto the dragged subtree (or a hidden row) is a no-op.
-  if (!visible.some((i) => i.id === overId) || !visible.some((i) => i.id === activeId)) {
-    return { groups, leaves };
-  }
-  const { parentId } = getDropProjection(visible, activeId, overId, dragOffset, indentationWidth);
-
-  const isGroup = groups.some((g) => g.id === activeId);
-  if (isGroup && parentId !== null && isDescendantGroup(groups, activeId, parentId)) {
-    return { groups, leaves };
-  }
-
-  const activeIndex = full.findIndex((i) => i.id === activeId);
-  const overIndex = full.findIndex((i) => i.id === overId);
-  if (activeIndex === -1 || overIndex === -1) return { groups, leaves };
-
-  const reParented = full.map((i) => (i.id === activeId ? { ...i, parentId } : i));
-  const sorted = arrayMove(reParented, activeIndex, overIndex);
+  const plan = planTreeDrop(flattenTree(buildTree(groups, leaves)), collapsedIds, activeId, overId, dragOffset, indentationWidth, {
+    canParent: (row) => row.kind === 'group',
+    refuses: (active, parent) => active.kind === 'group' && parent !== null && isDescendantGroup(groups, active.id, parent.id),
+  });
+  if (!plan) return { groups, leaves };
 
   const g2 = groups.map((g) => ({ ...g }));
   const l2 = leaves.map((l) => ({ ...l }));
   const byGroup = new Map(g2.map((g) => [g.id, g]));
   const byLeaf = new Map(l2.map((l) => [l.id, l]));
   const orderByParent = new Map<string, number>();
-  for (const item of sorted) {
+  for (const item of plan.moved) {
     const key = item.parentId ?? '\0root';
     const order = orderByParent.get(key) ?? 0;
     orderByParent.set(key, order + 1);
@@ -260,4 +261,62 @@ export function applyDrop<G extends TreeGroup, L extends TreeLeaf>(
     }
   }
   return { groups: g2, leaves: l2 };
+}
+
+/** The projection walked up out of every blocked parent, then replayed at that depth so the rows below agree.
+ *  Null when they would hold the row where it can't be. */
+export function projectionPastBlocked<G extends TreeGroup, L extends TreeLeaf>(
+  items: FlatTreeNode<G, L>[], active: FlatTreeNode<G, L>, overId: string, projection: { depth: number; parentId: string | null },
+  blocked: (id: string) => boolean, indentationWidth: number,
+): { depth: number; parentId: string | null } | null {
+  const parentOf = new Map(items.map((i) => [i.id, i.parentId]));
+  let { depth, parentId } = projection;
+  while (parentId !== null && blocked(parentId)) {
+    parentId = parentOf.get(parentId) ?? null;
+    depth -= 1;
+  }
+  const replayed = depth === projection.depth
+    ? projection
+    : getDropProjection(items, active.id, overId, (depth - active.depth) * indentationWidth, indentationWidth);
+  return replayed.depth === depth && replayed.parentId === parentId ? replayed : null;
+}
+
+/**
+ * What a drop in a tree with entity nodes writes: every owner (an entity's id, null for the world) whose item
+ * moved or changed owner, and the nodes that store where they landed. Unplaced nodes still ending the top level
+ * in `unplacedIds` order stay unplaced. A pinned node's entity is among the touched owners.
+ */
+export function nodeDropWrites<G extends TreeGroup, L extends TreeLeaf>(
+  before: { groups: readonly G[]; leaves: readonly L[] }, after: { groups: readonly G[]; leaves: readonly L[] },
+  nodeIds: ReadonlySet<string>, unplacedIds: readonly string[],
+  ownerBefore: (id: string) => string | null, ownerAfter: (id: string) => string | null,
+): { touched: Set<string | null>; pinned: Set<string> } {
+  const spot = (parent: string | null | undefined, order: number | undefined) => `${parent ?? ''}|${order ?? ''}`;
+  const spotBefore = new Map([
+    ...before.groups.map((g) => [g.id, spot(g.parentId, g.order)] as const),
+    ...before.leaves.map((l) => [l.id, spot(l.groupId, l.order)] as const),
+  ]);
+  const touched = new Set<string | null>();
+  const touch = (id: string, parent: string | null | undefined, order: number | undefined) => {
+    if (spotBefore.get(id) === spot(parent, order) && ownerBefore(id) === ownerAfter(id)) return;
+    touched.add(ownerBefore(id));
+    touched.add(ownerAfter(id));
+  };
+  for (const g of after.groups) if (!nodeIds.has(g.id)) touch(g.id, g.parentId, g.order);
+  for (const l of after.leaves) touch(l.id, l.groupId, l.order);
+
+  const rootIds = [...after.groups.filter((g) => g.parentId === null), ...after.leaves.filter((l) => (l.groupId ?? null) === null)]
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((item) => item.id);
+  const stillUnplaced = new Set<string>();
+  for (let i = rootIds.length - 1, j = unplacedIds.length - 1; i >= 0 && j >= 0 && rootIds[i] === unplacedIds[j]; i--, j--) {
+    stillUnplaced.add(unplacedIds[j]);
+  }
+  const groupById = new Map(after.groups.map((g) => [g.id, g]));
+  const pinned = new Set([...nodeIds].filter((id) => {
+    if (stillUnplaced.has(id)) return false;
+    const node = groupById.get(id)!;
+    return unplacedIds.includes(id) || spotBefore.get(id) !== spot(node.parentId, node.order);
+  }));
+  pinned.forEach((id) => touched.add(id));
+  return { touched, pinned };
 }

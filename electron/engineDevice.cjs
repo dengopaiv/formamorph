@@ -6,8 +6,9 @@
 // reported machine saw 47.8 GB total and 0 GB free while nvidia-smi showed 14.7 GB free on the card alone.
 // One visible adapter means the figure is that adapter's own.
 //
-// Nothing else decides: llmEngine.cjs applies whatever index this returns, and null means "leave llama.cpp's
-// own default alone", which is what a machine that can't be told apart gets.
+// Nothing else decides: llmEngine.cjs passes the device at whatever index this returns to llama-server's
+// `--device`, and null means "leave llama.cpp's own default alone", which is what a machine that can't be
+// told apart gets.
 
 /** The setting value meaning "let the policy choose". Anything else is a device name to pin to. */
 const ENGINE_DEVICE_AUTO = 'auto';

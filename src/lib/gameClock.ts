@@ -11,6 +11,8 @@
  * the same seam. Design: docs-internal/designs/time-system/design.md.
  */
 
+import type { Daypart } from '@/types';
+
 /** The story's time frame. Not authored anywhere yet — every field falls back to its default. */
 export interface WorldCalendar {
   /** Hour of day the story opens at, 0..hoursPerDay-1. */
@@ -106,10 +108,18 @@ export function dayAndHour(elapsed: number, calendar?: WorldCalendar): { day: nu
   return { day: Math.floor(total / hoursPerDay) + 1, hour: total % hoursPerDay };
 }
 
+/** Every daypart `daypart()` emits, in clock order from midnight. */
+export const DAYPARTS: readonly Daypart[] = ['night', 'dawn', 'morning', 'midday', 'afternoon', 'evening'];
+
+export const isDaypart = (v: unknown): v is Daypart => typeof v === 'string' && (DAYPARTS as readonly string[]).includes(v);
+
+/** `dayparts` once each, in clock order. */
+export const daypartSet = (dayparts: readonly Daypart[]): Daypart[] => DAYPARTS.filter((d) => dayparts.includes(d));
+
 /** Coarse time of day. Deliberately not a clock reading: an exact numeral in context is a parrotable
  *  value — small models echo it back into the prose — and the narration only ever needs the daypart.
  *  Boundaries are fractions of the day, so a non-24-hour calendar divides the same way. */
-export function daypart(hour: number, calendar?: WorldCalendar): string {
+export function daypart(hour: number, calendar?: WorldCalendar): Daypart {
   const { hoursPerDay } = resolve(calendar);
   const f = ((hour % hoursPerDay) + hoursPerDay) % hoursPerDay / hoursPerDay;
   if (f < 0.25) return 'night';
@@ -120,6 +130,12 @@ export function daypart(hour: number, calendar?: WorldCalendar): string {
   if (f < 0.83) return 'evening';
   return 'night';
 }
+
+/** The daypart after `elapsed` story hours, read off the rounded minute the clock stamp and scripts share. */
+export const daypartAt = (elapsed: number, calendar?: WorldCalendar): Daypart => clockReading(elapsed, calendar).daypart;
+
+/** The daypart a story opens at when nothing set its hour: what authoring lenses read. */
+export const OPENING_DAYPART: Daypart = daypart(DEFAULT_START_HOUR);
 
 /** Absolute position in story time, e.g. `Day 3, evening`. */
 export function formatAbsolute(elapsed: number, calendar?: WorldCalendar): string {
@@ -132,13 +148,23 @@ export function formatAbsolute(elapsed: number, calendar?: WorldCalendar): strin
  *  the log never enters context. Accumulated in whole minutes so a measured 15m delta shows, and so a
  *  moment just short of midnight rolls the day instead of printing `24:00`. */
 export function formatClock(elapsed: number, calendar?: WorldCalendar): string {
+  const { day, hour, minute } = clockReading(elapsed, calendar);
+  return `Day ${day}, ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/** Day, hour and minute after `elapsed` story hours, all from one rounded minute count, so `formatClock`'s
+ *  stamp, a script's `clock` and its daypart agree and the minute never reads 60. */
+export function clockReading(elapsed: number, calendar?: WorldCalendar): { day: number; hour: number; minute: number; daypart: Daypart } {
   const { hoursPerDay, startHour } = resolve(calendar);
   const minutesPerDay = hoursPerDay * 60;
   const total = Math.round((Math.max(0, elapsed) + startHour) * 60);
   const within = total % minutesPerDay;
-  const hh = String(Math.floor(within / 60)).padStart(2, '0');
-  const mm = String(within % 60).padStart(2, '0');
-  return `Day ${Math.floor(total / minutesPerDay) + 1}, ${hh}:${mm}`;
+  return {
+    day: Math.floor(total / minutesPerDay) + 1,
+    hour: Math.floor(within / 60),
+    minute: within % 60,
+    daypart: daypart(within / 60, calendar),
+  };
 }
 
 const NUMBER_WORDS = ['', '', 'two', 'three', 'four', 'five', 'six'];
@@ -205,4 +231,25 @@ export function buildStamper(args: {
 /** The present moment as a sentence for the recap's now-line closer. */
 export function formatNow(nowHours: number, calendar?: WorldCalendar): string {
   return `It is now ${formatAbsolute(nowHours, calendar)}.`;
+}
+
+export const TURN_TIME_UNITS = ['minutes', 'hours', 'days', 'weeks'] as const;
+export type TurnTimeUnit = (typeof TURN_TIME_UNITS)[number];
+export const TURN_TIME_UNIT_HOURS: Record<TurnTimeUnit, number> = { minutes: 1 / 60, hours: 1, days: 24, weeks: 168 };
+
+const isWhole = (n: number) => Math.abs(n - Math.round(n)) < 1e-6;
+
+/** Hours as an amount in the largest unit that holds it whole. Zero reads as hours. */
+export function splitTurnHours(hours: number): { amount: string; unit: TurnTimeUnit } {
+  if (hours === 0) return { amount: '0', unit: 'hours' };
+  const unit = [...TURN_TIME_UNITS].reverse().find((u) => isWhole(hours / TURN_TIME_UNIT_HOURS[u])) ?? 'hours';
+  const amount = hours / TURN_TIME_UNIT_HOURS[unit];
+  return { amount: String(isWhole(amount) ? Math.round(amount) : amount), unit };
+}
+
+/** A typed amount in a unit as hours. Null when blank, negative, or past MAX_TURN_HOURS. */
+export function joinTurnHours(amount: string, unit: TurnTimeUnit): number | null {
+  if (amount.trim() === '') return null;
+  const hours = Number(amount) * TURN_TIME_UNIT_HOURS[unit];
+  return Number.isFinite(hours) && hours >= 0 && hours <= MAX_TURN_HOURS ? hours : null;
 }

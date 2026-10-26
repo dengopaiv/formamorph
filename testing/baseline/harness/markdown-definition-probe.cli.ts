@@ -1,12 +1,14 @@
 // Markdown definition probe — what does the narrator do with syntax it is told exists but not when to use?
 // Sedge Landing, six actions: calm (idle, inner), dialogue (talk), pivot (threat, find, name).
 //
-// Arms, paired by seed, on the Experimental preset: `definitions` (the shipped `<MARKDOWN GUIDANCE|definitions>`),
+// `default` runs the Default preset as shipped, with the Thinking-off user message.
+//
+// Arms, paired by seed, on the Experimental preset: `definitions` (the shipped `<MARKDOWN GUIDANCE>`),
 // `shape` (the first definitions, display shape only), `emphasis` (meaning definitions, bold as "emphasis"),
 // `force` (bold as force "said or felt"), `long` / `short` (bold as volume, italics as source, with and
 // without examples),
 // `highlights` (meaning definitions plus both highlight
-// lines), `guidance` (the same chip slot carrying Default's usage-directed Markdown text), `none` (Markdown Formatting off,
+// lines), `none` (Markdown Formatting off,
 // so the Formatting section is absent). Every other byte of the prompt is shared.
 //
 // Per reply it counts each defined syntax, prints every colored highlight and its key, and counts the
@@ -14,16 +16,18 @@
 //
 // Usage: npx vite-node testing/baseline/harness/markdown-definition-probe.cli.ts --
 //          [--endpoint URL] [--model ID] [--token T] [--runs 3] [--max 600] [--only idle,talk]
-//          [--arms definitions,shape,guidance,none] [--show] [--dump]
+//          [--arms default,definitions,shape,none] [--show] [--dump]
+//          [--reasoning none|auto|low|medium|high] [--show-thought]
+// With --reasoning on, it also reports each reply's thought length and how often the thought names formatting.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { experimentalSystemPrompt } from '@/components/game/ExperimentalPrompts';
-import { markdownDefinitions } from '@/components/game/GamePrompts';
+import { defaultNarrationUserPrompt, defaultSystemPrompt, markdownGuidance } from '@/components/game/GamePrompts';
 import { authoredChipScene } from '@/lib/chipValues/authoredScene';
 import { chipValues } from '@/lib/chipValues/chipValues';
 import { HIGHLIGHT_COLORS } from '@/lib/markdownToolbar';
 import { parsePromptTemplate, renderPromptTemplate, serializeSegments } from '@/lib/promptTemplate';
-import { baseToken, joinToken, splitToken } from '@/lib/promptVariables';
+import { baseToken, splitToken } from '@/lib/promptVariables';
 import { buildNarrationPrompt } from '@/lib/turnPipeline/narrationPrompt';
 import { migrateWorld } from '@/lib/version';
 
@@ -37,7 +41,9 @@ const token = argVal('--token', process.env.PROBE_TOKEN ?? '');
 const runs = Number(argVal('--runs', '3'));
 const maxTokens = Number(argVal('--max', '600'));
 const only = argVal('--only', '');
-const armNames = argVal('--arms', 'definitions,shape,guidance,none').split(',');
+const armNames = argVal('--arms', 'default,definitions,shape,none').split(',');
+// `none` sends reasoning off; `auto` sends no field (Model Default); a level sends that level.
+const reasoning = argVal('--reasoning', 'none');
 const SEED = 515151;
 
 const BASELINE = path.resolve('testing/baseline');
@@ -45,15 +51,6 @@ const world = migrateWorld(JSON.parse(readFileSync(path.join(BASELINE, 'sedge-la
 const fixture = JSON.parse(readFileSync(path.join(BASELINE, 'markdown-definition-cases.json'), 'utf8')) as {
   cases: Array<{ id: string; kind: string; action: string }>;
 };
-
-/** The Experimental template with the Markdown chip on its usage-directed variant, under the same Header. */
-function withGuidanceVariant(): string {
-  return serializeSegments(parsePromptTemplate(experimentalSystemPrompt).map((segment) => {
-    if (segment.type !== 'variable' || baseToken(segment.token) !== '<MARKDOWN GUIDANCE>') return segment;
-    const parts = splitToken(segment.token);
-    return parts ? { ...segment, token: joinToken({ ...parts, variantId: undefined, pre: '' }) } : segment;
-  }));
-}
 
 // The first definitions: display shape only, with no meaning sentences.
 const SHAPE_ONLY = `- \`**text**\` displays text in bold.
@@ -89,7 +86,7 @@ const FORCE_BOLD = EMPHASIS_BOLD.replace(
 
 /** The shipped definitions with the bold and italic lines replaced. */
 function withBoldItalic(bold: string, italic: string): string {
-  return markdownDefinitions(true).split('\n').map((line) => {
+  return markdownGuidance(true).split('\n').map((line) => {
     if (line.startsWith('- `**text**`')) return `- \`**text**\` displays text in bold. ${bold}`;
     if (line.startsWith('- `*text*`')) return `- \`*text*\` displays text in italics. ${italic}`;
     return line;
@@ -106,7 +103,11 @@ const SHORT = withBoldItalic(
   'Italic text means the words come from outside the narration.',
 );
 
-const ARMS: Record<string, { template: string; markdownOutput: boolean }> = {
+/** The Default narration user message, as the app sends it with Thinking off. */
+const defaultUser = (action: string) => defaultNarrationUserPrompt.replace('<PLAYER ACTION>', action);
+
+const ARMS: Record<string, { template: string; markdownOutput: boolean; user?: (action: string) => string }> = {
+  default: { template: defaultSystemPrompt, markdownOutput: true, user: defaultUser },
   long: { template: withFixedDefinitions(LONG), markdownOutput: true },
   short: { template: withFixedDefinitions(SHORT), markdownOutput: true },
   definitions: { template: experimentalSystemPrompt, markdownOutput: true },
@@ -114,7 +115,6 @@ const ARMS: Record<string, { template: string; markdownOutput: boolean }> = {
   emphasis: { template: withFixedDefinitions(EMPHASIS_BOLD), markdownOutput: true },
   force: { template: withFixedDefinitions(FORCE_BOLD), markdownOutput: true },
   highlights: { template: withFixedDefinitions(MEANING_WITH_HIGHLIGHTS), markdownOutput: true },
-  guidance: { template: withGuidanceVariant(), markdownOutput: true },
   none: { template: experimentalSystemPrompt, markdownOutput: false },
 };
 
@@ -172,19 +172,31 @@ async function loadedModel(): Promise<string> {
   return loaded.id;
 }
 
-async function narrate(model: string, system: string, action: string, seed: number): Promise<string> {
-  // Narration is unpinned in PROMPT_SAMPLER_PINS, so no temperature is sent.
+/** The reply and, with `--reasoning`, the thought behind it. */
+interface Narration { text: string; reasoning: string; reasoningTokens: number | null }
+
+async function narrate(model: string, system: string, user: string, seed: number): Promise<Narration> {
+  // Narration is unpinned in PROMPT_SAMPLER_PINS, so no temperature is sent. `auto` is Model Default: no field.
+  const effort = reasoning === 'auto' ? {} : { reasoning_effort: reasoning };
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({
-      model, seed, max_tokens: maxTokens, reasoning_effort: 'none', stream: false,
-      messages: [{ role: 'system', content: system }, { role: 'user', content: action }],
+      model, seed, max_tokens: maxTokens, ...effort, stream: false,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     }),
   });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  const body = await res.json() as { choices: Array<{ message: { content: string | null } }> };
-  return body.choices[0].message.content ?? '';
+  const body = await res.json() as {
+    choices: Array<{ message: { content: string | null; reasoning_content?: string; reasoning?: string } }>;
+    usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+  };
+  const message = body.choices[0].message;
+  return {
+    text: message.content ?? '',
+    reasoning: message.reasoning_content ?? message.reasoning ?? '',
+    reasoningTokens: body.usage?.completion_tokens_details?.reasoning_tokens ?? null,
+  };
 }
 
 const model = await loadedModel();
@@ -200,6 +212,11 @@ if (args.includes('--dump')) {
 }
 
 const names = Object.keys(METRICS);
+const words = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+// A thought that talks about the formatting rules rather than the scene.
+const FORMAT_TALK = /\b(bold(ed|ing)?|italic(s|ize|ized)?|markdown|format(ting)?|emphasi[sz]e?|struck|strikethrough)\b/gi;
+const thought: Record<string, Array<{ words: number; tokens: number | null; format: number; empty: boolean }>> =
+  Object.fromEntries(armNames.map((arm) => [arm, []]));
 const totals: Record<string, Record<string, Record<string, number>>> = {};
 const replies: Record<string, number> = {};
 for (const arm of armNames) {
@@ -207,9 +224,12 @@ for (const arm of armNames) {
   replies[arm] = 0;
   for (const c of cases) {
     const system = systemPrompt(arm, c.action);
+    const user = ARMS[arm].user?.(c.action) ?? c.action;
     for (let i = 0; i < runs; i++) {
-      const text = await narrate(model, system, c.action, SEED + i);
+      const reply = await narrate(model, system, user, SEED + i);
+      const text = reply.text;
       const row = Object.fromEntries(names.map((n) => [n, METRICS[n](text)]));
+      thought[arm].push({ words: words(reply.reasoning), tokens: reply.reasoningTokens, format: count(reply.reasoning, FORMAT_TALK), empty: !text.trim() });
       for (const kind of [c.kind, 'all']) {
         totals[arm][kind] ??= Object.fromEntries(names.map((n) => [n, 0]));
         for (const n of names) totals[arm][kind][n] += row[n];
@@ -217,7 +237,12 @@ for (const arm of armNames) {
       replies[arm]++;
       const colored = [...text.matchAll(COLORED)].map((m) => `${m[1]}:"${m[2]}"`).join(' ');
       console.log(`[${arm}] ${c.id} #${i} ${names.map((n) => `${n}=${row[n]}`).join(' ')} · ${text.split(/\s+/).length}w${colored ? ` · ${colored}` : ''}`);
+      if (reasoning !== 'none') {
+        const last = thought[arm].at(-1)!;
+        console.log(`    thought ${last.words}w · ${last.tokens ?? '?'} tok · format mentions ${last.format}${last.empty ? ' · EMPTY REPLY' : ''}`);
+      }
       if (args.includes('--show')) console.log(`    ${text.replace(/\n+/g, ' ¶ ')}`);
+      if (args.includes('--show-thought') && reply.reasoning) console.log(`    THOUGHT: ${reply.reasoning.replace(/\n+/g, ' ¶ ')}`);
     }
   }
 }
@@ -231,4 +256,16 @@ for (const arm of armNames) {
   }
 }
 console.log(`replies per arm: ${armNames.map((arm) => `${arm} ${replies[arm]}`).join(' · ')}`);
+if (reasoning !== 'none') {
+  const mean = (xs: number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0);
+  const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : 0);
+  console.log(`\nREASONING (--reasoning ${reasoning})`);
+  for (const arm of armNames) {
+    const t = thought[arm];
+    const tokens = t.flatMap((x) => (x.tokens === null ? [] : [x.tokens]));
+    console.log(`${arm.padEnd(14)} words mean ${mean(t.map((x) => x.words))} · median ${median(t.map((x) => x.words))}`
+      + ` · tokens mean ${tokens.length ? mean(tokens) : '?'} · format mentions ${t.reduce((a, x) => a + x.format, 0)}`
+      + ` in ${t.filter((x) => x.format > 0).length}/${t.length} · empty replies ${t.filter((x) => x.empty).length}`);
+  }
+}
 console.log(`duration ${((Date.now() - started) / 1000).toFixed(0)}s`);

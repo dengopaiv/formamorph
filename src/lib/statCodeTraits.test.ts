@@ -8,22 +8,22 @@ describe('savedTraits', () => {
   const authored: Trait = { id: 'brave', name: 'Bold', playerToggle: true, statChanges: [{ statId: 'h', value: 99, type: 'starting' }] };
 
   it('re-reads each trait from the world but keeps the stat changes the save settled against', () => {
-    const { acquired } = savedTraits({ playerTraits: [saved] }, [authored]);
+    const { acquired } = savedTraits({ globalTraits: [saved] }, [authored]);
     expect(acquired).toEqual([{ ...authored, statChanges: saved.statChanges }]);
   });
 
   it('reads a save with no switched-off traits, no records and no cascade-off list as empty', () => {
-    expect(savedTraits({ playerTraits: [] }, []))
+    expect(savedTraits({ globalTraits: [] }, []))
       .toEqual({ acquired: [], disabledTraitIds: [], appliedValues: {}, cascadeOffTraitIds: {}, ownedTraits: {} });
   });
 
   it('carries the switched-off ids, the movement records, the cascade-off list and owned state through', () => {
     const out = savedTraits({
-      playerTraits: [saved], disabledTraitIds: ['brave'], appliedTraitValues: { brave: { h: 10 } },
-      cascadeOffTraitIds: { world: ['brave'] }, ownedTraits: { ash: { chosen: ['tamed'] } },
+      globalTraits: [saved], disabledTraitIds: ['brave'], appliedTraitValues: { brave: { h: 10 } },
+      cascadeOffTraitIds: { global: ['brave'] }, ownedTraits: { ash: { chosen: ['tamed'] } },
     }, [authored]);
     expect(out).toMatchObject({
-      disabledTraitIds: ['brave'], appliedValues: { brave: { h: 10 } }, cascadeOffTraitIds: { world: ['brave'] },
+      disabledTraitIds: ['brave'], appliedValues: { brave: { h: 10 } }, cascadeOffTraitIds: { global: ['brave'] },
       ownedTraits: { ash: { chosen: ['tamed'] } },
     });
   });
@@ -32,7 +32,7 @@ describe('savedTraits', () => {
 describe('sandboxTraits under gates', () => {
   // A code switch-on of a locked trait leaves it acquired and off; the sandbox entry keeps its three fields.
   const paladin: Trait = { id: 'paladin', name: 'Paladin', statChanges: [] };
-  const plate: Trait = { id: 'plate', name: 'Plate Armor', statChanges: [], requires: [{ kind: 'trait', id: 'paladin' }] };
+  const plate: Trait = { id: 'plate', name: 'Plate Armor', statChanges: [], requires: [{ all: [{ kind: 'trait', id: 'paladin' }] }] };
   const world = { traits: [paladin, plate], groups: [] };
 
   it('reads a locked trait code switched on as acquired and not enabled', () => {
@@ -46,16 +46,16 @@ describe('sandboxTraits under gates', () => {
   });
 });
 
-describe('applyCodeTraitSwitches on a bearer’s own trait', () => {
+describe('applyCodeTraitSwitches on an owner’s own trait', () => {
   const group: TraitGroup = { id: 'g', name: 'Mood', parentId: null, maxPicks: 1 };
   const calm: Trait = { id: 'calm', name: 'Calm', groupId: 'g', statChanges: [] };
   const angry: Trait = { id: 'angry', name: 'Angry', groupId: 'g', statChanges: [] };
   const sworn: Trait = { id: 'sworn', name: 'Sworn', mode: 'alwaysOn', statChanges: [] };
-  const fury: Trait = { id: 'fury', name: 'Fury', statChanges: [], requires: [{ kind: 'trait', id: 'angry' }] };
+  const fury: Trait = { id: 'fury', name: 'Fury', statChanges: [], requires: [{ all: [{ kind: 'trait', id: 'angry' }] }] };
   const mira = { id: 'mira', name: 'Mira', traits: [calm, angry, sworn, fury], groups: [group] };
   const world: TraitWorld = {
     traits: [], groups: [], entities: [{ id: 'mira', name: 'Mira', persona: true }], persona: { source: 'world', entityId: 'mira' },
-    bearers: [{ id: 'world', name: '', traits: [], groups: [] }, mira],
+    global: { traits: [], groups: [] }, owners: [mira],
   };
   // Always On Sworn is on from the start, as play seeds it.
   const start = (chosen: string[]) => ({
@@ -64,7 +64,7 @@ describe('applyCodeTraitSwitches on a bearer’s own trait', () => {
   const flip = (chosen: string[], traitId: string, enabled: boolean) =>
     applyCodeTraitSwitches(start(chosen), [{ traitId, enabled, by: 'Vigor', ownerId: 'mira' }], world);
 
-  it('retires the active sibling in the bearer’s own Up to One group', () => {
+  it('retires the active sibling in the owner’s own Up to One group', () => {
     const { state, log } = flip(['calm'], 'angry', true);
     expect(state.ownedTraits?.mira).toEqual({ chosen: ['sworn', 'calm', 'angry'], disabled: ['calm'] });
     expect(log).toEqual(['Trait switched off: Calm (by Vigor)', 'Acquired trait: Angry (by Vigor)']);
@@ -103,12 +103,18 @@ describe('entityTraitNames', () => {
 
   it('lists each entity’s traits, owned or linked, and marks the ones a persona choice can play', () => {
     expect(entityTraitNames({ traits: [cursed], traitGroups: [], entities }, [])).toEqual([
-      { id: 'mira', name: 'Mira', persona: true, folder: [], tabPosition: 0, traits: [
+      { id: 'mira', name: 'Mira', type: '', pronouns: '', persona: true, folder: [], tabPosition: 0, traits: [
         { id: 'scarred', name: 'Scarred', path: [], tabPosition: 0 }, { id: 'cursed', name: 'Cursed', path: [], tabPosition: 1 },
       ] },
-      { id: 'ash', name: 'Ash', persona: false, traits: [{ id: 'loyal', name: 'Loyal', path: [], tabPosition: 0 }], folder: [], tabPosition: 1 },
-      { id: 'wanderer', name: 'Wanderer', persona: true, traits: [{ id: 'marked', name: 'Marked', path: [], tabPosition: 0 }], folder: [], tabPosition: 2 },
+      { id: 'ash', name: 'Ash', type: '', pronouns: '', persona: false, traits: [{ id: 'loyal', name: 'Loyal', path: [], tabPosition: 0 }], folder: [], tabPosition: 1 },
+      { id: 'wanderer', name: 'Wanderer', type: '', pronouns: '', persona: true, traits: [{ id: 'marked', name: 'Marked', path: [], tabPosition: 0 }], folder: [], tabPosition: 2 },
     ]);
+  });
+
+  it('reads pronouns as the placeholder name, since an editor run has no rolls', () => {
+    const pair: Placeholder = { id: 'ph-pair', name: 'Pair', values: [{ id: 'v-her', text: 'she/her' }] };
+    const keeper: Entity = { id: 'k', name: 'Keeper', pronouns: '{{ph:ph-pair:world:p1}}' };
+    expect(entityTraitNames({ traits: [], traitGroups: [], entities: [keeper] }, [pair])[0].pronouns).toBe('Pair');
   });
 
   // Play reads the set in its own order, so only the tab position follows the tree.

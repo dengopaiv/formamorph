@@ -9,13 +9,16 @@ import { FeedbackDialog } from '@/components/menu/FeedbackDialog';
 import { FeedbackEditDialog } from '@/components/menu/FeedbackEditDialog';
 import { PodiumDialog } from '@/components/menu/PodiumDialog';
 import { SentMessagesDialog } from '@/components/menu/SentMessagesDialog';
+import { SuspendDialog } from '@/components/menu/SuspendDialog';
 import { ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
+import { RootCrashScreen } from '@/components/RootCrashScreen';
 import { RevealAnimationDialog } from '@/components/RevealAnimationDemo';
 import { devContestSamples } from '@/lib/devEventSample';
 import { devChangelogDraft, devFeedbackThread, devPickerRows, devPresetShareJson } from '@/lib/devPaneSamples';
 import { useDevRoute } from '@/lib/devRouter';
 import { IMAGE_CAPS } from '@/lib/imageSlots';
 import { APP_VERSION } from '@/lib/version';
+import { FEEDBACK_TYPES } from '@/types';
 
 const clearRouteOnClose = (open: boolean) => { if (!open) window.location.hash = '#dev'; };
 const ignore = () => {};
@@ -42,13 +45,16 @@ function Pasted({ text, children }: { text: string; children: ReactNode }) {
 }
 
 export default function DevPaneRoutes() {
-  switch (useDevRoute()?.modal) {
+  const route = useDevRoute();
+  switch (route?.modal) {
     case 'eventForm': return <EventFormDialog open onOpenChange={clearRouteOnClose} />;
     case 'podium': return <PodiumDialog open onOpenChange={clearRouteOnClose} contest={devContestSamples()[1]} />;
     case 'sentMessages': return <SentMessagesDialog open onOpenChange={clearRouteOnClose} username="Sample Player" />;
+    case 'suspend': return <SuspendDialog open onOpenChange={clearRouteOnClose} username="Sample Player" alreadySuspended={false} onConfirm={ignore} />;
     case 'feedbackForm': {
-      const { title, body } = devFeedbackThread();
-      return <FeedbackDialog open onOpenChange={clearRouteOnClose} initialTitle={title} initialBody={body} />;
+      const type = FEEDBACK_TYPES.find((value) => value === route.tab) ?? 'bug';
+      const { title, body } = devFeedbackThread(type);
+      return <FeedbackDialog open onOpenChange={clearRouteOnClose} initialType={type} initialTitle={title} initialBody={body} />;
     }
     case 'feedbackEdit': return <FeedbackEditDialog open onOpenChange={clearRouteOnClose} thread={devFeedbackThread()} mayEditProse mayRefile onSaved={ignore} />;
     case 'changelogEntry': return <ChangelogEntryDialog open onOpenChange={clearRouteOnClose} entry={devChangelogDraft()} onSubmit={ignore} />;
@@ -68,6 +74,11 @@ export default function DevPaneRoutes() {
       <Pressed>
         <PlaceholderSectionList rows={devPickerRows()} selectedId="" onSelect={ignore} placeholders={[]} />
       </Pressed>
+    );
+    case 'rootCrash': return (
+      <div className="fixed inset-0 z-50 bg-background">
+        <RootCrashScreen error={new Error('Sample crash')} componentStack={'\n    at SampleComponent\n    at App'} />
+      </div>
     );
     default: return null;
   }

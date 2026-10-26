@@ -1,7 +1,8 @@
 import type {
   Connection, DictionaryEntry, Entity, GameLocation, Placeholder, PlayerStat, Trait, TraitGroup,
 } from '@/types';
-import type { OwnedTraitsInForce } from '../locationContext';
+import type { OwnedStatsInForce, OwnedTraitsInForce } from '../locationContext';
+import type { OwnerStatPart, StatPlacement } from '../statContext';
 import type { ResolvedPersona } from '../persona';
 import type { ResolveEntityText } from '../resolveWorldNames';
 import type { WorldCalendar } from '../gameClock';
@@ -22,12 +23,25 @@ export interface ChipScene {
   overview: string;
   /** The stats with their current values. */
   stats: PlayerStat[];
+  /** Where the stats sit. A flat list when absent. */
+  statPlacement?: StatPlacement;
+  /** The switched-on stats of each entity the player plays as, at their current values, each placed by its
+   *  owner. Every part renders in the persona's block; with no persona, they follow `stats` in the Stats chip.
+   *  None when absent. */
+  playedStats?: readonly OwnerStatPart[];
+  /** Each entity the player plays as, its text resolved and its links expanded. One besides the persona joins
+   *  the persona's block with its owned traits. None when absent. */
+  playedEntities?: readonly Entity[];
   /** The traits in force. An adapter that holds per-trait pins resolves those before it builds the scene. */
   traits: Trait[];
   traitGroups: TraitGroup[];
   /** Each entity's owned traits in force, the persona's included. None when absent. */
   ownedTraits?: OwnedTraitsInForce;
+  /** Each entity's switched-on stats at their current values. None when absent. */
+  ownedStats?: OwnedStatsInForce;
   persona: ResolvedPersona | null;
+  /** The played entity's name, which a chip Header reads as the Persona Name. Nobody plays when absent or null. */
+  playerName?: string | null;
   /** Where the scene is, or nowhere: a world with no locations, or a start not yet resolved. */
   location: GameLocation | null;
   locations: GameLocation[];

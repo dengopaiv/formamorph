@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+// Renders each trailer composition (default: both) to out/<id>.mp4, then checks every file against its composition,
+// every line of copy against the reading bar, every camera move, and proves its 6 s loop. The wide cut is also checked against the
+// Steam spec and writes its poster frame.
+//
+//   npm run render                 both cuts
+//   npm run render -- TrailerWide  one cut
+//   npm run check                  the copy and camera checks alone, with no render
+import { bundle } from '@remotion/bundler';
+import { parseMedia } from '@remotion/media-parser';
+import { nodeReader } from '@remotion/media-parser/node';
+import { renderMedia, renderStill, selectComposition } from '@remotion/renderer';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CHECK_ONLY = process.argv.includes('--check');
+const named = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
+const ids = named.length > 0 ? named : ['TrailerWide', 'TrailerTall'];
+const outDir = path.join(root, 'out');
+mkdirSync(outDir, { recursive: true });
+
+/**
+ * Per-composition checks. The wide cut follows Steam's store trailer spec (partner docs, read 2026-10-08):
+ * up to 1920x1080, 30 or 60 fps, 5,000+ Kbps, H.264 in MP4. The spec states no length limit; the storyboard
+ * sets the 90 s target. The poster must be a 1920x1080 frame of the video. The first 6 s are Steam's
+ * microtrailer, so they must loop.
+ */
+const CHECKS = {
+  TrailerWide: {
+    videoBitrate: '12M',
+    minKbps: 5000,
+    maxSeconds: 90,
+    loopFrames: 360,
+    poster: { size: '1920x1080', fromEnd: 1 },
+  },
+  // The social cut has no store spec. It shares the wide cut's first 6 s, so it loops too.
+  TrailerTall: { loopFrames: 360 },
+};
+
+/** Ruling Q32: every card holds its crop, so any travel past float noise is a pan. */
+const HOLD_PERCENT = 1e-6;
+
+console.log('Bundling…');
+const serveUrl = await bundle({ entryPoint: path.join(root, 'src/index.ts'), publicDir: path.join(root, 'public') });
+
+const rendered = [];
+for (const id of ids) {
+  const composition = await selectComposition({ serveUrl, id });
+  if (CHECK_ONLY) {
+    rendered.push({ composition, outputLocation: null });
+    continue;
+  }
+  const outputLocation = path.join(outDir, `${id}.mp4`);
+  let lastStep = -1;
+  await renderMedia({
+    composition,
+    serveUrl,
+    codec: 'h264',
+    outputLocation,
+    jpegQuality: 95,
+    videoBitrate: CHECKS[id]?.videoBitrate,
+    onProgress: ({ progress }) => {
+      const step = Math.floor(progress * 10);
+      if (step !== lastStep) {
+        lastStep = step;
+        console.log(`${id}: ${step * 10}%`);
+      }
+    },
+  });
+  rendered.push({ composition, outputLocation });
+}
+
+const still = async (composition, frame, output) => {
+  await renderStill({ composition, serveUrl, frame, output, imageFormat: 'png' });
+  return readFileSync(output);
+};
+
+/** PNG width and height, read from the IHDR chunk. */
+const pngSize = (buffer) => `${buffer.readUInt32BE(16)}x${buffer.readUInt32BE(20)}`;
+
+let failed = false;
+const report = (ok, line, details = []) => {
+  if (!ok) failed = true;
+  console.log(`${ok ? 'OK  ' : 'FAIL'}  ${line}`);
+  for (const detail of details) console.log(`      ${detail}`);
+};
+
+/** Rulings Q17, Q25, Q32, Q38 and Q48: the copy, dense hold and camera checks, measured by the timeline the composition plays. */
+const reportCopyAndCamera = (composition) => {
+  // Each line's enter, legible and exit seconds and its characters per second.
+  for (const line of composition.props.reading) {
+    const cps = line.charsPerSecond === null ? '-' : line.charsPerSecond.toFixed(1);
+    const exit = line.exitSeconds === null ? 'holds to end' : `exit ${line.exitSeconds.toFixed(2)} s`;
+    report(line.ok, `${line.shot.padEnd(4)} enter ${line.enterSeconds.toFixed(2)} s  hold ${line.seconds.toFixed(2).padStart(5)} s  ${exit.padEnd(12)}  ${cps.padStart(4)} cps  "${line.text}"`);
+  }
+
+  // A dense card holds at least 5 s after it lands.
+  for (const card of composition.props.dense) {
+    report(card.ok, `${card.shot.padEnd(4)} dense card holds ${card.seconds.toFixed(2)} s after it lands at frame ${card.landFrame} (${card.minSeconds} s minimum)`);
+  }
+
+  // Every card holds one crop, and its subject region stays whole in the card's visible area on every frame.
+  for (const camera of composition.props.camera) {
+    const name = camera.pane === null ? camera.shot : `${camera.shot}/${camera.pane}`;
+    const zooms = Math.abs(camera.zoomTo - camera.zoomFrom) > 1e-6;
+    const problems = [];
+    if (zooms) problems.push(`zoom ${camera.zoomFrom.toFixed(2)} -> ${camera.zoomTo.toFixed(2)}: no card may change zoom`);
+    if (camera.travelPercent > HOLD_PERCENT) problems.push(`pan: ${camera.travelPercent.toPrecision(2)}% inside a card that must hold its crop`);
+    if (camera.subject.problem) problems.push(`subject: ${camera.subject.problem}`);
+    const subject = camera.subject.problem ? 'subject out' : `subject in frame, ${camera.subject.margin.toFixed(0)} px clear`;
+    report(problems.length === 0, `${name.padEnd(6)} camera zoom ${camera.zoomFrom.toFixed(2)}, ${zooms || camera.travelPercent > HOLD_PERCENT ? 'moves' : 'holds'}  ${subject}  (${camera.source})`, problems);
+  }
+};
+
+for (const { composition, outputLocation } of rendered) {
+  if (CHECK_ONLY) {
+    console.log(`${composition.id}: ${composition.durationInFrames} frames, ${(composition.durationInFrames / composition.fps).toFixed(2)} s`);
+    reportCopyAndCamera(composition);
+    continue;
+  }
+  const media = await parseMedia({
+    src: outputLocation,
+    reader: nodeReader,
+    fields: { dimensions: true, fps: true, slowNumberOfFrames: true, videoCodec: true, audioCodec: true },
+  });
+  const spec = CHECKS[composition.id];
+  const expected = {
+    size: `${composition.width}x${composition.height}`,
+    fps: composition.fps,
+    frames: composition.durationInFrames,
+    videoCodec: 'h264',
+    audioCodec: null,
+  };
+  const actual = {
+    size: `${media.dimensions?.width}x${media.dimensions?.height}`,
+    fps: media.fps === null ? null : Math.round(media.fps * 100) / 100,
+    frames: media.slowNumberOfFrames,
+    videoCodec: media.videoCodec,
+    audioCodec: media.audioCodec,
+  };
+  const problems = Object.keys(expected).filter((key) => expected[key] !== actual[key]).map((key) => `${key}: expected ${expected[key]}, got ${actual[key]}`);
+  const seconds = actual.frames === null ? null : actual.frames / composition.fps;
+  const kbps = seconds ? Math.round((statSync(outputLocation).size * 8) / seconds / 1000) : null;
+  if (spec?.maxSeconds && (seconds === null || seconds >= spec.maxSeconds)) problems.push(`length: ${seconds} s is not under ${spec.maxSeconds} s`);
+  if (spec?.minKbps && (kbps === null || kbps < spec.minKbps)) problems.push(`bitrate: ${kbps} Kbps is under ${spec.minKbps} Kbps`);
+  const summary = `${path.relative(root, outputLocation)}  ${actual.size}  ${actual.fps} fps  ${seconds?.toFixed(2) ?? '?'} s  ${kbps ?? '?'} Kbps  ${actual.videoCodec}  audio: ${actual.audioCodec ?? 'none'}`;
+  report(problems.length === 0, summary, problems);
+  reportCopyAndCamera(composition);
+
+  if (!spec) continue;
+
+  // The microtrailer loops when its last frame is its first frame, so the replay has no jump.
+  const first = await still(composition, 0, path.join(outDir, `${composition.id}-loop-first.png`));
+  const last = await still(composition, spec.loopFrames - 1, path.join(outDir, `${composition.id}-loop-last.png`));
+  report(first.equals(last), `first ${spec.loopFrames / composition.fps} s loop: frame 0 and frame ${spec.loopFrames - 1} are identical`);
+  if (!spec.poster) continue;
+
+  // The poster is a frame of the encoded video, so it is the frame a viewer sees. Seek by time, to the frame's start.
+  const posterFrame = composition.durationInFrames - spec.poster.fromEnd;
+  const posterPath = path.join(outDir, `${composition.id}-poster.png`);
+  execFileSync('npx', ['remotion', 'ffmpeg', '-y', '-loglevel', 'error', '-ss', String(posterFrame / composition.fps), '-i', outputLocation, '-frames:v', '1', '-update', '1', posterPath], {
+    cwd: root,
+    shell: true,
+  });
+  const poster = pngSize(readFileSync(posterPath));
+  report(poster === spec.poster.size, `${path.relative(root, posterPath)}  ${poster}  frame ${posterFrame}`, poster === spec.poster.size ? [] : [`size: expected ${spec.poster.size}`]);
+}
+process.exit(failed ? 1 : 0);

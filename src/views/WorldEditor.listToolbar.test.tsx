@@ -27,6 +27,12 @@ vi.mock('react-toastify', () => ({
   ToastContainer: () => null,
 }));
 
+// The picker lists the local library; an empty one keeps these tests off IndexedDB.
+vi.mock('@/lib/librarySources', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/librarySources')>()),
+  libraryItems: vi.fn().mockResolvedValue([]),
+}));
+
 const HUE = encodePlaceholderToken({ id: 'ph-hue', mode: 'world', placementId: 'hue-1' });
 
 const WORLD: World = benchEditorWorld({
@@ -40,7 +46,7 @@ const WORLD: World = benchEditorWorld({
 } as Partial<World>);
 
 const openTab = (name: RegExp) => fireEvent.mouseDown(screen.getByRole('tab', { name }));
-const searchBox = (tab: string) => screen.getByPlaceholderText(`Search or add new ${tab}`) as HTMLInputElement;
+const searchBox = (tab: string) => screen.getByPlaceholderText(`Filter ${tab}`) as HTMLInputElement;
 const type = (box: HTMLInputElement, value: string) => fireEvent.change(box, { target: { value } });
 const addButton = (tab: string) => screen.getByRole('button', { name: `Add to ${tab}` });
 const menuButton = (name: string) => screen.getByRole('button', { name });
@@ -52,7 +58,7 @@ describe('the search text names the next add', () => {
   it('names a trait from the + button and clears the box', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'simple');
     openTab(/Traits/);
-    const box = searchBox('traits');
+    const box = searchBox('Traits');
     type(box, '  Ember  ');
     fireEvent.click(addButton('Traits'));
     expect(ctx().traits.map((t) => t.name)).toContain('Ember');
@@ -62,7 +68,7 @@ describe('the search text names the next add', () => {
   it('hands the trimmed text to a + menu row and clears the box', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Traits/);
-    const box = searchBox('traits');
+    const box = searchBox('Traits');
     type(box, ' Rites ');
     fireEvent.click(addButton('Traits'));
     fireEvent.click(menuButton('Add Group'));
@@ -74,7 +80,7 @@ describe('the search text names the next add', () => {
   it('names an owned trait picked through the drill-in', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Traits/);
-    const box = searchBox('traits');
+    const box = searchBox('Traits');
     type(box, 'Keen');
     fireEvent.click(addButton('Traits'));
     fireEvent.click(menuButton('Add Trait to Entity'));
@@ -86,7 +92,7 @@ describe('the search text names the next add', () => {
   it('Add Blueprints Group ignores the text and still clears the box', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Traits/);
-    const box = searchBox('traits');
+    const box = searchBox('Traits');
     type(box, 'Not a name');
     fireEvent.click(addButton('Traits'));
     fireEvent.click(menuButton('Add Blueprints Group'));
@@ -94,12 +100,69 @@ describe('the search text names the next add', () => {
     expect(box).toHaveValue('');
   });
 
-  it('names an entity from the + button in Basic', () => {
+  it('names an entity from the + menu in Basic', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'simple');
     openTab(/Entities/);
-    type(searchBox('entities'), 'Mira');
+    type(searchBox('Entities'), 'Mira');
     fireEvent.click(addButton('Entities'));
+    fireEvent.click(menuButton('Add Entity'));
     expect(ctx().entities.map((e) => e.name)).toContain('Mira');
+  });
+});
+
+describe('the + menu routes that leave the world', () => {
+  const MENUS = [
+    // The picker's title is the add row's name.
+    { tab: /Entities/, label: 'Entities', filter: 'Entities', add: 'Add Entity', file: 'Import Entity…' },
+    { tab: /Dictionary/, label: 'Dictionary', filter: 'Dictionaries', add: 'Add Dictionary', file: 'Import Dictionary…' },
+  ] as const;
+  /** The open + menu's row labels, found through its Add From Library… row. */
+  const rowNames = () => within(menuButton('Add From Library…').parentElement!).getAllByRole('button')
+    .map((b) => b.textContent?.trim());
+
+  describe.each(MENUS)('on $label', ({ tab, label, filter, add, file }) => {
+    it.each(['simple', 'advanced'] as const)('lists the add and both library rows in %s', (mode) => {
+      renderWorldEditorBench(WORLD, mode);
+      openTab(tab);
+      fireEvent.click(addButton(label));
+      const group = label === 'Entities' && mode === 'advanced' ? ['Add Group'] : [];
+      expect(rowNames()).toEqual([...group, add, 'Add From Library…', file]);
+    });
+
+    it('opens the library picker from Add From Library… and clears the typed text', async () => {
+      renderWorldEditorBench(WORLD, 'simple');
+      openTab(tab);
+      const box = searchBox(filter);
+      type(box, 'Mir');
+      fireEvent.click(addButton(label));
+      fireEvent.click(menuButton('Add From Library…'));
+      expect(await screen.findByRole('dialog', { name: add })).toBeInTheDocument();
+      expect(box).toHaveValue('');
+    });
+
+    it('opens the file chooser from the import row and clears the typed text', () => {
+      const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+      try {
+        renderWorldEditorBench(WORLD, 'simple');
+        openTab(tab);
+        const box = searchBox(filter);
+        type(box, 'Mir');
+        fireEvent.click(addButton(label));
+        fireEvent.click(menuButton(file));
+        expect(click.mock.contexts.some((input) => (input as HTMLInputElement).type === 'file')).toBe(true);
+        expect(box).toHaveValue('');
+      } finally {
+        click.mockRestore();
+      }
+    });
+  });
+
+  it('keeps Save to Library in the footer and leaves no Add button beside it', () => {
+    renderWorldEditorBench(WORLD, 'simple');
+    openTab(/Entities/);
+    expect(screen.getByRole('button', { name: 'Save to Library' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Entity' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More add options' })).toBeNull();
   });
 });
 
@@ -108,10 +171,11 @@ describe('boxes that only name', () => {
   it('names a new dictionary from the search text', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Dictionary/);
-    const box = searchBox('dictionaries');
+    const box = searchBox('Dictionaries');
     type(box, 'Bestiary');
     expect(screen.queryByText('Fen Lore')).toBeNull();
     fireEvent.click(addButton('Dictionary'));
+    fireEvent.click(menuButton('Add Dictionary'));
     expect(ctx().dictionaries.map((d) => d.name)).toContain('Bestiary');
     expect(box).toHaveValue('');
   });
@@ -119,7 +183,7 @@ describe('boxes that only name', () => {
   it('names a new placeholder and leaves the list unfiltered', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Placeholders/);
-    const box = searchBox('placeholders');
+    const box = searchBox('Placeholders');
     type(box, 'Eyes');
     expect(screen.getAllByText('Hue').length).toBeGreaterThan(0);
     fireEvent.click(addButton('Placeholders'));
@@ -133,7 +197,7 @@ describe('search results', () => {
   it('lists the rows whose label matches and says when none do', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Entities/);
-    const box = searchBox('entities');
+    const box = searchBox('Entities');
     type(box, 'wick');
     expect(screen.getByText('Odd Wick')).toBeInTheDocument();
     expect(screen.queryByText(/Ash the/)).toBeNull();
@@ -141,10 +205,24 @@ describe('search results', () => {
     expect(screen.getByText('No entities match “zzz”.')).toBeInTheDocument();
   });
 
+  it('lists every row again when the X clears the search', () => {
+    renderWorldEditorBench(WORLD, 'advanced');
+    openTab(/Entities/);
+    const box = searchBox('Entities');
+    type(box, 'wick');
+    expect(screen.queryByText(/Ash the/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Search' }));
+
+    expect(box).toHaveValue('');
+    expect(screen.getByText('Odd Wick')).toBeInTheDocument();
+    expect(screen.getByText(/Ash the/)).toBeInTheDocument();
+  });
+
   it('matches the placeholder behind a chip by its name and by its value', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     openTab(/Entities/);
-    const box = searchBox('entities');
+    const box = searchBox('Entities');
     type(box, 'hue');
     expect(screen.getByText(/Ash the/)).toBeInTheDocument();
     expect(screen.queryByText('Odd Wick')).toBeNull();

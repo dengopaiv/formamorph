@@ -91,7 +91,7 @@ To re-roll only the choices, select **Re-generate Choices** beside them.
 2. Change the text in the **Edit Text** dialog. **Edit full screen** gives the editor the whole window.
 3. Select **Save**.
 
-Saving rewrites the turn's narration. The game reads the edited text for entities again. It also clears that turn's memory and diary entries, and your own edit to that memory. The story then writes them again from your version.
+Saving rewrites the turn's narration. The game reads the edited text again to find who is in the turn, and that page's **Entities** tab updates to match. A new name you write in becomes an entity. It also clears that turn's memory and diary entries, and your own edit to that memory. The story then writes them again from your version.
 
 ## How to Edit Your Action
 <!-- keywords: change, fix, typo, rewrite, my message, input, correct, what i typed, my post, sent by mistake, amend, own line, user turn, remove picture, after sending -->
@@ -184,14 +184,14 @@ See [The AI Context Inspector](#the-ai-context-inspector) for the search and the
 
 | Area | What it holds |
 |---|---|
-| The story | The narration, the choices and the action box. A status line above the box names the request that is running, such as *Generating Narration…* |
-| The left panel | The **Entities**, **Notes**, **Memory** and **Logs** tabs. In a world with a 3D model, an **Avatar** / **Entities** switch sits above it. |
+| The story | The narration, the choices and the action box. While the AI works, a status strip over the bottom of the narration names the request that is running, such as *Generating Narration…*, next to a small animated icon for that request |
+| The left panel | The **Entities**, **Notes**, **Memory** and **Logs** tabs. The entity view shows the selected entity's Avatar, 3D model or image. See [In the Game](Avatars#in-the-game). |
 | The right panel | Your persona, the in-game date and time, and the **Stats**, **Traits** and **Location** tabs |
 | Top left | The music button and the AI Context button |
 | Top right | **Edit World** and the **Menu** |
 | Bottom left | **Hide UI**, which hides the panels so only the story shows |
 
-On mobile, three tabs at the top switch between **Character** (the left panel), **Game** (the story) and **Status** (the right panel). The **Character** tab also has an **Avatar** tab for the 3D model. **Edit World** and **AI Context** move into the **Menu**. **Hide UI** and the music button don't show.
+On mobile, three tabs at the top switch between **Character** (the left panel), **Game** (the story) and **Status** (the right panel). The **Character** tab also has a **View** tab that holds the entity view. **Edit World** and **AI Context** move into the **Menu**. **Hide UI** and the music button don't show.
 
 ## Turn Actions
 <!-- keywords: buttons under text, more menu, copy to clipboard, message options, toolbar, icons below, three dots, long press -->
@@ -218,7 +218,7 @@ No actions show while the AI writes a turn.
 
 | Tab | What it is |
 |---|---|
-| **Entities** | Who the story counts as present. See [Entities in Play](Entities). |
+| **Entities** | Who the story counts as present. See [Entities in Game](Entities). |
 | **Notes** | Your standing notes for the AI. See [Notes](#notes). |
 | **Memory** | What the story remembers. See [Story Memory](Memory#the-memory-tab). |
 | **Logs** | A record of what changed. See [Logs](#logs). |
@@ -248,15 +248,15 @@ The **Logs** tab lists what the game changed: your starting traits and location,
 |---|---|
 | Language box | Sets the language or style the AI writes in, the same as **AI Language** in **Settings** |
 | Persona row | Shows who you play. **Change** opens **Change Persona**. See [Change It in Game](Personas#change-it-in-game). |
-| **Stats** | Your stats. **Edit Stats** lets you drag them; **Re-generate Stats** asks the AI again. Shows only when the world has stats you can see. |
-| **Traits** | Your active traits. Filter them, or switch one on or off. |
+| **Stats** | The global stats under **Global**, and your persona's stats under its name. **Edit Stats** lets you drag them; **Re-generate Stats** asks the AI again. Shows only when the world has stats you can see. |
+| **Traits** | Your active traits. A **Global** section holds the global traits you picked. Your persona's section is marked **You**. Filter them, or switch one on or off. |
 | **Location** | Where you are, its description and the places it connects to |
 
 ## The Entity Dialog
 <!-- keywords: npc profile, character sheet, portrait, bio, unknown name, who is this, click a name, cast details -->
 <!-- route: entity -->
 
-Select a name in the **Entities** tab to open it. On desktop with the avatar showing, the first select shows that entity's picture in the panel.
+Select a name in the **Entities** tab to open it. The first select shows that entity's Avatar, 3D model or image in the entity view.
 
 The dialog shows the entity's image or 3D model, its player-facing description, and its sound. An entity the story invented also has **Edit** and **Regenerate** for its description. **Regenerate** shows a **New Description** to **Keep** or **Discard**.
 
@@ -358,7 +358,7 @@ After either button, the card doesn't show again for that world on this device. 
 ## Related
 
 - [🚪 Starting a Game](Starting-a-Game): everything before page one
-- [🎭 Entities in Play](Entities): the cast, and how a game opens
+- [🎭 Entities in Game](Entities): the cast, and how a game opens
 - [🧠 Story Memory](Memory): what the story remembers
 - [🪪 Personas](Personas): who you are in the story
 - [🔌 Connect Your Own AI](Connect-Your-Own-AI): moving past the Demo AI

@@ -19,7 +19,7 @@ import { PrivacyPolicyProvider } from '@/contexts/PrivacyPolicyContext';
 import AuthService from '@/services/AuthService';
 import { AGE_GATE_VERSION, acceptAgeGate } from '@/lib/ageGate';
 import { closeErrorDetails, DetailedError } from '@/lib/errorDetails';
-import { closeBugReport } from '@/lib/bugReportStore';
+import { closeFeedback } from '@/lib/feedbackOpener';
 import { toastError } from '@/lib/linkToast';
 
 /** Stands in for the game view: a turn typed but not sent, which a remount would drop. */
@@ -53,7 +53,7 @@ afterEach(() => {
   act(() => {
     toast.dismiss();
     closeErrorDetails();
-    closeBugReport();
+    closeFeedback();
   });
   cleanup();
   AuthService.token = null;
@@ -114,7 +114,7 @@ describe('Report Bug for a signed-out player', () => {
     await screen.findByRole('dialog', { name: 'Send Feedback' });
     expect(AuthService.isAuthenticated()).toBe(true);
     expect(titleValue()).toBe('ComfyUI rejected the workflow');
-    expect(bodyValue()).toBe('Node #4: missing');
+    expect(bodyValue()).toBe('```\nNode #4: missing\n```');
     expect(screen.queryByRole('dialog', { name: 'Error Details' })).toBeNull();
     // The answer made on the way in is recorded against the account that just signed in.
     await waitFor(() => expect(requested.some((url) => url.endsWith('/policies/age-gate/accept'))).toBe(true));

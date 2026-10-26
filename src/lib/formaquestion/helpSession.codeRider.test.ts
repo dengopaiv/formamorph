@@ -4,9 +4,10 @@ import type { SurfaceId } from '@/lib/docs/surfaceMap';
 import { UNKNOWN_REASONING_CAPABILITY } from '@/lib/reasoningEffort';
 import type { Surface } from '@/lib/surface/surfaceRegistry';
 import { sseReply, sseResponse, textSnapshot, textTarget } from '@/test/aiTextFixtures';
+import { riderPreset } from '@/test/helpFixtures';
 import { HELP_CHIP } from './helpChips';
-import { DEFAULT_CODE_RIDER, STAT_CODE_TAB } from './helpCodeRider';
-import { DEFAULT_HELP_PRESET_ID, duplicateHelpPreset, editHelpPrompt, EMPTY_HELP_PRESET_STORE, type HelpPresetStore } from './helpPresets';
+import { DEFAULT_CODE_RIDER, SCRIPT_TAB, scriptHomeLine, TRAIT_SCRIPT_TAB, WORLD_SCRIPT_TAB } from './helpCodeRider';
+import { CODE_TEST_RIDER_LINE } from './helpCodeTest';
 import { helpUserMessage } from './helpPrompt';
 import { askHelp, type HelpEvent, type HelpQuestion } from './helpSession';
 import { helpSettingsOf, type HelpSettings } from './helpSettings';
@@ -18,7 +19,12 @@ const PAGES = {
 const index = createDocsIndex({ pages: PAGES, sidebar: '- [World Editor Stats](World-Editor-Stats)\n- [Traits](Traits)\n' });
 
 const surface = (...tabs: SurfaceId[]): Surface => ({ screen: 'worldEditor', dialog: null, tabs });
-const CODE_TAB = surface(STAT_CODE_TAB);
+const CODE_TAB = surface(SCRIPT_TAB);
+const STAT_HOME_LINE = scriptHomeLine(CODE_TAB)!;
+const TRAIT_TAB = surface(TRAIT_SCRIPT_TAB);
+const TRAIT_HOME_LINE = scriptHomeLine(TRAIT_TAB)!;
+const WORLD_TAB = surface(WORLD_SCRIPT_TAB);
+const WORLD_HOME_LINE = scriptHomeLine(WORLD_TAB)!;
 
 type FetchSpy = ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>;
 interface SentBody { messages: { role: string; content: string }[]; max_tokens?: number }
@@ -30,10 +36,6 @@ const settingsOf = (over: Partial<HelpSettings> = {}) => helpSettingsOf({ source
 
 /** An endpoint known to take function calls, so lookup mode runs. */
 const CAPABLE = textSnapshot(textTarget({ reasoning: { ...UNKNOWN_REASONING_CAPABILITY, tools: true, sources: { tools: 'native' } } }));
-
-/** A custom preset with its rider changed, active. */
-const riderPreset = (code: string): HelpPresetStore =>
-  editHelpPrompt(duplicateHelpPreset(EMPTY_HELP_PRESET_STORE, DEFAULT_HELP_PRESET_ID, 'mine', 'Mine'), 'mine', 'code', code);
 
 async function ask(question: string, over: Partial<HelpQuestion> = {}) {
   const fetchImpl: FetchSpy = vi.fn(async () => sseResponse(sseReply('Done.')));
@@ -58,10 +60,64 @@ describe('the Code rider', () => {
     expect(bodyOf(fetchImpl).max_tokens).toBe(800);
   });
 
-  it('rides any question asked from a stat Code tab', async () => {
+  it('rides any question asked from a stat Code tab, with the stat home line after it', async () => {
     const { fetchImpl } = await ask('How do I make this go down?', { surface: CODE_TAB });
-    expect(userOf(fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
+    expect(userOf(fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${STAT_HOME_LINE}`)).toBe(true);
     expect(bodyOf(fetchImpl).max_tokens).toBe(800);
+  });
+
+  it('sends the stat home line after an edited rider, and alone after an empty one', async () => {
+    const edited = await ask(CODE_QUESTION, { surface: CODE_TAB, settings: settingsOf({ presets: riderPreset('Answer with code.\n') }) });
+    expect(userOf(edited.fetchImpl).endsWith(`\n\nAnswer with code.\n${STAT_HOME_LINE}`)).toBe(true);
+    const empty = await ask(CODE_QUESTION, { surface: CODE_TAB, settings: settingsOf({ presets: riderPreset(' \n') }) });
+    expect(userOf(empty.fetchImpl).endsWith(`\n\n${STAT_HOME_LINE}`)).toBe(true);
+    expect(userOf(empty.fetchImpl)).not.toContain(DEFAULT_CODE_RIDER.split('\n')[0]);
+  });
+
+  it('puts the home line between the rider and the code-test line', async () => {
+    const { fetchImpl } = await ask(CODE_QUESTION, { surface: CODE_TAB, settings: settingsOf({ lookup: true }), snapshot: CAPABLE });
+    expect(userOf(fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${STAT_HOME_LINE}\n${CODE_TEST_RIDER_LINE}`)).toBe(true);
+  });
+
+  it('rides any question asked from a trait Scripts tab, with the trait home line after it, not the stat one', async () => {
+    const { fetchImpl } = await ask('How do I make this go down?', { surface: TRAIT_TAB });
+    expect(userOf(fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${TRAIT_HOME_LINE}`)).toBe(true);
+    expect(userOf(fetchImpl)).not.toContain(STAT_HOME_LINE);
+    expect(bodyOf(fetchImpl).max_tokens).toBe(800);
+  });
+
+  it('rides any question asked from the world Scripts tab, with the world home line after it', async () => {
+    const { fetchImpl } = await ask('How do I make this go down?', { surface: WORLD_TAB });
+    expect(userOf(fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${WORLD_HOME_LINE}`)).toBe(true);
+    expect(userOf(fetchImpl)).not.toContain(STAT_HOME_LINE);
+    expect(userOf(fetchImpl)).not.toContain(TRAIT_HOME_LINE);
+    const tested = await ask(CODE_QUESTION, { surface: WORLD_TAB, settings: settingsOf({ lookup: true }), snapshot: CAPABLE });
+    expect(userOf(tested.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${WORLD_HOME_LINE}\n${CODE_TEST_RIDER_LINE}`)).toBe(true);
+    const empty = await ask(CODE_QUESTION, { surface: WORLD_TAB, settings: settingsOf({ presets: riderPreset(' \n') }) });
+    expect(userOf(empty.fetchImpl).endsWith(`\n\n${WORLD_HOME_LINE}`)).toBe(true);
+  });
+
+  it('sends the trait home line after an edited rider, alone after an empty one, and before the code-test line', async () => {
+    const edited = await ask(CODE_QUESTION, { surface: TRAIT_TAB, settings: settingsOf({ presets: riderPreset('Answer with code.\n') }) });
+    expect(userOf(edited.fetchImpl).endsWith(`\n\nAnswer with code.\n${TRAIT_HOME_LINE}`)).toBe(true);
+    const empty = await ask(CODE_QUESTION, { surface: TRAIT_TAB, settings: settingsOf({ presets: riderPreset(' \n') }) });
+    expect(userOf(empty.fetchImpl).endsWith(`\n\n${TRAIT_HOME_LINE}`)).toBe(true);
+    const tested = await ask(CODE_QUESTION, { surface: TRAIT_TAB, settings: settingsOf({ lookup: true }), snapshot: CAPABLE });
+    expect(userOf(tested.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${TRAIT_HOME_LINE}\n${CODE_TEST_RIDER_LINE}`)).toBe(true);
+  });
+
+  it('sends no home line off a trait Scripts tab, and none while Use the Open Screen is off', async () => {
+    const elsewhere = await ask(CODE_QUESTION, { surface: surface('worldEditorTrait.details') });
+    expect(userOf(elsewhere.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
+    const off = await ask(CODE_QUESTION, { surface: TRAIT_TAB, settings: settingsOf({ openScreen: false }) });
+    expect(userOf(off.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
+  });
+
+  it('sends no home line off a script home, and none while Use the Open Screen is off', async () => {
+    const elsewhere = await ask(CODE_QUESTION, { surface: surface('worldEditorStat.details') });
+    expect(userOf(elsewhere.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
+    const off = await ask(CODE_QUESTION, { surface: CODE_TAB, settings: settingsOf({ openScreen: false }) });
+    expect(userOf(off.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
   });
 
   it('leaves the Code tab out while Use the Open Screen is off; code words still ride', async () => {
@@ -91,7 +147,10 @@ describe('the Code rider', () => {
 
   it('rides lookup mode and a bare question too', async () => {
     const lookup = await ask(CODE_QUESTION, { settings: settingsOf({ lookup: true }), snapshot: CAPABLE });
-    expect(userOf(lookup.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
+    // The code test rides lookup mode too, so the test-first line ends the rider.
+    expect(userOf(lookup.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}\n${CODE_TEST_RIDER_LINE}`)).toBe(true);
+    const plainLookup = await ask(CODE_QUESTION, { settings: settingsOf({ lookup: true, codeTest: false }), snapshot: CAPABLE });
+    expect(userOf(plainLookup.fetchImpl).endsWith(`\n\n${DEFAULT_CODE_RIDER}`)).toBe(true);
     const bare = settingsOf({ openScreen: false, lookup: false, sources: { keyword: false, aiPicks: false, semantic: false } });
     expect(userOf((await ask(CODE_QUESTION, { settings: bare })).fetchImpl)).toBe(`${CODE_QUESTION}\n\n${DEFAULT_CODE_RIDER}`);
   });

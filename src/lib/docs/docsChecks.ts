@@ -15,9 +15,16 @@ export const HOME_PAGE = 'Home';
 /** The wiki's navigation page, which holds the second page index. */
 export const SIDEBAR_PAGE = '_Sidebar';
 
-/** Pages in `docs/` that are not part of the player guide, so nothing in the app points at them. */
-// `Changelog.Fork` is this fork's record, kept beside upstream's changelog and never a guide page.
-export const NON_GUIDE_PAGES: readonly string[] = [SIDEBAR_PAGE, 'Design-System', 'Writing-Guide', 'Changelog.Fork'];
+/** Pages in `docs/` that are not part of the player guide, so nothing in the app points at them. `StatCodeGuide` is
+ *  the moved-to stub that keeps old wiki links open. `Changelog.Fork` is this fork's record, kept beside upstream's
+ *  changelog and never a guide page. */
+export const NON_GUIDE_PAGES: readonly string[] = [SIDEBAR_PAGE, 'Design-System', 'Writing-Guide', 'StatCodeGuide', 'Changelog.Fork'];
+
+/** An archived changelog, one per old major series (`Changelog-v2`); the wiki keeps it, the app never loads it. */
+export const ARCHIVED_CHANGELOG = /^Changelog-v\d+$/;
+
+/** Is this page left out of the guide: a listed non-guide page or an archived changelog? */
+export const isNonGuidePage = (page: string): boolean => NON_GUIDE_PAGES.includes(page) || ARCHIVED_CHANGELOG.test(page);
 
 type AnchorIndex = Map<string, Set<string>>;
 
@@ -28,7 +35,7 @@ function anchorIndex(pages: DocsPages): AnchorIndex {
 /** Why a page is not a guide page, or null when it is. */
 function pageProblem(index: AnchorIndex, page: string): string | null {
   if (!index.has(page)) return `page ${page} does not exist`;
-  if (NON_GUIDE_PAGES.includes(page)) return `page ${page} is not a guide page`;
+  if (isNonGuidePage(page)) return `page ${page} is not a guide page`;
   return null;
 }
 
@@ -123,7 +130,7 @@ export function indexProblems(pages: DocsPages, indexPage: string): string[] {
     for (const href of docsHrefs(source)) listed.add(hrefParts(href).page);
   });
   return Object.keys(pages)
-    .filter((page) => page !== HOME_PAGE && page !== indexPage && !NON_GUIDE_PAGES.includes(page) && !listed.has(page))
+    .filter((page) => page !== HOME_PAGE && page !== indexPage && !isNonGuidePage(page) && !listed.has(page))
     .map((page) => `${indexPage} does not list ${page}`);
 }
 
@@ -134,7 +141,7 @@ export function indexProblems(pages: DocsPages, indexPage: string): string[] {
 export function keywordLineProblems(pages: DocsPages): string[] {
   const problems: string[] = [];
   for (const [page, markdown] of Object.entries(pages)) {
-    if (NON_GUIDE_PAGES.includes(page)) continue;
+    if (isNonGuidePage(page)) continue;
     const lines = markdown.split(/\r?\n/);
     const headings = docHeadings(markdown);
     const headingLines = new Set(headings.map((heading) => heading.line));
@@ -195,7 +202,7 @@ function forEachRouteLine(
   visit: (route: { page: string; line: number; heading: DocHeading | undefined; value: string }) => void,
 ): void {
   for (const [page, markdown] of Object.entries(pages)) {
-    if (NON_GUIDE_PAGES.includes(page)) continue;
+    if (isNonGuidePage(page)) continue;
     const headings = new Map(docHeadings(markdown).map((heading) => [heading.line, heading]));
     let heading: DocHeading | undefined;
     forEachProseLine(markdown, (source, line) => {

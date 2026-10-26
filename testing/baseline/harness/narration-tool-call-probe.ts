@@ -144,18 +144,27 @@ export interface ProbeTrialEvidence {
   durationMs: number;
 }
 
-const CURRENT_ENTITIES =
-  '<ENTITIES|markdown|header="Characters and things that may appear in this location">';
-const SUMMARY_ENTITIES =
-  '<ENTITIES|summary.markdown|header="Characters and things that may appear in this location">';
-const SUBLOCATION_ENTITIES =
-  '<ENTITIES|sublocations.markdown|header="Characters and things that may appear in a sub-location">';
-const SUMMARY_SUBLOCATION_ENTITIES =
-  '<ENTITIES|sublocations.summary.markdown|header="Characters and things that may appear in a sub-location">';
+// The full-entry entity tokens each prompt source holds, paired with their summary twins. The experimental
+// snapshot is frozen at the study's wording; the default prompt reads live from GamePrompts.ts.
+const ENTITY_DEFINITION_PRE =
+  'pre="An entity is a character, creature, or object. These entries describe entities that may appear in the current location.\n\n"';
+const SUBLOCATION_PRE = 'pre="Entries for entities associated with sublocations.\n\n"';
+const DEFAULT_ENTITY_SWAPS: ReadonlyArray<readonly [string, string]> = [
+  [`<ENTITIES|markdown|${ENTITY_DEFINITION_PRE}|header="Entities in the Current Location">`,
+    `<ENTITIES|summary.markdown|${ENTITY_DEFINITION_PRE}|header="Entities in the Current Location">`],
+  [`<ENTITIES|sublocations.markdown|${SUBLOCATION_PRE}|header="Entities in Sublocations">`,
+    `<ENTITIES|sublocations.summary.markdown|${SUBLOCATION_PRE}|header="Entities in Sublocations">`],
+];
+const SNAPSHOT_ENTITY_SWAPS: ReadonlyArray<readonly [string, string]> = [
+  ['<ENTITIES|markdown|header="Characters and things that may appear in this location">',
+    '<ENTITIES|summary.markdown|header="Characters and things that may appear in this location">'],
+  ['<ENTITIES|sublocations.markdown|header="Characters and things that may appear in a sub-location">',
+    '<ENTITIES|sublocations.summary.markdown|header="Characters and things that may appear in a sub-location">'],
+];
 const OUTPUT_SENTENCE =
-  'Output only the story prose - the events themselves, with no labels, no mention of being an AI, and nothing after the scene ends.';
+  'Output only the story prose - the events themselves, with no labels and nothing after the scene ends.';
 const TOOL_OUTPUT_SENTENCE =
-  'Submit the finished story through write, with only the story prose in its narration argument: the events themselves, with no labels, no mention of being an AI, and nothing after the scene ends.';
+  'Submit the finished story through write, with only the story prose in its narration argument: the events themselves, with no labels and nothing after the scene ends.';
 const ENTITY_INFORMATION = `## Entity information
 The entity listings contain summaries. Full descriptions are available through request_info.
 Before portraying a listed entity in this turn, retrieve its full description using its listed name. Use that description together with the established scene to write the entity consistently.
@@ -228,8 +237,8 @@ export const SECTION_DEFINITIONS: Readonly<Record<string, string>> = {
 export const ENTITY_SECTION_SCOPE = 'These summaries identify entities that may appear in the current location.';
 
 function probeSystemTemplate(experimental = false, preparationGoal = false, requiredLore = false, decisionNotes = false, roleOnly = false): string {
-  let template = replaceOnce(experimental ? experimentalSystemPrompt : defaultSystemPrompt, CURRENT_ENTITIES, SUMMARY_ENTITIES);
-  template = replaceOnce(template, SUBLOCATION_ENTITIES, SUMMARY_SUBLOCATION_ENTITIES);
+  let template = experimental ? experimentalSystemPrompt : defaultSystemPrompt;
+  for (const [from, to] of experimental ? SNAPSHOT_ENTITY_SWAPS : DEFAULT_ENTITY_SWAPS) template = replaceOnce(template, from, to);
   if (experimental) {
     if (roleOnly) {
       const start = template.indexOf('<WORLD DESCRIPTION');

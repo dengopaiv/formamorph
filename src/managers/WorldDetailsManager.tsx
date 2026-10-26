@@ -13,6 +13,7 @@ import { PROMPT_KIND_VARIABLES } from "@/lib/promptVariables";
 import { authoredChipScene } from "@/lib/chipValues/authoredScene";
 import { chipValues } from "@/lib/chipValues/chipValues";
 import { composePreviewValues, languagePreviewValue } from "@/lib/previewValuePool";
+import { layerValues, omitValues } from "@/lib/promptValues";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/typography";
@@ -24,6 +25,9 @@ import {
 } from "@/lib/worldPrompt";
 import { isOpeningFieldKey, openingsEnabled, setOpeningsEnabled } from "@/lib/openings";
 import { OpeningsPanel } from "./OpeningsPanel";
+import { OVERVIEW_PANELS, type OverviewPanel } from '@/views/overviewPanels';
+import type { FieldReveal } from '@/views/useHistoryReveal';
+import { fieldFrame, fieldPath } from '@/lib/historyField';
 import { useEditorMode } from "@/lib/editorMode";
 import type { FocusFieldHint } from "@/types";
 
@@ -32,17 +36,7 @@ const PROMPT_KIND_VARIABLE_KEY = {
   narration: 'narration', choices: 'choices', statUpdates: 'statupdates',
 } as const;
 
-/**
- * The openings share the section's picker without being a {@link WorldPromptKind}: they are the player's
- * first message rather than a system prompt, and they live on their own overview fields instead of in
- * `promptOverrides`. So the panel keys widen by one where the override type does not.
- */
-type PanelKind = WorldPromptKind | 'opening';
-
-/** The three system prompts first, then the outlier — an opening is a different kind of text. */
-const PANEL_KINDS: PanelKind[] = [...WORLD_PROMPT_KINDS, 'opening'];
-
-const PANEL_LABELS: Record<PanelKind, string> = { ...WORLD_PROMPT_KIND_LABELS, opening: 'Openings' };
+const PANEL_LABELS: Record<OverviewPanel, string> ={ ...WORLD_PROMPT_KIND_LABELS, opening: 'Openings' };
 
 /** The note-and-Reset row under whichever panel is open. Reset appears only for text the author stored. */
 const PanelFooter = ({ note, onReset }: { note: ReactNode; onReset?: () => void }) => (
@@ -67,13 +61,15 @@ const PanelFooter = ({ note, onReset }: { note: ReactNode; onReset?: () => void 
  * Openings need no player-facing opt-out where the prompts do: the pre-filled box is editable, so the
  * player already has the last word on what the opening turn says.
  */
-const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
+const CustomPromptsSection = ({ focusField, tab, onTabChange: setTab, onOpenEntity, onOpenLocation }: {
   focusField?: FocusFieldHint | null;
+  tab: OverviewPanel | null;
+  onTabChange: (tab: OverviewPanel | null) => void;
   onOpenEntity?: (entityId: string) => void;
   onOpenLocation?: (locationId: string) => void;
 }) => {
   const {
-    worldOverview, updateWorldOverview, stats, locations, connections, entities, traits, traitGroups, dictionaries,
+    worldOverview, updateWorldOverview, stats, statGroups, locations, connections, entities, traits, traitGroups, dictionaries,
     placeholders,
   } = useGameData();
   const {
@@ -88,9 +84,9 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
   const previewValues = useMemo(
     () => {
       // A world has no notes or clock, so the pool's sample turn supplies both, as it does the per-turn chips.
-      const { '<NOTES>': _notes, '<TIME>': _time, ...authored } = chipValues(authoredChipScene({
-        worldOverview, stats, locations, connections, entities, traits, traitGroups, dictionaries, placeholders,
-      }));
+      const authored = omitValues(chipValues(authoredChipScene({
+        worldOverview, stats, statGroups, locations, connections, entities, traits, traitGroups, dictionaries, placeholders,
+      })), (key) => key === '<NOTES>' || key === '<TIME>');
       return composePreviewValues(
         {
           paragraphLimit, maxTokens, markdownOutput, sectionStyle: activeSectionStyle,
@@ -102,13 +98,13 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
     [
       paragraphLimit, maxTokens, markdownOutput, activeSectionStyle, limitActiveCharacters, activeCharacterLimit,
       language,
-      worldOverview, stats, locations, connections, entities, traits, traitGroups, dictionaries, placeholders,
+      worldOverview, stats, statGroups, locations, connections, entities, traits, traitGroups, dictionaries, placeholders,
     ],
   );
   const { advanced } = useEditorMode();
   // Nothing open by default, and picking the open one again closes it: four large fields is more of the
-  // panel than an author who isn't writing prompts should have to scroll past.
-  const [tab, setTab] = useState<PanelKind | null>(null);
+  // panel than an author who isn't writing prompts should have to scroll past. The editor holds the choice,
+  // so a history reveal can open the panel an edit was made on.
   const [resetKind, setResetKind] = useState<WorldPromptKind | null>(null);
 
   // The prompt each tab tracks: what the game would send right now, preset pins and all — not the shipped
@@ -139,7 +135,7 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
   // writes straight through to world state, where the only undo is discarding every unsaved edit at once.
   // Switching on opens the kind, since the author is about to want it; switching off leaves the panel as
   // it stands rather than yanking a field open around the click.
-  const toggle = (kind: PanelKind, on: boolean) => {
+  const toggle = (kind: OverviewPanel, on: boolean) => {
     if (on) setTab(kind);
     if (kind === 'opening') updateWorldOverview(setOpeningsEnabled(on));
     else write(kind, { enabled: on });
@@ -166,14 +162,14 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
       <ToggleGroup
         type="single"
         value={tab ?? ''}
-        onValueChange={(v) => setTab((v || null) as PanelKind | null)}
+        onValueChange={(v) => setTab((v || null) as OverviewPanel | null)}
         // The gate for the Openings panel: the panel shows only once its kind is open.
         {...targetAttribute('worldEditor.overview', 'custom-prompts')}
         // Four across only once the row clears the column with room to spare; two-up below that. Sized to
         // its own labels rather than the column, so it stays a control instead of stretching into a banner.
         className="inline-grid h-auto grid-cols-2 [@container(min-width:32rem)]:grid-cols-4"
       >
-        {PANEL_KINDS.map((kind, i) => (
+        {OVERVIEW_PANELS.map((kind, i) => (
           <div key={kind} className="inline-flex items-center">
             {/* The app's pipe (see PromptField's toolbar), pairing each checkbox with the label after it
                 rather than the one before. Only between neighbors on a row, never opening one: the second
@@ -194,6 +190,7 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
                 checked={kind === 'opening' ? openingsEnabled(worldOverview, [...entities, ...locations]) : worldPromptEnabled(worldOverview, kind)}
                 disabled={kind === 'opening' && noOpenings}
                 onCheckedChange={(c) => toggle(kind, c === true)}
+                {...fieldFrame('prompts', kind, 'enabled')}
                 aria-label={kind === 'opening'
                   ? "Use this world's openings"
                   : `Use this world's ${PANEL_LABELS[kind].toLowerCase()} prompt`}
@@ -219,6 +216,7 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
         return (
           <div className="space-y-2">
             <PlaceholderField
+              historyField={fieldPath('prompts', kind)}
               value={stored ?? presetPrompts[kind]}
               // Storing on the first divergence is what keeps an untouched kind tracking the preset: a
               // world only carries a prompt its author actually wrote.
@@ -232,7 +230,7 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
                 // The choices prompt's language chip names itself in the directive, so its preview says
                 // "choices" where the pool's default says "narration".
                 previewValues: kind === 'choices'
-                  ? { ...previewValues, ...languagePreviewValue('choices', language) }
+                  ? layerValues(previewValues, languagePreviewValue('choices', language))
                   : previewValues,
                 sampleData: 'Your world, sample turn',
               }}
@@ -265,16 +263,22 @@ const CustomPromptsSection = ({ focusField, onOpenEntity, onOpenLocation }: {
   );
 };
 
+/** The readme tab that shows each readme field, by its find-bar field key and its field identity alike. */
+const README_TABS: Partial<Record<string, 'introduction' | 'gameplay'>> = { introReadme: 'introduction', readme: 'gameplay' };
+
 /**
  * The world's two readmes, one tab each. The player never sees them together: the Introduction opens over
  * the first enter-world setup screen and the Gameplay one on entering the game, so writing for a player
  * who has already built their character stays out of the pre-trait window.
  *
- * `focusField` is the search target the find bar just navigated to, which is the only way it can reach
- * whichever readme isn't currently showing. It arrives as a fresh object per navigation so that stepping
- * onto a second hit in the same readme re-opens that tab after the author has flipped away from it.
+ * `focusField` is the search target the find bar just navigated to, and `fieldReveal` the field an undo or
+ * redo returns to. Either is the only way to reach whichever readme isn't showing. Each arrives as a fresh
+ * object per navigation, so a second visit to the same readme re-opens its tab after the author flipped away.
  */
-const ReadmeSection = ({ focusField }: { focusField?: FocusFieldHint | null }) => {
+const ReadmeSection = ({ focusField, fieldReveal }: {
+  focusField?: FocusFieldHint | null;
+  fieldReveal?: FieldReveal | null;
+}) => {
   const { worldOverview, updateWorldOverview, placeholders } = useGameData();
   // Opens on the Introduction, except for a world that only has the older Gameplay readme — an author
   // whose readme is on the other tab would otherwise be met by an empty field where their text used to be.
@@ -282,9 +286,13 @@ const ReadmeSection = ({ focusField }: { focusField?: FocusFieldHint | null }) =
     !worldOverview.introReadme?.trim() && worldOverview.readme?.trim() ? 'gameplay' : 'introduction');
 
   useEffect(() => {
-    if (focusField?.fieldKey === 'introReadme') setTab('introduction');
-    else if (focusField?.fieldKey === 'readme') setTab('gameplay');
+    const shows = README_TABS[focusField?.fieldKey ?? ''];
+    if (shows) setTab(shows);
   }, [focusField]);
+  useEffect(() => {
+    const shows = README_TABS[fieldReveal?.field ?? ''];
+    if (shows) setTab(shows);
+  }, [fieldReveal]);
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="space-y-2">
@@ -300,6 +308,7 @@ const ReadmeSection = ({ focusField }: { focusField?: FocusFieldHint | null }) =
       <TabsContent value="introduction" className="space-y-2">
         <Hint>Shown before the player makes any setup choices</Hint>
         <PlaceholderField
+          historyField="introReadme"
           value={worldOverview.introReadme ?? ''}
           onChange={(introReadme) => updateWorldOverview({ introReadme })}
           placeholders={placeholders}
@@ -311,6 +320,7 @@ const ReadmeSection = ({ focusField }: { focusField?: FocusFieldHint | null }) =
       <TabsContent value="gameplay" className="space-y-2">
         <Hint>Shown when the player enters the world</Hint>
         <PlaceholderField
+          historyField="readme"
           value={worldOverview.readme ?? ''}
           onChange={(readme) => updateWorldOverview({ readme })}
           placeholders={placeholders}
@@ -329,8 +339,13 @@ export const AI_DESCRIPTION_INFO = "Goes to the AI on every turn as your world's
 
 /** The AI-facing world content fields (description, system prompt, readmes), shown in the editor's right
  *  column on the Overview tab. Identity/listing fields live in WorldOverviewManager (left column). */
-const WorldDetailsManager = ({ focusField, onOpenEntity, onOpenLocation }: {
+const WorldDetailsManager = ({ focusField, fieldReveal, panel, onPanelChange, onOpenEntity, onOpenLocation }: {
   focusField?: FocusFieldHint | null;
+  /** The field the latest undo or redo returns to. */
+  fieldReveal?: FieldReveal | null;
+  /** The open custom prompt panel, held by the editor. */
+  panel: OverviewPanel | null;
+  onPanelChange: (panel: OverviewPanel | null) => void;
   /** Opens an entity's Openings tab, from the openings panel's group header. */
   onOpenEntity?: (entityId: string) => void;
   /** Opens a location's Openings tab, from the openings panel's group header. */
@@ -347,6 +362,7 @@ const WorldDetailsManager = ({ focusField, onOpenEntity, onOpenLocation }: {
     <div className="space-y-4">
       <PromptField
         label="Player-Facing Description"
+        historyField="description"
         info={<HintInfo>{PLAYER_DESCRIPTION_INFO}</HintInfo>}
         value={worldOverview.description}
         onChange={(description) => updateWorldOverview({ description })}
@@ -355,10 +371,11 @@ const WorldDetailsManager = ({ focusField, onOpenEntity, onOpenLocation }: {
         resizable
       />
 
-      <ReadmeSection focusField={focusField} />
+      <ReadmeSection focusField={focusField} fieldReveal={fieldReveal} />
 
       <PlaceholderField
         label="AI-Facing Description"
+        historyField="systemPrompt"
         info={<HintInfo>{AI_DESCRIPTION_INFO}</HintInfo>}
         value={worldOverview.systemPrompt || ''}
         onChange={(systemPrompt) => updateWorldOverview({ systemPrompt })}
@@ -367,7 +384,7 @@ const WorldDetailsManager = ({ focusField, onOpenEntity, onOpenLocation }: {
         tourAnchor="world-ai-description"
       />
 
-      <CustomPromptsSection focusField={focusField} onOpenEntity={onOpenEntity} onOpenLocation={onOpenLocation} />
+      <CustomPromptsSection focusField={focusField} tab={panel} onTabChange={onPanelChange} onOpenEntity={onOpenEntity} onOpenLocation={onOpenLocation} />
     </div>
   );
 };

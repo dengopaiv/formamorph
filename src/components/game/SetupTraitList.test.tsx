@@ -1,11 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 import { SetupTraitList } from './SetupTraitList';
-import { groupPickState } from '@/lib/traitGates';
+import { groupPickState, type ConditionState } from '@/lib/traitGates';
+import { scoped } from '@/lib/scope';
 import type { Stat, Trait, TraitGroup } from '@/types';
 
 /**
- * The setup screen's trait list renders from the world's traits alone. In Play shows it inside the World
+ * The setup screen's trait list renders from the world's traits alone. In Game shows it inside the World
  * Editor, outside the full-screen setup dialog and with no game running.
  */
 
@@ -61,20 +62,33 @@ describe('SetupTraitList outside the setup dialog', () => {
     expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Grit: +2', 'Grit: -1 (max)']);
   });
 
+  it('shows an entity owner its own stat changes and the global ones, played or not (Q18, Q30)', () => {
+    const resolve = { id: 'resolve', name: 'Resolve', min: 0, max: 10, value: 5 } as Stat;
+    const sworn: Trait = {
+      id: 'sworn', name: 'Sworn', statChanges: [
+        { statId: 'resolve', value: 3, type: 'starting' },
+        { statId: 'grit', value: 1, type: 'starting' },
+      ],
+    } as Trait;
+    const owned = { traits: [sworn], groups: [], picks: null, ownerId: 'ent-1', ownStats: [resolve] };
+    view(owned);
+    expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Resolve: +3', 'Grit: +1']);
+  });
+
   it('offers a max-one group as one choice at most', () => {
     const onTraitSelect = view({ selectedTraits: ['dockhand'] });
     expect(screen.getAllByRole('radio')).toHaveLength(2);
     expect(screen.getByRole('radio', { name: 'Dockhand' })).toBeChecked();
     // Clicking the chosen one clears it, so "none of these" stays reachable.
     fireEvent.click(screen.getByRole('radio', { name: 'Dockhand' }));
-    expect(onTraitSelect).toHaveBeenCalledWith('dockhand', 'world');
+    expect(onTraitSelect).toHaveBeenCalledWith('dockhand', null);
   });
 
   it('offers a group with no max as checkboxes', () => {
     const onTraitSelect = view({ picks: null });
     expect(screen.queryByRole('radio')).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Scholar' }));
-    expect(onTraitSelect).toHaveBeenCalledWith('scholar', 'world');
+    expect(onTraitSelect).toHaveBeenCalledWith('scholar', null);
   });
 
   it('disables the unchecked rows of a full group with a larger max, and keeps the checked ones switchable', () => {
@@ -118,11 +132,13 @@ describe('SetupTraitList outside the setup dialog', () => {
 });
 
 describe('SetupTraitList gates', () => {
-  const req = (text: string, holds: boolean, hidden = false) => ({ text, holds, unresolved: false, hidden });
-  const gates = new Map([['world', new Map([
-    ['dockhand', { unlocked: false, requirements: [req('Paladin', false), req('Knight', false)] }],
-    ['scholar', { unlocked: true, requirements: [req('Mage', true), req('any Class', false)] }],
-  ])]]);
+  const req = (text: string, holds: boolean, hidden = false): ConditionState => ({ text, holds, unresolved: false, hidden });
+  /** Each Condition as a row of its own. */
+  const oneEach = (...conditions: ReturnType<typeof req>[]) => conditions.map((c) => ({ holds: c.holds, conditions: [c] }));
+  const gates = scoped(new Map([
+    ['dockhand', { unlocked: false, rows: oneEach(req('Paladin', false), req('Knight', false)) }],
+    ['scholar', { unlocked: true, rows: oneEach(req('Mage', true), req('any Class', false)) }],
+  ]));
 
   it('keeps a locked trait in place, disabled, and says what it requires', () => {
     view({ gates, picks: null });
@@ -142,6 +158,16 @@ describe('SetupTraitList gates', () => {
     expect(screen.getByText('Unlocked by Mage')).toBeInTheDocument();
   });
 
+  it("marks the played persona's name in the line with the You pill (Q7)", () => {
+    const onPersona = scoped(new Map([
+      ['dockhand', { unlocked: false, rows: oneEach({ ...req('Kate: Paladin', false), persona: 'Kate' }, req('Knight', false)) }],
+    ]));
+    view({ gates: onPersona, picks: null });
+    const line = screen.getByText(/^Requires Kate/);
+    expect(line).toHaveTextContent(/^Requires KateYou: Paladin or Knight$/);
+    expect(within(line).getByText('You')).toBeInTheDocument();
+  });
+
   it('shows a dismissible banner naming what a change turned off and why', () => {
     const onDismissCascade = vi.fn();
     view({ cascade: { off: ['Plate Armor', 'Shield'], because: 'Rogue' }, onDismissCascade });
@@ -155,7 +181,7 @@ describe('SetupTraitList gates', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  describe('an Always On trait', () => {
+  describe('an Automatic trait', () => {
     const marked: Trait = { id: 'marked', name: 'Marked', groupId: 'origin', mode: 'alwaysOn', statChanges: [] } as Trait;
     const traits = [dockhand, scholar, marked];
 
@@ -168,7 +194,7 @@ describe('SetupTraitList gates', () => {
     it('shows checked with no control while active, and blocks the max-one group’s other picks', () => {
       view({ traits, selectedTraits: ['marked'], picks: groupPickState(origin, traits, ['marked']) });
       expect(screen.getByText('Marked')).toBeInTheDocument();
-      expect(screen.getByRole('img', { name: 'Always On' })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: 'Automatic' })).toBeInTheDocument();
       expect(screen.queryByRole('radio', { name: 'Marked' })).toBeNull();
       expect(screen.getByRole('radio', { name: 'Scholar' })).toBeDisabled();
       expect(screen.getByRole('radio', { name: 'Dockhand' })).toBeDisabled();
@@ -177,7 +203,7 @@ describe('SetupTraitList gates', () => {
     it('shows no control in a checkbox group either', () => {
       view({ traits: [marked], picks: null, selectedTraits: ['marked'] });
       expect(screen.queryByRole('checkbox')).toBeNull();
-      expect(screen.getByRole('img', { name: 'Always On' })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: 'Automatic' })).toBeInTheDocument();
     });
   });
 
@@ -188,15 +214,15 @@ describe('SetupTraitList gates', () => {
     it('does not show while active, and still blocks the max-one group’s other picks', () => {
       view({ traits, selectedTraits: ['secret-bond'], picks: groupPickState(origin, traits, ['secret-bond']) });
       expect(screen.queryByText('Secret Bond')).toBeNull();
-      expect(screen.queryByRole('img', { name: 'Always On' })).toBeNull();
+      expect(screen.queryByRole('img', { name: 'Automatic' })).toBeNull();
       expect(screen.getByRole('radio', { name: 'Scholar' })).toBeDisabled();
     });
 
     it('leaves a Hidden requirement out of the gate line', () => {
-      const hiddenGates = new Map([['world', new Map([
-        ['dockhand', { unlocked: false, requirements: [req('Secret Bond', false, true), req('Knight', false)] }],
-        ['scholar', { unlocked: true, requirements: [req('Secret Bond', true, true), req('Mage', true)] }],
-      ])]]);
+      const hiddenGates = scoped(new Map([
+        ['dockhand', { unlocked: false, rows: oneEach(req('Secret Bond', false, true), req('Knight', false)) }],
+        ['scholar', { unlocked: true, rows: oneEach(req('Secret Bond', true, true), req('Mage', true)) }],
+      ]));
       view({ gates: hiddenGates, picks: null });
       expect(screen.getByText('Requires Knight')).toBeInTheDocument();
       expect(screen.getByText('Unlocked by Mage')).toBeInTheDocument();
@@ -204,9 +230,9 @@ describe('SetupTraitList gates', () => {
     });
 
     it('reads a bare "Locked" when every requirement is Hidden', () => {
-      const hiddenGates = new Map([['world', new Map([
-        ['dockhand', { unlocked: false, requirements: [req('Secret Bond', false, true)] }],
-      ])]]);
+      const hiddenGates = scoped(new Map([
+        ['dockhand', { unlocked: false, rows: oneEach(req('Secret Bond', false, true)) }],
+      ]));
       view({ gates: hiddenGates, picks: null });
       expect(screen.getByText('Locked')).toBeInTheDocument();
       expect(screen.queryByText(/Secret Bond/)).toBeNull();

@@ -32,6 +32,8 @@ const SectionHeading = ({ label, note }: { label: string; note?: string }) => (
   </div>
 );
 
+const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+
 /**
  * One stat: the fresh game's number and band on the face of the row, and a slider that scrubs the whole
  * range, live-updating which descriptor the AI would be told. The scrub position is row-local state; the
@@ -47,10 +49,11 @@ const StatRow = ({ stat }: { stat: OpeningStat }) => {
       <div className="flex items-baseline gap-1.5">
         <span className="min-w-0 flex-grow truncate text-label">{stat.name}</span>
         {stat.traitShift !== 0 && (
-          <span className="shrink-0 text-meta text-muted-foreground">
-            {stat.traitShift > 0 ? `+${stat.traitShift}` : stat.traitShift} from traits
-          </span>
+          <span className="shrink-0 text-meta text-muted-foreground">{signed(stat.traitShift)} from traits</span>
         )}
+        <span className="shrink-0 text-meta text-muted-foreground">
+          Min {stat.min} · Regen {stat.regen === 0 ? 0 : signed(stat.regen)}
+        </span>
         <span className={cn('shrink-0 text-meta', scrubbed ? 'text-muted-foreground' : 'font-medium')}>
           {statValueLabel(stat, value)}
         </span>
@@ -84,13 +87,32 @@ const StatRow = ({ stat }: { stat: OpeningStat }) => {
   );
 };
 
+/** One owner's stat rows, each keyed on its settled numbers so a world edit snaps its slider back, and the
+ *  stats its traits leave off. */
+const StatList = ({ stats, disabled }: { stats: OpeningStat[]; disabled: string[] }) => (
+  <>
+    {stats.length === 0 ? (
+      <p className="text-meta text-muted-foreground">No stats are live at game start</p>
+    ) : (
+      <div className="space-y-1">
+        {stats.map((stat) => (
+          <StatRow key={`${stat.id}:${stat.value}:${stat.min}:${stat.max}`} stat={stat} />
+        ))}
+      </div>
+    )}
+    {disabled.length > 0 && (
+      <p className="text-meta text-muted-foreground">Off at game start: {disabled.join(', ')}.</p>
+    )}
+  </>
+);
+
 /** One trait in force at game start, with everything it imposes under it. */
 const TraitRow = ({ trait }: { trait: OpeningTrait }) => (
   <div className="rounded-md border p-1.5">
     <div className="flex items-baseline gap-1.5">
       <span className="min-w-0 flex-grow truncate text-label">{trait.name}</span>
       {trait.isPc && (
-        <span className="shrink-0 rounded bg-muted px-1 text-meta text-muted-foreground">Lens PC</span>
+        <span className="shrink-0 rounded bg-muted px-1 text-meta text-muted-foreground">Lens Pick</span>
       )}
     </div>
     {(trait.pins.length > 0 || trait.toggles.length > 0) && (
@@ -214,6 +236,7 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
   });
 
   const narrated = data.opening.kind === 'narration';
+  const personaName = data.personas.find((persona) => persona.id === data.personaId)?.name;
 
   if (!data.location) {
     return (
@@ -228,7 +251,7 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
       <div className="space-y-2 pr-2">
         <div className="rounded-md border bg-muted/30 p-2">
           <p className="text-label font-medium">
-            Turn one as {data.pcName ?? 'the default character'}
+            {personaName ? `Turn one as ${personaName}` : 'Turn one with no persona'}
             {narrated ? ', opening on a written page one' : ` ≈ ${tokenLabel(data.totalTokens)} tokens`}
           </p>
           {data.personas.length > 0 && (
@@ -244,7 +267,7 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
                   ))}
                 </SelectContent>
               </Select>
-              <p className="min-w-0 truncate text-meta text-muted-foreground">sets who you play</p>
+              <p className="min-w-0 truncate text-meta text-muted-foreground">Sets the persona</p>
             </div>
           )}
           {data.starts.length > 1 ? (
@@ -260,7 +283,7 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
                 </SelectContent>
               </Select>
               <p className="min-w-0 truncate text-meta text-muted-foreground">
-                one of {data.startPool} possible starts, picked at random in play
+                one of {data.startPool} possible starts, picked at random when the game starts
               </p>
             </div>
           ) : (
@@ -292,22 +315,15 @@ export function OpeningInstrument({ data, onReroll, onStartChange, onPersonaChan
           label="Stats at Game Start"
           note="scrub to test the bands without editing the world"
         />
-        {data.stats.length === 0 ? (
-          <p className="text-meta text-muted-foreground">No stats are live at game start</p>
-        ) : (
-          <div className="space-y-1">
-            {data.stats.map((stat) => (
-              <StatRow key={`${stat.id}:${stat.value}:${stat.min}:${stat.max}`} stat={stat} />
-            ))}
+        <StatList stats={data.stats} disabled={data.disabledStats} />
+        {data.entityStats.map((entity) => (
+          <div key={entity.id} className="space-y-1">
+            <SectionHeading label={entity.name} note="own stats at game start" />
+            <StatList stats={entity.stats} disabled={entity.disabledStats} />
           </div>
-        )}
-        {data.disabledStats.length > 0 && (
-          <p className="text-meta text-muted-foreground">
-            Off at game start: {data.disabledStats.join(', ')}.
-          </p>
-        )}
+        ))}
 
-        <SectionHeading label="Active Traits" note={data.pcName ? 'defaults plus the lens PC' : 'the defaults'} />
+        <SectionHeading label="Active Traits" note={data.pcName ? 'defaults plus the lens pick' : 'the defaults'} />
         {data.traits.length === 0 ? (
           <p className="text-meta text-muted-foreground">No traits are active at game start</p>
         ) : (

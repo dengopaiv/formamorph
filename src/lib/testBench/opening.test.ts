@@ -292,7 +292,7 @@ describe('the assembled first prompt', () => {
     const w = world({
       worldOverview: {
         name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '',
-        use3DModel: false, tags: [],
+        tags: [],
         openings: [{ id: 'o0', text: 'Benched.', kind: 'action' }, { id: 'o1', text: cue, kind: 'action' }],
         openingWeights: { o0: 0 },
       },
@@ -705,17 +705,17 @@ describe('the persona pick', () => {
     expect(at(w, { personaId: 'e-wren' }).opening.text).toBe('Wren steps ashore.');
   });
 
-  it('names the persona as the Player Name of its own row', () => {
+  it('names the persona as the Persona Name of its own row', () => {
     const w = staged({ entities: [{ ...cast()[1], openings: [row('o-wren', '{{user}} steps ashore.', true)] }] });
     expect(at(w, { personaId: 'e-wren' }).opening.text).toBe('Wren steps ashore.');
   });
 
-  it('names the Custom Persona entity as the Player Name under None', () => {
+  it('names the Custom Persona entity as the Persona Name under None', () => {
     const w = staged({ entities: [{ ...custom(), openings: [row('o-custom', '{{user}} arrives.', true)] }] });
     expect(at(w, {}).opening.text).toBe('Newcomer arrives.');
   });
 
-  it('reads the Player Name as "you" when the world has no persona to play', () => {
+  it('reads the Persona Name as "you" when the world has no persona to play', () => {
     const w = staged({ worldOverview: { ...ov, openings: [row('o-world', '{{user}} wake.')] } });
     expect(at(w, {}).opening.text).toBe('You wake.');
   });
@@ -744,5 +744,169 @@ describe('the persona pick', () => {
       }
       expect(new Set(texts(at(w, { personaId, startLocationId: start })))).toEqual(drawn);
     }
+  });
+});
+
+describe('entity stats at game start', () => {
+  const ov = { name: 'Sedge Landing', description: '', systemPrompt: '' } as WorldOverview;
+  const stat = (id: string, over: Partial<Stat> = {}): Stat => ({
+    id, name: id, type: 'number', description: '', min: 0, max: 100, value: 20, regen: 0, descriptors: [], thresholdUnit: 'raw', ...over,
+  });
+  // Trust runs 0..100 from 20 with +1 regen and two raw bands: Wary up to 30, Warm up to 150.
+  const trust = stat('s-trust', {
+    name: 'Trust', regen: 1,
+    descriptors: [{ id: 'b1', threshold: 30, description: 'Wary' }, { id: 'b2', threshold: 150, description: 'Warm' }],
+  });
+  // Hardy is a default owned trait: it raises Trust's max, start and regen. Stoic is optional, so a fresh game skips it.
+  const hardy: Trait = {
+    id: 't-hardy', name: 'Hardy', isDefault: true,
+    statChanges: [
+      { statId: 's-trust', value: 50, type: 'max' }, { statId: 's-trust', value: 15, type: 'starting' },
+      { statId: 's-trust', value: 2, type: 'regen' },
+    ],
+  };
+  const stoic: Trait = { id: 't-stoic', name: 'Stoic', statChanges: [{ statId: 's-trust', value: 40, type: 'starting' }] };
+  // Calm is a default owned trait that switches Nerve on, as a trait does for the player.
+  const calm: Trait = { id: 't-calm', name: 'Calm', isDefault: true, statChanges: [], statToggles: [{ statId: 's-own-nerve', enabled: true }] };
+
+  const maren = (over: Partial<Entity> = {}): Entity => ({
+    id: 'e1', name: 'Maren', locations: ['harbor'],
+    stats: [trust], traits: [hardy, stoic], ...over,
+  });
+  const staged = (entities: Entity[], rest: Partial<OpeningWorld> = {}) => world({ worldOverview: ov, entities, ...rest });
+  const marenOf = (w: OpeningWorld) => openingFor(w).entityStats.find((e) => e.id === 'e1');
+
+  it('lists each entity that owns stats, with starting value, derived bounds, regen and band', () => {
+    const w = staged([maren({ traits: [] }), { id: 'e2', name: 'Tobin', locations: ['harbor'] }]);
+    const opening = openingFor(w);
+    expect(opening.entityStats.map((e) => e.name)).toEqual(['Maren']);
+    expect(opening.entityStats[0].stats).toEqual([expect.objectContaining({
+      id: 's-trust', name: 'Trust', value: 20, min: 0, max: 100, regen: 1, descriptor: 'Wary', uncovered: false,
+    })]);
+  });
+
+  it('applies the entity’s default traits to its derived bounds, start, regen and band', () => {
+    const [row] = marenOf(staged([maren()]))!.stats;
+    expect(row).toMatchObject({ value: 35, min: 0, max: 150, regen: 3, traitShift: 15, descriptor: 'Warm' });
+  });
+
+  it('gates a default trait on the entity’s own stat at its authored start, as Enter World does', () => {
+    const gatedOn = (value: number) => maren({ traits: [{ ...hardy, requires: [{ all: [{ kind: 'stat', id: 's-trust', operator: '>=', value, unit: 'raw' }] }] }] });
+    expect(marenOf(staged([gatedOn(20)]))!.stats[0]).toMatchObject({ value: 35, max: 150 });
+    expect(marenOf(staged([gatedOn(25)]))!.stats[0]).toMatchObject({ value: 20, max: 100 });
+  });
+
+  it('leaves out a trait a fresh game does not pick', () => {
+    const [row] = marenOf(staged([maren({ traits: [stoic] })]))!.stats;
+    expect(row).toMatchObject({ value: 20, max: 100, traitShift: 0 });
+  });
+
+  it('moves a global stat through an entity’s default global row, as play opens it (ticket 02 persona ruling)', () => {
+    const lucky: Trait = { id: 't-lucky', name: 'Lucky', isDefault: true, statChanges: [{ statId: 's-luck', value: 3, type: 'starting' }] };
+    const luckOf = (opening: ReturnType<typeof openingFor>) => opening.stats.find((s) => s.id === 's-luck')!.value;
+    const base = luckOf(openingFor(staged([maren({ traits: [] })])));
+    expect(luckOf(openingFor(staged([maren({ traits: [lucky] })])))).toBe(base + 3);
+    const wren = staged([maren({ id: 'e-wren', name: 'Wren', persona: true, personaOnly: true, traits: [lucky] })]);
+    expect(luckOf(atPersona(wren, 'e-wren'))).toBe(base + 3);
+  });
+
+  it('never lets an entity’s trait move the player’s stats', () => {
+    const base = openingFor(staged([maren({ traits: [] })])).stats;
+    const withTrait = openingFor(staged([maren()])).stats;
+    expect(withTrait).toEqual(base);
+  });
+
+  it('keeps one entity’s stats apart from another’s, even for a shared stat id', () => {
+    const tobin: Entity = { id: 'e2', name: 'Tobin', locations: ['harbor'], stats: [trust] };
+    const opening = openingFor(staged([maren(), tobin]));
+    const value = (id: string) => opening.entityStats.find((e) => e.id === id)!.stats[0].value;
+    expect([value('e1'), value('e2')]).toEqual([35, 20]);
+  });
+
+  it('switches an entity stat on through its own trait, and names a stat that stays off', () => {
+    const nerve = stat('s-own-nerve', { name: 'Nerve', enabled: false });
+    const on = marenOf(staged([maren({ stats: [trust, nerve], traits: [calm] })]))!;
+    expect(on.stats.map((s) => s.name)).toEqual(['Trust', 'Nerve']);
+    expect(on.disabledStats).toEqual([]);
+    const off = marenOf(staged([maren({ stats: [trust, nerve], traits: [] })]))!;
+    expect(off.stats.map((s) => s.name)).toEqual(['Trust']);
+    expect(off.disabledStats).toEqual(['Nerve']);
+  });
+
+  // Maren links Resolve, a Blueprint stat the world keeps in its Blueprints group.
+  const linking = (traits?: Trait[]) => staged([maren({
+    stats: undefined, traits,
+    statLinks: [{ id: 'l1', originalId: 's-resolve', kind: 'stat', originalName: 'Resolve', groupId: null, order: 0 }],
+  })], {
+    stats: [...stats, stat('s-resolve', { name: 'Resolve', value: 40, max: 80, groupId: 'sg-bp' })],
+    statGroups: [{ id: 'sg-bp', name: 'Blueprints', parentId: null, system: 'blueprints' }],
+  });
+
+  it('reads a linked Blueprint stat as the entity’s own, and keeps Blueprints off the player', () => {
+    const opening = openingFor(linking());
+    expect(opening.entityStats[0].stats).toEqual([expect.objectContaining({ id: 's-resolve', name: 'Resolve', value: 40, max: 80 })]);
+    expect(opening.stats.map((s) => s.id)).not.toContain('s-resolve');
+  });
+
+  it('moves a linked stat with a trait change that names its Blueprint', () => {
+    const boost: Trait = { id: 't-boost', name: 'Boost', isDefault: true, statChanges: [{ statId: 's-resolve', value: 20, type: 'max' }] };
+    expect(openingFor(linking([boost])).entityStats[0].stats[0]).toMatchObject({ id: 's-resolve', max: 100 });
+  });
+
+  it('shows the bands’ coverage gap for an entity stat as it does for a player stat', () => {
+    const doomed = stat('s-doom2', { name: 'Doom', value: 80, descriptors: [{ id: 'd', threshold: 20, description: 'Faint' }] });
+    const [row] = marenOf(staged([maren({ stats: [doomed], traits: [] })]))!.stats;
+    expect(row).toMatchObject({ descriptor: null, uncovered: true });
+  });
+
+  // Play seeds every authored entity but runs only the cast and the player's own entity.
+  const only = () => maren({ persona: true, personaOnly: true });
+  const custom = () => maren({ id: 'e-custom', name: 'Newcomer', customPersona: true, personaOnly: true });
+  const atPersona = (w: OpeningWorld, personaId: string | null) =>
+    buildOpening(w, lensAt(w), primeOpeningRolls(w, {}, pickFirst), { personaId });
+
+  it('leaves out a persona-only entity while nobody plays it', () => {
+    expect(openingFor(staged([only()])).entityStats).toEqual([]);
+  });
+
+  it('lists a persona-only entity once its persona is picked, with its own traits applied', () => {
+    const [row] = atPersona(staged([only()]), 'e1').entityStats;
+    expect(row).toMatchObject({ id: 'e1' });
+    expect(row.stats[0]).toMatchObject({ value: 35, max: 150 });
+  });
+
+  it('lists the Custom Persona entity’s stats under None, and drops them once a world persona is picked', () => {
+    const w = staged([custom(), maren({ id: 'e-wren', name: 'Wren', persona: true, traits: [] })]);
+    // Wren is not persona-only, so she is in the cast under None and plays herself under her pick.
+    expect(openingFor(w).entityStats.map((e) => e.id)).toEqual(['e-custom', 'e-wren']);
+    expect(atPersona(w, 'e-wren').entityStats.map((e) => e.id)).toEqual(['e-wren']);
+  });
+
+  it('applies a persona trait picked as the lens PC to the persona’s own stats (Q33)', () => {
+    const knight: Trait = { id: 't-knight', name: 'Knight', groupId: 'cg', statChanges: [{ statId: 's-trust', value: 5, type: 'starting' }] };
+    const scout: Trait = { id: 't-scout', name: 'Scout', groupId: 'cg', statChanges: [] };
+    const w = staged([maren({
+      id: 'e-custom', name: 'Newcomer', customPersona: true, stats: [trust], traits: [knight, scout],
+      traitGroups: [{ id: 'cg', name: 'Class', parentId: null, maxPicks: 1 }],
+    })]);
+    const trustOf = (pc: string) => openingFor(w, pc).entityStats.find((e) => e.id === 'e-custom')!.stats[0].value;
+    expect([trustOf('t-knight'), trustOf('t-scout')]).toEqual([25, 20]);
+  });
+
+  it('names the entity through the active pins, as the rest of the instrument does', () => {
+    const w = staged([maren({ name: chip('ph-hair', 'world', 'pl-e1') })]);
+    const opening = buildOpening(w, lensAt(w, { pcTraitId: 't-reach' }), primeOpeningRolls(w, {}, pickFirst));
+    expect(opening.entityStats[0].name).toBe('copper');
+  });
+
+  it('never edits the world', () => {
+    const w = staged([maren()]);
+    const snapshot = JSON.stringify(w);
+    openingFor(w);
+    expect(JSON.stringify(w)).toBe(snapshot);
+  });
+
+  it('has none for the closed tab', () => {
+    expect(EMPTY_OPENING.entityStats).toEqual([]);
   });
 });

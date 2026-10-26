@@ -1,11 +1,18 @@
+// First import: it must evaluate before any dependency that iterates a ReadableStream at module load.
+import './lib/polyfills/readableStreamAsyncIterator'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './fonts'
 import './index.css'
 import './lib/buildInfo'
 import { trackDevicePixelRatio } from './lib/devicePixelGrid'
+import { installGlobalErrorHandlers } from './lib/globalErrorHandlers'
+import { installDevFeedbackStub } from './lib/dev/devFeedbackStub'
 
 trackDevicePixelRatio()
+installGlobalErrorHandlers()
+// Static, so the stub is in place before the first list fetches.
+if (import.meta.env.DEV) installDevFeedbackStub()
 if (import.meta.env.DEV && import.meta.env.VITE_FM_HOLD_UPDATES) void import('./lib/dev/heldUpdatesBanner')
 
 createRoot(document.getElementById('root')!).render(

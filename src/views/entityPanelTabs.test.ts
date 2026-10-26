@@ -18,6 +18,7 @@ describe('entityTabForField', () => {
     expect(entityTabForField('type')).toBe('profile');
     expect(entityTabForField('imageTags')).toBe('profile');
     expect(entityTabForField('pronouns')).toBe('profile');
+    expect(entityTabForField('relationships[2].label')).toBe('profile');
   });
 
   it('puts any alias on Profile, whichever chip the hit is in', () => {
@@ -72,11 +73,17 @@ describe('entityTabForField', () => {
 });
 
 describe('the library entity editor tabs', () => {
-  it('put Traits and Placeholders on the top strip and every other panel tab on the Entity sub-strip', () => {
-    expect(ENTITY_EDITOR_TABS.map((t) => t.value)).toEqual(['entity', 'traits', 'placeholders']);
+  it('put Traits, Stats and Placeholders on the top strip and every other panel tab on the Entity sub-strip', () => {
+    expect(ENTITY_EDITOR_TABS.map((t) => t.value)).toEqual(['entity', 'traits', 'stats', 'placeholders']);
     expect(ENTITY_EDITOR_SUBTABS.map((t) => t.value)).toEqual(['profile', 'descriptions', 'openings']);
     const both = [...ENTITY_EDITOR_SUBTABS, ...ENTITY_EDITOR_TABS.slice(1)].map((t) => t.value).sort();
     expect(both).toEqual(ENTITY_PANEL_TABS.map((t) => t.value).sort());
+  });
+
+  it('puts Stats after Traits in the World Editor panel, Advanced only', () => {
+    expect(ENTITY_PANEL_TABS.map((t) => t.value)).toEqual(['profile', 'descriptions', 'traits', 'stats', 'placeholders', 'openings']);
+    expect(entityPanelTabsFor(true).map((t) => t.value)).toContain('stats');
+    expect(entityPanelTabsFor(false).map((t) => t.value)).not.toContain('stats');
   });
 
   it('send a field to the Entity tab and the sub-tab that holds it', () => {

@@ -1,0 +1,24 @@
+{
+  "location": "The Tidewell",
+  "entity": "Maren",
+  "opening": "Maren kneels at the rim of the Tidewell, setting a fresh shell among the offerings. She looks up and smiles at you.",
+  "turns": [
+    {
+      "action": "I ask Maren how long she has tended the spring.",
+      "narration": "\"Twenty years this winter.\" She turns her wrist so the silver scales catch the light. \"It keeps a little of everyone who stays.\""
+    },
+    {
+      "action": "I ask if the change ever frightens her.",
+      "narration": "Her laugh is warm, but her eyes drift to the water. \"Not the scales. Some nights the tide calls louder than it used to.\""
+    },
+    {
+      "action": "I promise to sit with her at the next high tide.",
+      "narration": "Maren is quiet for a moment. Then she presses a cool, webbed hand over yours. \"I'd like that. Bring your own blanket. The stone gets cold.\""
+    }
+  ],
+  "choices": [
+    "I ask Maren what the tide says when it calls.",
+    "I dip my fingers in the Tidewell.",
+    "I walk with Maren to the Salt Lantern."
+  ]
+}

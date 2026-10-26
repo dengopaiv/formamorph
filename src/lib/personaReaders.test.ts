@@ -42,22 +42,24 @@ describe('entity readers in play', () => {
     // The roster chips read the live Chip Scene: Here and In Scene from the full cast, the outer scopes from
     // the authored cast. liveScene.test.ts proves the rendering; this pins which list the scene is handed.
     { reader: 'roster chip', source: liveScene, pattern: /entities: allEntities,/ },
-    { reader: 'roster chip, sublocations and reachable', source: liveScene, pattern: /outerScopeEntities: ownText\(sources\.entities\),/ },
+    { reader: 'roster chip, sublocations and reachable', source: liveScene, pattern: /outerScopeEntities: ownText\(placed\(sources\.entities\)\),/ },
     { reader: 'roster chip, live view hands the adapter both casts', source: viewer, pattern: /entities,\s*allEntities,\s*participants,/ },
     { reader: 'prose parse for participation', source: viewer, pattern: /readNarration\(\{[^}]*entities: allEntities,/ },
     { reader: 'participation fan-out', source: viewer, pattern: /splitParticipants\(turnParticipants, liveScene\(null, codeView\)\.entities,/ },
-    { reader: 'diaries', source: viewer, pattern: /const found = allEntities\.find\(\(e\) => e\.name\.trim\(\)/ },
-    { reader: 'diaries, text resolved with its owner', source: viewer, pattern: /const entity = found && resolveEntityTexts\(\[found\], resolveEntityText\)\[0\];/ },
-    { reader: 'discovery matching', source: viewer, pattern: /const knownNames = \[\.\.\.allEntities\.map/ },
+    { reader: 'diaries, view hands over the cast', source: viewer, pattern: /const found = findEntityByCharacterName\(target\.name, allEntities\);/ },
+    { reader: 'diaries, text resolved with its owner', source: viewer, pattern: /entity: found && resolveEntityTexts\(\[found\], resolveEntityText\)\[0\]/ },
+    { reader: 'discovery matching', source: viewer, pattern: /entityNames: allEntities\.map\(\(e\) => e\.name\),/ },
     { reader: 'discovery exclusions', source: viewer, pattern: /characters: clean\(\[\.\.\.allEntities\.map\(\(e\) => e\.name\), \.\.\.playerNames\]\)/ },
-    { reader: 'scene tags', source: viewer, pattern: /\.map\(\(name\) => allEntities\.find\(\(e\) => sameCharacterName\(e\.name, name\)\)\)/ },
+    // The persona joins the picture by its own slot, never through the cast.
+    { reader: 'scene tags', source: viewer, pattern: /pickSceneCast\(\{ participants, entities: allEntities, persona: persona\?\.entity \?\? null,/ },
     { reader: "planner's cast", source: viewer, pattern: /classifyCast\(cast, allEntities, playerNames\)/ },
     { reader: 'in-game entity panel', source: viewer, pattern: /entities=\{allEntities\}/ },
     // The seed resolves the pick itself, so it reads every world entity: a picked persona-only one is in no cast yet.
-    { reader: 'opening pool, new game', source: viewer, pattern: /drawNewGameOpening\(\{\s*pick: personaPick, worldEntities: traitEntities,/ },
+    // It reads them where the new game placed them.
+    { reader: 'opening pool, new game', source: viewer, pattern: /drawNewGameOpening\(\{\s*pick: personaPick, worldEntities: entitiesInPlay\(traitEntities, startPositions\),/ },
     { reader: 'opening pool, regenerate and load', source: viewer, pattern: /const sessionPool = \(\) => openingPool\(\{\s*overview: worldOverview,\s*entities,/ },
     { reader: 'panels, scene list', source: panels, pattern: /const \{ entities: authoredEntities(?:, \w+)* \} = useResolvedWorld\(\)/ },
-    { reader: 'panels, narration names', source: panels, pattern: /const \{ entities \} = useResolvedWorld\(\)/ },
+    { reader: 'narration edit rescan', source: viewer, pattern: /useNarrationRescan\(\{ entities: allEntities,/ },
   ];
 
   it.each(readers)('$reader reads the cast', ({ source, pattern }) => {

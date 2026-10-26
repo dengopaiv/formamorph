@@ -42,7 +42,7 @@ describe('HelpButton', () => {
   });
 
   it('nudges until its topic is opened, then stays quiet — and the quiet persists across mounts', () => {
-    render(<HelpButton topicId="worldEditor.stats" />);
+    render(<HelpButton topicId="worldEditor.statCode" />);
     expect(tinted()).toBe(true);
 
     fireEvent.click(helpButton());
@@ -50,25 +50,41 @@ describe('HelpButton', () => {
 
     // A fresh mount re-reads the store, so the quiet is persisted rather than only in memory.
     cleanup();
-    render(<HelpButton topicId="worldEditor.stats" />);
+    render(<HelpButton topicId="worldEditor.statCode" />);
     expect(tinted()).toBe(false);
   });
 
   it('reads seen-state per topic on mount — an unseen topic still nudges after another was opened', () => {
-    // Seen-state is read once, on mount. The World Editor swaps topics on one button via `key={topicId}`,
-    // which remounts it — modeled here by cleanup + a fresh render for the next topic.
-    render(<HelpButton topicId="worldEditor.stats" />);
+    // Seen-state is read once, on mount, so the next topic gets a fresh render.
+    render(<HelpButton topicId="worldEditor.statCode" />);
     fireEvent.click(helpButton());
     expect(tinted()).toBe(false);
 
     cleanup();
-    render(<HelpButton topicId="worldEditor.dictionary" />);
+    render(<HelpButton topicId="worldEditor.aliases" />);
     expect(tinted()).toBe(true); // its own state — not inherited from the opened one
   });
 });
 
+describe('the Scripts help topic', () => {
+  it('answers to its old key too, so an old link still opens it', () => {
+    expect(HELP_TOPICS['worldEditor.statCode']).toBe(HELP_TOPICS['worldEditor.scriptBox']);
+    expect(HELP_TOPICS['worldEditor.scriptBox']).toMatchObject({ title: 'Scripts', wikiPage: 'ScriptsGuide' });
+  });
+
+  it('names the five timings on its Timings tab and the name each one adds on its Variables tab', () => {
+    const tabs = HELP_TOPICS['worldEditor.scriptBox'].tabs ?? [];
+    expect(tabs.map((t) => t.label)).toEqual(['Overview', 'Timings', 'Variables', 'Stat Writes']);
+    const tab = (label: string) => tabs.find((t) => t.label === label)?.body ?? '';
+    for (const timing of ['Before the AI', 'After the AI', 'During AI Output', 'At Game Start', 'When a Trait Switches']) {
+      expect(tab('Timings')).toContain(`**${timing}**`);
+    }
+    for (const name of ['narration', 'trait', 'player']) expect(tab('Variables')).toContain(`\`${name}\``);
+  });
+});
+
 describe('HelpButton Learn more', () => {
-  const topicId = 'worldEditor.stats';
+  const topicId = 'worldEditor.scriptBox';
   const topic = HELP_TOPICS[topicId];
   let unregister: (() => void) | null = null;
   beforeEach(() => {

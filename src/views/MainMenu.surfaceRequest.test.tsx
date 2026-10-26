@@ -83,6 +83,15 @@ describe('a surface request on the main menu', () => {
     expect(registry.get().dialog).toBe('settings');
   });
 
+  it('keeps a tab the player picks before the landing clears', async () => {
+    renderMenu();
+    requester.send('settings.output');
+    expect(registry.get().tabs).toEqual(['settings.output']);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Display' }));
+    await settle();
+    expect(registry.get().tabs).toEqual(['settings.display']);
+  });
+
   it('opens Load Game for a game surface, since no game is running', async () => {
     renderMenu();
     requester.send('gameViewer.memory');
@@ -120,9 +129,9 @@ describe('a surface request on the main menu', () => {
     fireEvent.change(await screen.findByDisplayValue('Sedge Landing'), { target: { value: 'Sedge Landing EDITED' } });
 
     requester.send('backup');
-    await screen.findByText('Unsaved changes');
+    await screen.findByRole('alertdialog', { name: 'Unsaved changes' });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull());
     expect(registry.get().dialog).toBe('worldEditor');
 
     requester.send('backup');
@@ -138,7 +147,7 @@ describe('a surface request on the main menu', () => {
 
     requester.send('settings.display');
     await waitFor(() => expect(registry.get().dialog).toBe('settings'));
-    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    expect(screen.queryByRole('alertdialog', { name: 'Unsaved changes' })).toBeNull();
   });
 
   it('opens an Advanced-only Settings tab on Settings already open in Simple mode', async () => {

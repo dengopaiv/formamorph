@@ -2,11 +2,13 @@ import { useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode 
 import { verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { DragEndEvent } from '@dnd-kit/core';
+import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { Info, Move, Play, Plus, Redo2, Undo2, X } from 'lucide-react';
 import { EditorRow, EditorRowList } from '@/components/EditorRow';
 import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { PresetNameDialog } from '@/components/modals/PresetNameDialog';
 import { PanelShell } from '@/components/PanelShell';
+import { FULLSCREEN_CORNER_CLEAR } from '@/components/FullscreenShell';
 import { PresetHeader } from '@/components/presetHeader/PresetHeader';
 import { ReadOnlyNotice } from '@/components/prompt/ReadOnlyNotice';
 import { OptionSwitcher, Row, Section, ValueSlider } from '@/components/SettingsRows';
@@ -19,7 +21,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tip } from '@/components/ui/tooltip';
 import { Hint, Meta } from '@/components/ui/typography';
 import { ImageUpload } from '@/lib/UtilityComponents';
-import { historyShortcut } from '@/lib/canvasHistory';
+import { historyShortcut } from '@/lib/editorHistory';
 import { downloadBlob } from '@/lib/downloadBlob';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { filesFrom } from '@/lib/importFiles';
@@ -58,7 +60,6 @@ import {
   type MascotSelection,
 } from '@/lib/formaquestion/mascotSelection';
 import { MascotPiece } from './MascotPiece';
-import { MascotScaleRow } from './MascotScaleRow';
 import { WidgetLabel, WidgetRow } from './WidgetRow';
 import { usePointerDrag } from './usePointerDrag';
 import type { MascotReplay } from './useMascotMotion';
@@ -187,8 +188,19 @@ type UrlOf = (ref: MascotImageRef) => string | null;
 const dragStyle = ({ transform, transition, isDragging }: Pick<ReturnType<typeof useSortable>, 'transform' | 'transition' | 'isDragging'>) =>
   ({ transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 1 : undefined });
 
-/** An overlay's place in its layer, as a sortable id. The same image can sit in a layer twice. */
-const overlayId = (index: number): string => String(index);
+/** Sortable ids that follow each overlay through a reorder. A repeat of the same image takes its occurrence count. */
+function overlayIds(images: readonly MascotImageRef[]): string[] {
+  const seen = new Map<string, number>();
+  return images.map((image) => {
+    const key = image.kind === 'bundled' ? `bundled:${image.name}` : `stored:${image.id}`;
+    const count = seen.get(key) ?? 0;
+    seen.set(key, count + 1);
+    return `${key}#${count}`;
+  });
+}
+
+// An overlay list is its own drag boundary, so a row never leaves its layer.
+const OVERLAY_LIST_MODIFIERS = [restrictToVerticalAxis, restrictToParentElement];
 
 function Thumb({ url }: { url: string | null }) {
   return (
@@ -198,7 +210,8 @@ function Thumb({ url }: { url: string | null }) {
   );
 }
 
-function SortableOverlay({ index, image, urlOf, selected, readOnly, onSelect, onRemove }: {
+function SortableOverlay({ id, index, image, urlOf, selected, readOnly, onSelect, onRemove }: {
+  id: string;
   index: number;
   readOnly: boolean;
   image: MascotImageRef;
@@ -207,7 +220,7 @@ function SortableOverlay({ index, image, urlOf, selected, readOnly, onSelect, on
   onSelect: () => void;
   onRemove: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, ...drag } = useSortable({ id: overlayId(index) });
+  const { attributes, listeners, setNodeRef, ...drag } = useSortable({ id });
   return (
     <EditorRow
       setNodeRef={setNodeRef}
@@ -220,7 +233,7 @@ function SortableOverlay({ index, image, urlOf, selected, readOnly, onSelect, on
       icon={<Thumb url={urlOf(image)} />}
       label={image.kind === 'bundled' ? image.name : MASCOT_COPY.storedOverlay}
       meta={image.kind === 'bundled' ? MASCOT_COPY.bundledOverlay : undefined}
-      actions={readOnly ? [] : [{ icon: <X className="h-4 w-4" />, title: MASCOT_COPY.removeOverlay, onClick: onRemove }]}
+      actions={readOnly ? [] : [{ icon: <X className="h-4 w-4" />, destructive: true, title: MASCOT_COPY.removeOverlay, onClick: onRemove }]}
     />
   );
 }
@@ -238,8 +251,12 @@ function LayerBody({ layer, urlOf, readOnly, selectedOverlay, onSelectOverlay, o
   onMoveOverlay: (from: number, to: number) => void;
 }) {
   const nameId = `fq-mascot-layer-${layer.id}`;
+  const ids = overlayIds(layer.images);
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    if (over && active.id !== over.id) onMoveOverlay(Number(active.id), Number(over.id));
+    if (!over || active.id === over.id) return;
+    const from = ids.indexOf(String(active.id));
+    const to = ids.indexOf(String(over.id));
+    if (from !== -1 && to !== -1) onMoveOverlay(from, to);
   };
   return (
     <div className="grid gap-3 rounded-b-md border border-t-0 border-border p-3">
@@ -251,12 +268,13 @@ function LayerBody({ layer, urlOf, readOnly, selectedOverlay, onSelectOverlay, o
       <div className="grid gap-1">
         <span className="text-label">{MASCOT_COPY.overlays}</span>
         {layer.images.length > 0 && (
-          <EditorDndContext onDragEnd={handleDragEnd}>
-            <StableSortableContext items={layer.images.map((_, index) => overlayId(index))} strategy={verticalListSortingStrategy}>
+          <EditorDndContext modifiers={OVERLAY_LIST_MODIFIERS} onDragEnd={handleDragEnd}>
+            <StableSortableContext items={ids} strategy={verticalListSortingStrategy}>
               <EditorRowList className="min-w-0">
                 {layer.images.map((image, index) => (
                   <SortableOverlay
-                    key={overlayId(index)}
+                    key={ids[index]}
+                    id={ids[index]}
                     index={index}
                     image={image}
                     urlOf={urlOf}
@@ -328,7 +346,7 @@ function SortableLayer({ layer, expanded, selected, urlOf, readOnly, onSelect, o
             </span>
           </span>
         }
-        actions={readOnly ? [] : [{ icon: <X className="h-4 w-4" />, title: MASCOT_COPY.removeLayer, onClick: onRemove }]}
+        actions={readOnly ? [] : [{ icon: <X className="h-4 w-4" />, destructive: true, title: MASCOT_COPY.removeLayer, onClick: onRemove }]}
       />
       {expanded && children}
     </div>
@@ -700,7 +718,6 @@ export function MascotTab({ settings, control, onOpenGeneral }: {
         </figure>
       </div>
       <Hint>{MASCOT_COPY.preview.hint}</Hint>
-      <MascotScaleRow />
       <TransitionControls
         transition={rig.transition}
         readOnly={readOnly}
@@ -835,6 +852,7 @@ export function MascotTab({ settings, control, onOpenGeneral }: {
         label={copy.label}
         actions={presetActions}
         testId="mascot-preset-row"
+        className={morph.contentInOverlay ? FULLSCREEN_CORNER_CLEAR : undefined}
         select={(
           <Select value={selected.id} onValueChange={control.select}>
             <SelectTrigger aria-label={copy.label} className="min-w-0 flex-1">

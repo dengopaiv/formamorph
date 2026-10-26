@@ -1,33 +1,38 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useGameData } from '../contexts/GameDataContext';
 import { PanelTabContent, PanelTabs } from '@/components/ui/panel-tabs';
-import { EntityDescriptionFields, EntityLocationsField, EntityProfileFields, EntityStartingLocationField } from './EntityFields';
+import { EntityDescriptionFields, EntityLocationsField, EntityProfileFields } from './EntityFields';
 import ScopedPlaceholdersSection from './ScopedPlaceholdersSection';
+import EntityStatsMirror from './EntityStatsMirror';
 import EntityTraitsMirror from './EntityTraitsMirror';
 import { EntityOpenings } from './OpeningsPanel';
 import { useEditingDraft } from '@/lib/useEditingDraft';
 import { statCodeName } from '@/lib/statCodeNames';
 import { useRenameField } from '@/lib/useCodeRename';
 import { withEntityLocations } from '@/lib/entityPresence';
+import { entitiesInTreeOrder } from '@/lib/entityGroupTree';
+import { withRelationships } from '@/lib/entityRelationships';
+import EntityRelationshipsField from './EntityRelationshipsField';
 import { customPersonaHeldElsewhere } from '@/lib/customPersona';
 import type { Entity, FocusFieldHint } from '@/types';
+import { Hint } from '@/components/ui/typography';
 import { labelPlaceholders } from '@/lib/placementLetters';
 import { locationRows } from '@/lib/locationTree';
 import { useEditorMode } from '@/lib/editorMode';
 import { entityPanelTabsFor, entityTabForField, type EntityPanelTab } from '@/views/entityPanelTabs';
 
 /**
- * Right-panel editor for one entity: the field groups split across Profile, Descriptions, Traits, Openings
- * and Placeholders. The Traits tab is the Traits tab's editor over this entity alone.
+ * Right-panel editor for one entity: the field groups split across Profile, Descriptions, Traits, Stats,
+ * Openings and Placeholders. The Traits and Stats tabs are those tabs' editors over this entity alone.
  *
- * The panel remounts per entity, so the chosen tab and the open trait and placeholder are the editor's to
- * hold and arrive as props.
+ * The panel remounts per entity, so the chosen tab and the open trait, stat and placeholder are the editor's
+ * to hold and arrive as props.
  *
  * `focusField` is the search target the find bar just navigated to. A hit on a tab that isn't showing has no
  * field to mark, so the panel opens the owning tab; the same hint the Overview panel takes for its own pair.
  */
 const EntityManager = ({
-  entity, tab, onTabChange, traitId, onTraitIdChange, placeholderId, onPlaceholderIdChange, onOpenWorldPlaceholder, focusField,
+  entity, tab, onTabChange, traitId, onTraitIdChange, statId, onStatIdChange, placeholderId, onPlaceholderIdChange, onOpenWorldPlaceholder, focusField,
 }: {
   entity: Entity;
   tab: EntityPanelTab;
@@ -35,6 +40,9 @@ const EntityManager = ({
   /** The Traits tab's open trait, group or Link; null shows its list. */
   traitId: string | null;
   onTraitIdChange: (id: string | null) => void;
+  /** The Stats tab's open stat; null shows its list. */
+  statId: string | null;
+  onStatIdChange: (id: string | null) => void;
   /** The Placeholders tab's open row; null shows its list. */
   placeholderId: string | null;
   onPlaceholderIdChange: (id: string | null) => void;
@@ -42,7 +50,7 @@ const EntityManager = ({
   onOpenWorldPlaceholder: (id: string) => void;
   focusField?: FocusFieldHint | null;
 }) => {
-  const { updateEntity, entities, locations, placeholders, placementLetters, placeholderOwners } = useGameData();
+  const { updateEntity, entities, entityGroups, locations, placeholders, placementLetters, placeholderOwners } = useGameData();
   const { draft: editingEntity, setDraft, setField: handleChange } = useEditingDraft<Entity>(entity, updateEntity);
   const { advanced } = useEditorMode();
   // An entity that owns placeholders is a node of the `placeholders` map, so renaming it moves the owner
@@ -67,6 +75,16 @@ const EntityManager = ({
     updateEntity(next);
   };
 
+  // Read as the tree it is, so a picker presents the hierarchy the way the game's own list does.
+  const locationOptions = useMemo(
+    () => locationRows(locations).map(({ location, depth }) => ({
+      label: labelPlaceholders(location.name, placeholders, { letters: placementLetters, owners: placeholderOwners }),
+      value: location.id,
+      depth,
+    })),
+    [locations, placeholders, placementLetters, placeholderOwners],
+  );
+
   const handleLocationsChange = (ids: string[]) => {
     if (editingEntity) writeWhole(withEntityLocations(editingEntity, ids));
   };
@@ -81,23 +99,17 @@ const EntityManager = ({
   if (!editingEntity) return null;
 
   const groupProps = { value: editingEntity, onChange: handleChange, placeholders, ownerId: entity.id };
-  // Read as the tree it is, so a picker presents the hierarchy the way the game's own list does.
-  const locationOptions = locationRows(locations).map(({ location, depth }) => ({
-    label: labelPlaceholders(location.name, placeholders, { letters: placementLetters, owners: placeholderOwners }),
-    value: location.id,
-    depth,
-  }));
   const tabs = entityPanelTabsFor(advanced);
 
   return (
-    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Entity Fields" surfaceTabs="worldEditorEntity">
+    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Entity Fields" surfaceTabs="worldEditorEntity" focus={{ kind: 'entity', id: entity.id, name: entity.name }}>
 
         <PanelTabContent value="profile">
           <EntityProfileFields
             {...groupProps}
             nameHandlers={rename}
             home="world"
-            customPersonaHolder={customPersonaHeldElsewhere(entities, entity.id)?.name}
+            customPersonaEntityName={customPersonaHeldElsewhere(entities, entity.id)?.name}
             // Two columns need ~570px, and the pane holding them is not monotonic in viewport width: below
             // `md` it is the full-width detail sheet, at `md` it becomes half the editor. So the second
             // column comes back only where the pane is wide enough — once in the sheet, again at `xl`.
@@ -110,7 +122,16 @@ const EntityManager = ({
                   selectedIds={selectedLocationIds}
                   onLocationsChange={handleLocationsChange}
                 />
-                <EntityStartingLocationField {...groupProps} options={locationOptions} />
+                {!editingEntity.customPersona && (
+                  <Hint>Set <b>Presence</b>, <b>Movement</b> and <b>Known In</b> on the full-screen <b>Locations Canvas</b></Hint>
+                )}
+                <EntityRelationshipsField
+                  entity={editingEntity}
+                  entities={entitiesInTreeOrder(entityGroups, entities)}
+                  labelOf={(e) => labelPlaceholders(e.name, placeholders, { letters: placementLetters, owners: placeholderOwners })}
+                  placeholders={placeholders}
+                  onChange={(relationships) => writeWhole(withRelationships(editingEntity, relationships))}
+                />
               </>
             )}
           />
@@ -123,6 +144,12 @@ const EntityManager = ({
         {advanced && (
           <PanelTabContent value="traits" fill>
             <EntityTraitsMirror entity={entity} selectedId={traitId} onSelect={onTraitIdChange} />
+          </PanelTabContent>
+        )}
+
+        {advanced && (
+          <PanelTabContent value="stats" fill>
+            <EntityStatsMirror entity={entity} selectedId={statId} onSelect={onStatIdChange} />
           </PanelTabContent>
         )}
 

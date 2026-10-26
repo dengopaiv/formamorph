@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  addLink, detachLink, detachDropsStats, dropLinksTo, editLinkTrait, linkedTraits, linksTo, originalPath, removeBlueprints, removeLink, resetLink,
+  addLink, detachLink, dropLinksTo, editLinkTrait, linkedTraits, linksTo, originalPath, removeBlueprints, removeLink, resetLink,
   resetLinkField, resetLinkTrait, setLinkField,
 } from './traitLinks';
 import type { Entity, Trait, TraitGroup, TraitLink } from '@/types';
@@ -16,7 +16,7 @@ const off = (blueprint: boolean) => ({ isDefault: { value: false, blueprint } })
 // Classes (Paladin, Wizard, Schools (Fire)), Brave at the root.
 const world = {
   traits: [
-    trait('paladin', { name: 'Paladin', groupId: 'classes', order: 0, isDefault: true, requires: [{ kind: 'trait', id: 'wizard' }] }),
+    trait('paladin', { name: 'Paladin', groupId: 'classes', order: 0, isDefault: true, requires: [{ all: [{ kind: 'trait', id: 'wizard' }] }] }),
     trait('wizard', { groupId: 'classes', order: 1 }),
     trait('fire', { groupId: 'schools' }),
     trait('brave', { groupId: null, statChanges: [{ statId: 's', value: 1, type: 'min' }] }),
@@ -34,14 +34,14 @@ describe('addLink', () => {
     ],
   };
 
-  it('links an original at the end of the bearer\'s top level, after its owned items and links', () => {
-    const bearer: Entity = {
+  it('links an original at the end of the owner\'s top level, after its owned items and links', () => {
+    const owner: Entity = {
       id: 'ash', name: 'Ash',
       traits: [trait('oath', { groupId: null, order: 0 }), trait('vow', { groupId: 'g-own' })],
       traitGroups: [group('g-own', null, { order: 1 })],
       traitLinks: [link('l1', 'wizard', 'trait', { order: 2 })],
     };
-    expect(addLink(blueprinted, bearer, 'classes', 'new')?.traitLinks).toEqual([
+    expect(addLink(blueprinted, owner, 'classes', 'new')?.traitLinks).toEqual([
       link('l1', 'wizard', 'trait', { order: 2 }),
       { id: 'new', originalId: 'classes', kind: 'group', originalName: 'Classes', groupId: null, order: 3 },
     ]);
@@ -82,7 +82,7 @@ describe('linkedTraits', () => {
     const l = link('l1', 'paladin', 'trait', {
       overrides: {
         paladin: {
-          requires: { value: [], blueprint: [{ kind: 'trait', id: 'wizard' }] },
+          requires: { value: [], blueprint: [{ all: [{ kind: 'trait', id: 'wizard' }] }] },
           playerToggle: { value: true, blueprint: false },
           statChanges: { value: [{ statId: 's', value: 2, type: 'max' }], blueprint: [] },
         },
@@ -172,51 +172,28 @@ describe('editLinkTrait', () => {
       paladin: { requires: { value: [], blueprint: paladin.requires }, playerToggle: { value: true, blueprint: false } },
     });
     expect(out.traitLinks?.[1]).toBe(ash.traitLinks![1]);
-    expect(world.traits[0].requires).toEqual([{ kind: 'trait', id: 'wizard' }]);
+    expect(world.traits[0].requires).toEqual([{ all: [{ kind: 'trait', id: 'wizard' }] }]);
     expect(editLinkTrait(world, ash, 'l-ash', 'pack', paladin)).toBe(ash);
   });
 });
 
-describe('detachDropsStats', () => {
-  const cast: Entity = { id: 'c', name: 'C' };
-
-  it('reads stat changes and stat toggles anywhere the link brings, as the link reads them', () => {
-    expect(detachDropsStats(world, cast, link('l1', 'brave', 'trait'))).toBe(true);
-    expect(detachDropsStats(world, cast, link('l1', 'wizard', 'trait'))).toBe(false);
-    const toggled = { ...world, traits: [...world.traits, trait('ember', { groupId: 'schools', statToggles: [{ statId: 's', enabled: true }] })] };
-    expect(detachDropsStats(toggled, cast, link('l1', 'classes', 'group'))).toBe(true);
-    expect(detachDropsStats(world, cast, link('l1', 'classes', 'group'))).toBe(false);
-    // An override that adds stat changes counts; one that clears them does not.
-    const adds = { wizard: { statChanges: { value: [{ statId: 's', value: 1, type: 'max' as const }], blueprint: [] } } };
-    expect(detachDropsStats(world, cast, link('l1', 'classes', 'group', { overrides: adds }))).toBe(true);
-    const clears = { brave: { statChanges: { value: [], blueprint: world.traits[3].statChanges } } };
-    expect(detachDropsStats(world, cast, link('l1', 'brave', 'trait', { overrides: clears }))).toBe(false);
-  });
-
-  it('drops nothing on a persona, which keeps the stats (Q8)', () => {
-    expect(detachDropsStats(world, { ...cast, persona: true }, link('l1', 'brave', 'trait'))).toBe(false);
-    expect(detachDropsStats(world, { ...cast, customPersona: true }, link('l1', 'brave', 'trait'))).toBe(false);
-  });
-});
-
 describe('detachLink', () => {
-  it('turns a trait link into an owned copy with a new id in the link\'s place, as the link reads it, without stat effects', () => {
+  it('turns a trait link into an owned copy with a new id in the link\'s place, as the link reads it', () => {
     const overrides = { brave: { ...on(false), playerToggle: { value: true, blueprint: false } } };
     const a: Entity = { id: 'a', name: 'A', traitGroups: [group('bond', null)], traitLinks: [link('l1', 'brave', 'trait', { groupId: 'bond', order: 3, overrides })] };
     const out = detachLink(world, a, 'l1')!;
     expect(out.entity).not.toHaveProperty('traitLinks');
     const copy = out.entity.traits!.find((t) => t.id === out.newId)!;
     expect(out.newId).not.toBe('brave');
-    expect(copy).toMatchObject({ name: 'brave', groupId: 'bond', order: 3, isDefault: true, playerToggle: true, statChanges: [] });
-    expect(copy).not.toHaveProperty('statToggles');
+    expect(copy).toMatchObject({ name: 'brave', groupId: 'bond', order: 3, isDefault: true, playerToggle: true, statChanges: world.traits[3].statChanges });
   });
 
-  it('keeps stat changes and stat toggles, as the link reads them, on a persona (Q8)', () => {
+  it('keeps stat changes and stat toggles, as the link reads them, on any entity', () => {
     const toggles = [{ statId: 's', enabled: true }];
     const toggled = { ...world, traits: world.traits.map((t) => (t.id === 'brave' ? { ...t, statToggles: toggles } : t)) };
     const raised = [{ statId: 's', value: 3, type: 'max' as const }];
     const overrides = { brave: { statChanges: { value: raised, blueprint: world.traits[3].statChanges } } };
-    for (const mark of [{ persona: true }, { customPersona: true }]) {
+    for (const mark of [{}, { persona: true }, { customPersona: true }]) {
       const a: Entity = { id: 'a', name: 'A', ...mark, traitLinks: [link('l1', 'brave', 'trait', { overrides })] };
       const out = detachLink(toggled, a, 'l1')!;
       expect(out.entity.traits!.find((t) => t.id === out.newId)).toMatchObject({ statChanges: raised, statToggles: toggles });
@@ -235,7 +212,7 @@ describe('detachLink', () => {
     const byName = (n: string) => traits.find((t) => t.name === n)!;
     expect(byName('fire').groupId).toBe(schools.id);
     expect(byName('Paladin')).toMatchObject({ groupId: root.id, isDefault: false });
-    expect(byName('Paladin').requires).toEqual([{ kind: 'trait', id: byName('wizard').id }]);
+    expect(byName('Paladin').requires).toEqual([{ all: [{ kind: 'trait', id: byName('wizard').id }] }]);
     const ids = [...groups, ...traits].map((x) => x.id);
     expect(ids.some((id) => ['classes', 'schools', 'paladin', 'wizard', 'fire'].includes(id))).toBe(false);
   });
@@ -262,8 +239,8 @@ describe('blueprint pins on links', () => {
   });
 
   it("overrides the pin list against the original's, and clears it back to live", () => {
-    const bearer: Entity = { id: 'mira', name: 'Mira', traitLinks: [link('l1', 'paladin', 'trait')] };
-    const set = setLinkField(pinned, bearer, 'l1', 'paladin', 'placeholderPins', [plate]);
+    const owner: Entity = { id: 'mira', name: 'Mira', traitLinks: [link('l1', 'paladin', 'trait')] };
+    const set = setLinkField(pinned, owner, 'l1', 'paladin', 'placeholderPins', [plate]);
     expect(set.traitLinks![0].overrides).toEqual({ paladin: { placeholderPins: { value: [plate], blueprint: [tabard] } } });
     expect(linkedTraits(pinned, set.traitLinks![0], 'paladin')[0].placeholderPins).toEqual([plate]);
     expect(resetLinkField(set, 'l1', 'paladin', 'placeholderPins').traitLinks![0]).toEqual(link('l1', 'paladin', 'trait'));
@@ -300,7 +277,7 @@ describe('removeBlueprints (Q11, Q12)', () => {
     expect(out.traitGroups.find((g) => g.id === 'classes')?.parentId).toBeNull();
     expect(out.traits.find((t) => t.id === 'oath')?.groupId).toBeNull();
     expect(out.entities[0]).toBe(cast);
-    expect(out).toMatchObject({ detached: 0, strippedOn: [], movedUp: true });
+    expect(out).toMatchObject({ detached: 0, movedUp: true });
   });
 
   it('detaches a linked item with its subtree into each linker, deletes it, and moves the unlinked rest up', () => {
@@ -325,13 +302,13 @@ describe('removeBlueprints (Q11, Q12)', () => {
     expect(removeBlueprints(bp, [all])!.movedUp).toBe(false);
   });
 
-  it('names each cast entity whose copies lose stat effects, once, and no persona', () => {
+  it('keeps the stat effects of every entity\'s copies, cast or persona', () => {
     const statful = { ...bp, traits: bp.traits.map((t) => (t.id === 'oath' ? { ...t, statChanges: [{ statId: 's', value: 1, type: 'max' as const }] } : t)) };
     const cast: Entity = { id: 'c', name: 'Cy', traitLinks: [link('l1', 'oath', 'trait'), link('l2', 'classes', 'group', { order: 1 })] };
     const persona: Entity = { id: 'p', name: 'Pia', customPersona: true, traitLinks: [link('l3', 'oath', 'trait')] };
     const out = removeBlueprints(statful, [cast, persona])!;
-    expect(out.strippedOn).toEqual(['Cy']);
-    expect(out.entities[1].traits?.[0].statChanges).toEqual([{ statId: 's', value: 1, type: 'max' }]);
+    expect(out.entities.map((e) => e.traits?.find((t) => t.name === 'oath')?.statChanges))
+      .toEqual([[{ statId: 's', value: 1, type: 'max' }], [{ statId: 's', value: 1, type: 'max' }]]);
   });
 
   it('is null without a Blueprints group', () => {

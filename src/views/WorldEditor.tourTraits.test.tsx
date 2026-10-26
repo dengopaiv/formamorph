@@ -10,7 +10,7 @@ import type { Stat, Trait, World } from '@/types';
 
 /**
  * The Authoring Tour's Traits steps, driven through the real editor: the add step and its tour trait, the
- * three field steps, and In Play's setup screen, traits block and settled stat row.
+ * three field steps, and In Game's setup screen, traits block and settled stat row.
  */
 
 vi.mock('@/lib/authoringTour/tourImages', () => ({
@@ -29,20 +29,10 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
 }));
-
-vi.setConfig({ testTimeout: 15_000 });
 
 const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 
@@ -50,7 +40,7 @@ const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 const WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   traitGroups: [],
   // A New World overview carries no readme or openings, which the overview type calls required.
@@ -71,7 +61,7 @@ const addButton = () => screen.getByRole('button', { name: 'Add to Traits' });
 /** In Simple mode, the Traits tab's + makes the trait in one click. */
 const clickAddTrait = () => fireEvent.click(addButton());
 
-const inPlay = () => screen.getByRole('region', { name: 'In Play' });
+const inPlay = () => screen.getByRole('region', { name: 'In Game' });
 const playerSees = () => within(inPlay()).queryByRole('region', { name: 'Player Sees' });
 const reader = (prompt: string) => within(inPlay()).queryByRole('region', { name: `${prompt} Reads` });
 const marks = (el: HTMLElement) => Array.from(el.querySelectorAll('mark')).map((m) => m.textContent);
@@ -219,7 +209,7 @@ describe('Authoring Tour — Traits steps', () => {
   });
 });
 
-describe('In Play — Traits', () => {
+describe('In Game — Traits', () => {
   it('Add: shows nothing until there is a trait', async () => {
     await resumeAt('add-trait');
     expect(playerSees()).toBeNull();
@@ -251,12 +241,12 @@ describe('In Play — Traits', () => {
     await resumeAt('trait-ai-description');
     expect(within(playerSees()!).getByText('Players never see the AI-Facing Description')).toBeInTheDocument();
     // The picked trait is in the block by name before it has a description.
-    expect(readText(reader('Narration Prompt')!)).toBe('## Traits\n- **Tide-Touched**');
+    expect(readText(reader('Narration Prompt')!)).toBe('## Global Traits\n- **Tide-Touched**');
 
     fireEvent.click(noteButton('Use Example')!);
     const narration = reader('Narration Prompt')!;
     await waitFor(() => expect(marks(narration)).toEqual([TIDE_TOUCHED_AI]));
-    expect(readText(narration)).toBe(`## Traits\n- **Tide-Touched:** ${TIDE_TOUCHED_AI}`);
+    expect(readText(narration)).toBe(`## Global Traits\n- **Tide-Touched:** ${TIDE_TOUCHED_AI}`);
   });
 
   it('Stat Change: shows the change on the setup screen and the stat starting at the settled value', async () => {
@@ -269,7 +259,7 @@ describe('In Play — Traits', () => {
     expect(within(sees).getByRole('listitem')).toHaveTextContent('Sea Change: +15');
     // The traits block never lists stat changes, so nothing in it is marked.
     const narration = reader('Narration Prompt')!;
-    expect(readText(narration)).toBe(`## Traits\n- **Tide-Touched:** ${TIDE_TOUCHED_AI}`);
+    expect(readText(narration)).toBe(`## Global Traits\n- **Tide-Touched:** ${TIDE_TOUCHED_AI}`);
     expect(marks(narration)).toEqual([]);
   });
 

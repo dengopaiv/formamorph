@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  resolveReasoningCapability, mergeReasoningCapability, reasoningRuledOut,
+  resolveReasoningCapability, mergeReasoningCapability, reasoningRuledOut, parseReasoningCapability,
+  reasoningNeedsResolve, storedAfterResolve,
   SAFE_REASONING_EFFORTS, REASONING_CANDIDATES,
   type ReasoningCapability,
 } from './reasoningEffort';
@@ -131,6 +132,17 @@ describe('llama.cpp properties endpoint', () => {
     expect(record?.sources.levels).toBe('native');
   });
 
+  // Only llama.cpp serves template caps, and it takes a per-request budget on every template that has them.
+  it('names the llama.cpp dialect and its token budget whatever the template says', async () => {
+    for (const honored of [true, false]) {
+      resetProbeMemo();
+      const { doFetch } = backend({ [PROPS]: props({ supports_reasoning_effort: honored }) });
+      const record = await resolveReasoningCapability(TARGET, doFetch);
+      expect(record).toMatchObject({ dialect: 'llamacpp', budget: true });
+      expect(record?.sources).toMatchObject({ dialect: 'native', budget: 'native' });
+    }
+  });
+
   // llama.cpp exposes no flag for "does this model think", so the question stays open either way.
   it('leaves the reasons question unknown whatever the template says', async () => {
     const honored = backend({ [PROPS]: props({ supports_reasoning_effort: true }) });
@@ -140,10 +152,29 @@ describe('llama.cpp properties endpoint', () => {
     expect((await resolveReasoningCapability(TARGET, ignored.doFetch))?.reasons).toBeNull();
   });
 
-  it('accepts no effort level when the template ignores the field', async () => {
+  // `none` disables thinking on any template, so it is the one literal a template that ignores the field takes.
+  it('accepts the none literal alone when the template ignores the field, which leaves the model in play', async () => {
     const { doFetch } = backend({ [PROPS]: props({ supports_reasoning_effort: false }) });
     const record = await resolveReasoningCapability(TARGET, doFetch);
-    expect(record?.levels).toEqual([]);
+    expect(record?.levels).toEqual(['none']);
+    expect(reasoningRuledOut(record)).toBe(false);
+  });
+
+  // A record written before llama.cpp named its dialect: levels from `/props`, no dialect, no budget.
+  it('asks a llama.cpp record cached before the dialect existed once more, and stores the new answers', async () => {
+    for (const reasons of [{}, { reasons: 'catalog' as const }]) {
+      resetProbeMemo();
+      const cached = parseReasoningCapability({
+        reasons: 'reasons' in reasons ? true : null, levels: [], budget: null, tools: false,
+        sources: { levels: 'native', tools: 'probe', ...reasons },
+      });
+      expect(reasoningNeedsResolve(cached)).toBe(true);
+      const { doFetch } = backend({ [PROPS]: props({ supports_reasoning_effort: false }) });
+      const fresh = await resolveReasoningCapability(TARGET, doFetch, { stored: cached });
+      const stored = storedAfterResolve(cached, fresh!);
+      expect(stored).toMatchObject({ dialect: 'llamacpp', budget: true, levels: ['none'] });
+      expect(reasoningNeedsResolve(stored)).toBe(false);
+    }
   });
 
   it('moves on when an older build omits the flag', async () => {
@@ -186,6 +217,44 @@ describe('gateway model list', () => {
     const { doFetch } = backend({ [OPENAI]: entry({ supported_parameters: ['temperature', 'top_p'] }) });
     const record = await resolveReasoningCapability(TARGET, doFetch);
     expect(record).toMatchObject({ reasons: false });
+  });
+
+  describe('NanoGPT detailed list', () => {
+    const NANO = { url: 'https://nano-gpt.com/api/v1/chat/completions', token: 't', model: 'm' };
+    const DETAILED = 'https://nano-gpt.com/api/v1/models?detailed=true';
+
+    it('asks for the detailed list and reads its reasoning flag and efforts', async () => {
+      const { doFetch, calls } = backend({
+        [DETAILED]: entry({ capabilities: { reasoning: true }, reasoning_efforts: ['low', 'high', 'max', 'turbo'] }),
+      });
+      const record = await resolveReasoningCapability(NANO, doFetch);
+      expect(calls.some((c) => c.url === DETAILED)).toBe(true);
+      expect(record).toMatchObject({ reasons: true, levels: ['low', 'high', 'max'], offAllowed: false });
+      expect(record?.sources).toMatchObject({ reasons: 'native', levels: 'native', offAllowed: 'native' });
+    });
+
+    it('allows off where the efforts list none', async () => {
+      const { doFetch } = backend({ [DETAILED]: entry({ capabilities: { reasoning: true }, reasoning_efforts: ['none', 'low'] }) });
+      expect(await resolveReasoningCapability(NANO, doFetch)).toMatchObject({ offAllowed: true, levels: ['none', 'low'] });
+    });
+
+    it('asks a NanoGPT subdomain for the detailed list too', async () => {
+      const www = { ...NANO, url: 'https://www.nano-gpt.com/api/v1/chat/completions' };
+      const { doFetch, calls } = backend({});
+      await resolveReasoningCapability(www, doFetch);
+      expect(calls.some((c) => c.url === 'https://www.nano-gpt.com/api/v1/models?detailed=true')).toBe(true);
+    });
+
+    it('rules a model out when the flag is false', async () => {
+      const { doFetch } = backend({ [DETAILED]: entry({ capabilities: { reasoning: false } }) });
+      expect(await resolveReasoningCapability(NANO, doFetch)).toMatchObject({ reasons: false });
+    });
+  });
+
+  it('reads a capabilities flag on any host, leaving the levels open without a list', async () => {
+    const { doFetch } = backend({ [OPENAI]: entry({ capabilities: { reasoning: true } }) });
+    const record = await resolveReasoningCapability(TARGET, doFetch);
+    expect(record).toMatchObject({ reasons: true, levels: null, offAllowed: null });
   });
 
   it('moves on when the model is not in the list', async () => {
@@ -331,16 +400,17 @@ describe('the dialect each existing source names', () => {
     expect(ruledOut).toMatchObject({ reasons: false, dialect: 'lmstudio' });
   });
 
-  it('leaves Ollama and llama.cpp unknown, since neither names a spelling', async () => {
+  it('leaves Ollama unknown, since it names no spelling', async () => {
     const ollama = backend({ [OLLAMA]: { status: 200, body: { capabilities: ['completion', 'thinking'] } } });
     expect((await resolveReasoningCapability(TARGET, ollama.doFetch))?.dialect).toBe('unknown');
+  });
 
-    resetProbeMemo();
+  it('names llama.cpp from its template caps, through the probe that answers the reasons question', async () => {
     const llama = backend({
       [PROPS]: { status: 200, body: { chat_template_caps: { supports_reasoning_effort: true } } },
       [COMPLETIONS]: { status: 200, body: {} },
     });
-    expect((await resolveReasoningCapability(TARGET, llama.doFetch))?.dialect).toBe('unknown');
+    expect((await resolveReasoningCapability(TARGET, llama.doFetch))?.dialect).toBe('llamacpp');
   });
 
   it('leaves the dialect unknown when only the probe answered', async () => {
@@ -412,7 +482,7 @@ describe('the chain ends on the reasons question, not on any answer', () => {
       [COMPLETIONS]: { status: 200, body: {} },
     });
     const record = await resolveReasoningCapability(TARGET, doFetch);
-    expect(record?.levels).toEqual([]);
+    expect(record?.levels).toEqual(['none']);
     expect(record?.sources.levels).toBe('native');
   });
 
@@ -633,7 +703,7 @@ describe('merging a fresh answer onto a stored record', () => {
     levels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     budget: null,
     dialect: 'unknown',
-    offAllowed: null, tools: null,
+    offAllowed: null, tools: null, structuredOutput: null,
     sources: { levels: 'cache' },
   };
 
@@ -649,14 +719,14 @@ describe('merging a fresh answer onto a stored record', () => {
   });
 
   it('keeps a stored answer the fresh record does not carry', () => {
-    const stored: ReasoningCapability = { reasons: true, levels: ['none', 'high'], budget: true, dialect: 'lmstudio', offAllowed: null, tools: null, sources: { reasons: 'native', levels: 'native', budget: 'native', dialect: 'native' } };
-    const fresh: ReasoningCapability = { reasons: null, levels: null, budget: null, dialect: 'unknown', offAllowed: null, tools: null, sources: {} };
+    const stored: ReasoningCapability = { reasons: true, levels: ['none', 'high'], budget: true, dialect: 'lmstudio', offAllowed: null, tools: null, structuredOutput: null, sources: { reasons: 'native', levels: 'native', budget: 'native', dialect: 'native' } };
+    const fresh: ReasoningCapability = { reasons: null, levels: null, budget: null, dialect: 'unknown', offAllowed: null, tools: null, structuredOutput: null, sources: {} };
     expect(mergeReasoningCapability(stored, fresh)).toEqual(stored);
   });
 
   it('takes every fresh answer over the stored one', () => {
-    const stored: ReasoningCapability = { reasons: false, levels: [], budget: null, dialect: 'unknown', offAllowed: null, tools: null, sources: { reasons: 'probe', levels: 'probe' } };
-    const fresh: ReasoningCapability = { reasons: true, levels: ['none', 'low'], budget: true, dialect: 'lmstudio', offAllowed: true, tools: null, sources: { reasons: 'native', levels: 'native', budget: 'native', dialect: 'native' } };
+    const stored: ReasoningCapability = { reasons: false, levels: [], budget: null, dialect: 'unknown', offAllowed: null, tools: null, structuredOutput: null, sources: { reasons: 'probe', levels: 'probe' } };
+    const fresh: ReasoningCapability = { reasons: true, levels: ['none', 'low'], budget: true, dialect: 'lmstudio', offAllowed: true, tools: null, structuredOutput: null, sources: { reasons: 'native', levels: 'native', budget: 'native', dialect: 'native' } };
     expect(mergeReasoningCapability(stored, fresh)).toEqual(fresh);
   });
 });

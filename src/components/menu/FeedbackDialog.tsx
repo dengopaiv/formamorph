@@ -7,7 +7,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import PromptField from "@/components/prompt/PromptField";
@@ -19,6 +23,10 @@ import {
 } from "@/lib/feedbackDraft";
 import { collectDiagnostics, DIAGNOSTIC_LABELS } from "@/lib/bugDiagnostics";
 import { CATEGORY_OPTIONS, DEFAULT_CATEGORY, FEEDBACK_TYPE_LABELS } from "@/lib/feedbackPresentation";
+import { isStaff } from "@/lib/roles";
+import { FeedbackThreadView } from "@/components/menu/FeedbackThreadView";
+import { SimilarQuestions } from "@/components/menu/SimilarQuestions";
+import AuthService from "@/services/AuthService";
 import FeedbackService from "@/services/FeedbackService";
 import { FEEDBACK_TYPES, type BugDiagnostics, type FeedbackCategory, type FeedbackType } from "@/types";
 
@@ -47,6 +55,14 @@ const COPY: Record<FeedbackType, {
     submit: 'Send Suggestion',
     sent: 'Suggestion filed — you can follow it under Suggestions in your profile',
   },
+  question: {
+    description: 'Everyone can read, answer and vote on questions, so check the list below for yours first. Replies land under Questions in your profile.',
+    titlePlaceholder: 'What you want to know, in a line',
+    bodyLabel: 'What you tried',
+    bodyPlaceholder: 'Where you got stuck, and what you tried already',
+    submit: 'Post Question',
+    sent: 'Question posted — you can follow it under Questions in your profile',
+  },
 };
 
 interface FeedbackDialogProps {
@@ -56,9 +72,18 @@ interface FeedbackDialogProps {
   initialType?: FeedbackType;
   /** Called after something is filed, so a list showing the caller's own can pick it up. */
   onFiled?: () => void;
-  /** Filled-in fields that replace any unsent draft; the fill then becomes the draft. */
+  /** Filled-in fields. Over an unsent draft the dialog asks first; a fill it takes becomes the draft. */
   initialTitle?: string;
   initialBody?: string;
+  /** The control focus goes back to on close, for an opener that a dialog makes inert as it opens. */
+  returnFocus?: HTMLElement | null;
+}
+
+/** A fill that waits on the Replace-draft confirm. */
+interface PendingFill {
+  type: FeedbackType;
+  title: string;
+  body: string;
 }
 
 /** The reporter's diagnostics, shown before sending — nothing about them leaves silently. */
@@ -84,14 +109,14 @@ function DiagnosticsPanel({ diagnostics }: { diagnostics: BugDiagnostics }) {
 }
 
 /**
- * File a bug report or a suggestion. Opened from the menu footer, from in-game, and from either feedback
+ * File a bug report, a suggestion or a question. Opened from the menu footer, from in-game, and from either feedback
  * tab in the profile dialog.
  *
  * One dialog with a tab rather than two: the forms differ by a dropdown's contents and whether anything
  * about the machine goes with it, which is not two dialogs' worth of difference.
  */
 export function FeedbackDialog({
-  open, onOpenChange, initialType = 'bug', onFiled, initialTitle, initialBody,
+  open, onOpenChange, initialType = 'bug', onFiled, initialTitle, initialBody, returnFocus,
 }: FeedbackDialogProps) {
   const [type, setType] = useState<FeedbackType>(initialType);
   const [title, setTitle] = useState('');
@@ -100,6 +125,9 @@ export function FeedbackDialog({
   const [isSending, setIsSending] = useState(false);
   // Set when this opening started from stored writing rather than a blank form, so the dialog can say so.
   const [restored, setRestored] = useState(false);
+  // A similar question opened over the form; the form stays mounted underneath with the draft.
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [similarRefresh, setSimilarRefresh] = useState(0);
 
   // No chip family: this is prose, and an authored world's placeholders mean nothing here.
   const plainVocab = useMemo(() => plainVocabulary(), []);
@@ -109,26 +137,42 @@ export function FeedbackDialog({
   // Muted once the report is away, so the mirror below can't re-save what was just sent.
   const filedRef = useRef(false);
 
-  // An unsent report outranks the caller's requested branch: it opens on whatever was being written,
-  // announced and one click from gone, rather than the writing being silently dropped.
-  useResetOnOpen(open, () => {
-    const filled = initialTitle !== undefined || initialBody !== undefined;
-    // A fill replaces the draft; the mirror below saves the fill in its place.
-    if (filled) clearFeedbackDraft();
-    const draft = filled ? null : loadFeedbackDraft();
-    const startType = draft?.type ?? initialType;
-    setType(startType);
-    setTitle(draft?.title ?? initialTitle ?? '');
+  // A fill that arrived over unsent writing, while the Replace-draft confirm asks.
+  const [pendingFill, setPendingFill] = useState<PendingFill | null>(null);
+
+  const showForm = (next: PendingFill & { category?: FeedbackCategory }, fromDraft: boolean) => {
+    setType(next.type);
+    setTitle(next.title);
     // A stored category from an older build's list would be refused by the server, so it's only taken
     // when the live options still offer it.
-    const known = CATEGORY_OPTIONS[startType].some((option) => option.value === draft?.category);
-    setCategory(known && draft ? draft.category : DEFAULT_CATEGORY[startType]);
-    setBody(draft?.body ?? initialBody ?? '');
+    const known = CATEGORY_OPTIONS[next.type].some((option) => option.value === next.category);
+    setCategory(known && next.category ? next.category : DEFAULT_CATEGORY[next.type]);
+    setBody(next.body);
+    setRestored(fromDraft);
+  };
+
+  // An unsent report outranks the caller's requested branch: it opens on whatever was being written,
+  // announced and one click from gone, rather than the writing being silently dropped. A fill over it asks first.
+  useResetOnOpen(open, () => {
+    const fill = initialTitle !== undefined || initialBody !== undefined
+      ? { type: initialType, title: initialTitle ?? '', body: initialBody ?? '' }
+      : null;
+    const draft = loadFeedbackDraft();
+    if (draft) showForm(draft, true);
+    else showForm(fill ?? { type: initialType, title: '', body: '' }, false);
+    const same = draft && fill && draft.type === fill.type && draft.title === fill.title && draft.body === fill.body;
+    setPendingFill(draft && !same ? fill : null);
     setIsSending(false);
-    setRestored(draft !== null);
+    setOpenThreadId(null);
     filedRef.current = false;
     setDiagnostics(collectDiagnostics());
   });
+
+  // The mirror below saves the fill in the draft's place.
+  const replaceDraft = () => {
+    if (pendingFill) showForm(pendingFill, false);
+    setPendingFill(null);
+  };
 
   // Mirror the form to storage as it's written, so closing the dialog — or reloading to reproduce the bug
   // being reported — costs nothing. Only while open: the reset above would otherwise write back its blanks.
@@ -182,7 +226,14 @@ export function FeedbackDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[800px] max-h-[90dvh] flex flex-col">
+      <DialogContent
+        className="sm:max-w-[800px] max-h-[90dvh] flex flex-col"
+        onCloseAutoFocus={(event) => {
+          if (!returnFocus?.isConnected) return;
+          event.preventDefault();
+          returnFocus.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquarePlus className="h-4 w-4" /> Send Feedback
@@ -191,7 +242,17 @@ export function FeedbackDialog({
         </DialogHeader>
 
         <ScrollArea className="flex-1 min-h-0">
-          <div className="space-y-4">
+          {openThreadId && (
+            <FeedbackThreadView
+              threadId={openThreadId}
+              isAdmin={isStaff(AuthService.getCurrentUser())}
+              onBack={() => setOpenThreadId(null)}
+              onChanged={() => setSimilarRefresh((n) => n + 1)}
+            />
+          )}
+
+          {/* Hidden, not unmounted, under an open thread: Back returns to the same draft and caret. */}
+          <div className="space-y-4" hidden={openThreadId !== null}>
             {restored && (
               <p className="rounded-md border bg-muted/40 px-3 py-2 text-meta text-muted-foreground">
                 Picked up where you left off — this was still unsent. Discard it below to start fresh.
@@ -199,7 +260,7 @@ export function FeedbackDialog({
             )}
 
             <Tabs value={type} onValueChange={(value) => switchType(value as FeedbackType)}>
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 {FEEDBACK_TYPES.map((value) => (
                   <TabsTrigger key={value} value={value}>{FEEDBACK_TYPE_LABELS[value].tab}</TabsTrigger>
                 ))}
@@ -216,6 +277,10 @@ export function FeedbackDialog({
                 placeholder={copy.titlePlaceholder}
               />
             </div>
+
+            {type === 'question' && (
+              <SimilarQuestions title={title} onOpen={setOpenThreadId} refreshKey={similarRefresh} />
+            )}
 
             <div className="space-y-2">
               <label className="text-label font-medium">Category</label>
@@ -245,28 +310,51 @@ export function FeedbackDialog({
               />
             </div>
 
-            {/* Bugs only. A suggestion is about the game, not about the machine it was written on, so there
-                is nothing to disclose because nothing is collected. */}
+            {/* Bugs only. A suggestion or question is about the game, not about the machine it was written
+                on, so there is nothing to disclose because nothing is collected. */}
             {type === 'bug' && <DiagnosticsPanel diagnostics={diagnostics} />}
           </div>
         </ScrollArea>
 
         {/* Closing keeps the writing, so the footer says "Close" and discarding is its own deliberate
             button — offered only when there is something to lose. */}
-        <DialogFooter className="sm:justify-between">
-          <Button
-            variant="ghost"
-            className={hasDraftContent({ title, body }) ? 'text-destructive hover:text-destructive' : 'invisible'}
-            onClick={discardDraft}
-            disabled={isSending || !hasDraftContent({ title, body })}
+        {!openThreadId && (
+          <DialogFooter className="sm:justify-between">
+            <Button
+              variant="ghost"
+              className={hasDraftContent({ title, body }) ? 'text-destructive hover:text-destructive' : 'invisible'}
+              onClick={discardDraft}
+              disabled={isSending || !hasDraftContent({ title, body })}
+            >
+              Discard Draft
+            </Button>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSending}>Close</Button>
+              <Button onClick={submit} disabled={isSending}>{isSending ? 'Sending…' : copy.submit}</Button>
+            </div>
+          </DialogFooter>
+        )}
+
+        {/* Keep Draft, Escape and an outside press all leave the draft as it is. */}
+        <AlertDialog open={pendingFill !== null} onOpenChange={(next) => { if (!next) setPendingFill(null); }}>
+          <AlertDialogContent
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              document.getElementById('feedbackTitle')?.focus();
+            }}
           >
-            Discard Draft
-          </Button>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSending}>Close</Button>
-            <Button onClick={submit} disabled={isSending}>{isSending ? 'Sending…' : copy.submit}</Button>
-          </div>
-        </DialogFooter>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Replace your unsent draft?</AlertDialogTitle>
+              <AlertDialogDescription>This deletes your unsent draft.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep Draft</AlertDialogCancel>
+              <AlertDialogAction className={buttonVariants({ variant: 'destructive' })} onClick={replaceDraft}>
+                Replace
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

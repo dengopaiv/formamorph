@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, fireEvent, within } from '@testing-library/react';
 import { asMobile, benchEditorWorld, openEditorTab, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { decodePlaceholderToken, encodePlaceholderToken } from '@/lib/placeholders';
 import type { World } from '@/types';
 
 /** The top-level Locations tab on the List Editor: the tree, a flat sortable search, and the Canvas view. */
@@ -32,7 +33,7 @@ const WORLD: World = benchEditorWorld({
 } as Partial<World>);
 
 const searchLocations = (term: string) =>
-  fireEvent.change(screen.getByPlaceholderText('Search or add new locations'), { target: { value: term } });
+  fireEvent.change(screen.getByPlaceholderText('Filter Locations'), { target: { value: term } });
 
 /** The flat search list's rows, by the label each one shows. */
 const searchRows = () => screen.queryAllByRole('button', { name: /^Select / }).map((b) => b.getAttribute('aria-label')!.slice('Select '.length));
@@ -93,6 +94,21 @@ describe('the Locations tab', () => {
     expect(shownName()).toBe('Harbor (Copy)');
   });
 
+  it('gives a duplicated search row its own Unique-chip rolls', () => {
+    const roll = encodePlaceholderToken({ id: 'eye', mode: 'unique', placementId: 'p1' });
+    const world = benchEditorWorld({
+      locations: [{ id: 'harbor', name: 'Harbor', description: `Eyes ${roll}` }],
+    } as Partial<World>);
+    const { ctx } = renderWorldEditorBench(world, 'advanced');
+    openEditorTab(/Locations/);
+
+    searchLocations('Harbor');
+    fireEvent.click(within(searchRow('Harbor')).getByRole('button', { name: 'Duplicate' }));
+    const [source, copy] = ctx().locations;
+    expect(source.description).toBe(`Eyes ${roll}`);
+    expect(decodePlaceholderToken(copy.description!.slice('Eyes '.length))!.placementId).not.toBe('p1');
+  });
+
   it('deletes a search row and closes its details', () => {
     const { ctx } = renderWorldEditorBench(WORLD, 'advanced');
     openEditorTab(/Locations/);
@@ -138,8 +154,9 @@ describe('the Locations tab', () => {
   describe('the view switch', () => {
     /** The toolbar's controls in DOM order: the +, the search box, then each view button by its name. */
     const toolbarOrder = () => {
-      const box = screen.getByPlaceholderText('Search or add new locations');
-      return [...box.parentElement!.querySelectorAll<HTMLElement>('button, input')].map((el) =>
+      const box = screen.getByPlaceholderText('Filter Locations');
+      const row = screen.getByRole('button', { name: 'Add to Locations' }).parentElement!;
+      return [...row.querySelectorAll<HTMLElement>('button, input')].map((el) =>
         el === box ? 'search' : el.getAttribute('aria-label') ?? el.textContent);
     };
     const viewButtons = () => ['List', 'Canvas'].map((name) => screen.getByRole('radio', { name }));
@@ -183,7 +200,7 @@ describe('the Locations tab', () => {
       renderWorldEditorBench(WORLD, 'advanced');
       openEditorTab(/Locations/);
 
-      const box = screen.getByPlaceholderText('Search or add new locations');
+      const box = screen.getByPlaceholderText('Filter Locations');
       let row: HTMLElement = screen.getByRole('radio', { name: 'Canvas' });
       while (!row.contains(box)) row = row.parentElement!;
       expect(row.querySelector('[role="tablist"]')).toBeNull();

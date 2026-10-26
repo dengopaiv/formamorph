@@ -41,8 +41,8 @@ describe('default prompts carry the expected variable chips', () => {
       '<MARKDOWN GUIDANCE>',
       '<WORLD DESCRIPTION>',
       '<DICTIONARY|before>',
-      '<STATS DESCRIPTION|descriptions.markdown>',
       '<TRAITS DESCRIPTION|markdown>',
+      '<STATS DESCRIPTION|descriptions.markdown>',
       '<PERSONA|markdown>',
       '<NOTES>',
       '<LOCATION|markdown>',
@@ -51,6 +51,7 @@ describe('default prompts carry the expected variable chips', () => {
       '<ENTITIES|markdown>',
       '<ENTITIES|sublocations.markdown>',
       '<ENTITIES|reachable.summary.markdown>',
+      '<ENTITIES|known.summary.markdown>',
       '<DICTIONARY>',
       // Last, where recency makes a small model honor it — and where the code-side append used to sit.
       '<LANGUAGE>',
@@ -60,9 +61,9 @@ describe('default prompts carry the expected variable chips', () => {
   it('choices prompt', () => {
     expect(tokensIn(defaultChoicesPrompt)).toEqual([
       '<WORLD DESCRIPTION>',
-      '<STATS DESCRIPTION|descriptions.markdown>',
       '<TRAITS DESCRIPTION|markdown>',
-      '<PERSONA|name.markdown>',
+      '<STATS DESCRIPTION|descriptions.markdown>',
+      '<PERSONA|summary.markdown>',
       '<NOTES>',
       '<LOCATION|summary.markdown>',
       '<LOCATION|sublocations.summary.markdown>',
@@ -70,6 +71,7 @@ describe('default prompts carry the expected variable chips', () => {
       '<ENTITIES|summary.markdown>',
       '<ENTITIES|sublocations.summary.markdown>',
       '<ENTITIES|reachable.summary.markdown>',
+      '<ENTITIES|known.summary.markdown>',
       '<LANGUAGE>',
     ]);
   });
@@ -79,6 +81,8 @@ describe('default prompts carry the expected variable chips', () => {
       '<WORLD DESCRIPTION>',
       '<STATS DESCRIPTION|numbers.meaning.markdown>',
       '<TRAITS DESCRIPTION|markdown>',
+      '<PERSONA|withstats.summary.markdown>',
+      '<ENTITIES|inscene.withstats.summary.markdown>',
       '<NOTES>',
     ]);
   });
@@ -91,18 +95,17 @@ describe('default prompts carry the expected variable chips', () => {
   });
 
   it('thinking (pre-call) prompt', () => {
-    // The reframed continuity planner (director+storyboarder fusion) drops the stats chip - the narrator,
-    // not the plan, owns outcome, so stats are noise here. Same context set as the staged director.
     expect(tokensIn(defaultThinkingPrompt)).toEqual([
       '<WORLD DESCRIPTION>',
       '<TRAITS DESCRIPTION|markdown>',
-      '<PERSONA|markdown>',
+      '<PERSONA|nostats.markdown>',
       '<LOCATION|summary.markdown>',
       '<LOCATION|sublocations.summary.markdown>',
       '<LOCATION|reachable.summary.markdown>',
       '<ENTITIES|summary.markdown>',
       '<ENTITIES|sublocations.summary.markdown>',
       '<ENTITIES|reachable.summary.markdown>',
+      '<ENTITIES|known.summary.markdown>',
       '<NOTES>',
     ]);
   });
@@ -111,13 +114,14 @@ describe('default prompts carry the expected variable chips', () => {
     expect(tokensIn(defaultDirectorPrompt)).toEqual([
       '<WORLD DESCRIPTION>',
       '<TRAITS DESCRIPTION|markdown>',
-      '<PERSONA|markdown>',
+      '<PERSONA|nostats.markdown>',
       '<LOCATION|summary.markdown>',
       '<LOCATION|sublocations.summary.markdown>',
       '<LOCATION|reachable.summary.markdown>',
       '<ENTITIES|summary.markdown>',
       '<ENTITIES|sublocations.summary.markdown>',
       '<ENTITIES|reachable.summary.markdown>',
+      '<ENTITIES|known.summary.markdown>',
       '<NOTES>',
       '<ACTIVE CHARACTER GUIDANCE>',
     ]);
@@ -128,7 +132,7 @@ describe('default prompts carry the expected variable chips', () => {
       '<CHARACTER NAME>',
       '<WORLD DESCRIPTION>',
       '<TRAITS DESCRIPTION|markdown>',
-      '<PERSONA|markdown>',
+      '<PERSONA|nostats.markdown>',
       '<LOCATION|summary.markdown>',
       '<LOCATION|sublocations.summary.markdown>',
       '<LOCATION|reachable.summary.markdown>',
@@ -142,8 +146,8 @@ describe('default prompts carry the expected variable chips', () => {
   it('staged storyboard prompt', () => {
     expect(tokensIn(defaultStoryboardPrompt)).toEqual([
       '<WORLD DESCRIPTION>',
-      '<STATS DESCRIPTION|descriptions.markdown>',
       '<TRAITS DESCRIPTION|markdown>',
+      '<STATS DESCRIPTION|descriptions.markdown>',
       '<PERSONA|markdown>',
       '<LOCATION|summary.markdown>',
       '<LOCATION|sublocations.summary.markdown>',
@@ -227,12 +231,8 @@ describe('planDirective', () => {
 });
 
 describe('markdownGuidance', () => {
-  // The toggle must actually toggle: enabled and disabled produce two distinct, non-empty directives.
-  it('produces distinct, non-empty guidance for the enabled and disabled modes', () => {
-    const on = markdownGuidance(true);
-    const off = markdownGuidance(false);
-    expect(on).toBeTruthy();
-    expect(off).toBeTruthy();
-    expect(on).not.toBe(off);
+  it('defines the syntax while Markdown is on and sends nothing while it is off', () => {
+    expect(markdownGuidance(true)).toContain('`**text**` displays text in bold.');
+    expect(markdownGuidance(false)).toBe('');
   });
 });

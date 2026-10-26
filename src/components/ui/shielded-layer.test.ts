@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { coverShieldedLayer, ensureShieldedLayer, ignoreLayerPress, inShieldedLayer, keepLayerFocus } from './shielded-layer';
+import { coverShieldedLayer, ensureShieldedLayer, ignoreLayerDismiss, inShieldedLayer, keepLayerFocus } from './shielded-layer';
 
 /** Dispatches a bubbling event on `target` and reports whether a `document` listener saw it. */
 function reachesDocument(target: Element, event: Event): boolean {
@@ -28,13 +28,13 @@ describe('the shielded layer', () => {
     const mount = ensureShieldedLayer();
     expect(ensureShieldedLayer()).toBe(mount);
     expect(mount.parentElement?.parentElement).toBe(document.body);
-    expect(document.querySelectorAll('[data-shielded-layer]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-shielded-layer="window"]')).toHaveLength(1);
   });
 
-  it('paints above dialogs and under the chip typeahead and tooltips', () => {
+  it('paints above dialogs and the chip typeaheads, and under tooltips', () => {
     const host = ensureShieldedLayer().parentElement!;
-    expect(Number(host.style.zIndex)).toBeGreaterThan(50);
-    expect(Number(host.style.zIndex)).toBeLessThan(70);
+    expect(Number(host.style.zIndex)).toBeGreaterThan(60);
+    expect(Number(host.style.zIndex)).toBeLessThan(80);
   });
 
   it('sinks under dialogs and goes inert while a dialog covers it, and rises again after the dialog exits', () => {
@@ -50,6 +50,26 @@ describe('the shielded layer', () => {
     expect(mount.inert).toBe(false);
     // The rise waits for the closing dialog's exit animation.
     expect(host.style.transition).toBe('z-index 0s linear 200ms');
+  });
+
+  it('gives toasts their own host, above the window layer and below tooltips', () => {
+    const toasts = ensureShieldedLayer('toasts');
+    const windowLayer = ensureShieldedLayer();
+    expect(toasts).not.toBe(windowLayer);
+    expect(ensureShieldedLayer('toasts')).toBe(toasts);
+    expect(Number(toasts.parentElement!.style.zIndex)).toBeGreaterThan(Number(windowLayer.parentElement!.style.zIndex));
+    expect(Number(toasts.parentElement!.style.zIndex)).toBeLessThan(80);
+    expect(inShieldedLayer(toasts)).toBe(true);
+  });
+
+  it('keeps the toasts layer above dialogs and live while the window layer is covered', () => {
+    const toasts = ensureShieldedLayer('toasts');
+    const zIndex = toasts.parentElement!.style.zIndex;
+    coverShieldedLayer(true);
+    expect(toasts.parentElement!.style.zIndex).toBe(zIndex);
+    expect(Number(zIndex)).toBeGreaterThan(50);
+    expect(toasts.inert).not.toBe(true);
+    coverShieldedLayer(false);
   });
 
   it('carries aria-live, which keeps a modal dialog from hiding it', () => {
@@ -83,7 +103,7 @@ describe('the shielded layer', () => {
 
   it('prevents a dialog close for a press in the layer, and passes every other press to the caller', () => {
     const caller = vi.fn();
-    const guard = ignoreLayerPress(caller);
+    const guard = ignoreLayerDismiss(caller);
     const inside = new Event('pointerdown', { bubbles: true, cancelable: true });
     const layerButton = childOfLayer();
     layerButton.addEventListener('pointerdown', guard);

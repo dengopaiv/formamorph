@@ -75,8 +75,9 @@ export const REVEAL_RANGES = {
   minStagger: { min: 0, max: 150, step: 5 },
 } as const;
 
-/** A word reveal's per-word fade length and the delay between words, in ms. */
-export interface RevealTiming { duration: number; stagger: number }
+/** A word reveal's per-word fade length and the delay between words, in ms. `maxBacklogMs` caps how far
+ *  ahead of now Streamdown schedules words; unset means no cap. */
+export interface RevealTiming { duration: number; stagger: number; maxBacklogMs?: number }
 
 /** Any effect enabled ⇒ animate the reveal; none ⇒ fall back to the smooth crawl. */
 export const revealActive = (s: RevealSpec): boolean => s.fade || s.move || s.scale || s.blur;
@@ -151,6 +152,8 @@ export const DRAIN_TARGET_WORDS = 4;
 //  - Bounds on that speed-up/slow-down so the controller stays gentle and never stalls or sprints.
 export const PACE_CORRECTION_MIN = 0.5;
 export const PACE_CORRECTION_MAX = 2;
+//  - The tail's speed-up is capped lower: a sprint at the end reads as uneven pace.
+export const DRAIN_CORRECTION_MIN = 0.75;
 
 export { clamp }; // re-exported (from ./utils) so existing importers/tests keep their path
 
@@ -170,6 +173,6 @@ export function flooredTiming(t: RevealTiming, minStagger: number, minDuration: 
 export function pacedStagger(msPerWord: number, backlogWords: number, drainingOnly: boolean): number {
   const target = drainingOnly ? DRAIN_TARGET_WORDS : TARGET_BUFFER_WORDS;
   let correction = clamp(target / Math.max(backlogWords, 1), PACE_CORRECTION_MIN, PACE_CORRECTION_MAX);
-  if (drainingOnly) correction = Math.min(correction, 1);
+  if (drainingOnly) correction = clamp(correction, DRAIN_CORRECTION_MIN, 1);
   return clamp(msPerWord * correction, STAGGER_MIN, STAGGER_MAX);
 }

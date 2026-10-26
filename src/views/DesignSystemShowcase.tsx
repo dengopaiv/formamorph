@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react';
 import { PromptNavigationReference } from '@/components/design-system/PromptNavigationReference';
-import { BearerFlyoutReference } from '@/components/design-system/BearerFlyoutReference';
+import { OwnerFlyoutReference } from '@/components/design-system/OwnerFlyoutReference';
 import { BreadcrumbPickerReference } from '@/components/design-system/BreadcrumbPickerReference';
 import { TravelHintPairReference } from '@/components/design-system/TravelHintPairReference';
 import { FormaquestionReference } from '@/components/design-system/FormaquestionReference';
@@ -8,6 +8,12 @@ import { FeedbackFilterRowReference } from '@/components/design-system/FeedbackF
 import { SupporterFlairReference } from '@/components/design-system/SupporterFlairReference';
 import { PresetHeaderReference } from '@/components/design-system/PresetHeaderReference';
 import { LandingPulseReference } from '@/components/design-system/LandingPulseReference';
+import { PanelCrashCardReference } from '@/components/design-system/PanelCrashCardReference';
+import { ChipOptionsReference } from '@/components/design-system/ChipOptionsReference';
+import { CodeCardReference } from '@/components/design-system/CodeCardReference';
+import { VariableMenuReference } from '@/components/design-system/VariableMenuReference';
+import { YouMarkReference } from '@/components/design-system/YouMarkReference';
+import { SegmentedMultiSelectReference } from '@/components/design-system/SegmentedMultiSelectReference';
 import { useDevRoute } from '@/lib/devRouter';
 import { BookOpen, MonitorCog } from 'lucide-react';
 import { OptionSwitcher, Row, Section } from '@/components/SettingsRows';
@@ -26,22 +32,29 @@ import { SETTINGS_OPTIONS } from '@/components/modals/settingsCopy';
 import { optionRowCopy, rowCopy } from '@/components/modals/settingsRowCopy';
 import { DisplaySettingsSection } from '@/components/modals/DisplaySettingsSection';
 import { OutputSettingsSection } from '@/components/modals/OutputSettingsSection';
-import { SettingsModeSwitch } from '@/components/modals/SettingsModeSwitch';
+import { ModeSelect } from '@/components/ui/mode-select';
 import type { SettingsSource } from '@/components/modals/settingsSource';
 import { useLocalSettingsSource } from '@/components/design-system/useLocalSettingsSource';
 import { settingsUseAdvancedValues, sectionHiddenFields } from '@/lib/settingsAdvancedData';
 import { reasoningRuledOut } from '@/lib/reasoningEffort';
-import type { SettingsMode } from '@/lib/settingsMode';
+import { SETTINGS_MODE_DESCRIPTIONS, SETTINGS_HIDDEN_NOTICE, type SettingsMode } from '@/lib/settingsMode';
 import PromptField from '@/components/prompt/PromptField';
 import { plainVocabulary } from '@/lib/chipVocabulary';
 import { CommunityCardReference } from '@/components/design-system/CommunityCardReference';
 import { FindBarReference } from '@/components/design-system/FindBarReference';
+import { SearchFieldReference } from '@/components/design-system/SearchFieldReference';
 import { CodeTemplatesReference } from '@/components/design-system/CodeTemplatesReference';
 import { LocationsCanvasReference } from '@/components/design-system/LocationsCanvasReference';
-import { MainMenuContextMenuReference } from '@/components/design-system/MainMenuContextMenuReference';
+import { ContextMenuReferences } from '@/components/design-system/ContextMenuReferences';
 import { FooterActionOrderReference } from '@/components/design-system/FooterActionOrderReference';
 import { NarrationTurnReference } from '@/components/design-system/NarrationTurnReference';
+import { ScriptPromptLineReference } from '@/components/design-system/ScriptPromptLineReference';
+import { RequestStatusStripReference } from '@/components/design-system/RequestStatusStripReference';
 import { PanelTabStripReference } from '@/components/design-system/PanelTabStripReference';
+import { SectionsBarReference } from '@/components/design-system/SectionsBarReference';
+import { NavRailReference } from '@/components/design-system/NavRailReference';
+import { SurfaceAppBarReference } from '@/components/design-system/SurfaceAppBarReference';
+import { HistoryControlsReference } from '@/components/design-system/HistoryControlsReference';
 import { RichListReferences } from '@/components/design-system/RichListReferences';
 import { PromptChipsReference } from '@/components/design-system/PromptChipsReference';
 
@@ -194,7 +207,14 @@ function SettingsReference() {
     <div className="grid gap-6">
       <div className="flex flex-wrap items-center gap-3">
         <Meta role="status" aria-live="polite" className="min-w-0 flex-1">{status}</Meta>
-        <SettingsModeSwitch mode={mode} onModeChange={setMode} hasHiddenValues={hasHiddenValues} />
+        <ModeSelect
+          mode={mode}
+          onModeChange={setMode}
+          descriptions={SETTINGS_MODE_DESCRIPTIONS}
+          hiddenNotice={hasHiddenValues ? SETTINGS_HIDDEN_NOTICE : undefined}
+          size="sm"
+          aria-label="Settings mode"
+        />
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
         <Card role="region" aria-labelledby="display-reference-title">
@@ -281,6 +301,12 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     Component: FindBarReference,
   },
   {
+    id: 'search-field',
+    label: 'Search Field',
+    description: 'Search icon, text box, and a Clear Search X',
+    Component: SearchFieldReference,
+  },
+  {
     id: 'code-templates',
     label: 'Code Templates',
     description: 'Selection, parameters, validation, and generated code',
@@ -295,8 +321,8 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
   {
     id: 'context-menu',
     label: 'Context Menu',
-    description: 'Grouped library tile actions',
-    Component: MainMenuContextMenuReference,
+    description: 'Grouped library tile actions and item detail lines',
+    Component: ContextMenuReferences,
   },
   {
     id: 'rich-lists',
@@ -317,6 +343,30 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     Component: PanelTabStripReference,
   },
   {
+    id: 'sections-bar',
+    label: 'Sections Bar',
+    description: 'Grouped tabs folded behind one bar on mobile',
+    Component: SectionsBarReference,
+  },
+  {
+    id: 'nav-rail',
+    label: 'Nav Rail',
+    description: 'Grouped tabs on a collapsible rail inside the surface',
+    Component: NavRailReference,
+  },
+  {
+    id: 'surface-app-bar',
+    label: 'Surface App Bar',
+    description: 'A surface-wide top row with its tools on the center line',
+    Component: SurfaceAppBarReference,
+  },
+  {
+    id: 'history-controls',
+    label: 'History Controls',
+    description: 'A split Undo, Redo and History pill, and its mobile icon',
+    Component: HistoryControlsReference,
+  },
+  {
     id: 'prompt-navigation',
     label: 'Prompt Navigation',
     description: 'Nested prompt selection and independent scrolling',
@@ -329,10 +379,22 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     Component: NarrationTurnReference,
   },
   {
-    id: 'bearer-flyouts',
-    label: 'Bearer Flyouts',
+    id: 'prompt-line',
+    label: 'Inline Prompt Line',
+    description: 'A script’s question or message in the turn column',
+    Component: ScriptPromptLineReference,
+  },
+  {
+    id: 'status-strip',
+    label: 'Request Status Strip',
+    description: 'The running request’s row, floated over the narration',
+    Component: RequestStatusStripReference,
+  },
+  {
+    id: 'owner-flyouts',
+    label: 'Owner Flyouts',
     description: 'Drill-down entity pickers in a menu and on a button',
-    Component: BearerFlyoutReference,
+    Component: OwnerFlyoutReference,
   },
   {
     id: 'breadcrumb-picker',
@@ -375,6 +437,42 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     label: 'Landing Pulse',
     description: 'One ring pulse on the row a Take Me There landing points at',
     Component: LandingPulseReference,
+  },
+  {
+    id: 'panel-crash-card',
+    label: 'Panel Crash Card',
+    description: 'The card a crashed editor panel shows in its own place',
+    Component: PanelCrashCardReference,
+  },
+  {
+    id: 'chip-options',
+    label: 'Chip Options',
+    description: 'Chip settings in a centered dialog, with a live sample of what the chip sends',
+    Component: ChipOptionsReference,
+  },
+  {
+    id: 'code-card',
+    label: 'Code Hover Card',
+    description: 'The card a code editor shows for a name, and its Find All Uses list',
+    Component: CodeCardReference,
+  },
+  {
+    id: 'variable-menu',
+    label: 'Variable Menu Rows',
+    description: 'The code Variable menu’s rows: type, read-only mark and method',
+    Component: VariableMenuReference,
+  },
+  {
+    id: 'you-mark',
+    label: 'You Pill',
+    description: 'The mark after the played persona’s name, on a plain row and a selected row',
+    Component: YouMarkReference,
+  },
+  {
+    id: 'segmented-multi-select',
+    label: 'Segmented Multi-Select',
+    description: 'A segmented control where each option turns on by itself, as the time chip uses',
+    Component: SegmentedMultiSelectReference,
   },
 ];
 

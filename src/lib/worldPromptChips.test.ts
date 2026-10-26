@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveWorldPrompt, worldPromptChipValues, worldPromptTexts, type WorldPromptKind } from './worldPrompt';
 import { buildNarrationPrompt } from './turnPipeline/narrationPrompt';
-import { TURN_PASSES, choicesSystemPrompt, statUpdatesSystemPrompt } from './turnPipeline/turnPasses';
+import { TURN_PASSES, choicesSystemPrompt, statUpdatesRequest } from './turnPipeline/turnPasses';
 import { emptyTurnMaterial } from './turnPipeline/turnPlan';
 import { TEST_PROMPTS, testInput } from './turnPipeline/turnTestInputs';
 import { collectPins } from './placeholderPins';
@@ -28,7 +28,7 @@ const MOOD_CHIP = encodePlaceholderToken({ id: MOOD.id, mode: 'unique', placemen
 
 const overview = (promptOverrides: WorldOverview['promptOverrides']): WorldOverview => ({
   name: 'W', description: '', author: '', thumbnail: null, bgm: null,
-  systemPrompt: '', use3DModel: false, tags: [], promptOverrides,
+  systemPrompt: '', tags: [], promptOverrides,
 });
 
 const WORLD = overview({
@@ -136,8 +136,11 @@ describe('the standalone re-rolls, which render outside a turn', () => {
     const ctx = turnCtx(false, [SLOW]);
     expect(choicesSystemPrompt(WORLD.promptOverrides!.choicesPrompt!, 'English', ctx))
       .toBe(passRequest('choices', false, [SLOW]).systemPrompt);
-    expect(statUpdatesSystemPrompt(WORLD.promptOverrides!.statUpdatesPrompt!, ctx))
-      .toBe('STATS A salt marsh. Let the scene move slowly.');
+    expect(statUpdatesRequest(
+      { system: WORLD.promptOverrides!.statUpdatesPrompt!, user: TEST_PROMPTS.statUpdatesUser, text: TEST_PROMPTS.statText },
+      { ctx, action: '', narration: '' },
+      { statCount: 1, quiet: false },
+    ).systemPrompt).toBe('STATS A salt marsh. Let the scene move slowly.');
   });
 });
 
@@ -171,7 +174,7 @@ describe('which custom prompts give chip values', () => {
   });
 });
 
-describe('the Player Name marker in a custom prompt', () => {
+describe('the Persona Name marker in a custom prompt', () => {
   // The marker reads its sentence position from the text around it, which a per-chip value cannot carry.
   // A prompt names the player with the Persona prompt variable.
   it('is not a chip value, so the prompt keeps it as typed', () => {

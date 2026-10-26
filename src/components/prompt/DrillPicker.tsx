@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react';
 import { AlertTriangle, Lock } from 'lucide-react';
 import { CHIP_BASE } from '@/components/Chip';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchField } from '@/components/ui/search-field';
 import { useWheelScroll } from '@/lib/useWheelScroll';
 import { cn } from '@/lib/utils';
 import { chipRowMatches, chipSectionOpens, type ChipRow, type ChipVocabulary } from '@/lib/chipVocabulary';
@@ -19,7 +19,7 @@ import ChipRowHeading from './ChipRowHeading';
  * re-aiming a guessing game. Aiming a chip at one another placeholder owns is refused instead, with the
  * offer to promote it — a fork in the road rather than a wall.
  *
- * Opened from a chip's pop-out, seeded at the path that chip already carries: the level it stands on is what
+ * Opened from Chip Options, seeded at the path that chip already carries: the level it stands on is what
  * the picker shows first, and its trail is the way back out.
  */
 
@@ -152,12 +152,13 @@ const DrillPicker = ({ vocab, token, onPick }: {
           </span>
         ))}
       </div>
-      <Input
+      <SearchField
         value={filter}
-        onChange={(e) => { setFilter(e.target.value); setBlocked(null); }}
+        onChange={(next) => { setFilter(next); setBlocked(null); }}
         aria-label="Filter Placeholders"
         placeholder="Filter…"
-        className="h-7 text-label"
+        size="sm"
+        inputClassName="h-7 text-label"
       />
       <div ref={scroller} className="max-h-56 space-y-2 overflow-y-auto">
         {!!rows.length && (

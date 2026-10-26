@@ -1,28 +1,29 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   COMMAND_PRIORITY_LOW, SELECTION_CHANGE_COMMAND,
-  UNDO_COMMAND, REDO_COMMAND, CAN_UNDO_COMMAND, CAN_REDO_COMMAND,
-  type NodeKey,
+  UNDO_COMMAND, REDO_COMMAND, CAN_UNDO_COMMAND, CAN_REDO_COMMAND, FORMAT_TEXT_COMMAND,
+  type NodeKey, type TextFormatType,
 } from 'lexical';
-import { mergeRegister } from '@lexical/utils';
+import { IS_APPLE, mergeRegister } from '@lexical/utils';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
-import { HistoryPlugin, createEmptyHistoryState } from '@lexical/react/LexicalHistoryPlugin';
+import { FieldHistoryPlugin } from './fieldHistory';
+import { ValueSyncPlugin, EditablePlugin } from './ValueSyncPlugin';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import {
   Bold, Italic, Strikethrough, Highlighter, Heading1, Heading2, Heading3, Heading4,
   List, ListOrdered, ListChecks, Link2, Image, Table, SquareCode, Minus, Subscript, Superscript,
   Quote, Code, Undo2, Redo2, ChevronDown, Dices,
-  Maximize2, Minimize2, Columns2, Square,
+  Maximize2, Columns2, Square,
 } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
 import { Hint } from '@/components/ui/typography';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { FullscreenShell } from '@/components/FullscreenShell';
+import { FullscreenShell, FULLSCREEN_CORNER_CLEAR } from '@/components/FullscreenShell';
 import { useMorphFullscreen } from '@/lib/useMorphFullscreen';
 import { ReadOnlyNotice } from './ReadOnlyNotice';
 import { CHIP_BASE } from '@/components/Chip';
@@ -30,6 +31,7 @@ import { MarkdownRenderer } from '@/components/game/MarkdownRenderer';
 import { type MarkdownAction, HIGHLIGHT_COLORS } from '@/lib/markdownToolbar';
 import { type PromptVariable } from '@/lib/promptVariables';
 import { resolvePromptSegments } from '@/lib/promptTemplate';
+import type { TokenValues } from '@/lib/promptValues';
 import {
   tintValue, emptyMarker, stripTintSentinels, tintMarkStyle, emptyMarkStyle,
   TINT_MARK_CLASS, EMPTY_MARK_CLASS, EMPTY_MARK_LABEL,
@@ -44,16 +46,17 @@ import { ValueEdgesPlugin } from './ValueEdgesPlugin';
 import { OpenValueLayoutPlugin } from './OpenValueLayoutPlugin';
 import { ActiveValuePlugin } from './ActiveValuePlugin';
 import {
-  ActiveValueContext, EditValueContext, OpenValuesContext,
+  ActiveValueContext, ChipReadsContext, EditValueContext, OpenValuesContext,
   type ActiveValueRelay, type EditValueRelay, type OpenValueView,
 } from './openValueContext';
-import { buildEditorState, createEchoLedger, serializeRoot, $applyMarkdownAction } from './promptFieldState';
+import { buildEditorState, $applyMarkdownAction } from './promptFieldState';
 import { ChipTypeaheadPlugin } from './ChipTypeahead';
 import { ChipInsertTargetPlugin, useChipInsertRegistration } from './ChipInsertTarget';
 import { ChipDragPlugin } from './ChipDrag';
 import { PromptTokenPastePlugin, RefusedChipPastePlugin } from './PromptTokenPastePlugin';
 import { TOOLBAR_BTN } from './toolbarStyles';
 import { anchorAt, applyAnchor, captureAnchor, caretOffset, PROMPT_ANCHORS, type ScrollAnchor } from './previewScrollSync';
+import { fieldFrame } from '@/lib/historyField';
 
 interface ToolbarItem {
   action: MarkdownAction;
@@ -61,12 +64,14 @@ interface ToolbarItem {
   title: string;
   /** A `flexible-marker-*` class, on the items whose icon alone can't say them apart. */
   swatch?: string;
+  /** The letter Lexical's Ctrl/⌘ shortcut for this action uses. */
+  shortcut?: string;
 }
 
 // Always visible: the formatting an author reaches for mid-sentence.
 const MARKDOWN_TOOLBAR: ToolbarItem[] = [
-  { action: 'bold', Icon: Bold, title: 'Bold' },
-  { action: 'italic', Icon: Italic, title: 'Italic' },
+  { action: 'bold', Icon: Bold, title: 'Bold', shortcut: 'B' },
+  { action: 'italic', Icon: Italic, title: 'Italic', shortcut: 'I' },
   { action: 'strike', Icon: Strikethrough, title: 'Strikethrough' },
   { action: 'code', Icon: Code, title: 'Inline code' },
   { action: 'quote', Icon: Quote, title: 'Blockquote' },
@@ -247,6 +252,8 @@ function SplitButton({ items, label, disabled, apply }: {
   );
 }
 
+const SHORTCUT_FORMATS: Partial<Record<TextFormatType, MarkdownAction>> = { bold: 'bold', italic: 'italic' };
+
 /** Markdown formatting toolbar. Reads the editor as a flat string, applies the pure transform, rebuilds,
  *  then restores the selection the transform asked for. Editing the tree directly (rather than routing
  *  through `onChange`) keeps ValueSyncPlugin's external-value path — and its scroll reset — out of it. */
@@ -258,12 +265,22 @@ function MarkdownToolbar({ parse, disabled }: { parse: ChipVocabulary['parse']; 
     editor.focus();
   };
 
+  // Lexical turns Ctrl/⌘+B and +I into FORMAT_TEXT_COMMAND, which PlainTextPlugin leaves unhandled.
+  useEffect(() => editor.registerCommand(FORMAT_TEXT_COMMAND, (format: TextFormatType) => {
+    const action = SHORTCUT_FORMATS[format];
+    if (disabled || !action) return false;
+    editor.update(() => $applyMarkdownAction(parse, action));
+    return true;
+  }, COMMAND_PRIORITY_LOW), [editor, parse, disabled]);
+
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {MARKDOWN_TOOLBAR.map(({ action, Icon, title }) => (
-        <Tip key={action} tip={title}>
+      {MARKDOWN_TOOLBAR.map(({ action, Icon, title, shortcut }) => (
+        <Tip key={action} tip={shortcut ? `${title} (${IS_APPLE ? '⌘' : 'Ctrl+'}${shortcut})` : title}>
           <button
             type="button" disabled={disabled}
+            aria-label={title}
+            aria-keyshortcuts={shortcut && `${IS_APPLE ? 'Meta' : 'Control'}+${shortcut}`}
             onMouseDown={(event) => { event.preventDefault(); apply(action); }}
             className={TOOLBAR_BTN}
           >
@@ -280,62 +297,6 @@ function MarkdownToolbar({ parse, disabled }: { parse: ChipVocabulary['parse']; 
 }
 
 // --- plugins ---
-
-/** Two-way sync between the controlled `value` string and the Lexical editor state. Our own edits go through
- *  the echo ledger, so the external-value effect never rebuilds (and jolts the caret) on an echo. */
-function ValueSyncPlugin({ value, onChange, parse, onExternalValue }: {
-  value: string;
-  onChange: (v: string) => void;
-  parse: ChipVocabulary['parse'];
-  /** Fired when `value` changes from outside the editor (a Reset or a template swap), not on a typed echo. */
-  onExternalValue?: () => void;
-}) {
-  const [editor] = useLexicalComposerContext();
-  const [echoes] = useState(() => createEchoLedger(value));
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  const parseRef = useRef(parse);
-  parseRef.current = parse;
-  const onExternalRef = useRef(onExternalValue);
-  onExternalRef.current = onExternalValue;
-
-  // Whether a person has done anything since this field mounted. A value that arrives on its own — a world
-  // still loading, a draft resolving — is not an edit and must not become an undo step, or a freshly opened
-  // editor offers to "undo" back to the empty field it rendered for one tick. A generation, a Reset or a
-  // template swap all follow a click, which is what tells them apart: by shape they are the same change.
-  const userActed = useRef(false);
-  useEffect(() => {
-    const mark = () => { userActed.current = true; };
-    const doc = editor.getRootElement()?.ownerDocument ?? document;
-    doc.addEventListener('pointerdown', mark, { capture: true });
-    doc.addEventListener('keydown', mark, { capture: true });
-    return () => {
-      doc.removeEventListener('pointerdown', mark, { capture: true });
-      doc.removeEventListener('keydown', mark, { capture: true });
-    };
-  }, [editor]);
-
-  useEffect(() => {
-    if (echoes.receive(value)) return;
-    // `history-merge` folds the rebuild into the current history entry instead of pushing one.
-    editor.update(
-      () => buildEditorState(value, parseRef.current),
-      userActed.current ? undefined : { tag: 'history-merge' },
-    );
-    onExternalRef.current?.();
-  }, [value, editor, echoes]);
-
-  useEffect(
-    () => editor.registerUpdateListener(({ editorState }) => {
-      editorState.read(() => {
-        const next = serializeRoot();
-        if (echoes.send(next)) onChangeRef.current(next);
-      });
-    }),
-    [editor, echoes],
-  );
-  return null;
-}
 
 /**
  * Keeps the preview on the line being written. Every selection change (and the edit that follows it) reports
@@ -354,35 +315,6 @@ function CaretFollowPlugin({ onCaret }: { onCaret: () => void }) {
       editor.registerCommand(SELECTION_CHANGE_COMMAND, () => { report(); return false; }, COMMAND_PRIORITY_LOW),
     );
   }, [editor, onCaret]);
-  return null;
-}
-
-/**
- * HistoryPlugin, given a baseline entry to undo *to*.
- *
- * It records a change by pushing the entry it was already holding, and starts holding none — so the
- * first change after mount becomes the baseline instead of an undo step. Typing hides that (the second
- * keystroke is undoable), but a field whose first change is a whole-value replace — Generate on an
- * untouched summary, a Reset, a template swap — had nothing to undo at all.
- */
-function SeededHistoryPlugin() {
-  const [editor] = useLexicalComposerContext();
-  const historyState = useMemo(() => createEmptyHistoryState(), []);
-
-  // In an effect, not in render: during render the initial state is still pending, so what's readable
-  // is the bare root — and `setEditorState` rejects an empty state, which makes undoing to it a silent
-  // no-op rather than an error.
-  useEffect(() => {
-    historyState.current ??= { editor, editorState: editor.getEditorState() };
-  }, [editor, historyState]);
-
-  return <HistoryPlugin externalHistoryState={historyState} />;
-}
-
-/** Reflects `readOnly` into the editor's editability (initialConfig only applies it at mount). */
-function EditablePlugin({ readOnly }: { readOnly: boolean }) {
-  const [editor] = useLexicalComposerContext();
-  useEffect(() => editor.setEditable(!readOnly), [editor, readOnly]);
   return null;
 }
 
@@ -439,7 +371,7 @@ const EDITOR_CLASS =
  *  chip and the Insert key) so it's obvious which text came from which variable. */
 function PreviewPane({ value, previewValues, vocab, scrollRef, onScroll }: {
   value: string;
-  previewValues: Record<string, string>;
+  previewValues: TokenValues;
   vocab: ChipVocabulary;
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: React.UIEventHandler<HTMLDivElement>;
@@ -480,7 +412,7 @@ function PreviewPane({ value, previewValues, vocab, scrollRef, onScroll }: {
  *  (see previewTint). Author text and values are scrubbed first, so neither can forge a pairing. */
 function MarkdownPreviewPane({ value, previewValues, vocab, scrollRef, onScroll }: {
   value: string;
-  previewValues?: Record<string, string>;
+  previewValues?: TokenValues;
   vocab: ChipVocabulary;
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: React.UIEventHandler<HTMLDivElement>;
@@ -508,14 +440,16 @@ function MarkdownPreviewPane({ value, previewValues, vocab, scrollRef, onScroll 
  * With `markdown`, it also gains a formatting toolbar and its Preview renders markdown instead of tinting
  * chips — for author-facing prose fields (world description, readme) that the player reads as markdown.
  */
-const PromptField = ({ value, onChange, variables = [], vocabulary, previewValues, openValues, onReroll, insertOwnerId, markdown = false, resizable = false, placeholder, className, readOnly = false, ariaLabel, sampleData = false, onRequestEdit, readOnlyReason, onRequestFullscreen, fullscreen: fullscreenProp, insertTrigger, label, info, labelAside, hint, tourAnchor }: {
+const PromptField = ({ value, onChange, variables = [], vocabulary, previewValues, chipReads, openValues, onReroll, insertOwnerId, markdown = false, resizable = false, placeholder, className, readOnly = false, ariaLabel, sampleData = false, onRequestEdit, readOnlyReason, onRequestFullscreen, fullscreen: fullscreenProp, insertTrigger, label, info, labelAside, hint, tourAnchor, historyField }: {
   value: string;
   onChange: (v: string) => void;
   /** Prompt-variable palette (used when no explicit `vocabulary` is given — the default prompt family). */
   variables?: PromptVariable[];
   /** Override the token family (e.g. world placeholders). Defaults to the prompt vocabulary from `variables`. */
   vocabulary?: ChipVocabulary;
-  previewValues?: Record<string, string>;
+  previewValues?: TokenValues;
+  /** What a chip's Chip Options reads, for a field that has no Preview to take `previewValues` from. */
+  chipReads?: TokenValues;
   /** Token → the value each chip opens on. Given with `previewValues`, the field offers a Values tab that
    *  shows every chip open on its value. */
   openValues?: Record<string, OpenValueView>;
@@ -572,6 +506,8 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   insertTrigger?: string;
   /** The Authoring Tour step that points at this field, set on the field's own wrapper. */
   tourAnchor?: string;
+  /** The World Editor field identity, set on the field's own wrapper (see `historyField`). */
+  historyField?: string;
 }) => {
   const vocab = useMemo(() => vocabulary ?? promptVocabulary(variables), [vocabulary, variables]);
   const dragKey = useRef<string | null>(null);
@@ -834,10 +770,16 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
     ? <span className="flex items-center gap-1.5"><Label className="leading-none">{label}</Label>{info}</span>
     : <Label className="leading-none">{label}</Label>;
 
+  const canSplit = showTabs && splitAvailable(effectiveWidth, fullscreen);
+  // Only in its own window does the field reach the top edge, under the shell's corner button.
+  const cornerClear = fullscreen && !hostedFullscreen && FULLSCREEN_CORNER_CLEAR;
+  // What renders above the chrome; see `body`.
+  const chromeOnTop = !(readOnly && readOnlyReason) && !(markdown && (label || hint));
+
   const chrome = (
     // The chip palette is many chips wide and wraps; it must be allowed to shrink (`min-w-0`) or its
     // intrinsic width shoves the buttons off the side of a mobile screen instead of wrapping.
-    <div className="flex items-center gap-1 flex-shrink-0">
+    <div className={cn('flex items-center gap-1 flex-shrink-0', chromeOnTop && cornerClear)}>
       <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
         {label && !markdown && caption}
         {/* Markdown actions address the field's flat text, which a caret inside an open value is not in. */}
@@ -870,8 +812,8 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
           </>
         )}
         <HistoryButtons disabled={editingDisabled} />
-        <span className="mx-0.5 w-hairline self-stretch bg-border" />
-        {showTabs && splitAvailable(effectiveWidth, fullscreen) && (
+        {(canSplit || !fullscreen) && <span className="mx-0.5 w-hairline self-stretch bg-border" />}
+        {canSplit && (
           <Tip tip={split ? 'Show one pane at a time' : 'Show edit and preview side by side'}>
             <button
               type="button"
@@ -884,15 +826,17 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
           </Tip>
         )}
         {/* The tip is also the name the fullscreen shell hands focus back by, so the two cannot drift. */}
-        <Tip tip={fullscreen ? 'Exit full screen' : 'Edit full screen'}>
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </button>
-        </Tip>
+        {!fullscreen && (
+          <Tip tip="Edit full screen">
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Maximize2 className="h-4 w-4" />
+            </button>
+          </Tip>
+        )}
       </div>
     </div>
   );
@@ -949,7 +893,9 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   // A read-only editor looks broken rather than protected — the caret simply does nothing — and that reads
   // worst at full screen, where the field is the whole window. Say why, and offer the way out.
   const readOnlyNotice = readOnly && readOnlyReason && (
-    <ReadOnlyNotice reason={readOnlyReason} onRequestEdit={onRequestEdit} />
+    <div className={cn('flex-shrink-0', cornerClear)}>
+      <ReadOnlyNotice reason={readOnlyReason} onRequestEdit={onRequestEdit} />
+    </div>
   );
 
   const body = (
@@ -959,6 +905,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
       ref={(element) => { measureRef(element); bodyRef.current = element; }}
       data-find-field={typeof label === 'string' ? label : undefined}
       data-tour-anchor={tourAnchor}
+      {...(historyField !== undefined && fieldFrame(historyField))}
       className={cn('flex flex-col flex-1 min-h-0 gap-2', className)}
     >
       {/* Above the chrome, not below it: the Options panel shows the same notice with nothing above it, so
@@ -971,6 +918,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
         <div className={cn(
           'flex items-center justify-between gap-2 flex-shrink-0',
           fullscreen && 'max-sm:justify-center',
+          cornerClear && [cornerClear, 'max-sm:pl-9'],
         )}>
           {caption}
           {labelAside}
@@ -978,7 +926,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
       )}
       {/* Label, help, control: a markdown field's help follows its own caption row, and a plain field's
           follows the chrome row that carries its caption. Either way it lands before the editor. */}
-      {markdown && hint && <Hint className="flex-shrink-0">{hint}</Hint>}
+      {markdown && hint && <Hint className={cn('flex-shrink-0', !label && !readOnlyNotice && cornerClear)}>{hint}</Hint>}
       {chrome}
       {!markdown && hint && <Hint className="flex-shrink-0">{hint}</Hint>}
       {panes}
@@ -988,6 +936,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
   return (
     <LexicalComposer initialConfig={initialConfig}>
       <ChipVocabularyContext.Provider value={vocab}>
+      <ChipReadsContext.Provider value={chipReads ?? previewValues}>
       <OpenValuesContext.Provider value={openValues ?? NO_OPEN_VALUES}>
       <EditValueContext.Provider value={editValue}>
       <ActiveValueContext.Provider value={activeValue}>
@@ -1014,7 +963,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
         ) : (
           body
         )}
-        <SeededHistoryPlugin />
+        <FieldHistoryPlugin />
         {vocab.header && <PromptTokenPastePlugin vocab={vocab} />}
         {vocab.refuses && <RefusedChipPastePlugin vocab={vocab} />}
         <ValueSyncPlugin value={value} onChange={onChange} parse={vocab.parse} onExternalValue={resetScroll} />
@@ -1035,6 +984,7 @@ const PromptField = ({ value, onChange, variables = [], vocabulary, previewValue
       </ActiveValueContext.Provider>
       </EditValueContext.Provider>
       </OpenValuesContext.Provider>
+      </ChipReadsContext.Provider>
       </ChipVocabularyContext.Provider>
     </LexicalComposer>
   );

@@ -1,5 +1,6 @@
 import type { CatalogKind } from '@/lib/catalogKinds';
 import type { LikeCount } from '@/lib/likeCount';
+import type { ModerationStatus } from '@/lib/listingModeration';
 import type { SupporterFlair } from './supporter';
 
 /**
@@ -69,6 +70,8 @@ export interface ProfileCreation {
    * not shown the listing at all, rather than shown it marked.
    */
   quarantined: boolean;
+  /** Where it stands in review. `live` for a player and on a server without review. */
+  moderation: ModerationStatus;
 }
 
 /** Somebody the reader follows, as the manage list shows them. */
@@ -205,6 +208,17 @@ export interface LikeGiven {
   quarantined: boolean;
   /** When they liked, as a server timestamp. The list is newest-first by this. */
   likedAt: string;
+}
+
+/** An account as the admin Users table and the status route report it. An API read shape. */
+export interface AdminUser {
+  id: string;
+  username: string;
+  status: string | null;
+  accountType: string;
+  /** When a timed suspension ends, as a server timestamp. Null for a suspension with no end, and for any
+   *  account that is not suspended. */
+  suspendedUntil: string | null;
 }
 
 /** One recorded moment behind a link: what an account did, when, and from which browser family. */

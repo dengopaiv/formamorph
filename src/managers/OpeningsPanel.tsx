@@ -11,10 +11,10 @@ import { EditorDndContext, StableSortableContext } from '@/components/dnd/Editor
 import PlaceholderField from '@/components/prompt/PlaceholderField';
 import { Badge, badgeVariants } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { SelectOptions } from '@/components/SelectOptions';
 import { Tip } from '@/components/ui/tooltip';
 import { Hint } from '@/components/ui/typography';
 import { ListSearchToolbar } from '@/components/ListToolbar';
@@ -28,6 +28,8 @@ import { matchesListSearch, type ListSearchNames } from '@/lib/listSearch';
 import { labelPlaceholders } from '@/lib/placementLetters';
 import { cn } from '@/lib/utils';
 import type { Entity, GameLocation, Opening, OpeningKind, Placeholder } from '@/types';
+import { WorldInput } from '@/components/editor/WorldField';
+import { fieldFrame, fieldPath } from '@/lib/historyField';
 
 /** The Starting Location filter's value for every start at once. */
 const ALL_LOCATIONS = 'all-locations';
@@ -52,6 +54,8 @@ export function OpeningsPanel({ onOpenEntity, onOpenLocation }: {
   const [filter, setFilter] = useState<string | null>(null);
   const view = openingsEditorView({ overview: worldOverview, entities, locations }, filter);
   const label = (name: string) => labelPlaceholders(name, placeholders, { letters: placementLetters, owners: placeholderOwners });
+  // A fresh array per render; the items inside skip their render while a start's id and label hold.
+  const startOptions = view.starts.map((l) => ({ value: l.id, label: label(l.name) }));
   const [world, ...ownedGroups] = view.groups;
   const owners = [...entities, ...locations];
   const anyOpenings = hasAuthoredOpenings(worldOverview) || owners.some(hasAuthoredOpenings);
@@ -79,7 +83,7 @@ export function OpeningsPanel({ onOpenEntity, onOpenLocation }: {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_LOCATIONS}>All Locations</SelectItem>
-              {view.starts.map((l) => <SelectItem key={l.id} value={l.id}>{label(l.name)}</SelectItem>)}
+              <SelectOptions options={startOptions} />
             </SelectContent>
           </Select>
         </div>
@@ -435,6 +439,7 @@ const OpeningCard = ({
           onValueChange={(v) => { if (v) onKind(v as OpeningKind); }}
           aria-label={`Opens As, ${a11yLabel}`}
           className="h-6"
+          {...fieldFrame('openings', opening.id, 'kind')}
         >
           <ToggleGroupItem value="action" className="px-2 py-0 text-helper">Player Action</ToggleGroupItem>
           <ToggleGroupItem value="narration" className="px-2 py-0 text-helper">Narration</ToggleGroupItem>
@@ -446,22 +451,25 @@ const OpeningCard = ({
             onValueChange={(v) => { if (v) onSelf(v === 'self'); }}
             aria-label={`Drawn For, ${a11yLabel}`}
             className="h-6"
+            {...fieldFrame('openings', opening.id, 'self')}
           >
             <ToggleGroupItem value="others" className="px-2 py-0 text-helper">Others</ToggleGroupItem>
             <ToggleGroupItem value="self" className="px-2 py-0 text-helper">Self</ToggleGroupItem>
           </ToggleGroup>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <Input
-            type="number"
-            min={0}
-            step={1}
-            value={weight}
-            onChange={(e) => onWeight(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-            className="h-6 w-14 px-1.5 text-helper"
-            aria-label={`Draw weight for ${a11yLabel}`}
-            title="Draw weight"
-          />
+          <span className="inline-flex" {...fieldFrame('openings', opening.id, 'weight')}>
+            <WorldInput
+              type="number"
+              min={0}
+              step={1}
+              value={weight}
+              onChange={(e) => onWeight(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+              className="h-6 w-14 px-1.5 text-helper"
+              aria-label={`Draw weight for ${a11yLabel}`}
+              title="Draw weight"
+            />
+          </span>
           <span className="w-10 text-right text-meta text-muted-foreground" aria-label={`Chance for ${a11yLabel}`}>
             {chance === null ? '—' : `${Math.round(chance)}%`}
           </span>
@@ -482,6 +490,7 @@ const OpeningCard = ({
       {open && (
         <div className="p-2">
           <PlaceholderField
+            historyField={fieldPath('openings', opening.id, 'text')}
             value={opening.text}
             onChange={onText}
             placeholders={placeholders}

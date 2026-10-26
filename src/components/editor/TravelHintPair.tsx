@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { hintsLinked, withHint, withLink, withUnlink } from '@/lib/connectionEditing';
-import type { Connection, LegKey } from '@/types';
+import type { Connection, LegKey, Placeholder } from '@/types';
+import { PlaceholderNameField } from '@/components/prompt/PlaceholderField';
+import type { ChipFocusHandle } from '@/components/prompt/ChipInput';
+import { fieldFrame } from '@/lib/historyField';
 
 /** One hint box: the leg it edits, its visible label, and its accessible name. */
 export interface TravelHintLeg {
@@ -38,17 +40,19 @@ const COPIES = 'Copies the first Travel Hint';
  * A Connection's Travel Hint boxes, first leg on top, with a vertical link toggle beside a two-way pair.
  * Linked, the first box writes both legs and the second box shows its text read-only.
  */
-export function TravelHintPair({ connection, legs, idPrefix, onChange, focus }: {
+export function TravelHintPair({ connection, legs, idPrefix, onChange, focus, placeholders }: {
   connection: Connection;
+  /** The world's placeholders. A connection has no owner, so its chips offer only global ones. */
+  placeholders: Placeholder[];
   /** The legs the record has, in display order. The first is the one a link copies from. */
   legs: TravelHintLeg[];
   idPrefix: string;
-  /** Receives every rewritten record. The merge key groups one box's keystrokes into one edit. */
-  onChange: (next: Connection, mergeKey?: string) => void;
+  /** Receives every rewritten record. `typedLeg` names the box a keystroke went into, so a run is one edit. */
+  onChange: (next: Connection, typedLeg?: LegKey) => void;
   focus?: TravelHintFocus | null;
 }) {
   const [records, setRecords] = useState<Record<string, LinkRecord>>({});
-  const boxes = useRef<Partial<Record<LegKey, HTMLInputElement | null>>>({});
+  const boxes = useRef<Partial<Record<LegKey, ChipFocusHandle | null>>>({});
 
   useEffect(() => {
     if (focus) boxes.current[focus.leg]?.focus();
@@ -59,15 +63,15 @@ export function TravelHintPair({ connection, legs, idPrefix, onChange, focus }: 
   const linked = !!second && (record?.basis === connection ? record.linked : hintsLinked(connection));
   const firstHint = connection[first.key]?.hint ?? '';
 
-  const write = (next: Connection, state: Omit<LinkRecord, 'basis'>, mergeKey?: string) => {
+  const write = (next: Connection, state: Omit<LinkRecord, 'basis'>, typedLeg?: LegKey) => {
     setRecords((current) => ({ ...current, [next.id]: { ...state, basis: next } }));
-    onChange(next, mergeKey);
+    onChange(next, typedLeg);
   };
 
   const editHint = (leg: LegKey, text: string) => {
     const edited = withHint(connection, leg, text);
     const next = linked ? withLink(edited, first.key) : edited;
-    write(next, { linked, held: record?.held }, `hint:${connection.id}:${leg}`);
+    write(next, { linked, held: record?.held }, leg);
   };
 
   const toggle = () => {
@@ -85,21 +89,20 @@ export function TravelHintPair({ connection, legs, idPrefix, onChange, focus }: 
     <div className="flex gap-1">
       <div className="min-w-0 flex-1 space-y-2">
         {legs.map(({ key, label, name }) => {
-          const id = `${idPrefix}-${key}`;
           const copy = linked && key === second?.key;
           return (
-            <div key={key} className="space-y-1">
-              <Label htmlFor={id} className="flex items-center gap-1">{label}</Label>
-              <Input
-                id={id}
-                ref={(node) => { boxes.current[key] = node; }}
+            <div key={key} className="space-y-1" {...fieldFrame('connections', connection.id, key)}>
+              <Label className="flex items-center gap-1" onClick={() => boxes.current[key]?.focus()}>{label}</Label>
+              <PlaceholderNameField
+                focusRef={(handle) => { boxes.current[key] = handle; }}
                 value={copy ? firstHint : connection[key]?.hint ?? ''}
+                placeholders={placeholders}
                 readOnly={copy}
-                aria-describedby={copy ? describedBy : undefined}
+                ariaDescribedBy={copy ? describedBy : undefined}
                 className={cn(copy && 'bg-muted text-muted-foreground')}
-                onChange={(e) => editHint(key, e.target.value)}
+                onChange={(text) => editHint(key, text)}
                 placeholder="Travel Hint, e.g. through the shimmering portal"
-                aria-label={name}
+                ariaLabel={name}
               />
             </div>
           );

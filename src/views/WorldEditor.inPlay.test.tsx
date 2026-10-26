@@ -6,7 +6,7 @@ import { reloadTourProgress } from '@/lib/authoringTour/progress';
 import type { World } from '@/types';
 
 /**
- * The Authoring Tour's In Play pane, driven through the real editor: what the player sees and what each
+ * The Authoring Tour's In Game pane, driven through the real editor: what the player sees and what each
  * prompt reads for the current step, updated as the author types, and the dock it borrows from the Bench.
  */
 
@@ -26,15 +26,6 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-// jsdom has no Worker: the measure answers with the real byte count, off a promise like the worker's.
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
@@ -43,14 +34,14 @@ vi.mock('react-toastify', () => ({
 const worldWith = (systemPrompt: string): World => benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt, use3DModel: false, tags: [],
+    systemPrompt, tags: [],
   },
   // A New World overview, which carries no readme or openings.
 } as unknown as Partial<World>);
 
 const startTour = async (world: World) => {
   const view = renderWorldEditorBench(world, 'simple', { newWorld: true });
-  const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' }, { timeout: 2000 });
+  const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' });
   fireEvent.click(within(offer).getByRole('button', { name: 'Start Tour' }));
   await screen.findByRole('dialog', { name: 'World Name' });
   return view;
@@ -69,7 +60,7 @@ const nextStep = async () => {
   await screen.findByRole('dialog', { name: 'AI-Facing Description' });
 };
 
-const inPlay = () => screen.queryByRole('region', { name: 'In Play' });
+const inPlay = () => screen.queryByRole('region', { name: 'In Game' });
 const playerSees = () => within(inPlay()!).getByRole('region', { name: 'Player Sees' });
 const narration = () => within(inPlay()!).getByRole('region', { name: 'Narration Prompt Reads' });
 const marks = (el: HTMLElement) => Array.from(el.querySelectorAll('mark')).map((m) => m.textContent);
@@ -83,7 +74,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('In Play — World Name', () => {
+describe('In Game — World Name', () => {
   it('shows the name on the library card as the author types', async () => {
     await startTour(worldWith(''));
     expect(within(playerSees()).getByRole('heading', { name: 'New World' })).toBeInTheDocument();
@@ -99,7 +90,7 @@ describe('In Play — World Name', () => {
   });
 });
 
-describe('In Play — AI-Facing Description', () => {
+describe('In Game — AI-Facing Description', () => {
   it('shows the world block with the author text marked, and the library card with a caption', async () => {
     await startTour(worldWith(''));
     await nextStep();
@@ -118,12 +109,12 @@ describe('In Play — AI-Facing Description', () => {
     await startTour(worldWith('Greet {{user}} at the gate.'));
     await nextStep();
     // The chip reads as its label in the world block, so the field's own text is nowhere in it.
-    expect(narration().textContent).toContain('Greet Player Name at the gate.');
+    expect(narration().textContent).toContain('Greet Persona Name at the gate.');
     expect(marks(narration())).toEqual([]);
   });
 });
 
-describe('In Play — Thumbnail', () => {
+describe('In Game — Thumbnail', () => {
   it('puts the picture on the library card once Use Example loads it', async () => {
     await startTour(worldWith(''));
     await nextStep();
@@ -144,14 +135,14 @@ describe('In Play — Thumbnail', () => {
   });
 });
 
-describe('In Play — the dock', () => {
+describe('In Game — the dock', () => {
   it('takes the docked Bench slot for the tour and hands it back after', async () => {
     renderWorldEditorBench(worldWith(''), 'simple', { newWorld: true });
     await clickOpenBench();
     fireEvent.click(screen.getByRole('button', { name: 'Pop Out' }));
     expect(dockedBench()).not.toBeNull();
 
-    const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' }, { timeout: 2000 });
+    const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' });
     fireEvent.click(within(offer).getByRole('button', { name: 'Start Tour' }));
     await screen.findByRole('dialog', { name: 'World Name' });
     expect(inPlay()).not.toBeNull();

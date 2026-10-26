@@ -10,7 +10,7 @@ import type { World } from '@/types';
 
 /**
  * The Authoring Tour's Entities steps, driven through the real editor: the add step, each field step with its
- * In Play slice, and the roster before and after the entity has a location.
+ * In Game slice, and the roster before and after the entity has a location.
  */
 
 vi.mock('@/lib/authoringTour/tourImages', () => ({
@@ -29,21 +29,10 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
 }));
-
-// A case walks up to seven saved steps, which outlasts the default window under the whole suite's load.
-vi.setConfig({ testTimeout: 15_000 });
 
 const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 
@@ -51,7 +40,7 @@ const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 const WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   // A New World overview carries no readme or openings, which the overview type calls required.
 } as unknown as Partial<World>);
@@ -65,8 +54,16 @@ const stepNumber = () => Number(/(\d+) \//.exec(within(tourBar()).getByText(/^Au
 const stepNote = () => screen.getAllByRole('dialog').find((d) => within(d).queryByText(`${stepNumber()} / ${TOTAL}`))!;
 const noteButton = (name: string) => within(stepNote()).queryByRole('button', { name });
 const addButton = () => screen.getByRole('button', { name: /^Add to (Locations|Entities)$/ });
+/** Presses the + the step points at. On Entities it opens a menu, and Add Entity is the row that adds. */
+const clickAdd = () => {
+  const plus = addButton();
+  fireEvent.click(plus);
+  if (plus.getAttribute('aria-label') === 'Add to Entities') {
+    fireEvent.click(screen.getByRole('button', { name: 'Add Entity' }));
+  }
+};
 
-const inPlay = () => screen.getByRole('region', { name: 'In Play' });
+const inPlay = () => screen.getByRole('region', { name: 'In Game' });
 const playerSees = () => within(inPlay()).getByRole('region', { name: 'Player Sees' });
 const narration = () => within(inPlay()).getByRole('region', { name: 'Narration Prompt Reads' });
 const marks = (el: HTMLElement) => Array.from(el.querySelectorAll('mark')).map((m) => m.textContent);
@@ -100,7 +97,7 @@ const next = async () => {
 /** Moves to `id` the way an author in a hurry does: Add on an add step, then Use Example, then Next. */
 const walkTo = async (id: string) => {
   while (TOUR_STEPS[stepNumber() - 1].id !== id) {
-    if (TOUR_STEPS[stepNumber() - 1].add) fireEvent.click(addButton());
+    if (TOUR_STEPS[stepNumber() - 1].add) clickAdd();
     // The one step with no example asks for the author's own click.
     if (TOUR_STEPS[stepNumber() - 1].id === 'location-starting') {
       fireEvent.click(screen.getByRole('checkbox', { name: 'Starting Location' }));
@@ -164,11 +161,12 @@ describe('Authoring Tour — Entities steps', () => {
 
   it('waits for a new entity, then records and selects it', async () => {
     const { ctx } = await resumeAt('add-entity');
+    expect(within(stepNote()).getByText('Select Add Entity in the + menu to add an entity for players to meet')).toBeInTheDocument();
     // The harness world's own entity was there before the step, so it is not the tour's.
     expect(noteButton('Next')).toBeDisabled();
     expect(noteButton('Use Example')).toBeNull();
 
-    fireEvent.click(addButton());
+    clickAdd();
     await waitFor(() => expect(noteButton('Next')).toBeEnabled());
     const added = ctx().entities.find((e) => e.id !== 'resident')!;
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Name' })).toHaveTextContent('New Entity'));
@@ -181,7 +179,7 @@ describe('Authoring Tour — Entities steps', () => {
 
   it('keeps Next disabled on the name Add gives until the author changes it', async () => {
     const { ctx } = await resumeAt('add-entity');
-    fireEvent.click(addButton());
+    clickAdd();
     await waitFor(() => expect(noteButton('Next')).toBeEnabled());
     await next();
     const added = () => ctx().entities.find((e) => e.id !== 'resident')!;
@@ -223,7 +221,7 @@ describe('Authoring Tour — Entities steps', () => {
   });
 });
 
-describe('In Play — Entities', () => {
+describe('In Game — Entities', () => {
   it('Image: the picture lands on the entity card', async () => {
     const { ctx } = await resumeAt('entity-image');
     expect(noteButton('Next')).toBeDisabled();
@@ -231,7 +229,7 @@ describe('In Play — Entities', () => {
 
     fireEvent.click(noteButton('Use Example')!);
     await waitFor(() => expect(noteButton('Next')).toBeEnabled());
-    expect(ctx().entities.at(-1)?.images).toEqual(['data:image/webp;base64,maren']);
+    expect(ctx().entities.at(-1)?.images).toEqual([{ data: 'data:image/webp;base64,maren' }]);
     expect(within(playerSees()).getByRole('img', { name: 'Maren' })).toHaveAttribute('src', 'data:image/webp;base64,maren');
     // The roster stays, with nothing of the picture in it.
     expect(narration().textContent).toContain('- **Maren**');
@@ -268,7 +266,7 @@ describe('In Play — Entities', () => {
     await resumeAt('entity-pronouns');
     useExample();
 
-    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Pronouns' })).toHaveValue('she/her'));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Pronouns' })).toHaveTextContent('she/her'));
     expect(within(playerSees()).getByRole('heading', { name: 'Maren' })).toBeInTheDocument();
     expect(within(playerSees()).getByText('Players never see the Pronouns')).toBeInTheDocument();
     await waitFor(() => expect(marks(narration())).toEqual(['she/her']));

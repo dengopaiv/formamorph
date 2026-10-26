@@ -1,17 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect } from 'vitest';
+import { locationTabForField } from '@/views/locationPanelTabs';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { placementLetters } from '@/lib/placementLetters';
 import { isOpeningFieldKey, openingFieldKey } from '@/lib/openings';
 import { collectSearchTargets, findMatches, refusesBlueprintInsert, replaceAll, spliceText } from '@/lib/worldSearch';
 import type { SearchSources, SearchTarget } from '@/lib/worldSearch';
-import type { Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
+import type { Connection, Dictionary, Entity, GameLocation, Placeholder, Stat, Trait, WorldOverview } from '@/types';
 
 import { phValueId, phValues } from '@/test/placeholderValues';
 const LOOSE = { matchCase: false, wholeWord: false };
 
 const overview = (over: Partial<WorldOverview> = {}): WorldOverview => ({
   name: '', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '',
-  use3DModel: false, tags: [], ...over,
+  tags: [], ...over,
 });
 
 /** A sources bag whose updaters record what they were handed. */
@@ -83,7 +84,7 @@ describe('collectSearchTargets', () => {
         min: 0, max: 100, starting: 50, value: 50, regen: 0, descriptors: [],
         code: 'return value + 1;',
       } as Stat],
-      entities: [entity({ images: ['data:image/webp;base64,AAAA'] as Entity['images'] })],
+      entities: [entity({ images: [{ data: 'data:image/webp;base64,AAAA' }] })],
     });
     const keys = collectSearchTargets(src).map((t) => t.fieldKey);
     expect(keys).toContain('name');
@@ -105,10 +106,28 @@ describe('collectSearchTargets', () => {
     expect(targetFor(targets, 'descriptors[0].description')).toMatchObject({ value: 'Winded', chipCapable: true });
   });
 
-  it('reaches an entity’s pronouns as plain text and writes a replace to that entity', () => {
+  it('reaches each relationship label as a chip field named for its target', () => {
+    const ph: Placeholder = { id: 'p1', name: 'Hometown', values: phValues(['Sedge', 'Fen']) };
+    const chipName = encodePlaceholderToken({ id: 'p1', mode: 'world', placementId: 'place-1' });
+    const { src } = sources({
+      placeholders: [ph],
+      entities: [
+        entity({ relationships: [{ targetId: 'you', label: 'friend' }, { targetId: 'e2', label: 'rival' }, { targetId: 'gone', label: 'ghost' }] }),
+        entity({ id: 'e2', name: chipName }),
+      ],
+    });
+    const targets = collectSearchTargets(src);
+    expect(targetFor(targets, 'relationships[0].label')).toMatchObject({
+      itemId: 'e1', tab: 'entities', fieldLabel: 'Relationship to Persona', value: 'friend', chipCapable: true,
+    });
+    expect(targetFor(targets, 'relationships[1].label').fieldLabel).toBe('Relationship to {Sedge|Fen}');
+    expect(targetFor(targets, 'relationships[2].label').fieldLabel).toBe('Relationship to Unknown Entity');
+  });
+
+  it('reaches an entity’s pronouns as a chip field and writes a replace to that entity', () => {
     const { src, writes } = sources({ entities: [entity({ pronouns: 'she/her' })] });
     const target = targetFor(collectSearchTargets(src), 'pronouns');
-    expect(target).toMatchObject({ itemId: 'e1', tab: 'entities', fieldLabel: 'Pronouns', chipCapable: false });
+    expect(target).toMatchObject({ itemId: 'e1', tab: 'entities', fieldLabel: 'Pronouns', chipCapable: true });
     target.write('they/them');
     expect(writes.at(-1)).toEqual(['entity', expect.objectContaining({ id: 'e1', pronouns: 'they/them' })]);
   });
@@ -366,11 +385,11 @@ describe('findMatches — chips', () => {
     expect(chipHits(findMatches(targets, 'hometown', LOOSE, chips))).toEqual([second]);
   });
 
-  it('matches the Player Name chip by its label and never inside its token', () => {
+  it('matches the Persona Name chip by its label and never inside its token', () => {
     const { src } = sources({ entities: [entity({ name: '', aiDescription: 'Wren greets {{user}}.' })] });
     const targets = collectSearchTargets(src);
     const chips = { placeholders: [], letters: placementLetters([]) };
-    expect(chipHits(findMatches(targets, 'player name', LOOSE, chips))).toEqual(['{{user}}']);
+    expect(chipHits(findMatches(targets, 'persona name', LOOSE, chips))).toEqual(['{{user}}']);
     expect(findMatches(targets, 'user', LOOSE, chips)).toHaveLength(0);
   });
 
@@ -433,6 +452,34 @@ describe('findMatches — chips', () => {
   });
 });
 
+describe('Travel Hints', () => {
+  const places: GameLocation[] = [{ id: 'quay', name: 'Quay' }, { id: 'garden', name: 'Hill Garden' }];
+  const hinted = (connection: Connection) => sources({
+    locations: places, connections: [connection], updateConnection: (c) => written.push(c),
+  });
+  let written: Connection[] = [];
+  beforeEach(() => { written = []; });
+
+  it('finds each unlinked leg on the panel of the location it leaves, as a chip field', () => {
+    const { src } = hinted({ id: 'c1', a: 'quay', b: 'garden', aToB: { hint: 'up the steps' }, bToA: { hint: 'down the steps' } });
+    const hits = findMatches(collectSearchTargets(src), 'steps', LOOSE).map(({ target }) => target);
+    expect(hits.map((t) => [t.itemId, t.fieldLabel, t.chipCapable, locationTabForField(t.fieldKey)])).toEqual([
+      ['quay', 'Travel Hint to Hill Garden', true, 'presence'],
+      ['garden', 'Travel Hint to Quay', true, 'presence'],
+    ]);
+    hits[1].write('down the stair');
+    expect(written).toEqual([{ id: 'c1', a: 'quay', b: 'garden', aToB: { hint: 'up the steps' }, bToA: { hint: 'down the stair' } }]);
+  });
+
+  it('finds a linked pair once, and a replace there writes both legs', () => {
+    const { src } = hinted({ id: 'c1', a: 'quay', b: 'garden', aToB: { hint: 'by the bridge' }, bToA: { hint: 'by the bridge' } });
+    const matches = findMatches(collectSearchTargets(src), 'bridge', LOOSE);
+    expect(matches.map((m) => m.target.itemId)).toEqual(['quay']);
+    replaceAll(matches, () => 'ferry');
+    expect(written.at(-1)).toMatchObject({ aToB: { hint: 'by the ferry' }, bToA: { hint: 'by the ferry' } });
+  });
+});
+
 describe('replaceAll', () => {
   it('replaces every occurrence in a field and writes it once', () => {
     const { src, writes } = sources({ entities: [entity({ name: '', aiDescription: 'fen, fen, and fen' })] });
@@ -441,6 +488,15 @@ describe('replaceAll', () => {
     expect(summary).toMatchObject({ replaced: 3, fields: 1, skipped: 0 });
     expect(writes).toHaveLength(1);
     expect(writes[0][1]).toMatchObject({ aiDescription: 'marsh, marsh, and marsh' });
+  });
+
+  it('replaces inside a relationship label and keeps its chip and the other rows', () => {
+    const token = encodePlaceholderToken({ id: 'p1', mode: 'world', placementId: 'place-1' });
+    const relationships = [{ targetId: 'you', label: 'old friend' }, { targetId: 'e2', label: `old ${token} rival` }];
+    const { src, writes } = sources({ entities: [entity({ relationships }), entity({ id: 'e2', name: 'Bram' })] });
+    const matches = findMatches(collectSearchTargets(src), 'old', LOOSE).filter((m) => m.target.fieldKey === 'relationships[1].label');
+    replaceAll(matches, () => 'new');
+    expect(writes[0][1]).toMatchObject({ relationships: [relationships[0], { targetId: 'e2', label: `new ${token} rival` }] });
   });
 
   it('leaves a chip token intact when replacing text around it', () => {

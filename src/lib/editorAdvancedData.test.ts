@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { worldUsesAdvancedFeatures } from './editorAdvancedData';
 import type { AdvancedDataInput } from './editorAdvancedData';
-import type { Dictionary, Entity, GameLocation, Stat, Trait, WorldOverview } from '@/types';
+import type { Dictionary, Entity, GameLocation, Stat, Tool, Trait, WorldOverview } from '@/types';
 
 import { phValues } from '@/test/placeholderValues';
+import { boxScripts } from '@/test/scriptFixtures';
 const overview = (over: Partial<WorldOverview> = {}): WorldOverview => ({
   name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null, systemPrompt: '',
-  use3DModel: false, tags: [], ...over,
+  tags: [], ...over,
 });
 
 /** A world holding nothing Simple mode hides — every case below is this plus one hidden thing. */
@@ -24,6 +25,14 @@ const plain = (over: Partial<AdvancedDataInput> = {}): AdvancedDataInput => ({
 describe('worldUsesAdvancedFeatures', () => {
   it('says no about a world whose every field Simple mode can show', () => {
     expect(worldUsesAdvancedFeatures(plain())).toBe(false);
+  });
+
+  it('says yes about a World Tool, which has no Simple tab at all', () => {
+    const tool: Tool = {
+      id: 'w1', name: 'roll_fate', description: '', params: [], handler: { kind: 'template', body: 'Yes.' }, emptyResult: '', offeredTo: ['narration'],
+    };
+    expect(worldUsesAdvancedFeatures(plain({ tools: [tool] }))).toBe(true);
+    expect(worldUsesAdvancedFeatures(plain({ tools: [] }))).toBe(false);
   });
 
   it('says yes about a placeholder, which has no Simple tab at all', () => {
@@ -50,8 +59,8 @@ describe('worldUsesAdvancedFeatures', () => {
     const base = plain().stats[0];
     for (const hidden of [
       { descriptors: [{ id: 'd', threshold: 50, description: 'Winded' }] },
-      { code: 'return 1;' },
-      { beforeCode: 'return 1;' },
+      { scripts: boxScripts({ after: 'return 1;' }) },
+      { scripts: boxScripts({ before: 'return 1;' }) },
       { noDecrease: true },
     ]) {
       expect(worldUsesAdvancedFeatures(plain({ stats: [{ ...base, ...hidden } as Stat] }))).toBe(true);

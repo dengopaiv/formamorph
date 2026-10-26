@@ -1,6 +1,9 @@
-import { useId, useMemo, type ReactNode } from 'react';
-import { Info, Plus, Trash2 } from 'lucide-react';
-import type { Tool, ToolHandler, ToolParam, ToolParamType } from '@/types';
+import { useCallback, useId, useMemo, useState, type ReactNode } from 'react';
+import { Info, Plus, SquareFunction, Trash2 } from 'lucide-react';
+import type { ScriptTiming, Stat, Tool, ToolHandler, ToolParam, ToolParamType, ToolScriptHandler, ToolScriptTiming } from '@/types';
+import { StatCodeTemplateDialog } from './StatCodeTemplateDialog';
+import { migrateStatCodeRoutes } from '@/lib/statCodeRoutes';
+import type { CodeTraitPlace, SurfaceAnalysisOptions } from '@/lib/statCodeAnalysis';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -23,11 +26,21 @@ import {
   draftProblems, finishDraft, hasDraftProblems, namedParams, renameParam, withHandlerKind,
   type DraftProblems, type KeptHandlers, type HandlerProblem, type ParamProblem,
 } from '@/lib/tools/toolDraft';
+import { infoWithAccess, type SurfaceEntry } from '@/lib/codeSurface';
 import { toolScriptSurface } from '@/lib/tools/toolScriptSurface';
+import { worldToolArgsNodes, worldToolSurface } from '@/lib/tools/worldToolSurface';
+import { SCRIPT_TIMING_OF_TOOL, toolTimingOf } from '@/lib/tools/worldTools';
+import { statBoxAnalysisOptions, type StatCodeNames } from '@/lib/statCodeBoxOptions';
+import { statCodeNames } from '@/lib/statCodeTestRun';
+import { useCodeCardNavigation } from '@/lib/codeCardNavigation';
+import type { CodeWorldLookup } from '@/lib/codeWorldLookup';
+import { settleCodeUseReveal, useCodeUseReveal } from '@/lib/codeUseReveal';
 import { toolTemplateVocabulary } from '@/lib/tools/toolTemplateVocabulary';
-import type { ToolNameProblem } from '@/lib/tools/toolValidation';
+import type { ValueLookup } from '@/lib/promptValues';
+import { armsTrigger, type ToolNameProblem } from '@/lib/tools/toolValidation';
 import { TOOL_EDIT_TABS, type ToolEditTab } from './toolsView';
 import { ToolTryIt, type TryItWorld } from './ToolTryIt';
+import { useTryItPlacement } from './useTryItPlacement';
 
 type Change = (next: Tool) => void;
 
@@ -35,6 +48,14 @@ const NAME_PROBLEM: Record<ToolNameProblem, string> = {
   format: 'Use only letters, digits, _ and -, from 1 to 64 characters',
   taken: 'Another of your Tools uses this name',
   builtin: 'A built-in Tool uses this name',
+};
+
+/** Where the edited Tool lives: the player's own list, or a world's (which may take a built-in name). */
+export type ToolHome = 'user' | 'world';
+
+const NAME_PROBLEM_BY_HOME: Record<ToolHome, Record<ToolNameProblem, string>> = {
+  user: NAME_PROBLEM,
+  world: { ...NAME_PROBLEM, taken: 'Another Tool in this world uses this name' },
 };
 
 /** Shown under a parameter's name. An unnamed one is left to the footer, so a new card isn't born red. */
@@ -45,6 +66,15 @@ const PARAM_PROBLEM: Record<ParamProblem, string | null> = {
 };
 
 const HANDLER_PROBLEM: Record<HandlerProblem, string> = { lookupParam: 'Pick the parameter to search by' };
+
+/** What a World Tool's script reads its names from, as a Script's box does: the open world's names and its cards. */
+export interface WorldToolCode {
+  names: StatCodeNames;
+  /** A box's card lookup for the script timing it runs on. */
+  lookup?: (timing: ScriptTiming) => CodeWorldLookup;
+  /** What a template's placeholder slot picks from. */
+  placeholderPlaces?: readonly CodeTraitPlace[];
+}
 
 /** The footer's fix for each parameter problem, by the parameter's 1-based position. */
 const PARAM_FIX: Record<ParamProblem, (position: number) => string> = {
@@ -78,8 +108,8 @@ const LOOKUP_SOURCES: readonly { value: LookupSource; label: string; matches: st
 ];
 
 /** Label, help, control, then the control's problem: the Design System's field help order. */
-function Field({ id, label, hint, error, aside, children }: {
-  id: string; label: string; hint?: string; error?: string | null; aside?: ReactNode; children: ReactNode;
+function Field({ id, label, hint, note, error, aside, children }: {
+  id: string; label: string; hint?: string; note?: string | null; error?: string | null; aside?: ReactNode; children: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1 min-w-0">
@@ -88,6 +118,7 @@ function Field({ id, label, hint, error, aside, children }: {
         {aside}
       </div>
       {hint && <Hint>{hint}</Hint>}
+      {note && <Hint role="note">{note}</Hint>}
       {children}
       {error && <FieldError id={`${id}-error`}>{error}</FieldError>}
     </div>
@@ -114,17 +145,20 @@ function JsonField({ id, value, onChange }: { id: string; value: string; onChang
 /** A tab body. */
 interface TabProps { draft: Tool; onChange: Change; problems: DraftProblems }
 
-function DefinitionTab({ draft, onChange, problems }: TabProps) {
+function DefinitionTab({ draft, onChange, problems, home, nameNote }: TabProps & { home: ToolHome; nameNote?: string | null }) {
   const id = useId();
   const missing = OUTLINE.filter((heading) => !draft.description.includes(heading));
   const addOutline = () => {
     const kept = draft.description.trimEnd();
     onChange({ ...draft, description: `${kept}${kept ? '\n' : ''}${missing.map((h) => `${h} `).join('\n')}` });
   };
-  const nameError = draft.name && problems.name ? NAME_PROBLEM[problems.name] : null;
+  const nameError = draft.name && problems.name ? NAME_PROBLEM_BY_HOME[home][problems.name] : null;
   return (
     <div className="flex flex-col gap-4">
-      <Field id={`${id}-name`} label="Name" hint="Names the Tool for the AI, such as find_person" error={nameError}>
+      <Field
+        id={`${id}-name`} label="Name" hint="Names the Tool for the AI, such as find_person" error={nameError}
+        note={nameError ? null : nameNote}
+      >
         <Input
           id={`${id}-name`} value={draft.name} className="font-mono"
           aria-invalid={!!nameError} aria-describedby={nameError ? `${id}-name-error` : undefined}
@@ -214,7 +248,7 @@ function ParametersTab({ draft, onChange, problems }: TabProps) {
 }
 
 /** An ⓘ beside the Script label that opens the table of values a script can read. */
-function ScriptReference({ globals }: { globals: readonly { name: string; detail: string; info: string }[] }) {
+function ScriptReference({ globals }: { globals: readonly SurfaceEntry[] }) {
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -228,7 +262,7 @@ function ScriptReference({ globals }: { globals: readonly { name: string; detail
       <DialogContent className="flex max-h-[85dvh] flex-col sm:max-w-[640px]">
         <DialogHeader className="shrink-0">
           <DialogTitle>What a Script Can Read</DialogTitle>
-          <DialogDescription>Reads these read-only values. Returns text, or any other value as JSON.</DialogDescription>
+          <DialogDescription>Lists the values a script can read. A script returns text, or any other value as JSON.</DialogDescription>
         </DialogHeader>
         <ScrollArea className="-mx-1 min-h-0 flex-1 px-1">
           <dl aria-label="What the script can read" className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 pr-1 text-label">
@@ -236,7 +270,7 @@ function ScriptReference({ globals }: { globals: readonly { name: string; detail
               <div key={entry.name} className="contents">
                 <dt className="font-mono">{entry.name}</dt>
                 <dd className="min-w-0 text-muted-foreground">
-                  <span className="font-mono break-words text-foreground/80">{entry.detail}</span> {entry.info}
+                  <span className="font-mono break-words text-foreground/80">{entry.detail}</span> {infoWithAccess(entry)}
                 </dd>
               </div>
             ))}
@@ -247,16 +281,116 @@ function ScriptReference({ globals }: { globals: readonly { name: string; detail
   );
 }
 
-function HandlerTab({ draft, onChange, onKindChange, problems, placeholderNames }: TabProps & {
-  onKindChange: (kind: ToolHandler['kind']) => void; placeholderNames: readonly string[];
+const TIMING_CHOICES: { value: ToolScriptTiming; label: string; help: string }[] = [
+  { value: 'call', label: 'On Call', help: 'Runs your code when the AI calls, and sends the AI its return value' },
+  { value: 'output', label: 'During AI Output', help: 'Runs your code on each later narration sentence this turn' },
+  { value: 'after', label: 'After the AI', help: 'Runs your code right before the world’s After the AI scripts' },
+];
+
+/** A World Tool's Script timing, and the Reply and Stack Calls of a timing that arms a trigger. */
+function TriggerFields({ handler, onChange }: { handler: ToolScriptHandler; onChange: (next: ToolScriptHandler) => void }) {
+  const id = useId();
+  const timing = handler.timing ?? 'call';
+  const help = TIMING_CHOICES.find((t) => t.value === timing)?.help;
+  const setTiming = (next: ToolScriptTiming) => {
+    const { reply, stack, ...rest } = handler;
+    onChange(armsTrigger(next) ? { ...rest, timing: next, ...(reply ? { reply } : {}), ...(stack ? { stack } : {}) } : { ...rest, timing: next });
+  };
+  return (
+    <>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={`${id}-timing`}>Timing</Label>
+        <Hint id={`${id}-timing-help`}>{help}</Hint>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Select value={timing} onValueChange={(v) => setTiming(v as ToolScriptTiming)}>
+            <SelectTrigger id={`${id}-timing`} aria-describedby={`${id}-timing-help`}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {TIMING_CHOICES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      {armsTrigger(timing) && (
+        <>
+          <Field id={`${id}-reply`} label="Reply" hint="Goes to the AI on each call. Blank sends “Done.”">
+            <Input id={`${id}-reply`} value={handler.reply ?? ''} onChange={(e) => onChange({ ...handler, reply: e.target.value })} />
+          </Field>
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-2 text-label">
+              <Checkbox
+                checked={handler.stack === true} aria-describedby={`${id}-stack-help`}
+                onCheckedChange={(c) => onChange({ ...handler, stack: c === true })}
+              />
+              Stack Calls
+            </label>
+            <Hint id={`${id}-stack-help`}>Runs your code once for each call in the turn, in call order</Hint>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+const NO_STATS: Stat[] = [];
+
+/** The Script box's Templates button and menu: the World Tool templates for the Tool's timing. */
+function WorldToolTemplates({ params, timing, worldCode, hasExistingCode, onInsert }: {
+  params: readonly ToolParam[];
+  timing: ToolScriptTiming;
+  worldCode?: WorldToolCode;
+  hasExistingCode: boolean;
+  onInsert: (code: string, createdParams: ToolParam[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const names = worldCode?.names;
+  return (
+    <div>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        <SquareFunction className="h-4 w-4 mr-1" />Templates
+      </Button>
+      <StatCodeTemplateDialog
+        open={open} onOpenChange={setOpen} kind="worldTool" timing={timing} params={params}
+        stats={names?.codeNamedStats ?? NO_STATS} hasExistingCode={hasExistingCode}
+        onInsert={(code, created) => onInsert(names ? migrateStatCodeRoutes(code, names.placeholders) : code, created)}
+        placeholderPlaces={worldCode?.placeholderPlaces} traitPlaces={names?.traitPlaces} entities={names?.entities}
+      />
+    </div>
+  );
+}
+
+function HandlerTab({ draft, onChange, onKindChange, problems, chipReads, codeNames, home, worldCode }: TabProps & {
+  onKindChange: (kind: ToolHandler['kind']) => void; home: ToolHome;
+  /** The open world's script names. Absent, a World Tool's script completes against its surface alone. */
+  worldCode?: WorldToolCode;
+  /** The open world's names, which a user Tool's script completes against and its Variable menu lists. Null with
+   *  only the sample world. */
+  codeNames: StatCodeNames | null;
+  /** The scene chips' values on the world Try It runs on, which Chip Options shows. */
+  chipReads: ValueLookup;
 }) {
   const id = useId();
   const { handler, params } = draft;
   const named = namedParams(params);
   const source = LOOKUP_SOURCES.find((s) => handler.kind === 'lookup' && s.value === handler.source);
   const handlerError = problems.handler && HANDLER_PROBLEM[problems.handler];
-  const surface = useMemo(() => toolScriptSurface(params, placeholderNames), [params, placeholderNames]);
   const vocabulary = useMemo(() => toolTemplateVocabulary(params), [params]);
+  // A user Tool's script reads the same surface, without writes (Q24).
+  const userAnalysis = useMemo((): SurfaceAnalysisOptions => {
+    const surface = toolScriptSurface(params);
+    return codeNames ? statBoxAnalysisOptions(codeNames, { selfName: '', surface }) : { surface };
+  }, [params, codeNames]);
+  // A World Tool's script runs on the Scripts' sandbox, so its box reads that surface with `args` beside it.
+  const scriptTiming = toolTimingOf(draft);
+  const worldAnalysis = useMemo((): SurfaceAnalysisOptions => {
+    const worldSurface = worldToolSurface(params, scriptTiming);
+    if (!worldCode) return { surface: worldSurface };
+    return statBoxAnalysisOptions(worldCode.names, {
+      selfName: '', surface: worldSurface, lookup: worldCode.lookup?.(SCRIPT_TIMING_OF_TOOL[scriptTiming]),
+    });
+  }, [params, scriptTiming, worldCode]);
+  const argsMenu = useCallback(() => worldToolArgsNodes(params), [params]);
+  const navigation = useCodeCardNavigation();
+  const reveal = useCodeUseReveal(draft.id, null, 'tool');
   const setHandler = (next: ToolHandler) => onChange({ ...draft, handler: next });
   const kind = HANDLER_KINDS.find((k) => k.value === handler.kind) ?? HANDLER_KINDS[0];
   return (
@@ -325,15 +459,50 @@ function HandlerTab({ draft, onChange, onKindChange, problems, placeholderNames 
       )}
       {handler.kind === 'template' && (
         <PromptField
-          label="Template" ariaLabel="Template" vocabulary={vocabulary}
+          label="Template" ariaLabel="Template" vocabulary={vocabulary} chipReads={chipReads}
           hint="Returns this text. Insert a parameter to place what the AI passed."
           value={handler.body} onChange={(body) => setHandler({ ...handler, body })}
         />
       )}
-      {handler.kind === 'script' && (
+      {handler.kind === 'script' && home === 'world' && <TriggerFields handler={handler} onChange={setHandler} />}
+      {handler.kind === 'script' && home === 'world' && (
         <CodeArea
-          label="Script" ariaLabel="Script" rows={10} surface={surface}
-          info={<ScriptReference globals={surface.globals} />}
+          label="Script" ariaLabel="Script" rows={10} surface={worldAnalysis.surface} variables={argsMenu}
+          statNames={worldAnalysis.statNames}
+          placeholders={worldAnalysis.placeholders}
+          entities={worldAnalysis.entities}
+          locations={worldAnalysis.locations}
+          traits={worldCode?.names.traitPlaces}
+          owner={null}
+          lookup={worldAnalysis.lookup}
+          navigation={navigation}
+          revealLine={reveal?.line}
+          onLineRevealed={() => { if (reveal) settleCodeUseReveal(reveal); }}
+          info={<ScriptReference globals={worldAnalysis.surface.globals} />}
+          value={handler.code} onChange={(code) => setHandler({ ...handler, code })}
+        />
+      )}
+      {handler.kind === 'script' && home === 'world' && (
+        <WorldToolTemplates
+          params={params} timing={scriptTiming} worldCode={worldCode} hasExistingCode={!!handler.code.trim()}
+          // A new Parameter replaces the blank rows, which would otherwise block Save as unnamed.
+          onInsert={(code, created) => onChange({
+            ...draft,
+            params: created.length ? [...draft.params.filter((p) => p.name.trim() || p.description), ...created] : draft.params,
+            handler: { ...handler, code },
+          })}
+        />
+      )}
+      {handler.kind === 'script' && home !== 'world' && (
+        <CodeArea
+          label="Script" ariaLabel="Script" rows={10} surface={userAnalysis.surface} variables={argsMenu}
+          statNames={userAnalysis.statNames}
+          placeholders={userAnalysis.placeholders}
+          entities={userAnalysis.entities}
+          locations={userAnalysis.locations}
+          traits={codeNames?.traitPlaces}
+          owner={null}
+          info={<ScriptReference globals={userAnalysis.surface.globals} />}
           value={handler.code} onChange={(code) => setHandler({ ...handler, code })}
         />
       )}
@@ -365,11 +534,12 @@ function fixesToSave(draft: Tool, problems: DraftProblems): string | null {
 
 /**
  * Edit mode for a user Tool: Definition, Parameters and Handler on the World Editor's panel tab strip, Try It
- * beside them, and Cancel and Save Tool below. The draft and the tab live with the caller.
+ * beside them (a fourth tab when the editor is narrow), and Cancel and Save Tool below. The draft and the tab
+ * live with the caller.
  */
 export function ToolEditor({
   draft, onDraftChange, keptHandlers, editTab, onEditTabChange, userTools, reservedNames = [], editing, world, fullscreen, fullscreenButton,
-  onCancel, onSave,
+  onCancel, onSave, home = 'user', nameNote, worldCode,
 }: {
   draft: Tool;
   /** Takes the new kept handlers too when a handler type switch changed them. */
@@ -377,8 +547,13 @@ export function ToolEditor({
   keptHandlers: KeptHandlers;
   editTab: ToolEditTab;
   onEditTabChange: (tab: ToolEditTab) => void;
-  /** The user Tools, for the name check. */
+  /** The Tools of the draft's home, for the name check. */
   userTools: readonly Tool[];
+  home?: ToolHome;
+  /** Shown under a valid name, such as the Tool a World Tool replaces. */
+  nameNote?: string | null;
+  /** The open world's names for a World Tool's script. */
+  worldCode?: WorldToolCode;
   /** The caller's fixed function names, which the name check refuses as built-in. */
   reservedNames?: readonly string[];
   /** True when the draft edits a saved Tool, false for a new one. */
@@ -390,7 +565,7 @@ export function ToolEditor({
   onCancel: () => void;
   onSave: () => void;
 }) {
-  const problems = draftProblems(draft, userTools, reservedNames);
+  const problems = draftProblems(draft, userTools, reservedNames, { world: home === 'world' });
   const blocked = hasDraftProblems(problems);
   const fixes = fixesToSave(draft, problems);
   const body = { draft, onChange: (next: Tool) => onDraftChange(next), problems };
@@ -398,9 +573,12 @@ export function ToolEditor({
     const next = withHandlerKind(draft, kind, keptHandlers);
     onDraftChange(next.draft, next.kept);
   };
-  // Autocomplete lists the shared placeholders of the world Try It runs on.
-  const { snapshot } = world;
-  const placeholderNames = useMemo(() => Object.keys(snapshot().placeholders), [snapshot]);
+  // Autocomplete and the Variable menu list the open world's names, never the sample world's.
+  const { snapshot, open } = world;
+  const toolSnapshot = useMemo(() => snapshot(), [snapshot]);
+  const codeNames = useMemo(() => (open && toolSnapshot.script.authored ? statCodeNames(toolSnapshot.script.authored) : null), [open, toolSnapshot]);
+
+  const { gridRef, narrow, shownTab, tryItOpen, tabs } = useTryItPlacement(editTab, onEditTabChange);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-3">
@@ -408,34 +586,41 @@ export function ToolEditor({
         <p className="text-label font-medium truncate">{editing ? `Edit ${draft.name}` : 'New Tool'}</p>
         {fullscreenButton}
       </div>
-      <div
+      <Tabs
+        ref={gridRef}
         data-testid="tool-editor-grid"
+        surfaceTabs="settingsToolEdit"
+        value={shownTab} onValueChange={(t) => onEditTabChange(t as ToolEditTab)}
         className={cn(
-          'grid flex-1 min-h-0 gap-4 grid-rows-[minmax(0,2fr)_minmax(0,1fr)] lg:grid-rows-1',
-          fullscreen ? 'lg:grid-cols-[minmax(0,2fr)_minmax(22rem,1fr)]' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]',
+          'grid flex-1 min-h-0 grid-rows-1',
+          narrow && 'grid-cols-1 gap-3',
+          narrow && tryItOpen && 'grid-rows-[auto_minmax(0,1fr)]',
+          !narrow && 'gap-4',
+          !narrow && (fullscreen ? 'grid-cols-[minmax(0,2fr)_minmax(22rem,1fr)]' : 'grid-cols-[minmax(0,1fr)_minmax(0,22rem)]'),
         )}
       >
-        <Tabs
-          surfaceTabs="settingsToolEdit"
-          value={editTab} onValueChange={(t) => onEditTabChange(t as ToolEditTab)}
-          className="flex flex-col min-h-0 gap-3"
-        >
-          <PanelTabsList tabs={TOOL_EDIT_TABS} stripLabel="Tool Fields" labelClassName="hidden sm:inline" />
-          <ScrollArea className="flex-1 min-h-0">
+        <div className="flex flex-col min-h-0 gap-3">
+          <PanelTabsList tabs={tabs} stripLabel="Tool Fields" labelClassName="hidden sm:inline" />
+          <ScrollArea className={cn('flex-1 min-h-0', tryItOpen && 'hidden')}>
             <div className="pr-3 pb-1">
-              <TabsContent value="definition" className="mt-0"><DefinitionTab {...body} /></TabsContent>
+              <TabsContent value="definition" className="mt-0"><DefinitionTab {...body} home={home} nameNote={nameNote} /></TabsContent>
               <TabsContent value="parameters" className="mt-0"><ParametersTab {...body} /></TabsContent>
-              <TabsContent value="handler" className="mt-0"><HandlerTab {...body} onKindChange={switchKind} placeholderNames={placeholderNames} /></TabsContent>
+              <TabsContent value="handler" className="mt-0"><HandlerTab {...body} home={home} worldCode={worldCode} onKindChange={switchKind} chipReads={toolSnapshot.chips} codeNames={codeNames} /></TabsContent>
             </div>
           </ScrollArea>
-        </Tabs>
-        <ScrollArea className="h-full min-h-0 rounded-md border">
-          <div className="p-3">
-            {/* The draft as it would save, so a list option typed with spaces matches as it will in play. */}
-            <ToolTryIt tool={finishDraft(draft)} world={world} />
-          </div>
-        </ScrollArea>
-      </div>
+        </div>
+        {/* One Try It serves the column and the tab. It stays mounted while hidden, so its inputs and result stay. */}
+        <TabsContent
+          value="tryIt" forceMount hidden={narrow && !tryItOpen} role={narrow ? 'tabpanel' : 'presentation'} className="mt-0 min-h-0"
+        >
+          <ScrollArea className="h-full min-h-0 rounded-md border">
+            <div className="p-3">
+              {/* The draft as it would save, so a list option typed with spaces matches as it will in play. */}
+              <ToolTryIt tool={finishDraft(draft)} world={world} />
+            </div>
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
       <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3 flex-shrink-0">
         {fixes && <p role="status" className="mr-auto text-helper text-muted-foreground">{fixes}</p>}
         <Button variant="outline" onClick={onCancel}>Cancel</Button>

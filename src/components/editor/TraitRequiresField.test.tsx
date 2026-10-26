@@ -4,9 +4,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { TraitStoreContext, type TraitStore } from '@/contexts/TraitStoreContext';
-import { editorGateInput } from '@/lib/bearers';
+import { editorGateInput } from '@/lib/owners';
 import { TraitRequiresField } from './TraitRequiresField';
-import type { Entity, Trait, TraitGroup, TraitRequirement } from '@/types';
+import type { Entity, Trait, TraitGroup, TraitRequirement, TraitRequirementRow } from '@/types';
 
 const trait = (id: string, extra: Partial<Trait> = {}): Trait => ({ id, name: id, statChanges: [], ...extra });
 // Root: Brave. Blueprints: Classes (Paladin, Wizard), Smite. Albus links Classes; Mira owns Squire.
@@ -27,10 +27,11 @@ const albus: Entity = {
 const mira: Entity = { id: 'mira', name: 'Mira', traits: [trait('squire', { name: 'Squire' })] };
 
 /** The field over a trait whose edits land, so a test reads the chips the author would see next. */
-function Harness({ trait: initial, offWorld = false, onOpen = () => {}, extra = { traits: [], traitGroups: [] } }: {
+function Harness({ trait: initial, offWorld = false, onOpen = () => {}, onRows = () => {}, extra = { traits: [], traitGroups: [] } }: {
   trait: Trait;
   offWorld?: boolean;
   onOpen?: (r: TraitRequirement) => void;
+  onRows?: (rows: TraitRequirementRow[]) => void;
   extra?: { traits: Trait[]; traitGroups: TraitGroup[] };
 }) {
   const [current, setCurrent] = useState(initial);
@@ -49,7 +50,10 @@ function Harness({ trait: initial, offWorld = false, onOpen = () => {}, extra = 
       <TraitStoreContext.Provider value={store}>
         <TraitRequiresField
           trait={current}
-          onChange={(requires) => setCurrent({ ...current, requires: requires.length ? requires : undefined })}
+          onChange={(requires) => {
+            onRows(requires);
+            setCurrent({ ...current, requires: requires.length ? requires : undefined });
+          }}
           onOpen={onOpen}
         />
       </TraitStoreContext.Provider>
@@ -57,21 +61,25 @@ function Harness({ trait: initial, offWorld = false, onOpen = () => {}, extra = 
   );
 }
 
-const openPicker = () => fireEvent.click(screen.getByRole('button', { name: 'Add Requirement' }));
+/** Opens the picker that adds a row: **Add Requirement** first, **Or Another Way** after. */
+const openPicker = () => fireEvent.click(screen.getByRole('button', { name: /^(Add Requirement|Or Another Way)$/ }));
 const option = (name: RegExp) => screen.getByRole('option', { name });
-const chips = () => screen.getAllByRole('button').map((b) => b.textContent).filter((t) => t && t !== 'Add Requirement' && !t.startsWith('Remove'));
+const ADDS = ['Add Requirement', 'Or Another Way', 'And'];
+const chips = () => screen.getAllByRole('button').map((b) => b.textContent).filter((t) => t && !ADDS.includes(t) && !t.startsWith('Remove'));
+/** Each row's text, chips and joins in order. */
+const rowTexts = () => [...document.querySelectorAll('[data-requirement-row]')].map((row) => row.textContent);
 
-describe('TraitRequiresField bearer choice', () => {
-  it('asks which bearer after a target, listing Same Bearer, You, then every entity that bears it', async () => {
+describe('TraitRequiresField owner choice', () => {
+  it('asks which owner after a target, listing Same Owner, Persona, then every entity that owns it', async () => {
     render(<Harness trait={traits[3]} />);
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
     expect(screen.getByRole('button', { name: 'Back to targets' }).parentElement?.textContent).toBe('Requires Paladin on');
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Same BearerWhoever has the trait', 'You', 'Albus']);
-    expect(screen.getByPlaceholderText('Search bearers')).toHaveValue('');
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Same OwnerWhoever has the trait', 'Persona', 'Albus']);
+    expect(screen.getByPlaceholderText('Search owners')).toHaveValue('');
   });
 
-  it('adds the requirement scoped to the picked bearer, and the chip names the bearer', async () => {
+  it('adds the requirement scoped to the picked owner, and the chip names the owner', async () => {
     render(<Harness trait={traits[3]} />);
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
@@ -80,32 +88,32 @@ describe('TraitRequiresField bearer choice', () => {
 
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
-    fireEvent.click(option(/^You/));
-    expect(screen.getByRole('button', { name: 'You: Paladin' })).toBeInTheDocument();
+    fireEvent.click(option(/^Persona/));
+    expect(screen.getByRole('button', { name: 'Persona: Paladin' })).toBeInTheDocument();
 
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
-    fireEvent.click(option(/^Same Bearer/));
-    expect(chips()).toEqual(['Albus: Paladin', 'You: Paladin', 'Paladin']);
+    fireEvent.click(option(/^Same Owner/));
+    expect(chips()).toEqual(['Albus: Paladin', 'Persona: Paladin', 'Paladin']);
   });
 
-  it('opens a chip on its target whatever its bearer', async () => {
+  it('opens a chip on its target whatever its owner', async () => {
     const onOpen = vi.fn();
-    render(<Harness trait={trait('smite', { name: 'Smite', requires: [{ kind: 'trait', id: 'paladin', bearer: { kind: 'you' } }] })} onOpen={onOpen} />);
-    fireEvent.click(screen.getByRole('button', { name: 'You: Paladin' }));
-    expect(onOpen).toHaveBeenCalledWith({ kind: 'trait', id: 'paladin', bearer: { kind: 'you' } });
+    render(<Harness trait={trait('smite', { name: 'Smite', requires: [{ all: [{ kind: 'trait', id: 'paladin', owner: { kind: 'you' } }] }] })} onOpen={onOpen} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Persona: Paladin' }));
+    expect(onOpen).toHaveBeenCalledWith({ kind: 'trait', id: 'paladin', owner: { kind: 'you' } });
   });
 
-  it('disables a bearer already listed, and the target only once every bearer is', async () => {
-    const listed: TraitRequirement[] = [{ kind: 'trait', id: 'paladin', bearer: { kind: 'you' } }];
-    render(<Harness trait={trait('smite', { name: 'Smite', requires: listed })} />);
+  it('disables an owner already listed, and the target only once every owner is', async () => {
+    const listed: TraitRequirement[] = [{ kind: 'trait', id: 'paladin', owner: { kind: 'you' } }];
+    render(<Harness trait={trait('smite', { name: 'Smite', requires: [{ all: listed }] })} />);
     openPicker();
     const paladin = await screen.findByRole('option', { name: /^Paladin/ });
     expect(paladin).not.toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(paladin);
-    expect(option(/^You/)).toHaveAttribute('aria-disabled', 'true');
-    expect(option(/^Same Bearer/)).not.toHaveAttribute('aria-disabled', 'true');
-    fireEvent.click(option(/^Same Bearer/));
+    expect(option(/^Persona/)).toHaveAttribute('aria-disabled', 'true');
+    expect(option(/^Same Owner/)).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(option(/^Same Owner/));
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
     fireEvent.click(option(/^Albus/));
@@ -113,25 +121,27 @@ describe('TraitRequiresField bearer choice', () => {
     expect(await screen.findByRole('option', { name: /^Paladin/ })).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('goes back to the targets with the search cleared, and closing the picker forgets the target', async () => {
+  // Q25: the search belongs to the page, so it survives a trip to the owner choice page.
+  it('goes back to the targets with the search kept, and closing the picker forgets the target and the search', async () => {
     render(<Harness trait={traits[3]} />);
     openPicker();
-    fireEvent.change(screen.getByPlaceholderText('Search traits, groups, and personas'), { target: { value: 'pal' } });
+    fireEvent.change(screen.getByPlaceholderText('Search traits, groups, time of day, and personas'), { target: { value: 'pal' } });
     fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Back to targets' }));
-    expect(screen.getByPlaceholderText('Search traits, groups, and personas')).toHaveValue('');
-    expect(screen.getByRole('option', { name: /^Wizard/ })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search traits, groups, time of day, and personas')).toHaveValue('pal');
+    expect(screen.queryByRole('option', { name: /^Wizard/ })).toBeNull();
     fireEvent.click(screen.getByRole('option', { name: /^Paladin/ }));
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
     openPicker();
-    expect(await screen.findByPlaceholderText('Search traits, groups, and personas')).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText('Search traits, groups, time of day, and personas')).toHaveValue('');
+    expect(screen.getByRole('option', { name: /^Wizard/ })).toBeInTheDocument();
   });
 
-  it('offers a same-bearer requirement on an owned trait and names its group bearers', async () => {
+  it('offers a same-owner requirement on an owned trait and names its group owners', async () => {
     render(<Harness trait={mira.traits![0]} />);
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^any Classes/ }));
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Same BearerWhoever has the trait', 'You', 'Albus']);
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Same OwnerWhoever has the trait', 'Persona', 'Albus']);
     fireEvent.click(option(/^Albus/));
     expect(screen.getByRole('button', { name: 'Albus: any Classes' })).toBeInTheDocument();
   });
@@ -144,7 +154,7 @@ describe('TraitRequiresField bearer choice', () => {
     expect(screen.queryByRole('listbox')).toBeNull();
   });
 
-  it('adds a target for the same bearer at once off-world', async () => {
+  it('adds a target for the same owner at once off-world', async () => {
     render(<Harness trait={mira.traits![0]} offWorld />);
     openPicker();
     fireEvent.click(await screen.findByRole('option', { name: /^Brave/ }));
@@ -179,9 +189,207 @@ describe('TraitRequiresField breadcrumbs', () => {
     const user = userEvent.setup();
     render(<Harness trait={traits[0]} extra={deep} />);
     await user.click(screen.getByRole('button', { name: 'Add Requirement' }));
-    await user.type(screen.getByPlaceholderText('Search traits, groups, and personas'), 'elder');
+    await user.type(screen.getByPlaceholderText('Search traits, groups, time of day, and personas'), 'elder');
     expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([
       'RuneLore › … › Deep', 'any ElderLore › Runes', 'any DeepLore › … › Elder',
     ]);
+  });
+});
+
+describe('TraitRequiresField rows', () => {
+  const paladin: TraitRequirement = { kind: 'trait', id: 'paladin' };
+  const brave: TraitRequirement = { kind: 'trait', id: 'brave' };
+  const wizard: TraitRequirement = { kind: 'trait', id: 'wizard' };
+  const smite = (requires: Trait['requires']) => trait('smite', { name: 'Smite', requires });
+
+  it('reads Add Requirement with no rows, and Or Another Way once a row exists', () => {
+    render(<Harness trait={smite(undefined)} />);
+    expect(screen.getByRole('button', { name: 'Add Requirement' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'And' })).toBeNull();
+    expect(screen.queryByText(/any one of these/)).toBeNull();
+  });
+
+  it('joins Conditions with "and" inside a row and rows with "or" between them', () => {
+    render(<Harness trait={smite([{ all: [paladin, brave] }, { all: [wizard] }])} />);
+    expect(rowTexts()).toEqual(['PaladinandBraveAnd', 'WizardAnd']);
+    expect(screen.getAllByText('or')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'And' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Or Another Way' })).toBeInTheDocument();
+  });
+
+  it('adds a Condition to its own row with And, and a new row with Or Another Way', async () => {
+    render(<Harness trait={smite([{ all: [paladin] }, { all: [wizard] }])} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'And' })[1]);
+    // Only You can hold a world trait, so Brave adds with no owner page.
+    fireEvent.click(await screen.findByRole('option', { name: /^Brave/ }));
+    expect(rowTexts()).toEqual(['PaladinAnd', 'WizardandBraveAnd']);
+
+    openPicker();
+    // Only You can hold a world trait, so Brave adds with no owner page.
+    fireEvent.click(await screen.findByRole('option', { name: /^Brave/ }));
+    expect(rowTexts()).toEqual(['PaladinAnd', 'WizardandBraveAnd', 'BraveAnd']);
+  });
+
+  it('disables a Condition already in the row And adds to, but not one only in another row', async () => {
+    render(<Harness trait={smite([{ all: [paladin] }, { all: [wizard] }])} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'And' })[0]);
+    fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
+    expect(option(/^Same Owner/)).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to targets' }));
+    fireEvent.click(screen.getByRole('option', { name: /^Wizard/ }));
+    expect(option(/^Same Owner/)).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('removes a chip from its row, and the row with its last chip', () => {
+    render(<Harness trait={smite([{ all: [paladin, brave] }, { all: [wizard] }])} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Wizard' }));
+    expect(rowTexts()).toEqual(['PaladinandBraveAnd']);
+    expect(screen.queryByText('or')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Brave' }));
+    expect(rowTexts()).toEqual(['PaladinAnd']);
+  });
+
+  it('removes a whole row with its own control', () => {
+    render(<Harness trait={smite([{ all: [paladin, brave] }, { all: [wizard] }])} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove row Paladin and Brave' }));
+    expect(rowTexts()).toEqual(['WizardAnd']);
+  });
+
+  it('removes the last row and goes back to Add Requirement', () => {
+    render(<Harness trait={smite([{ all: [paladin] }])} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove row Paladin' }));
+    expect(rowTexts()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Add Requirement' })).toBeInTheDocument();
+  });
+});
+
+describe('TraitRequiresField Not flip', () => {
+  const paladin: TraitRequirement = { kind: 'trait', id: 'paladin' };
+  const brave: TraitRequirement = { kind: 'trait', id: 'brave' };
+  const smite = (requires: Trait['requires']) => trait('smite', { name: 'Smite', requires });
+  const chipOf = (name: string) => screen.getByRole('button', { name }).closest('span[class*="rounded-full"]')!;
+
+  it('flips a chip to Not, with a NOT mark and a dashed border, and stores the flag', () => {
+    const onRows = vi.fn();
+    render(<Harness trait={smite([{ all: [paladin, brave] }])} onRows={onRows} />);
+    const flip = screen.getByRole('button', { name: 'Require Paladin to be off' });
+    expect(flip).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(flip);
+    expect(onRows).toHaveBeenLastCalledWith([{ all: [{ ...paladin, not: true }, brave] }]);
+    expect(rowTexts()).toEqual(['NOT PaladinandBraveAnd']);
+    expect(chipOf('NOT Paladin')).toHaveClass('border-dashed');
+    expect(chipOf('Brave')).not.toHaveClass('border-dashed');
+    expect(screen.getByRole('button', { name: 'Remove row not Paladin and Brave' })).toBeInTheDocument();
+  });
+
+  it('flips a Not chip back to plain', () => {
+    const onRows = vi.fn();
+    render(<Harness trait={smite([{ all: [{ ...paladin, not: true }] }])} onRows={onRows} />);
+    const flip = screen.getByRole('button', { name: 'Require Paladin instead' });
+    expect(flip).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(flip);
+    expect(onRows).toHaveBeenLastCalledWith([{ all: [paladin] }]);
+    expect(chipOf('Paladin')).not.toHaveClass('border-dashed');
+  });
+
+  it('names the flip in its tooltip', async () => {
+    const user = userEvent.setup();
+    render(<Harness trait={smite([{ all: [paladin] }, { all: [{ ...brave, not: true }] }])} />);
+    await user.hover(screen.getByRole('button', { name: 'Require Paladin to be off' }));
+    expect(await screen.findByText('Require it to be off')).toBeVisible();
+    await user.unhover(screen.getByRole('button', { name: 'Require Paladin to be off' }));
+    await user.hover(screen.getByRole('button', { name: 'Require Brave instead' }));
+    expect(await screen.findByText('Require it instead')).toBeVisible();
+  });
+
+  it('keeps the owner on a flipped chip', () => {
+    render(<Harness trait={smite([{ all: [{ ...paladin, owner: { kind: 'you' as const } }] }])} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Require Persona: Paladin to be off' }));
+    expect(screen.getByRole('button', { name: 'NOT Persona: Paladin' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Require Persona: Paladin instead' })).toBeInTheDocument();
+  });
+
+  it('disables a flip that would repeat a Condition in its row', () => {
+    render(<Harness trait={smite([{ all: [paladin, { ...paladin, not: true }, brave] }])} />);
+    expect(screen.getByRole('button', { name: 'Require Paladin to be off' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Require Paladin instead' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Require Brave to be off' })).toBeEnabled();
+  });
+
+  it('disables a flip that would turn a one-chip row into a copy of another', () => {
+    render(<Harness trait={smite([{ all: [{ ...paladin, not: true }] }, { all: [paladin] }, { all: [paladin, brave] }])} />);
+    expect(screen.getByRole('button', { name: 'Require Paladin instead' })).toBeDisabled();
+    const toOff = screen.getAllByRole('button', { name: 'Require Paladin to be off' });
+    expect(toOff[0]).toBeDisabled();
+    expect(toOff[1]).toBeEnabled();
+  });
+
+  it('adds a target already present as plain to another row, where it flips to Not', async () => {
+    render(<Harness trait={smite([{ all: [paladin] }, { all: [brave] }])} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'And' })[1]);
+    fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
+    fireEvent.click(option(/^Same Owner/));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Require Paladin to be off' })[1]);
+    expect(rowTexts()).toEqual(['PaladinAnd', 'BraveandNOT PaladinAnd']);
+  });
+
+  it('lets a plain row join beside a Not row on the same target', async () => {
+    render(<Harness trait={smite([{ all: [{ ...paladin, not: true }] }])} />);
+    openPicker();
+    fireEvent.click(await screen.findByRole('option', { name: /^Paladin/ }));
+    expect(option(/^Same Owner/)).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});
+
+// Parked with the summary: its call in TraitRequiresField is commented out.
+describe.skip('TraitRequiresField summary', () => {
+  const extra = { traits: [trait('mage', { name: 'Mage', groupId: null, order: 1 }), trait('rogue', { name: 'Rogue', groupId: null, order: 2 })], traitGroups: [] };
+  const on = (id: string): TraitRequirement => ({ kind: 'trait', id });
+  const off = (id: string): TraitRequirement => ({ kind: 'trait', id, not: true });
+  const smite = (...rows: TraitRequirement[][]) => trait('smite', { name: 'Smite', requires: rows.map((all) => ({ all })) });
+  const summary = () => [...document.querySelectorAll('[data-requirement-summary] :is(p, li)')].map((l) => l.textContent);
+
+  it('reads an empty Requirement as always available', () => {
+    render(<Harness trait={trait('smite', { name: 'Smite' })} />);
+    expect(screen.getByText('Always available')).toBeInTheDocument();
+  });
+
+  it('reads one row as Needs and Blocked By, with no option list', () => {
+    render(<Harness trait={smite([on('brave'), off('paladin'), off('wizard')])} extra={extra} />);
+    expect(summary()).toEqual(['Needs: Brave', 'Blocked By: Paladin and Wizard']);
+  });
+
+  it('joins three Needs with a serial comma and three blockers with commas alone', () => {
+    render(<Harness trait={smite([on('brave'), on('paladin'), on('wizard'), off('mage'), off('rogue'), off('squire')])} extra={{ ...extra, traits: [...extra.traits, trait('squire', { name: 'Squire', groupId: null, order: 3 })] }} />);
+    expect(summary()).toEqual(['Needs: Brave, Paladin, and Wizard', 'Blocked By: Mage, Rogue, Squire']);
+  });
+
+  it('factors a Not every row shares into Blocked By, last, under Needs One Of', () => {
+    render(<Harness trait={smite([on('brave'), off('paladin')], [on('wizard'), off('paladin')])} extra={extra} />);
+    expect(summary()).toEqual(['Needs One Of:', 'Brave', 'Wizard', 'Blocked By: Paladin']);
+  });
+
+  it('lists what each row adds under Plus One Of when the rows share a Need', () => {
+    render(<Harness trait={smite([on('brave'), on('paladin')], [on('brave'), on('wizard'), off('mage'), off('rogue')], [on('brave'), off('paladin')])} extra={extra} />);
+    expect(summary()).toEqual(['Needs: Brave', 'Plus One Of:', 'Paladin', 'Wizard, blocked by Mage and Rogue', 'blocked by Paladin']);
+  });
+
+  it('keeps a Not in only some rows inside those rows', () => {
+    render(<Harness trait={smite([on('brave'), off('paladin')], [on('wizard'), off('mage')])} extra={extra} />);
+    expect(summary()).toEqual(['Needs One Of:', 'Brave, blocked by Paladin', 'Wizard, blocked by Mage']);
+  });
+
+  it('drops the options when one row is only the shared part, since that row already holds', () => {
+    render(<Harness trait={smite([on('brave')], [on('brave'), on('paladin')])} extra={extra} />);
+    expect(summary()).toEqual(['Needs: Brave']);
+  });
+
+  it('tells owners apart and names them as the chips do', () => {
+    render(<Harness trait={smite(
+      [{ kind: 'trait', id: 'paladin', owner: { kind: 'you' } }, off('brave')],
+      [on('paladin'), off('brave')],
+    )} />);
+    expect(summary()).toEqual(['Needs One Of:', 'Persona: Paladin', 'Paladin', 'Blocked By: Brave']);
   });
 });

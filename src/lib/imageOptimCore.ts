@@ -2,10 +2,13 @@
  * The optimize rules and field walks, over an injected codec. DOM-free, so a worker runs them with an encoder
  * of its own; `imageOptim` binds them to the encode worker for the main thread.
  */
-import type { Entity, World } from '@/types';
+import type { Entity, GalleryImage, World } from '@/types';
 import { dataUrlRealMime, isConvertibleImage, isRemoteImage, reencodeKeepsAnimation } from './imageBytes';
 import { entityImages } from './entityImages';
-import { IMAGE_CAPS, countWorldImages, type ImageCap } from './imageSlots';
+import { locationImages } from './locationImages';
+import { IMAGE_CAPS, type ImageCap } from './imageSlots';
+import { worldImageItems } from './mediaIndex';
+import { writeMediaSlot, type MediaEditor } from './mediaParents';
 
 /** Encodes and measures image data-URLs. `encode` never throws; it returns the source on failure. */
 export interface ImageCodec {
@@ -94,34 +97,39 @@ export async function downscaleWorldImages(
   onProgress?: (done: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<World> {
-  const total = countWorldImages(world);
+  const items = worldImageItems(world);
+  const total = items.length;
   let done = 0;
   onProgress?.(0, total);
-  const opt = async (url: string | undefined | null, cap: ImageCap): Promise<string | undefined | null> => {
-    if (!url) return url;
-    if (signal?.aborted) throw new DOMException('Optimize canceled', 'AbortError');
-    const result = (await deps.shouldEncode(url, cap)) ? await deps.optimize(url, cap) : url;
-    onProgress?.(++done, total);
-    return result;
-  };
 
-  const thumbnail = await opt(world.worldOverview?.thumbnail, IMAGE_CAPS.thumbnail);
-  const entities: World['entities'] = [];
-  for (const e of world.entities ?? []) {
-    const images: string[] = [];
-    for (const url of entityImages(e)) images.push((await opt(url, IMAGE_CAPS.entity)) ?? url);
-    entities.push({ ...e, images });
-  }
-  const locations: World['locations'] = [];
-  for (const l of world.locations ?? []) {
-    locations.push({ ...l, backgroundImage: (await opt(l.backgroundImage, IMAGE_CAPS.background)) ?? undefined });
+  // Each result is written back by its item's slot, through the parent table the editor writes with.
+  let out = world;
+  const editor = worldEditor(() => out, (next) => { out = next; });
+  for (const item of items) {
+    if (signal?.aborted) throw new DOMException('Optimize canceled', 'AbortError');
+    const result = (await deps.shouldEncode(item.value, item.budget)) ? await deps.optimize(item.value, item.budget) : item.value;
+    if (result !== item.value) writeMediaSlot(editor, item, { data: result });
+    onProgress?.(++done, total);
   }
 
   return {
-    ...world,
-    worldOverview: { ...world.worldOverview, thumbnail: thumbnail ?? null },
-    entities,
-    locations,
+    ...out,
+    worldOverview: { ...out.worldOverview, thumbnail: out.worldOverview?.thumbnail ?? null },
+    // Galleries come out in their stored shape, a legacy single image folded in.
+    entities: (out.entities ?? []).map((e) => ({ ...e, images: entityImages(e) })),
+    locations: (out.locations ?? []).map((l) => ({ ...l, images: locationImages(l) })),
+  };
+}
+
+/** The editor over a plain world: each write replaces the record it edits in the world `get` returns. */
+function worldEditor(get: () => World, set: (next: World) => void): MediaEditor {
+  const swap = <T extends { id: string }>(list: T[] | undefined, id: string, edit: (item: T) => T) =>
+    (list ?? []).map((item) => (item.id === id ? edit(item) : item));
+  return {
+    overview: (patch) => set({ ...get(), worldOverview: { ...get().worldOverview, ...patch(get().worldOverview) } }),
+    entity: (id, edit) => set({ ...get(), entities: swap(get().entities, id, edit) }),
+    location: (id, edit) => set({ ...get(), locations: swap(get().locations, id, edit) }),
+    dictionary: (id, edit) => set({ ...get(), dictionaries: swap(get().dictionaries, id, edit) }),
   };
 }
 
@@ -164,9 +172,9 @@ export async function applyEntityImagesOptimize(
   onImage?: () => void,
 ): Promise<Entity> {
   if (mode === 'off') return entity;
-  const images: string[] = [];
-  for (const url of entityImages(entity)) {
-    images.push((await applyImageOptimize(codec, url, mode, IMAGE_CAPS.entity)) ?? url);
+  const images: GalleryImage[] = [];
+  for (const img of entityImages(entity)) {
+    images.push({ ...img, data: (await applyImageOptimize(codec, img.data, mode, IMAGE_CAPS.entity)) ?? img.data });
     onImage?.();
   }
   return images.length ? { ...entity, images } : entity;

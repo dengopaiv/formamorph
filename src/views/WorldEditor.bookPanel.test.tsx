@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { asMobile, benchEditorWorld, panelTabLayout, renderWorldEditorBench } from '@/test/worldEditorBench';
+import { asMobile, benchEditorWorld, openEditorTab, panelTabLayout, renderWorldEditorBench, pickEditorMode, searchWorldField } from '@/test/worldEditorBench';
 import type { World } from '@/types';
 
 /**
@@ -39,8 +39,8 @@ const WORLD: World = benchEditorWorld({
   ],
 } as Partial<World>);
 
-// These tabs switch on mouseDown, not click.
-const openTab = (name: RegExp) => fireEvent.mouseDown(screen.getByRole('tab', { name }));
+// On mobile the editor's tabs sit behind the Sections bar, which the shared helper opens.
+const openTab = openEditorTab;
 
 /** The book panel's own strip, read by its name: the editor's top-level strip is on the same screen. */
 const panelStrip = () => screen.queryByRole('tablist', { name: 'Dictionary Fields' });
@@ -116,9 +116,7 @@ describe('the World Editor dictionary book panel tabs', () => {
     selectBook('Fen Lore');
     openPanelTab('Placeholders');
 
-    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
-    await screen.findByRole('search', { name: 'Find and replace in world' });
-    fireEvent.change(screen.getByLabelText('Find'), { target: { value: 'Marsh sayings' } });
+    fireEvent.change(searchWorldField(), { target: { value: 'Marsh sayings' } });
 
     await waitFor(() => expect(panelTab('Details')).toHaveAttribute('aria-selected', 'true'));
     await waitFor(() => expect(document.querySelector('.editor-find-target')).not.toBeNull());
@@ -129,12 +127,12 @@ describe('the World Editor dictionary book panel tabs', () => {
     selectBook('Fen Lore');
     openPanelTab('Placeholders');
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Simple' }));
+    pickEditorMode('Simple');
     expect(panelStrip()).toBeNull();
     expect(detailsShown()).toEqual({ ...ALL_DETAILS, enabled: false });
 
     // The switch wears the hidden-data marker, whose own label joins its accessible name.
-    fireEvent.click(screen.getByRole('radio', { name: /^Advanced/ }));
+    pickEditorMode('Advanced');
     expect(panelTab('Details')).toHaveAttribute('aria-selected', 'true');
   });
 });

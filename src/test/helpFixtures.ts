@@ -3,17 +3,26 @@ import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import { renderHelpPrompt } from '@/lib/formaquestion/helpChips';
 import { DEFAULT_HELP_PROMPTS, HELP_PICK_SYSTEM_PROMPT } from '@/lib/formaquestion/helpPrompt';
+import { DEFAULT_HELP_PRESET_ID, duplicateHelpPreset, editHelpPrompt, EMPTY_HELP_PRESET_STORE, type HelpPresetStore } from '@/lib/formaquestion/helpPresets';
 import { DEFAULT_MASCOT_RIG, type MascotRig } from '@/lib/formaquestion/mascot';
+import { DEFAULT_MASCOT_NAME } from '@/lib/formaquestion/mascotPresets';
 import type { MascotPresetStore } from '@/lib/formaquestion/mascotPresets';
 import { writeStoredWindow } from '@/lib/formaquestion/windowBox';
+import type { OpenWorld, StatCodeWorldSource, ToolSnapshotSource } from '@/lib/formaquestion/helpWorld';
+import type { StatCodeWorld } from '@/lib/statCodeTestRun';
+import { emptyToolSnapshot } from '@/lib/tools/toolSnapshot';
 import type { Tool } from '@/types';
 import { sseReply, sseResponse } from './aiTextFixtures';
 
+/** A custom help preset with its Code rider changed, active. */
+export const riderPreset = (code: string): HelpPresetStore =>
+  editHelpPrompt(duplicateHelpPreset(EMPTY_HELP_PRESET_STORE, DEFAULT_HELP_PRESET_ID, 'mine', 'Mine'), 'mine', 'code', code);
+
 /** The default answer prompt as a player who changed nothing sends it: the mascot on, with the default Voice. */
-export const VOICED_HELP_PROMPT = renderHelpPrompt(DEFAULT_HELP_PROMPTS.answer, { voice: DEFAULT_MASCOT_RIG.voice });
+export const VOICED_HELP_PROMPT = renderHelpPrompt(DEFAULT_HELP_PROMPTS.answer, { voice: DEFAULT_MASCOT_RIG.voice, name: DEFAULT_MASCOT_NAME });
 
 /** The default lookup prompt as a player who changed nothing sends it. */
-export const VOICED_LOOKUP_PROMPT = renderHelpPrompt(DEFAULT_HELP_PROMPTS.lookup, { voice: DEFAULT_MASCOT_RIG.voice });
+export const VOICED_LOOKUP_PROMPT = renderHelpPrompt(DEFAULT_HELP_PROMPTS.lookup, { voice: DEFAULT_MASCOT_RIG.voice, name: DEFAULT_MASCOT_NAME });
 
 /** Stores the window's place, with one size for both chromes. */
 export function storeWindowBox({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
@@ -72,3 +81,11 @@ export async function openHelpSettings() {
   await userEvent.click(screen.getByRole('button', { name: 'More Actions' }));
   await userEvent.click(await screen.findByRole('menuitem', { name: 'Settings' }));
 }
+
+/** An authored world with nothing in it. */
+export const emptyCodeWorld = (): StatCodeWorld => ({
+  stats: [], traits: [], traitGroups: [], entities: [], entityGroups: [], placeholders: [], placeholderGroups: [], dictionaries: [],
+});
+
+/** An open world: `snapshot` for the Tools, `authored` for the code test. */
+export const openWorld = (snapshot: ToolSnapshotSource = emptyToolSnapshot, authored: StatCodeWorldSource = emptyCodeWorld): OpenWorld => ({ snapshot, authored });

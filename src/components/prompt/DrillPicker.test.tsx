@@ -11,7 +11,7 @@ import type { Placeholder } from '@/types';
 
 import { phValues } from '@/test/placeholderValues';
 /**
- * Re-aiming a placed chip from its own pop-out: the picker opens on the path the chip already carries, and
+ * Re-aiming a placed chip in Chip Options: the picker opens on the path the chip already carries, and
  * whatever the author settles on moves that chip rather than replacing it. The two kinds of step read
  * differently — a variant names one branch, a slot routes through whichever value rolls — so the picker
  * keeps them apart and marks the slot a roll can miss.
@@ -54,7 +54,7 @@ const value = () => screen.getByTestId('value').textContent ?? '';
 const picker = () => screen.getByTestId('drill-picker');
 const rowNames = () => within(picker()).getAllByTestId('drill-picker-row').map((r) => r.textContent ?? '');
 
-/** Open the placed chip's pop-out and walk into its picker. A Unique chip says so in its own label, so the
+/** Open the placed chip's Chip Options and walk into its picker. A Unique chip says so in its own label, so the
  *  chip is found by what its path reads as rather than by the whole pill. */
 async function openPicker(user: ReturnType<typeof userEvent.setup>, path: string) {
   await user.click(screen.getByText(new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( \\(Unique\\))?$`)));
@@ -334,6 +334,22 @@ describe('DrillPicker — an owned target', () => {
     await user.type(within(picker()).getByLabelText('Filter Placeholders'), 'Eyes');
     expect(screen.queryByTestId('drill-picker-owned')).not.toBeInTheDocument();
     expect(owners()).toContain('isWhite:molly');
+  });
+
+  it('drops the refusal and the filter text together when the X clears the filter', async () => {
+    const user = userEvent.setup();
+    render(<OwnedHarness />);
+    await openPicker(user, 'Hair');
+    await toRoot(user);
+    await user.type(within(picker()).getByLabelText('Filter Placeholders'), 'Mol');
+    const owned = within(picker()).getAllByTestId('drill-picker-row').find((row) => row.textContent?.includes('owned'))!;
+    await user.click(owned);
+    expect(screen.getByTestId('drill-picker-owned')).toBeInTheDocument();
+
+    await user.click(within(picker()).getByRole('button', { name: 'Clear Search' }));
+
+    expect(screen.queryByTestId('drill-picker-owned')).not.toBeInTheDocument();
+    expect(within(picker()).getByLabelText('Filter Placeholders')).toHaveValue('');
   });
 
   it('still takes a drill step into the owner, which is how an owned row is meant to be reached', async () => {

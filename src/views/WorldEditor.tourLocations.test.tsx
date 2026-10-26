@@ -11,7 +11,7 @@ import type { World } from '@/types';
 
 /**
  * The Authoring Tour's Locations steps, driven through the real editor: the add steps and the tour items
- * they record, each field step with its In Play slice, and the recovery after a tour location is deleted.
+ * they record, each field step with its In Game slice, and the recovery after a tour location is deleted.
  */
 
 vi.mock('@/lib/authoringTour/tourImages', () => ({
@@ -30,21 +30,10 @@ vi.mock('@/lib/jsonFileWorkerUtils', () => ({
   serializeJsonBlob: vi.fn(), parseJsonText: vi.fn(), terminateWorker: vi.fn(),
 }));
 
-vi.mock('@/lib/jsonMeasureClient', async () => {
-  const { measurePublishBytes } = await import('@/lib/publishLimits');
-  return {
-    measureJsonBytes: async (value: unknown) => measurePublishBytes(value),
-    terminateMeasureWorker: vi.fn(),
-  };
-});
-
 vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
 }));
-
-// The ordered case walks the tour from its first step, which outlasts the default window under the whole suite's load.
-vi.setConfig({ testTimeout: 15_000 });
 
 const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 
@@ -52,7 +41,7 @@ const storeWorld = vi.mocked(WorldStorageService.storeWorld);
 const WORLD: World = benchEditorWorld({
   worldOverview: {
     name: 'New World', description: 'A blank world ready for editing', author: '', thumbnail: null, bgm: null,
-    systemPrompt: '', use3DModel: false, tags: [],
+    systemPrompt: '', tags: [],
   },
   // A New World overview carries no readme or openings, which the overview type calls required.
 } as unknown as Partial<World>);
@@ -74,7 +63,7 @@ const stepNote = () => screen.getAllByRole('dialog').find((d) => within(d).query
 const noteButton = (name: string) => within(stepNote()).queryByRole('button', { name });
 const addButton = () => screen.getByRole('button', { name: 'Add to Locations' });
 
-const inPlay = () => screen.getByRole('region', { name: 'In Play' });
+const inPlay = () => screen.getByRole('region', { name: 'In Game' });
 const playerSees = () => within(inPlay()).getByRole('region', { name: 'Player Sees' });
 const reader = (prompt: string) => within(inPlay()).queryByRole('region', { name: `${prompt} Reads` });
 const marks = (el: HTMLElement) => Array.from(el.querySelectorAll('mark')).map((m) => m.textContent);
@@ -85,7 +74,7 @@ const row = (name: string) => screen.getAllByText(name)
 
 const openTour = async () => {
   const view = renderWorldEditorBench(WORLD, 'simple', { newWorld: true });
-  const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' }, { timeout: 2000 });
+  const offer = await screen.findByRole('dialog', { name: 'Take the Authoring Tour?' });
   fireEvent.click(within(offer).getByRole('button', { name: 'Start Tour' }));
   await screen.findByRole('dialog', { name: TOUR_STEPS[0].title });
   return view;
@@ -230,11 +219,11 @@ describe('Authoring Tour — add steps', () => {
       name: 'The Salt Lantern',
       playerDescription: 'The village inn, warm and smelling of peat smoke and fried fish.',
       aiDescription: expect.stringMatching(/^A two-story inn on the harbor\./),
-      backgroundImage: 'data:image/webp;base64,saltLantern',
+      images: [{ data: 'data:image/webp;base64,saltLantern' }],
     });
     // The first tour location keeps its own text.
     expect(ctx().locations.filter((l) => l.name === 'The Tidewell')).toHaveLength(1);
-    // In Play stands at the new place.
+    // In Game stands at the new place.
     expect(within(playerSees()).getByRole('button', { name: 'Current Location: The Salt Lantern' })).toBeInTheDocument();
     expect(marks(reader('Narration Prompt')!)).toEqual(['The Salt Lantern']);
   });
@@ -332,16 +321,17 @@ describe('Authoring Tour — completion', () => {
   });
 });
 
-describe('In Play — Locations', () => {
+describe('In Game — Locations', () => {
   it('Background Image: opens the Media tab, and the picture sits behind the Location tab', async () => {
     const { ctx } = await resumeAt('location-image');
-    expect(screen.getByRole('tab', { name: 'Media' })).toHaveAttribute('aria-selected', 'true');
+    // The location panel's own Media tab, apart from the editor's tab of the same name.
+    expect(within(screen.getByRole('tablist', { name: 'Location Fields' })).getByRole('tab', { name: 'Media' })).toHaveAttribute('aria-selected', 'true');
     expect(noteButton('Next')).toBeDisabled();
     expect(within(playerSees()).queryByTestId('location-backdrop-image')).toBeNull();
 
     fireEvent.click(noteButton('Use Example')!);
     await waitFor(() => expect(noteButton('Next')).toBeEnabled());
-    expect(ctx().locations.at(-1)?.backgroundImage).toBe('data:image/webp;base64,tidewell');
+    expect(ctx().locations.at(-1)?.images?.[0]?.data).toBe('data:image/webp;base64,tidewell');
     expect(within(playerSees()).getByTestId('location-backdrop-image'))
       .toHaveStyle({ backgroundImage: 'url(data:image/webp;base64,tidewell)' });
     // The location block stays, with nothing of the picture in it.

@@ -87,13 +87,24 @@ const assertRendersTemplate = (systemPrompt: string, template: string): void => 
   }
 };
 
+/** The text prompt from its rules on, as the run recorded it: no owner rule or slight-shift rule, and the change bound it had. */
+const sharedStatTail = (template: string): string =>
+  template.slice(template.indexOf('## What to change')).replace(/^- The stats under Player Character.*\n/m, '')
+    .replace('a value-over-maximum. Put', 'a value-over-maximum; keep it between -20 and 20. Put')
+    .replace(/^- A slight but clear shift still gets a line.*\n/m, '');
+
+/** The storyboard as the run sent it, before its closing rule named the player character. */
+const recordedStoryboard = (template: string): string =>
+  template.replace("- Let the player character's stats", "- Let the player's stats");
+
 const templateById: Partial<Record<TurnPassId, string>> = {
   locationAuto: PROMPTS.locationChange,
   director: PROMPTS.director,
   character: PROMPTS.character,
   storyboard: PROMPTS.storyboard,
   choices: PROMPTS.choices,
-  statUpdates: PROMPTS.statUpdates,
+  // The run predates the schema request: a replay with no stat snapshot sends the text pass.
+  statUpdates: PROMPTS.statText.system ?? PROMPTS.statUpdates,
   summary: PROMPTS.summary,
   timePassed: PROMPTS.timePassed,
   openingTime: PROMPTS.openingTime,
@@ -151,7 +162,12 @@ describe('turn plan parity with the recorded run', () => {
       expect([id, built.silent], `${id} silent flag`).toEqual([id, request.silent]);
       expect([id, built.attachTurnId ?? null], `${id} attached turn`).toEqual([id, request.attachTurnId]);
       const template = templateById[id];
-      if (template) assertRendersTemplate(request.systemPrompt, template);
+      if (template) {
+        assertRendersTemplate(built.systemPrompt, template);
+        // The recorded text prompt has no owner blocks; only its shared tail is matched.
+        const recorded = id === 'statUpdates' ? sharedStatTail(template) : id === 'storyboard' ? recordedStoryboard(template) : template;
+        assertRendersTemplate(request.systemPrompt, recorded);
+      }
       // Messages the fixture holds every input for.
       if (!pass.fanOut && id !== 'storyboard') {
         expect(built.messages, `${id} messages`).toEqual(request.messages);

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseEntry, lintSection, inProgressBounds, latestReleaseBounds } from './changelogFormat.mjs';
+import { parseEntry, lintSection, inProgressBounds, latestReleaseBounds, releaseBounds, oversizeGroups, LEAD_WORDS, BODY_WORDS, GROUP_ENTRIES } from './changelogFormat.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -49,6 +49,12 @@ describe('lintSection', () => {
     ].join('\n')))).toEqual([]);
   });
 
+  it('spares a single-child group under In Progress, where an effort grows ticket by ticket', () => {
+    const body = ['- **👤 User-facing**', '  - **Solo:**', '    - **Only child.** Detail.'].join('\n');
+    expect(lintSection(lines(body), { inProgress: true })).toEqual([]);
+    expect(lintSection(lines(body))).toHaveLength(1);
+  });
+
   it('rejects a group with a single child', () => {
     const problems = lintSection(lines([
       '- **👤 User-facing**',
@@ -57,6 +63,34 @@ describe('lintSection', () => {
     ].join('\n')));
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/Image Generation.*at least 2/);
+  });
+
+  it('rejects a lead or a body over its word limit, nested entries included, and spares a group header', () => {
+    const n = (count) => Array(count).fill('word').join(' ');
+    expect(lintSection(lines([
+      '- **👤 User-facing**',
+      `  - **${n(LEAD_WORDS)}.** ${n(BODY_WORDS)}`,
+      `  - **${n(LEAD_WORDS + 5)} group:**`,
+      `    - **${n(LEAD_WORDS + 1)}.** Detail.`,
+      `    - **Short lead.** ${n(BODY_WORDS + 1)}`,
+    ].join('\n')))).toEqual([
+      expect.stringMatching(new RegExp(`Lead has ${LEAD_WORDS + 1} words`)),
+      expect.stringMatching(new RegExp(`Body has ${BODY_WORDS + 1} words.*Short lead`)),
+    ]);
+  });
+
+  it('names the groups over the entry cap, and stops counting at the next audience or heading', () => {
+    const group = (name, count) => [`  - **${name}:**`, ...Array.from({ length: count }, (_, i) => `    - **${name} entry ${i}.** Detail.`)];
+    const body = lines([
+      '- **👤 User-facing**',
+      ...group('Big', GROUP_ENTRIES + 1),
+      ...group('Full', GROUP_ENTRIES),
+      '  - **A loose entry.** Detail.',
+      '- **🛠️ Developer tooling**',
+      ...group('Tools', 2),
+    ].join('\n'));
+    expect(oversizeGroups(body)).toEqual([{ text: 'Big', entries: GROUP_ENTRIES + 1 }]);
+    expect(oversizeGroups(body, 1).map((g) => g.text)).toEqual(['Big', 'Full', 'Tools']);
   });
 
   it('rejects a bullet with no bold lead, which would ship nothing', () => {
@@ -102,6 +136,13 @@ describe('the shipped changelog', () => {
 
   it('has a well-formed In Progress section', () => {
     const bounds = inProgressBounds(src);
+    expect(bounds).not.toBeNull();
+    expect(lintSection(src.slice(bounds[0], bounds[1]), { inProgress: true })).toEqual([]);
+  });
+
+  it.each(['3.2.0', '3.1.0', '3.0.0'])('has a well-formed %s release section', (version) => {
+    // Releases before 3.0.0 predate the group format and the word limits, and are left as they shipped.
+    const bounds = releaseBounds(src, version);
     expect(bounds).not.toBeNull();
     expect(lintSection(src.slice(bounds[0], bounds[1]))).toEqual([]);
   });

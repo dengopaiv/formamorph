@@ -1,4 +1,4 @@
-import type { ChatMessage } from './ai';
+import type { ChatMessage, Tool } from './ai';
 
 /** A base64 data-URL string, e.g. "data:image/png;base64,...". */
 export type Base64Data = string;
@@ -27,6 +27,24 @@ export interface StatDescriptor {
 /** What a descriptor threshold's number means: the stat's own units, or a percentage of min→max. */
 export type ThresholdUnit = 'raw' | 'percent';
 
+/** The span the editor shows Regen per. `regen` itself is always per hour. */
+export type RegenUnit = 'minutes' | 'hours' | 'days' | 'weeks';
+
+/** When a script runs: before the turn's AI calls, after the AI's asks and regen land, on each completed
+ *  narration sentence, once at a new playthrough's start, or when a trait switches in play. */
+export type ScriptTiming = 'before' | 'after' | 'output' | 'start' | 'switch';
+
+/** One box of code with a timing, on a stat, a trait or the world. */
+export interface Script {
+  id: string;
+  /** Absent or blank = the owner and timing name it. */
+  name?: string;
+  timing: ScriptTiming;
+  code: string;
+  /** Run position within the timing; absent = after every ordered script, in owner then stat order. */
+  order?: number;
+}
+
 /** A world-defined stat: its schema (type, range, descriptors) plus its live/starting value. */
 export interface Stat {
   id: string;
@@ -35,22 +53,22 @@ export interface Stat {
   description: string;
   min: number;
   max: number;
-  /** Initial value at game start (definition-side). */
+  /** Base Value at game start (definition-side), before traits apply. */
   starting?: number;
   /** Live value. */
   value?: number;
+  /** The change per story hour. */
   regen: number;
+  /** The span the editor shows `regen` per. Absent = hours. */
+  regenUnit?: RegenUnit;
   descriptors: StatDescriptor[];
   /** How this stat's descriptor thresholds read: `raw` in the stat's own units (bands stay put when the
    *  range changes), `percent` as a share of min→max (bands rescale). Absent = raw. */
   thresholdUnit?: ThresholdUnit;
-  /** Optional JS run before the turn's AI calls, on the turn's starting state. Its writes reach that
-   *  turn's prompt. */
-  beforeCode?: string;
-  /** Optional JS run after the AI's asks and regen land. */
-  code?: string;
+  /** Scripts with this stat as `self`, run while the stat is enabled. Absent = none. */
+  scripts?: Script[];
   /** Body-mesh morph target names this stat drives; the value maps linearly across [min, authored max],
-   *  so a max raised in play pushes the influence past 1. */
+   *  so a max raised during the game pushes the influence past 1. */
   morphBindings?: string[];
   /** `false` starts the stat inert — hidden from the player and the AI, regen and code paused — until a
    *  trait switches it on. Absent = enabled. */
@@ -63,7 +81,75 @@ export interface Stat {
   noIncreaseMax?: boolean;
   noDecrease?: boolean;
   noDecreaseMax?: boolean;
+  /** The stat group this stat sits in; null or absent = top level. A group the owner lacks reads as top level. */
+  groupId?: string | null;
+  /** Sibling order among the stats and groups sharing the same parent. */
+  order?: number;
 }
+
+/** A folder grouping stats in the editor and the stat panel; nestable via `parentId`. Organization only: a
+ *  group has no modes, pick counts or gates. */
+export interface StatGroup {
+  id: string;
+  name: string;
+  /** Sent to the AI as the group's heading text. */
+  aiDescription?: string;
+  /** `false` hides the heading from the AI and moves the group's stats up one level. Absent = visible. */
+  aiVisible?: boolean;
+  /** null = top-level; otherwise the parent group's id. */
+  parentId: string | null;
+  /** Sibling order among the stats and groups sharing the same parent. */
+  order?: number;
+  /** `blueprints` marks the world's Blueprints group: its stats are not the player's and reach play only through
+   *  entity links. At most one world group carries it. Never set on an entity's own group. */
+  system?: 'blueprints';
+}
+
+/** A node under an entity that points at a Blueprint stat or stat group, the original, and reads it live. It
+ *  stores only its own place and its overrides. In play each linked stat runs under the original stat's id, with
+ *  this entity's own value. */
+export interface StatLink {
+  id: string;
+  /** The original's id: a world stat or stat group inside the Blueprints group. */
+  originalId: string;
+  kind: 'stat' | 'group';
+  /** The original's name when the link was stored, so it travels off-world and rebinds by name. */
+  originalName: string;
+  /** null = the entity's top level; otherwise one of the entity's own stat groups. */
+  groupId: string | null;
+  /** Sibling order among the entity's stats, links and groups sharing the same parent. */
+  order?: number;
+  /** Original stat id → this link's overrides on that stat. A stat absent here, or a field absent in its map,
+   *  reads the original live. A linked group keys its stats here. */
+  overrides?: Record<string, StatLinkOverrides>;
+  /** Off-world only: stat id → name for each stat below the original that `overrides` keys, so the keys rebind
+   *  by name when the original does. Dropped when the link binds to a world. */
+  keyNames?: Record<string, string>;
+}
+
+/** The fields a stat link may override, absent ones on the original read as off or empty. The name stays the
+ *  original's; `value` is the Base Value. */
+export interface StatLinkFields {
+  type: StatType;
+  description: string;
+  min: number;
+  max: number;
+  value: number;
+  regen: number;
+  regenUnit: RegenUnit;
+  descriptors: StatDescriptor[];
+  thresholdUnit: ThresholdUnit;
+  scripts: Script[];
+  morphBindings: string[];
+  enabled: boolean;
+  hidden: boolean;
+  noIncrease: boolean;
+  noIncreaseMax: boolean;
+  noDecrease: boolean;
+  noDecreaseMax: boolean;
+}
+
+export type StatLinkOverrides = BlueprintOverrides<StatLinkFields>;
 
 /** How a trait or stat-update modifies a stat. */
 export interface StatChange {
@@ -73,19 +159,26 @@ export interface StatChange {
   type?: 'min' | 'max' | 'starting' | 'regen';
   /** Stat-update cadence, e.g. 'hour'. */
   interval?: string;
+  /** On an owner's trait, the global stat, even where the owner has its own stat with this id. */
+  target?: StatRowTarget;
 }
+
+/** Whose stat an owner's trait row names when the id alone could mean two. */
+export type StatRowTarget = 'global';
 
 /** A stat this trait switches on or off while active; overrides the stat's own `enabled` default. */
 export interface TraitStatToggle {
   statId: string;
   enabled: boolean;
+  /** As on {@link StatChange}. */
+  target?: StatRowTarget;
 }
 
 /** A placeholder its source forces to a fixed value while the source is active, masking that playthrough's
  *  roll. The one shape every source carries: a trait, a location, a stat descriptor, a placeholder value. */
 export interface PlaceholderPin {
-  /** The target's id. A trait pin may name a blueprint placeholder: on each bearer it then traces to that
-   *  bearer's copy (see lib/blueprints). */
+  /** The target's id. A trait pin may name a blueprint placeholder: on each owner it then traces to that
+   *  owner's copy (see lib/blueprints). */
   placeholderId: string;
   value: string;
   /** The pinned value's id, when the pin names one the placeholder carries. Preferred over `value`, so a
@@ -104,17 +197,57 @@ export interface BlueprintOverride<V> {
 export type BlueprintOverrides<T> = { [K in keyof T]?: BlueprintOverride<T[K]> };
 
 /** Whose active set a requirement reads: the played persona's, or a named entity's. `name` is the entity's
- *  name when it was stored, so an unresolved one still reads. Absent on a requirement = the same bearer. */
-export type RequirementBearer =
+ *  name when it was stored, so an unresolved one still reads. Absent on a requirement = the same owner. */
+export type RequirementOwner =
   | { kind: 'you' }
   | { kind: 'entity'; id: string; name?: string };
 
-/** One way to unlock a gated trait: a trait is active, any trait below a group is active, or the player plays
- *  as a world entity. `name` is the target's name when it was stored, so an unresolved one still reads. */
+/** How a stat Condition compares the stat to its number. */
+export type StatComparison = '>' | '<' | '>=' | '<=' | '=' | '≠';
+
+/** One Condition of a gate: a trait is active, any trait below a group is active, the player plays as a
+ *  world entity, or an owner's stat compares to a number. `name` is the target's name when it was stored, so
+ *  an unresolved one still reads. `not` flips it: the Condition holds while its target is off, or while a stat
+ *  fails its comparison. A stat Condition's `value` is in the stat's own units under `raw`, or a share of its
+ *  min→max span under `percent`. */
 export type TraitRequirement =
-  | { kind: 'trait'; id: string; name?: string; bearer?: RequirementBearer }
-  | { kind: 'group'; id: string; name?: string; bearer?: RequirementBearer }
-  | { kind: 'playingAs'; id: string; name?: string };
+  | { kind: 'trait'; id: string; name?: string; owner?: RequirementOwner; not?: true }
+  | { kind: 'group'; id: string; name?: string; owner?: RequirementOwner; not?: true }
+  | { kind: 'playingAs'; id: string; name?: string; not?: true }
+  | StatRequirement
+  | TimeRequirement;
+
+/** A coarse time of day, as the story clock splits its day by fractions. */
+export type Daypart = 'night' | 'dawn' | 'morning' | 'midday' | 'afternoon' | 'evening';
+
+/** A time Condition: it holds while the story clock's daypart is one of `dayparts`. It names no target and
+ *  no owner. */
+export interface TimeRequirement {
+  kind: 'time';
+  dayparts: Daypart[];
+  // Absent, so code that reads any Condition's target finds none here.
+  id?: undefined;
+  name?: undefined;
+  owner?: undefined;
+  not?: undefined;
+}
+
+/** A stat Condition: see {@link TraitRequirement}. */
+export interface StatRequirement {
+  kind: 'stat';
+  id: string;
+  name?: string;
+  owner?: RequirementOwner;
+  operator: StatComparison;
+  value: number;
+  unit: ThresholdUnit;
+  not?: true;
+}
+
+/** One Requirement Row: it holds when every Condition in it holds. Never empty. */
+export interface TraitRequirementRow {
+  all: TraitRequirement[];
+}
 
 /** A folder grouping traits in the editor and the selection screen; nestable via `parentId`. */
 export interface TraitGroup {
@@ -129,6 +262,8 @@ export interface TraitGroup {
   playerDescription?: string;
   /** Sent to the AI as a header above this group's selected traits. */
   aiDescription?: string;
+  /** `false` hides the heading from the AI and moves the group's traits up one level. Absent = visible. */
+  aiVisible?: boolean;
   /** null = top-level; otherwise the parent group's id. */
   parentId: string | null;
   /** Sibling order among items sharing the same parent. */
@@ -143,15 +278,15 @@ export interface TraitGroup {
   system?: 'blueprints';
 }
 
-/** An entity node's place in the world's Traits tree. The parent is a world group, never an entity's own and
- *  never Blueprints: a placement that names Blueprints or a group below it reads as the top level. */
-export interface TraitPlacement {
+/** An entity node's place in the world's Traits or Stats tree. The parent is a world group, never an entity's own
+ *  and never Blueprints: a placement that names Blueprints or a group below it reads as the top level. */
+export interface TreePlacement {
   /** null = top level. */
   groupId: string | null;
   order: number;
 }
 
-/** A node under a bearer that points at a world trait or group, the original, and reads it live. It stores
+/** A node under an owner that points at a world trait or group, the original, and reads it live. It stores
  *  only its own place and per-link data; the original's text, gates and pins reach every link. */
 export interface TraitLink {
   id: string;
@@ -160,9 +295,9 @@ export interface TraitLink {
   kind: 'trait' | 'group';
   /** The original's name when the link was stored, so it travels off-world and rebinds by name. */
   originalName: string;
-  /** null = the bearer's root; otherwise one of the bearer's own groups. */
+  /** null = the owner's root; otherwise one of the owner's own groups. */
   groupId: string | null;
-  /** Sibling order among the bearer's items sharing the same parent. */
+  /** Sibling order among the owner's items sharing the same parent. */
   order?: number;
   /** Original trait id → this link's overrides on that trait. A trait absent here, or a field absent in its
    *  map, reads the original live. A linked group keys its children here. */
@@ -175,12 +310,14 @@ export interface TraitLink {
 /** The fields a link may override on a trait its original brings. Name and descriptions stay the original's. */
 export interface TraitLinkFields {
   isDefault: boolean;
-  requires: TraitRequirement[];
+  requires: TraitRequirementRow[];
   placeholderPins: PlaceholderPin[];
   playerToggle: boolean;
   statChanges: StatChange[];
   /** 'optional' stands for an absent `Trait.mode`, so an override to Optional survives the JSON export. */
   mode: 'optional' | TraitMode;
+  /** One override for the whole list, as a stat link's. */
+  scripts: Script[];
 }
 
 export type TraitLinkOverrides = BlueprintOverrides<TraitLinkFields>;
@@ -205,21 +342,30 @@ export interface Trait {
   isDefault?: boolean;
   /** Sibling order among items sharing the same parent/group. */
   order?: number;
-  /** The player may switch this trait on and off during play, not only at game start. */
+  /** The player may switch this trait on and off during the game, not only at game start. */
   playerToggle?: boolean;
   /** Stats forced on or off while this trait is active. */
   statToggles?: TraitStatToggle[];
   /** Placeholders held at a fixed value while this trait is active. */
   placeholderPins?: PlaceholderPin[];
-  /** Any one of these unlocks the trait. Absent or empty = always available. */
-  requires?: TraitRequirement[];
-  /** Absent = Optional. Always On is active exactly while its gate holds, and the player never switches it.
-   *  Hidden acts as Always On. Both ignore `isDefault` and `playerToggle`. */
+  /** Any one row that holds unlocks the trait. Absent or empty = always available. */
+  requires?: TraitRequirementRow[];
+  /** Absent = Optional. Automatic (stored `alwaysOn`) is active exactly while its gate holds, and the player never
+   *  switches it. Hidden acts as Automatic. Both ignore `isDefault` and `playerToggle`. */
   mode?: TraitMode;
+  /** Scripts with this trait as `self`. Absent = none. */
+  scripts?: Script[];
 }
 
 /** A trait's non-Optional mode. */
 export type TraitMode = 'alwaysOn' | 'hidden';
+
+/** One picture in an entity's gallery. */
+export interface GalleryImage {
+  data: Base64Data;
+  /** The Visibility rule: in play any one row that holds shows the image. Absent or empty = always shown. */
+  requires?: TraitRequirementRow[];
+}
 
 /** A character or object in the world, with separate player-facing and AI-facing descriptions plus optional media. */
 export interface Entity {
@@ -237,19 +383,16 @@ export interface Entity {
    *  scene. Read only with the Persona mark. */
   personaOnly?: boolean;
   /** Marks the entity as the Custom Persona: the player's own entity under None and under a library persona,
-   *  never in the cast (see lib/bearers). At most one per world, at the root. Excludes the Persona marks and
+   *  never in the cast (see lib/owners). At most one per world, at the root. Excludes the Persona marks and
    *  implies persona-only. */
   customPersona?: boolean;
-  /** Where a world persona begins, flagged as a starting location or not. Absent = Automatic: the first of
-   *  its locations that is a starting location. Read only for a world entity with the Persona mark. */
-  startingLocationId?: string;
   type?: string;
   /** The author's own source notes, in whatever shape suits them — bullets are expected. Both
    *  descriptions are drafted from it when it holds anything. **Nothing generates into it**; see
    *  `lib/authorBrief` for why that invariant is the feature. Absent on worlds written before it
    *  existed, which reads as "no brief" and leaves the drafting buttons behaving as they always did. */
   authorBrief?: string;
-  /** Shown to the player in-game. */
+  /** Shown to the player in game. */
   playerDescription?: string;
   /** Full description sent to the AI. */
   aiDescription?: string;
@@ -258,7 +401,7 @@ export interface Entity {
   /** The entity's gallery, in author order. Slot 0 is the primary — the one picture shown wherever only one
    *  fits (library grid, listing art, character-card pixels) — and in game the player pages through the rest.
    *  Read it through `lib/entityImages`, which also covers records written before the gallery. */
-  images?: Base64Data[];
+  images?: GalleryImage[];
   /**
    * Listing tags, the same kind a world carries — how somebody browsing Community Creations finds this.
    *
@@ -270,9 +413,22 @@ export interface Entity {
   imageTags?: string;
   sound?: MediaAsset;
   model?: MediaAsset;
+  /** The entity's Avatar. Absent = none. */
+  vrmPick?: VrmPick;
   /** Ids of the locations this entity belongs to. The entity is present at every one of them
-   *  simultaneously. Read it through `lib/entityPresence`, which inverts it into per-location rosters. */
+   *  simultaneously. Read it through `lib/entityPresence`, which inverts it into per-location rosters. Under
+   *  the Persona mark they are also where the player can start as it (see `lib/personaPick`). */
   locations?: string[];
+  /** `random`: one individual, placed at one of `locations` at random in each new game. Absent = present at
+   *  every listed location at once. The persona ignores it. */
+  presence?: EntityPresence;
+  /** How the entity moves during play. Absent = Free: no position, no AI request. The persona ignores it. */
+  movement?: EntityMovement;
+  /** Where the AI knows of the entity while it isn't present: `nowhere`, or the picked location ids, each
+   *  covering its whole subtree. Absent = Nearby, one step from where it is. */
+  knownIn?: 'nowhere' | string[];
+  /** The entity's links to other entities, at most one per target, in author order. Absent or empty = none. */
+  relationships?: EntityRelationship[];
   /** Editor-only folder this entity lives in; null/absent = ungrouped. Purely organizational — never sent
    *  to the AI (grouping does not change the entity context). Reset to ungrouped on character-card import. */
   groupId?: string | null;
@@ -288,17 +444,29 @@ export interface Entity {
   openings?: Opening[];
   /** Relative draw weight per opening id; an opening absent from the map weighs 1, and 0 benches it. */
   openingWeights?: Record<string, number>;
-  /** Traits this entity owns. They describe it to the AI, and join the player's traits when the player plays
-   *  as it. They carry no stat changes and no stat toggles. Ids are unique across the world and every entity. */
+  /** Traits this entity owns. They describe it to the AI, and are the persona's traits when the player plays
+   *  as it. Their stat changes and toggles act on the entity's own stats, and on the global stats where the
+   *  entity does not own the stat or the row targets global. Ids are unique across the world and every entity. */
   traits?: Trait[];
   /** Groups for this entity's own traits, nestable via `parentId` like the world's. */
   traitGroups?: TraitGroup[];
-  /** Links to world traits and groups, placed among the entity's own items (see lib/bearers). Each original
+  /** Links to world traits and groups, placed among the entity's own items (see lib/owners). Each original
    *  appears at most once in the entity's tree, directly or through a linked group. */
   traitLinks?: TraitLink[];
   /** Where this entity's node sits in the world's Traits tree: a world group and a sibling order. Absent,
    *  or a group that no longer exists, = the end of the top level. */
-  traitPlacement?: TraitPlacement;
+  traitPlacement?: TreePlacement;
+  /** Stats this entity owns: the world stat type, every field. Order is list order. Absent = none. In play
+   *  they are the entity's own values, and the persona's stats when the entity is played. */
+  stats?: Stat[];
+  /** Groups for this entity's own stats, nestable via `parentId` like the world's. */
+  statGroups?: StatGroup[];
+  /** Links to the world's Blueprint stats and stat groups, placed among the entity's own stats (see
+   *  lib/statLinks). No two links bring the same stat. */
+  statLinks?: StatLink[];
+  /** Where this entity's node sits in the world's Stats tree: a world stat group and a sibling order. Absent,
+   *  or a group that no longer exists, = the end of the top level. */
+  statPlacement?: TreePlacement;
   /** Off-world only: the shared placeholders this entity's chips use, so they resolve after import. An import
    *  merges them into the world's shared list by name and values and clears the field. */
   sharedPlaceholders?: Placeholder[];
@@ -311,6 +479,19 @@ export interface Entity {
   locationRefs?: ContentLocationRef[];
   /** What this copy follows, where it follows anything (see `ContentLink`). Absent = independent copy. */
   link?: ContentLink;
+}
+
+/** An entity's Presence beyond the default, Everywhere Listed. */
+export type EntityPresence = 'random';
+
+/** An entity's Movement beyond the default, Free. */
+export type EntityMovement = 'stays' | 'between' | 'follow';
+
+/** One authored link from an entity to another. `label` is the target's role toward the owner, read as
+ *  "<target> is <owner>'s <label>". */
+export interface EntityRelationship {
+  targetId: string;
+  label: string;
 }
 
 /** One location a piece of off-world content expects, as the world it left named it. The id is the key its
@@ -340,7 +521,7 @@ export interface GameLocation {
    *  `lib/authorBrief` for why that invariant is the feature. Absent on worlds written before it
    *  existed, which reads as "no brief" and leaves the drafting buttons behaving as they always did. */
   authorBrief?: string;
-  /** Shown to the player in-game. */
+  /** Shown to the player in game. */
   playerDescription?: string;
   /** Full description sent to the AI. */
   aiDescription?: string;
@@ -348,7 +529,10 @@ export interface GameLocation {
   aiSummary?: string;
   /** Legacy alias some views fall back to when `playerDescription` is absent. */
   description?: string;
-  backgroundImage?: Base64Data;
+  /** The location's gallery, in author order. In play the backdrop shows the first visible image. A rule's
+   *  owner-less Condition reads the played persona. Read it through `lib/locationImages`, which also covers
+   *  records written before the gallery. */
+  images?: GalleryImage[];
   /** Booru tags used for AI image generation; editor-only, not sent to the narrative AI. */
   imageTags?: string;
   ambientSound?: MediaAsset;
@@ -361,6 +545,9 @@ export interface GameLocation {
    *  nested, as the canvas reads a child's position. Editor-only: never sent to the AI. Absent means the
    *  canvas lays it out itself. */
   canvasPosition?: { x: number; y: number };
+  /** `true`: the entities reachable from here are the ones at the router's effective destinations (tree
+   *  neighbors plus Connection legs). Absent = the parent and siblings only. */
+  nearbyUsesConnections?: boolean;
   /** Placeholders held at a fixed value while the player is here. Released on leaving; a child location
    *  inherits nothing through `parentId`. */
   placeholderPins?: PlaceholderPin[];
@@ -436,7 +623,7 @@ export interface DictionaryEntry {
   secondaryExclude?: boolean;
   /** Treat the keywords as regular expressions instead of plain substrings. */
   useRegex?: boolean;
-  /** Match keywords as whole words (word boundaries) instead of substrings; ignored when `useRegex`. */
+  /** Match keywords as whole words (word boundaries) instead of substrings, regex keywords included. */
   matchWholeWords?: boolean;
   /** Match keywords case-sensitively (default: case-insensitive). */
   caseSensitive?: boolean;
@@ -508,7 +695,23 @@ export interface WorldPromptOverrides {
   statUpdatesPromptEnabled?: boolean;
 }
 
-/** World-level metadata and global settings (system prompt, media, 3D toggle) shared across all saves. */
+/** One Avatar in a world's store: its display name and the embedded file. */
+export interface WorldVrm {
+  name: string;
+  file: MediaAsset;
+  /** The file's content hash, which matches it to a library Avatar. Absent on entries added before it; read
+   *  through `lib/libraryVrm`, which computes it. */
+  hash?: string;
+}
+
+/** A world's Avatars, keyed by id. */
+export type WorldVrmStore = Record<string, WorldVrm>;
+
+/** Which Avatar an entity shows: the player's default, one from the world's store, or one from the player's
+ *  Avatar library (library entities). Absent = none. */
+export type VrmPick = { kind: 'default' } | { kind: 'world'; id: string } | { kind: 'library'; id: string };
+
+/** World-level metadata and global settings (system prompt, media, Avatars) shared across all saves. */
 export interface WorldOverview {
   name: string;
   description: string;
@@ -516,10 +719,12 @@ export interface WorldOverview {
   thumbnail: Base64Data | null;
   bgm: Base64Data | null;
   systemPrompt: string;
-  use3DModel: boolean;
   tags: string[];
-  /** v1.2.0: optional per-world custom player VRM model. */
-  customPlayerVRM?: MediaAsset | null;
+  /** The world's Avatars, keyed by id. Entities refer to one through `Entity.vrmPick`. */
+  vrmStore?: WorldVrmStore;
+  /** The played side's last resort, set only by the migration of a world whose old 3D Player Avatar flag
+   *  was on (see lib/legacyVrm). Never shown in the editor. */
+  legacyVrmFallback?: VrmPick;
   /** Optional markdown shown to the player on entering gameplay (per-world "Show Readme" toggle). */
   readme?: string;
   /** Optional markdown shown over the first enter-world setup screen, before any choice is made. Shares
@@ -537,6 +742,29 @@ export interface WorldOverview {
   allowedPersonas?: AllowedPersonas;
   /** The persona a new player starts on. Absent = the player's default persona. */
   startPersona?: StartPersona;
+  /** The picture behind the Locations canvas and the player's Map. Absent = none. */
+  mapBackground?: MapBackground;
+}
+
+/** A box on the Locations canvas, in canvas units. */
+export interface MapFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The world map art behind the location boxes. Every image fits inside the one frame at its own aspect
+ * ratio. In play the Map shows the first visible image; authoring shows slot 0. An owner-less rule row reads
+ * the played persona, as on a location.
+ */
+export interface MapBackground {
+  /** At least one image; the field goes with the last one. */
+  images: GalleryImage[];
+  frame: MapFrame;
+  /** 0 to 1. */
+  opacity: number;
 }
 
 /** `world` limits the pickers to this world's personas and its Custom Persona. Applied by lib/personaPick. */
@@ -566,6 +794,8 @@ export interface World {
   version?: string;
   worldOverview: WorldOverview;
   stats: Stat[];
+  /** Folders organizing the player's stats in the editor and the stat panel. */
+  statGroups?: StatGroup[];
   locations: GameLocation[];
   /** Authored travel links between locations (see `Connection`). Absent/empty ⇒ navigation is entirely
    *  implicit, exactly as before the graph existed. */
@@ -586,6 +816,10 @@ export interface World {
    *  (chips pick World or Unique); an Object shows all of them; one value is a Variable either way. Resolved
    *  at gameplay boundaries (see lib/placeholders); the name/token never reaches runtime. */
   placeholders?: Placeholder[];
+  /** Scripts no stat or trait owns; they run with no `self`. Absent = none. */
+  scripts?: Script[];
+  /** World Tools, in Tools-tab order: offered in every playthrough of this world. Absent = none. */
+  tools?: Tool[];
 }
 
 /** One authored value: a stable id and the author's text. The id is minted once and never changes, so a
@@ -631,7 +865,7 @@ export interface Placeholder {
   valueOverrides?: Record<string, CopyValueOverrides>;
   /** The editor folder this placeholder sits in on the Placeholders tab; null/absent = ungrouped. Only a
    *  shared placeholder is grouped: a scoped one sits under its entity or book, an owned one under its
-   *  holder. Editor-only, never sent to the AI, and dropped from card and dictionary exports. */
+   *  parent placeholder. Editor-only, never sent to the AI, and dropped from card and dictionary exports. */
   groupId?: string | null;
 }
 
@@ -690,7 +924,7 @@ export interface PlaceholderGroup {
   /** Sibling order among groups sharing the same parent. */
   order?: number;
   /** `blueprints` marks the world's Blueprints group: its shared placeholders are blueprints, read per
-   *  bearer through copies and never as World placeholders. At most one, at the top level. */
+   *  owner through copies and never as World placeholders. At most one, at the top level. */
   system?: 'blueprints';
 }
 
@@ -767,6 +1001,8 @@ export interface EntityMetadata extends CommunityLink {
   tags?: string[];
   /** The entity carries the Persona mark, so the tab's Personas filter shows it. */
   persona?: boolean;
+  /** The library Avatar the entity picks, so a library delete can name its users. */
+  vrmLibraryId?: string;
   /** Imported attribution and tags kept outside world content. */
   libraryDetails?: LibraryDetails;
 }

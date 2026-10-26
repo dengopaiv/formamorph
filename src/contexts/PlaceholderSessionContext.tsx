@@ -1,10 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useGameData } from './GameDataContext';
 import { primeRolls, weightedPick } from '@/lib/placeholders';
-import { bearerPriming } from '@/lib/ownedTraitsInPlay';
+import { ownerPriming } from '@/lib/ownedTraitsInPlay';
 import { allPinTexts, valuePinRollChips } from '@/lib/placeholderPins';
 import { entityTexts } from '@/lib/entityTexts';
 import { overviewTexts } from '@/lib/overviewTexts';
+import { connectionHints } from '@/lib/connectionEditing';
 import { bookTexts, libraryPlaceholderSet, primeLibraryRolls } from '@/lib/libraryPlaceholders';
 import { sameElements } from '@/lib/placeholderHomes';
 import type { Dictionary, Entity, Placeholder, PlaceholderRolls } from '@/types';
@@ -82,7 +83,7 @@ export function PlaceholderSessionProvider({ children }: { children: ReactNode }
   const [persona, setPersonaState] = useState<Entity | null>(null);
   const [additions, setAdditions] = useState<LibraryAdditions>(NO_ADDITIONS);
   const {
-    worldOverview, entities, locations, dictionaries, stats, traits, traitGroups, placeholders: worldPlaceholders,
+    worldOverview, entities, locations, connections, dictionaries, stats, traits, traitGroups, placeholders: worldPlaceholders,
   } = useGameData();
   const placeholders = useMemo(
     () => libraryPlaceholderSet(worldPlaceholders, libraryItems(persona, additions)),
@@ -160,19 +161,20 @@ export function PlaceholderSessionProvider({ children }: { children: ReactNode }
   // read the moment their trait is on, so their chips are primed too, whichever traits get picked.
   useEffect(() => {
     if (!sessionActive || placeholders.length === 0) return;
-    // Each bearer's tree: owned text and linked originals, and pins bound for that bearer.
+    // Each owner's tree: owned text and linked originals, and pins bound for that owner.
     const library = [...(persona ? [persona] : []), ...additions.characters];
-    const perBearer = bearerPriming({ traits, traitGroups, entities }, library, worldPlaceholders);
+    const perOwner = ownerPriming({ traits, traitGroups, entities }, library, worldPlaceholders);
     const texts = [
       ...overviewTexts(worldOverview),
       ...entities.flatMap(entityTexts),
       ...locations.flatMap((l) => [l.name, l.playerDescription, l.aiDescription, l.aiSummary, l.description, l.imageTags]),
+      ...connections.flatMap(connectionHints),
       ...[...dictionaries, ...additions.books].flatMap(bookTexts),
       ...stats.flatMap((s) => [s.name, s.description, ...(s.descriptors ?? []).map((d) => d.description)]),
       ...traits.flatMap((t) => [t.name, t.playerDescription, t.aiDescription]),
       ...traitGroups.flatMap((g) => [g.name, g.playerDescription, g.aiDescription]),
       ...library.flatMap(entityTexts),
-      ...perBearer.texts,
+      ...perOwner.texts,
     ].filter((t): t is string => !!t);
     // Keep the previous object when nothing new was rolled. `primeRolls` always returns a fresh object, and
     // this effect depends on `rolls` so a save restoring mid-session gets its missing placements primed —
@@ -180,16 +182,16 @@ export function PlaceholderSessionProvider({ children }: { children: ReactNode }
     // A placeholder whose values pin something reads its own world roll, so it gets one whether or not any
     // text places it.
     const pinTexts = allPinTexts({
-      traits: [...traits, ...perBearer.pinTraits], entities: [...entities, ...library], locations, stats, placeholders,
+      traits: [...traits, ...perOwner.pinTraits], entities: [...entities, ...library], locations, stats, placeholders,
     });
     setRolls((prev) => {
       let next = primeRolls(placeholders, [...texts, ...valuePinRollChips(placeholders)], prev, weightedPick, pinTexts);
-      // A blueprint chip in trait text rolls each bearer's copy, so each bearer's text is walked again through it.
-      for (const { texts: own, copies } of perBearer.copyTexts) next = primeRolls(placeholders, own, next, weightedPick, pinTexts, copies);
+      // A blueprint chip in trait text rolls each owner's copy, so each owner's text is walked again through it.
+      for (const { texts: own, copies } of perOwner.copyTexts) next = primeRolls(placeholders, own, next, weightedPick, pinTexts, copies);
       return sameRolls(prev, next) ? prev : next;
     });
   }, [
-    sessionActive, rolls, placeholders, worldPlaceholders, entities, locations, dictionaries, stats, traits, traitGroups,
+    sessionActive, rolls, placeholders, worldPlaceholders, entities, locations, connections, dictionaries, stats, traits, traitGroups,
     worldOverview, persona, additions,
   ]);
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ChipInput from './ChipInput';
 import TagChipField from './TagChipField';
@@ -148,12 +148,12 @@ describe('ChipTypeahead — the Built-in section', () => {
   it('lists the Built-ins first, under their heading', async () => {
     render(<BuiltinHarness />);
     await open();
-    expect(offered().slice(0, 3)).toEqual(['Player Name', 'Character Name', 'Molly']);
+    expect(offered().slice(0, 3)).toEqual(['Persona Name', 'Character Name', 'Molly']);
     expect(within(menu()!).getByText('Built-in')).toBeInTheDocument();
   });
 
   it.each([
-    ['player', 'Player Name'], ['user', 'Player Name'], ['Character', 'Character Name'], ['char', 'Character Name'],
+    ['persona', 'Persona Name'], ['player', 'Persona Name'], ['player name', 'Persona Name'], ['user', 'Persona Name'], ['Character', 'Character Name'], ['char', 'Character Name'],
   ])('finds %s', async (query, label) => {
     render(<BuiltinHarness />);
     await open(query);
@@ -239,12 +239,14 @@ describe('ChipTypeahead — drilling into a placeholder’s parts', () => {
   it('leaves a modified arrow to the caret, so selecting across the query is still possible', async () => {
     render(<Harness />);
     const user = await open('Molly');
-    await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+    // A bare key event: user-event moves the caret one place whatever Shift says, which here steps over the
+    // field's own "." and changes the query. The test is about the menu's key handler, not caret movement.
+    fireEvent.keyDown(screen.getByLabelText('Name'), { key: 'ArrowRight', shiftKey: true });
     // Shift-Right extends a selection; hijacking it would walk into Molly instead.
     await waitFor(() => expect(offered()).toEqual(['Molly']));
     await user.keyboard('{ArrowRight}');
     await waitFor(() => expect(offered()).toEqual(['isWhite', 'isAsian']));
-    await user.keyboard('{Shift>}{ArrowLeft}{/Shift}');
+    fireEvent.keyDown(screen.getByLabelText('Name'), { key: 'ArrowLeft', shiftKey: true });
     expect(offered()).toEqual(['isWhite', 'isAsian']);
   });
 

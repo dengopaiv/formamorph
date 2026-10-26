@@ -56,7 +56,7 @@ const WORLD: World = benchEditorWorld({
         { id: 't-tamed', name: 'Tamed', groupId: 'g-bond', statChanges: [], order: 0 },
         {
           id: 't-wild', name: 'Wild', groupId: 'g-bond', statChanges: [], order: 1,
-          requires: [{ kind: 'trait', id: 't-paladin' }, { kind: 'trait', id: 't-tamed' }, { kind: 'trait', id: 't-tamer' }],
+          requires: [{ all: [{ kind: 'trait', id: 't-paladin' }] }, { all: [{ kind: 'trait', id: 't-tamed' }] }, { all: [{ kind: 'trait', id: 't-tamer' }] }],
         },
         { id: 't-pack', name: 'Pack Sense', groupId: null, statChanges: [], order: 2 },
       ],
@@ -77,7 +77,7 @@ const openMirror = (name: string) => {
   selectEntity(name);
   fireEvent.mouseDown(entityFieldsTab('Traits'));
 };
-const searchBox = () => screen.getByPlaceholderText('Search or add new traits');
+const searchBox = () => screen.getByPlaceholderText('Filter Traits');
 const openAddMenu = (name: string) => fireEvent.click(screen.getByRole('button', { name: `Add to ${name}` }));
 /** The mirror's draggable rows, in order: the entity panel's own, apart from the entity tree's rows beside it. */
 const mirrorRows = () => {
@@ -200,7 +200,7 @@ describe('the entity Traits tab as a mirror', () => {
     fireEvent.click(rowNamed('Wild')!);
     openTraitFieldsTab('Availability');
     // Paladin is a world trait: named, never a button, and the details stay open.
-    expect(within(field()).getByText('Paladin')).toBeInTheDocument();
+    expect(within(field().querySelector<HTMLElement>('[data-requirement-row]')!).getByText('Paladin')).toBeInTheDocument();
     expect(within(field()).queryByRole('button', { name: 'Paladin' })).toBeNull();
     fireEvent.click(within(field()).getByRole('button', { name: 'Beast Tamer' }));
     openTraitFieldsTab('Details');
@@ -222,7 +222,7 @@ describe('the entity Traits tab as a mirror', () => {
     expect(within(line).queryByRole('button')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Edit Blueprint' })).toBeNull();
     openTraitFieldsTab('Availability');
-    fireEvent.click(screen.getByRole('checkbox', { name: /Enabled by Default/ }));
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Starts' })).getByRole('radio', { name: 'On' }));
     expect(entity(ctx, 'ash').traitLinks![0].overrides).toEqual({ 't-tamer': { isDefault: { value: true, blueprint: false } } });
     fireEvent.click(screen.getByRole('button', { name: 'Reset to Blueprint' }));
     expect(entity(ctx, 'ash').traitLinks![0]).not.toHaveProperty('overrides');
@@ -249,8 +249,9 @@ describe('the entity Traits tab as a mirror', () => {
       fireEvent.click(rowNamed('Tamed')!);
       expect(leadsStrip('Back to Traits', 'Trait Fields')).toBe(true);
       expect(leadsStrip('Back to Entities', 'Entity Fields')).toBe(true);
-      // No push draws a row of its own for the control.
-      expect(screen.queryByRole('button', { name: /^(Back|Traits|Entities)$/ })).toBeNull();
+      // No push draws a row of its own for the control: the editor header's Back is the only one named Back.
+      expect(screen.getAllByRole('button', { name: 'Back' })).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: /^(Traits|Entities)$/ })).toBeNull();
       fireEvent.click(backArrow()!);
       expect(detailsOpen()).toBe(false);
       expect(screen.getByRole('tablist', { name: 'Entity Fields' })).toBeInTheDocument();

@@ -3,7 +3,8 @@ import { expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { openDatabase, promisifyRequest } from '@/lib/idb';
+import { promisifyRequest } from '@/lib/idb';
+import { openWorldLibrary } from '@/lib/worldLibrary';
 import { FindBarReference } from './FindBarReference';
 
 const renderReference = () => render(
@@ -15,7 +16,7 @@ const renderReference = () => render(
 const STORED_WORLD = { id: 'protected-world', name: 'Protected World', data: { marker: 'unchanged' } };
 
 const replaceWorldStore = async (records: object[]) => {
-  const db = await openDatabase('worldsDB', 1, [{ name: 'worlds', keyPath: 'id' }]);
+  const db = await openWorldLibrary();
   const store = db.transaction(['worlds'], 'readwrite').objectStore('worlds');
   await promisifyRequest(store.clear());
   await Promise.all(records.map((record) => promisifyRequest(store.put(record))));
@@ -23,7 +24,7 @@ const replaceWorldStore = async (records: object[]) => {
 };
 
 const readWorldStore = async (): Promise<object[]> => {
-  const db = await openDatabase('worldsDB', 1, [{ name: 'worlds', keyPath: 'id' }]);
+  const db = await openWorldLibrary();
   const records = await promisifyRequest<object[]>(db.transaction(['worlds'], 'readonly').objectStore('worlds').getAll());
   db.close();
   return records;
@@ -40,7 +41,7 @@ it('navigates the production Find bar through local World Editor fields', async 
   await user.type(find, 'harbor');
 
   await waitFor(() => expect(screen.getByText('1 / 5')).toBeInTheDocument());
-  expect(screen.getByRole('textbox', { name: 'World Introduction' })).toHaveAttribute('data-find-current', 'true');
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'World Introduction' })).toHaveAttribute('data-find-current', 'true'));
 
   await user.keyboard('{Enter}');
   expect(screen.getByText('2 / 5')).toBeInTheDocument();
@@ -78,7 +79,7 @@ it('shows match-option and no-results states through the production controls', a
 
   await waitFor(() => expect(screen.getByText('No results')).toBeInTheDocument());
   expect(screen.getByRole('button', { name: 'Next match' })).toBeDisabled();
-  expect(screen.getByRole('status')).toHaveTextContent('The reference has no selected match.');
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('The reference has no selected match.'));
 });
 
 it('confirms local replacements and restores focus when the bar closes', async () => {
@@ -122,4 +123,36 @@ it('confirms local replacements and restores focus when the bar closes', async (
   await user.keyboard('{Escape}');
   expect(screen.queryByRole('search', { name: 'Find and replace in world' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Find' })).toHaveFocus();
+});
+
+it('docks Search World in a sample app bar and expands it into Find and Replace', async () => {
+  const user = userEvent.setup();
+  renderReference();
+  await user.click(screen.getByRole('radio', { name: 'Docked' }));
+  expect(screen.queryByRole('search', { name: 'Find and replace in world' })).not.toBeInTheDocument();
+
+  const field = screen.getByRole('textbox', { name: 'Search World' });
+  expect(field).not.toHaveFocus();
+  await user.type(field, 'harbor');
+  await waitFor(() => expect(screen.getByText('1 / 5')).toBeInTheDocument());
+
+  await user.click(screen.getByRole('button', { name: 'Show options and replace' }));
+  expect(screen.getByRole('textbox', { name: 'Search World' })).toHaveFocus();
+  await user.click(screen.getByRole('button', { name: 'Match case' }));
+  await waitFor(() => expect(screen.getByText('1 / 4')).toBeInTheDocument());
+  await user.type(screen.getByRole('textbox', { name: 'Replace with' }), 'haven');
+  await user.click(screen.getByRole('button', { name: 'Replace' }));
+  expect((screen.getByRole('textbox', { name: 'World Introduction' }) as HTMLTextAreaElement).value)
+    .toContain('haven entrance');
+
+  await user.click(screen.getByRole('button', { name: 'Collapse to search' }));
+  expect(screen.getByRole('textbox', { name: 'Search World' })).toHaveFocus();
+  expect(screen.queryByRole('textbox', { name: 'Replace with' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Show match options' }));
+  expect(screen.getByRole('button', { name: 'Match case' })).toHaveAttribute('aria-pressed', 'true');
+
+  await user.click(screen.getByRole('button', { name: 'Close Search' }));
+  expect(screen.getByRole('textbox', { name: 'Search World' })).toHaveValue('');
+  expect(screen.getByRole('textbox', { name: 'Search World' })).toHaveFocus();
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('The reference has no selected match.'));
 });

@@ -27,7 +27,7 @@ export type EntityTraitStore = TraitStore & { entityRoot: EntityRoot };
  * group or Link panel beside or over the list. The caller holds the selection. While a search is typed the
  * list is flat: matching traits and Links, never groups.
  */
-const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity, ownerLine = true, emptyHint, detailHeader }: {
+const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity, ownerLine = true, emptyHint, detailHeader, placeholder = 'Search or add new traits' }: {
   store: EntityTraitStore;
   layout: ListEditorLayout;
   selectedId: string | null;
@@ -39,19 +39,21 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
   emptyHint: ReactNode;
   /** Tops the detail pane: a host's placeholder palette. */
   detailHeader?: ReactNode;
+  /** The list box's text: a host under the World Editor's header search reads "Filter …". */
+  placeholder?: string;
 }) => {
-  const { bearer, world } = store.entityRoot;
+  const { owner, world } = store.entityRoot;
   const { placeholders, traits, traitGroups } = store;
   const [tab, setTab] = useState<TraitPanelTab>('details');
   const resetTab = useCallback(() => setTab('details'), []);
 
-  const tree = useMemo(() => entityRootTraitTree(bearer, world), [bearer, world]);
+  const tree = useMemo(() => entityRootTraitTree(owner, world), [owner, world]);
   const trait = traits.find((t) => t.id === selectedId);
   const group = traitGroups.find((g) => g.id === selectedId);
   const linkRow = selectedId ? tree.linkRows.get(selectedId) : undefined;
   const linkedTrait = linkRow && world?.traits.find((t) => t.id === linkRow.originalId);
   const linkedGroup = linkRow && world?.traitGroups.find((g) => g.id === linkRow.originalId);
-  const entityName = labelPlaceholders(bearer.name, placeholders);
+  const entityName = labelPlaceholders(owner.name, placeholders);
 
   // The row that shows a trait or group id here: its own row, or the row of the Link that reads it. Null when
   // the entity doesn't hold it, so a target outside the entity has nowhere to open.
@@ -67,13 +69,13 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
   };
   // "Playing as" the entity itself opens the entity where a host can; every other persona is outside.
   const requirementOpens = (r: TraitRequirement) => (r.kind === 'playingAs'
-    ? !!onOpenEntity && (r.id === bearer.id || r.id === SELF_ENTITY)
-    : rowOf(r.id) !== null);
-  const nameChips = <PlaceholderText text={bearer.name} placeholders={placeholders} />;
+    ? !!onOpenEntity && (r.id === owner.id || r.id === SELF_ENTITY)
+    : r.kind !== 'time' && rowOf(r.id) !== null);
+  const nameChips = <PlaceholderText text={owner.name} placeholders={placeholders} />;
 
   const add = (typed: string, addItem: typeof addOwnedTrait) => {
     const id = randomUUID();
-    const next = addItem(bearer, id, typed || undefined);
+    const next = addItem(owner, id, typed || undefined);
     store.setTraits(next.traits ?? []);
     store.setTraitGroups(next.traitGroups ?? []);
     onSelect(id);
@@ -102,7 +104,7 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
         name: t.name,
         actions: [
           { icon: <Copy className="h-4 w-4" />, title: 'Duplicate', onClick: () => duplicate(t.id) },
-          { icon: <X className="h-4 w-4" />, title: 'Delete', onClick: () => remove(t.id) },
+          { icon: <X className="h-4 w-4" />, destructive: true, title: 'Delete', onClick: () => remove(t.id) },
         ],
       })),
       ...[...tree.linkRows.values()].filter((row) => row.root).map((row): ListEditorRow => ({
@@ -110,7 +112,7 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
         name: rowName(row.link.id),
         icon: <Link2 className="h-4 w-4 shrink-0" aria-label="Link" />,
         labelClass: row.unbound ? 'text-muted-foreground' : undefined,
-        actions: linkRowRemovable(row, world) ? [{ icon: <X className="h-4 w-4" />, title: 'Remove Link', onClick: () => removeLinkRow(row) }] : [],
+        actions: linkRowRemovable(row, world) ? [{ icon: <X className="h-4 w-4" />, destructive: true, title: 'Remove Link', onClick: () => removeLinkRow(row) }] : [],
       })),
     ];
   };
@@ -129,7 +131,7 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
           <div key={id}>
             {linkedTrait ? (
               <LinkedTraitManager
-                bearer={bearer}
+                owner={owner}
                 link={linkRow.link}
                 original={linkedTrait}
                 onOpenTrait={openHeld}
@@ -143,18 +145,18 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
                 group={linkedGroup}
                 readOnly
                 detailsHeader={<LinkedFromLine originalId={linkRow.originalId} />}
-                detailsFooter={<ThisLinkSection entity={bearer} link={linkRow.link} originalId={linkRow.originalId} />}
+                detailsFooter={<ThisLinkSection entity={owner} link={linkRow.link} originalId={linkRow.originalId} />}
               />
             )}
           </div>
         )
       ) : group ? (
-        <GroupManager key={group.id} group={group} ownerId={bearer.id} />
+        <GroupManager key={group.id} group={group} ownerId={owner.id} />
       ) : trait ? (
         <TraitManager
           key={trait.id}
           trait={trait}
-          owner={bearer}
+          owner={owner}
           ownerLine={ownerLine}
           onOpenTrait={openHeld}
           onOpenEntity={onOpenEntity}
@@ -174,10 +176,9 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
     names: { placeholders },
     noun: 'traits',
     detail,
-    footer: () => (linkRow && !linkRow.unbound ? <LinkFooter bearer={bearer} row={linkRow} /> : undefined),
+    footer: () => (linkRow && !linkRow.unbound ? <LinkFooter owner={owner} row={linkRow} /> : undefined),
     add: {
       label: `Add to ${entityName}`,
-      menuClassName: 'w-56',
       menu: (
         <>
           <ListMenuRow icon={<FolderPlus className="h-4 w-4" />} label={<>Add Group to {nameChips}</>} onAdd={(typed) => add(typed, addOwnedGroup)} />
@@ -185,9 +186,9 @@ const EntityTraitsEditor = ({ store, layout, selectedId, onSelect, onOpenEntity,
         </>
       ),
     },
-    placeholder: 'Search or add new traits',
+    placeholder,
     holds: (id) => ownsItem(id) || tree.linkRows.has(id),
-    isEmpty: !(traits.length || traitGroups.length || bearer.traitLinks?.length),
+    isEmpty: !(traits.length || traitGroups.length || owner.traitLinks?.length),
     emptyHint,
     onDropStale: resetTab,
   };

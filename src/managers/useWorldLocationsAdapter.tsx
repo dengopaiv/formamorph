@@ -5,18 +5,23 @@ import type { ListEditorAdapter, ListEditorRow } from '@/components/listEditorHo
 import type { ListSearch } from '@/components/listToolbarHooks';
 import { useGameData } from '@/contexts/GameDataContext';
 import { newLocation } from '@/lib/blankWorld';
+import { copyWithFreshRolls, duplicateAfter } from '@/lib/duplicateAfter';
 import { matchesListSearch } from '@/lib/listSearch';
 import { randomUUID } from '@/lib/uuid';
 import type { FocusFieldHint } from '@/types';
 import { focusFieldForItem } from '@/views/findFocus';
 import type { LocationPanelTab } from '@/views/locationPanelTabs';
 import type { LocationView } from '@/views/locationViews';
-import LocationCanvas from './LocationCanvas';
+import { PanelErrorBoundary } from '@/components/PanelErrorBoundary';
+import LocationCanvas, { type ConnectionReveal, type SelectionReveal } from './LocationCanvas';
 import LocationManager from './LocationManager';
 import LocationTree from './LocationTree';
 
 /** The World Editor's Locations tab as a List Editor adapter: the tree or the canvas, a flat sortable search, and the location panel. */
-export function useWorldLocationsAdapter({ selectedId, onSelect, search, view, tab, onTabChange, focusField }: {
+export function useWorldLocationsAdapter({
+  selectedId, onSelect, search, view, tab, onTabChange, focusField, revealConnection, onConnectionRevealed,
+  revealSelection, onSelectionRevealed, onCanvasSelection,
+}: {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   /** The World Editor's shared search, which hides the open location while it leaves the location out. */
@@ -25,6 +30,14 @@ export function useWorldLocationsAdapter({ selectedId, onSelect, search, view, t
   tab: LocationPanelTab;
   onTabChange: (tab: LocationPanelTab) => void;
   focusField: FocusFieldHint | null;
+  /** A connection the canvas should select, as an undo brings it back. */
+  revealConnection?: ConnectionReveal | null;
+  onConnectionRevealed?: () => void;
+  /** The locations the canvas should make its whole selection, as an undo restores them. */
+  revealSelection?: SelectionReveal | null;
+  onSelectionRevealed?: () => void;
+  /** Every selection the canvas reports. */
+  onCanvasSelection?: (ids: string[]) => void;
 }): ListEditorAdapter {
   const { locations, placeholders, placementLetters, placeholderOwners, addLocation, removeLocation, setLocations } = useGameData();
   const names = { placeholders, letters: placementLetters, owners: placeholderOwners };
@@ -36,11 +49,9 @@ export function useWorldLocationsAdapter({ selectedId, onSelect, search, view, t
   };
   // The copy lands right after its original.
   const handleDuplicate = (id: string) => {
-    const index = locations.findIndex((l) => l.id === id);
-    if (index === -1) return;
-    const copy = { ...structuredClone(locations[index]), id: randomUUID() };
-    copy.name = `${copy.name} (Copy)`;
-    setLocations([...locations.slice(0, index + 1), copy, ...locations.slice(index + 1)]);
+    const { list, copy } = duplicateAfter(locations, id, copyWithFreshRolls);
+    if (!copy) return;
+    setLocations(list);
     onSelect(copy.id);
   };
 
@@ -50,7 +61,7 @@ export function useWorldLocationsAdapter({ selectedId, onSelect, search, view, t
     sortable: true,
     actions: [
       { icon: <Copy className="h-4 w-4" />, title: 'Duplicate', onClick: () => handleDuplicate(l.id) },
-      { icon: <X className="h-4 w-4" />, title: 'Delete', onClick: () => { removeLocation(l.id); onSelect(null); } },
+      { icon: <X className="h-4 w-4" />, destructive: true, title: 'Delete', onClick: () => { removeLocation(l.id); onSelect(null); } },
     ],
   }));
 
@@ -71,7 +82,19 @@ export function useWorldLocationsAdapter({ selectedId, onSelect, search, view, t
   const canvas = view === 'canvas';
   return {
     tree: canvas
-      ? <LocationCanvas selectedId={selectedId} onSelect={onSelect} />
+      ? (
+        <PanelErrorBoundary>
+          <LocationCanvas
+            selectedId={selectedId}
+            onSelect={onSelect}
+            revealConnection={revealConnection}
+            onConnectionRevealed={onConnectionRevealed}
+            revealSelection={revealSelection}
+            onSelectionRevealed={onSelectionRevealed}
+            onSelectionChange={onCanvasSelection}
+          />
+        </PanelErrorBoundary>
+      )
       : <LocationTree selectedId={selectedId} onSelect={onSelect} />,
     ownsSlot: canvas,
     rows,
@@ -93,7 +116,7 @@ export function useWorldLocationsAdapter({ selectedId, onSelect, search, view, t
     fills: (id) => !!shown(id),
     onReorder,
     add: { label: 'Add to Locations', onAdd: handleAdd },
-    placeholder: 'Search or add new locations',
+    placeholder: 'Filter Locations',
     holds: (id) => locations.some((l) => l.id === id),
     isEmpty: locations.length === 0,
     emptyHint: <EmptyListHint noun="locations" />,

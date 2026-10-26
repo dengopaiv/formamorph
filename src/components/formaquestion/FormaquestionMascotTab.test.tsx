@@ -117,27 +117,6 @@ afterEach(() => {
 
 const SCALE_KEY = 'formamorph.formaquestion.mascotScale';
 
-describe('the Scale slider', () => {
-  afterEach(() => localStorage.clear());
-
-  it('starts at Auto, steps to a percent and back, and stores each on this device', async () => {
-    mount();
-    const slider = screen.getByRole('slider', { name: 'Scale' });
-    expect(screen.getByText('Auto')).toBeInTheDocument();
-    expect(slider).toHaveAttribute('aria-valuetext', 'Auto');
-    slider.focus();
-    await userEvent.keyboard('{ArrowRight}');
-    expect(localStorage.getItem(SCALE_KEY)).toBe('25');
-    expect(slider).toHaveAttribute('aria-valuetext', '25%');
-    expect(screen.getByText('25%')).toBeInTheDocument();
-    await userEvent.keyboard('{End}');
-    expect(localStorage.getItem(SCALE_KEY)).toBe('150');
-    await userEvent.keyboard('{Home}');
-    expect(localStorage.getItem(SCALE_KEY)).toBe('auto');
-    expect(current).toEqual(expect.not.objectContaining({ scale: expect.anything() }));
-  });
-});
-
 describe('the layer list', () => {
   it('lists every layer in order with its kind and its switch', () => {
     mount();
@@ -215,11 +194,15 @@ describe('the layer list', () => {
     const body = layerRow('Happy');
     const grips = within(body).getAllByRole('button').filter((el) => el.getAttribute('aria-roledescription') === 'sortable');
     // The layer's own grip first, then one per overlay.
-    grips[2].focus();
+    const moved = grips[2];
+    moved.focus();
     await user.keyboard('[Space]');
     await user.keyboard('[ArrowUp]');
     await user.keyboard('[Space]');
     expect(layerOf('happy').images).toEqual([{ kind: 'bundled', name: 'eyes-closed' }, { kind: 'bundled', name: 'mouth-grin' }]);
+    // The row keeps its node, so the drop settles in place rather than sliding in from the old slot.
+    const after = within(layerRow('Happy')).getAllByRole('button').filter((el) => el.getAttribute('aria-roledescription') === 'sortable');
+    expect(after[1]).toBe(moved);
   });
 });
 
@@ -534,7 +517,8 @@ describe('player images', () => {
     const id = (drafted().base as { id: string }).id;
     await waitFor(() => expect(preview()[0]).toMatch(/^blob:/));
     await save();
-    await userEvent.click(screen.getByRole('button', { name: 'Remove image' }));
+    // The slot reads its own object URL after the draft and the preview, and shows Remove only once it has one.
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove image' }));
     expect(drafted().base).toEqual(DEFAULT_MASCOT_RIG.base);
     expect(await getMascotImage(id)).not.toBeNull();
     await save();
@@ -546,7 +530,7 @@ describe('player images', () => {
     await userEvent.upload(fileInput('fq-mascot-base'), png('base.png'));
     await waitFor(() => expect(drafted().base.kind).toBe('stored'));
     const id = (drafted().base as { id: string }).id;
-    await userEvent.click(screen.getByRole('button', { name: 'Remove image' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove image' }));
     expect(control.dirty).toBe(false);
     unmount();
     await waitFor(async () => expect(await getMascotImage(id)).toBeNull());
@@ -905,7 +889,7 @@ describe('the transition rows', () => {
     expect(drafted().transition.dissolve.durationMs).toBe(DISSOLVE_RANGES.durationMs.min);
 
     await userEvent.click(modeButton('None'));
-    expect(screen.getAllByRole('slider').map((thumb) => thumb.getAttribute('aria-label'))).toEqual(['Scale']);
+    expect(screen.queryAllByRole('slider')).toEqual([]);
     await userEvent.click(modeButton('Jelly'));
     expect(drafted().transition).toEqual({
       mode: 'jelly',
@@ -1047,7 +1031,6 @@ describe('the mascot card', () => {
     await upload(cardFile(cardRig));
     await waitFor(() => expect(saved().voice).toBe('Gruff.'));
     expect(localStorage.getItem(SCALE_KEY)).toBe('75');
-    expect(screen.getByText('75%')).toBeInTheDocument();
   });
 
   it('names the bad field of a refused card and changes nothing', async () => {
@@ -1119,7 +1102,7 @@ describe('full screen', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'View full screen' })));
   });
 
-  it('runs from the ⋯ menu below md, and Exit returns focus to the ⋯ button', async () => {
+  it('opens from the ⋯ menu below md, and the corner exit returns focus to the ⋯ button', async () => {
     // Below md the breakpoint hides the icon row; jsdom applies no CSS, so visibility follows that class.
     Object.defineProperty(HTMLElement.prototype, 'checkVisibility', {
       configurable: true,
@@ -1133,7 +1116,10 @@ describe('full screen', () => {
       };
       await fromMenu('View full screen');
       await screen.findByRole('dialog', { name: 'Mascot' });
-      await fromMenu('Exit full screen');
+      fireEvent.click(screen.getByRole('button', { name: 'Preset Actions' }));
+      expect(within(await screen.findByRole('menu')).queryByRole('menuitem', { name: /full screen/ })).toBeNull();
+      await userEvent.keyboard('{Escape}');
+      fireEvent.click(within(mascotWindow()).getByRole('button', { name: 'Exit full screen' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Mascot' })).toBeNull());
       await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Preset Actions' })));
     } finally {
@@ -1235,12 +1221,12 @@ describe('the preset row', () => {
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledTimes(1));
     const [blob, fileName] = vi.mocked(downloadBlob).mock.calls[0];
     expect(fileName).toBe('mascot.webp');
-    expect((await readMascotCard(blob)).name).toBe('Default');
+    expect((await readMascotCard(blob)).name).toBe('Morphie');
   });
 
   it('shows the Default read-only: no editor control takes input, and the preview still follows a selected layer', async () => {
     mountDefault();
-    expect(screen.getByText('Default is read-only')).toBeInTheDocument();
+    expect(screen.getByText('Morphie is read-only')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Voice' })).toHaveAttribute('readonly');
     expect(screen.queryByRole('button', { name: 'Add Layer' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove layer' })).toBeNull();
@@ -1248,7 +1234,7 @@ describe('the preset row', () => {
     expect(within(layerRow('Happy')).getByRole('checkbox', { name: 'Enable Happy' })).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Idle Look State' })).toBeDisabled();
     expect(screen.getByRole('radio', { name: MASCOT_COPY.transition.modes.jelly })).toBeDisabled();
-    for (const slider of screen.getAllByRole('slider').filter((el) => el.getAttribute('aria-label') !== 'Scale')) {
+    for (const slider of screen.getAllByRole('slider')) {
       expect(slider).toHaveAttribute('data-disabled');
     }
     expect(screen.getByRole('button', { name: MASCOT_COPY.transition.play.label })).toBeEnabled();
@@ -1261,8 +1247,8 @@ describe('the preset row', () => {
   it('duplicates the Default from the read-only notice into an editable copy', async () => {
     mountDefault();
     await userEvent.click(screen.getByRole('button', { name: /Duplicate & Edit/ }));
-    expect(current.mascotPresets.mascots.map((mascot) => mascot.name)).toEqual(['Default (copy)']);
-    expect(presetSelect()).toHaveTextContent('Default (copy)');
+    expect(current.mascotPresets.mascots.map((mascot) => mascot.name)).toEqual(['Morphie 2']);
+    expect(presetSelect()).toHaveTextContent('Morphie 2');
     expect(screen.getByRole('textbox', { name: 'Voice' })).not.toHaveAttribute('readonly');
   });
 
@@ -1271,7 +1257,8 @@ describe('the preset row', () => {
     mount({ ...DEFAULT_MASCOT_RIG, base: stored(id) });
     await userEvent.click(within(row()).getByRole('button', { name: 'Duplicate' }));
     const [mine, copy] = current.mascotPresets.mascots;
-    expect(copy.name).toBe('Mine (copy)');
+    // The copy keeps the name, numbered past the one in use.
+    expect(copy.name).toBe('Mine 2');
     expect(copy.rig.base).toEqual(stored(id));
     expect(mine.rig.base).toEqual(stored(id));
   });
@@ -1302,7 +1289,7 @@ describe('the preset row', () => {
     await userEvent.click(within(row()).getByRole('button', { name: 'Delete' }));
     await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Confirm' }));
     expect(current.mascotPresets.mascots.map((mascot) => mascot.name)).toEqual(['Twin']);
-    expect(presetSelect()).toHaveTextContent('Default');
+    expect(presetSelect()).toHaveTextContent('Morphie');
     await waitFor(async () => expect(await getMascotImage(own)).toBeNull());
     expect(await getMascotImage(shared)).not.toBeNull();
   });
@@ -1311,15 +1298,15 @@ describe('the preset row', () => {
     mount();
     await userEvent.click(within(layerRow('Crying')).getByRole('button', { name: 'Remove layer' }));
     await userEvent.click(screen.getByRole('button', { name: 'Expand Happy' }));
-    await selectMascot('Default');
+    await selectMascot('Morphie');
     const prompt = await screen.findByRole('alertdialog');
     await userEvent.click(within(prompt).getByRole('button', { name: 'Cancel' }));
     expect(presetSelect()).toHaveTextContent('Mine');
     expect(control.dirty).toBe(true);
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Happy');
-    await selectMascot('Default');
+    await selectMascot('Morphie');
     await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save & Exit' }));
-    expect(presetSelect()).toHaveTextContent('Default');
+    expect(presetSelect()).toHaveTextContent('Morphie');
     expect(current.mascotPresets.mascots[0].rig.layers.map((layer) => layer.id)).not.toContain('sad');
   });
 });

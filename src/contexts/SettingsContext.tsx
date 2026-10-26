@@ -2,7 +2,7 @@ import { randomUUID } from "@/lib/uuid";
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { PROMPT_TEXT_DEFAULTS } from '../components/game/GamePrompts';
 import { EXPERIMENTAL_PROMPT_VALUES } from '../components/game/ExperimentalPrompts';
-import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_PARALLEL_REQUESTS, DEFAULT_LOCAL_GPU_DEVICE, DEFAULT_LOCAL_AUTO_LOAD, DEFAULT_GEN_TEMPERATURE, DEFAULT_GEN_TOP_P, DEFAULT_GEN_REPETITION_PENALTY, DEFAULT_GEN_TOP_K, DEFAULT_GEN_MIN_P, DEFAULT_THEME_COLOR, BASE_THEME_COLOR, THEME_COLORS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, FONT_OPTIONS, SYSTEM_FONT_STACK, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, DEFAULT_QUOTE_COLOR, DEFAULT_QUOTE_ITALIC, DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_COLOR_DARK, NARRATION_FONT_OPTIONS, fontStack, fontSizeAdjust, DEFAULT_UPDATE_CHANNEL, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_CONTINUE_CHOICE, DEFAULT_IMAGE_ATTACHMENTS, CONTINUE_CHOICE_MODES, DEFAULT_NARRATION_LAYOUT, NARRATION_LAYOUTS, DEFAULT_TOOLS_ENABLED, type ContinueChoiceMode, type NarrationLayout, type ThemeColor, type FontChoice, type NarrationFont, type UpdateChannel } from './settingsDefaults';
+import { DEFAULT_EDITOR_AUTO_SAVE_IDLE_S, clampEditorAutoSaveIdle, DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_UNIFIED_KV_CACHE, DEFAULT_LOCAL_K_CACHE_TYPE, DEFAULT_LOCAL_V_CACHE_TYPE, DEFAULT_LOCAL_KV_CACHE_IN_RAM, LOCAL_CACHE_TYPES, DEFAULT_LOCAL_CONTEXT_OVERFLOW, LOCAL_CONTEXT_OVERFLOW_POLICIES, DEFAULT_LOCAL_PARALLEL_REQUESTS, DEFAULT_LOCAL_GPU_DEVICE, DEFAULT_LOCAL_AUTO_LOAD, DEFAULT_GEN_TEMPERATURE, DEFAULT_GEN_TOP_P, DEFAULT_GEN_REPETITION_PENALTY, DEFAULT_GEN_TOP_K, DEFAULT_GEN_MIN_P, DEFAULT_THEME_COLOR, BASE_THEME_COLOR, THEME_COLORS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, FONT_OPTIONS, SYSTEM_FONT_STACK, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, DEFAULT_QUOTE_COLOR, DEFAULT_QUOTE_ITALIC, DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_COLOR_DARK, NARRATION_FONT_OPTIONS, fontStack, fontSizeAdjust, DEFAULT_UPDATE_CHANNEL, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_CONTINUE_CHOICE, DEFAULT_IMAGE_ATTACHMENTS, CONTINUE_CHOICE_MODES, DEFAULT_NARRATION_LAYOUT, NARRATION_LAYOUTS, DEFAULT_TOOLS_ENABLED, DEFAULT_EDITOR_AUTO_SAVE, type LocalCacheType, type LocalContextOverflow, type ContinueChoiceMode, type NarrationLayout, type ThemeColor, type FontChoice, type NarrationFont, type UpdateChannel } from './settingsDefaults';
 import { isDesktop } from '../lib/imageGen/desktop';
 import type { ImageProviderId } from '../lib/imageGen';
 import { useLocalLlmStatus } from '../lib/useLocalLlmStatus';
@@ -30,9 +30,11 @@ import {
 } from '../lib/textEndpointPresets';
 import type { EndpointSampler } from '../lib/endpointSamplers';
 import type { RejectedEndpointOverride } from '../lib/aiRequest/rejectedOverride';
-import { fetchContextLength, detectedContextCodec, type DetectedContextEntry } from '../lib/contextLength';
+import { fetchContextLength } from '../lib/contextLength';
+import { ProbeBackoff, PROBE_RETRY_MIN_MS, nextProbeDelay } from '../lib/probeBackoff';
 import { normalizeEndpointUrl } from '../lib/endpointUrl';
 import { registerDevHook } from '../lib/devRouter';
+import { AUTOSAVE_SLOTS } from '../lib/autosave';
 import { usePersistentState, stringCodec, boolCodec, intCodec, floatCodec } from '../lib/usePersistentState';
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 import { useRootSnapshot, readRootMode } from '../lib/useRootSnapshot';
@@ -62,6 +64,7 @@ import { buildSharedPreset, type SharedPreset, type ImportedPreset } from '../li
 import { clampMaxOutput, isMaxOutputKind, shippedMaxOutput } from '../lib/promptMaxOutput';
 import { resolvePinnedPreset } from '../lib/worldPromptPreset';
 import { buildStyledValues } from '../lib/sectionStyle';
+import { builtinStatTextPrompts } from '../lib/statTextPrompts';
 import { defaultPromptSampler, type PromptSamplerMap, type PromptSampler } from '../lib/promptSamplers';
 import {
   resolvePromptEndpoint, endpointSignature, routedPresetId, routeMap,
@@ -74,7 +77,7 @@ import { planPresetTools } from '../lib/tools/toolPack';
 import { catalogOverridesCodec, saveCatalogOverride, withCatalogOverrides } from '../lib/tools/catalogOverrides';
 import type { ParagraphLimit } from '../lib/outputLength';
 import {
-  resolveReasoningCapability, storedAfterResolve, reasoningRereadsPerSession, isReasoningEngaged, parseReasoningSetting,
+  resolveReasoningCapability, storedAfterResolve, withSchemaRejected, reasoningRereadsPerSession, isReasoningEngaged, parseReasoningSetting,
   parsePromptReasoningSetting, resolveReasoningSetting, resolvePromptReasoningSetting, DEFAULT_REASONING_SETTING,
   parseReasoningCapability, reasoningNeedsResolve, reasoningAwaitingProof, UNKNOWN_REASONING_CAPABILITY,
   type PromptReasoning, type ReasoningSetting, type PromptReasoningSetting, type ReasoningCapability,
@@ -86,6 +89,14 @@ import {
 import type { SettingsTabId } from '@/components/modals/settingsTabs';
 import type { SurfaceRoute } from '@/lib/surface/surfaceRoute';
 import { useMountedRef } from '@/lib/useMountedRef';
+import { servedModel, servedModelKnown, useServedModelVersion } from '@/lib/servedModel';
+import { probeTextEndpoint } from '@/lib/textEndpointProbe';
+import { forgetCompletionProbe } from '@/lib/probeMemo';
+import type { AiEndpointTarget } from '@/lib/aiRequest/aiRequestSpec';
+
+/** The endpoint one capability resolve or Recheck runs against. */
+type CapabilityTarget = Pick<AiEndpointTarget, 'url' | 'apiToken' | 'model' | 'localEngine'>;
+import { FLAT_HOURS_PER_TURN } from '@/lib/gameClock';
 
 /** A request to open the Settings modal at a given tab (and, for `endpoints`, a given sub-tab). The nonce
  *  distinguishes two identical requests so the second one still re-opens the modal. */
@@ -144,10 +155,12 @@ function seedImagePresetStore(): ImageEndpointPresetStore {
     cfg: flt('imageCfg', d.cfg),
     sampler: str('imageSampler', d.sampler),
     adetailer: d.adetailer,
+    cleanTags: d.cleanTags,
     workflow: d.workflow,
     invokeEncoder: d.invokeEncoder,
     invokeVae: d.invokeVae,
     invokeBoard: d.invokeBoard,
+    fileName: d.fileName,
   });
 }
 
@@ -389,6 +402,8 @@ function useProvideSettings() {
   const [backgroundOverlay, setBackgroundOverlay] = usePersistentState<number>(`${APP_ID}_backgroundOverlay`, 0, floatCodec);
   // Let the AI format narration with Markdown (seeds the <MARKDOWN GUIDANCE> token in the game-text prompt).
   const [markdownOutput, setMarkdownOutput] = usePersistentState<boolean>(`${APP_ID}_markdownOutput`, true, boolCodec);
+  // Send past narration with markdown links as their text and images removed (lib/stripLinksAndImages).
+  const [stripLinksAndImages, setStripLinksAndImages] = usePersistentState<boolean>(`${APP_ID}_stripLinksAndImages`, true, boolCodec);
   // Synthesize narration audio sentence-by-sentence as the story streams (vs. after the full text).
   // Default off: streaming TTS competes with the LLM for the GPU when both run on one machine.
   const [streamNarrationAudio, setStreamNarrationAudio] = usePersistentState<boolean>(`${APP_ID}_streamNarrationAudio`, false, boolCodec);
@@ -432,6 +447,9 @@ function useProvideSettings() {
   // request to every turn, and the measurement needs probe evidence before defaulting on
   // (docs-internal/designs/time-system/design.md, phase 2).
   const [aiClock, setAiClock] = usePersistentState<boolean>(`${APP_ID}_aiClock`, false, boolCodec);
+  // Story hours each turn costs while Measured Clock is off. The default is the flat hour the game has always
+  // charged; 0 holds the clock still.
+  const [fixedTurnHours, setFixedTurnHours] = usePersistentState<number>(`${APP_ID}_fixedTurnHours`, FLAT_HOURS_PER_TURN, floatCodec);
   // Fire the post-narration aux requests (choices + stat updates + location router) concurrently instead of
   // one after another. Default on: ~29% faster turns on a parallel-capable endpoint (LM Studio "Parallel",
   // Ollama), harmless on serial endpoints (they queue). Turn off if a VRAM-tight local engine slows or OOMs
@@ -441,8 +459,18 @@ function useProvideSettings() {
   const [imageAttachments, setImageAttachments] = usePersistentState<boolean>(`${APP_ID}_imageAttachments`, DEFAULT_IMAGE_ATTACHMENTS, boolCodec);
   // Master switch over every prompt's Tools; the endpoint capability gate still applies when on.
   const [toolsEnabled, setToolsEnabled] = usePersistentState<boolean>(`${APP_ID}_toolsEnabled`, DEFAULT_TOOLS_ENABLED, boolCodec);
-  // Autosave the world's single autosave slot after every completed turn (starting with the opening). On by default.
+  // Autosave after every completed turn (starting with the opening). On by default.
   const [autosaveEnabled, setAutosaveEnabled] = usePersistentState<boolean>(`${APP_ID}_autosaveEnabled`, true, boolCodec);
+  // How many autosaves each world keeps, the oldest deleted. One by default.
+  const [autosaveSlots, setAutosaveSlots] = usePersistentState<number>(`${APP_ID}_autosaveSlots`, AUTOSAVE_SLOTS, intCodec);
+  // The World Editor saves on its own, in both hosts. One preference for every world.
+  const [editorAutoSave, setEditorAutoSave] = usePersistentState<boolean>(`${APP_ID}_editorAutoSave`, DEFAULT_EDITOR_AUTO_SAVE, boolCodec);
+  // Seconds of quiet before the editor autosaves a small change. A stored value outside the slider's range is pulled in.
+  const idleCodec = {
+    parse: (r: string) => clampEditorAutoSaveIdle(intCodec.parse(r)),
+    serialize: intCodec.serialize,
+  };
+  const [editorAutoSaveIdleSeconds, setEditorAutoSaveIdleSeconds] = usePersistentState<number>(`${APP_ID}_editorAutoSaveIdleSeconds`, DEFAULT_EDITOR_AUTO_SAVE_IDLE_S, idleCodec);
   // Lazily write a per-character first-person diary entry for each turn's participants as turns age out.
   // Write-side only for now (entries are stored + inspectable, not yet fed back into the character pass).
   // Default off: extra async requests (one per participant) that matter mostly on a local endpoint.
@@ -491,6 +519,7 @@ function useProvideSettings() {
   const setApiToken = useMemo(() => patchText('apiToken'), [patchText]);
   const setModelName = useMemo(() => patchText('model'), [patchText]);
   const setContextWindowOverride = useMemo(() => patchText('contextWindowOverride'), [patchText]);
+  const setExtraParams = useMemo(() => patchText('extraParams'), [patchText]);
   const setMaxTokens = useCallback((value: number) => {
     setTextPresetStore((store) => {
       const current = textActiveValues(store).maxOutputOverride;
@@ -552,12 +581,22 @@ function useProvideSettings() {
   const activeApiToken = apiToken;
   const activeModelName = modelName;
 
-  // Context window (tokens): auto-detected from the active endpoint, with an optional manual override.
-  // Stored with the `endpoint|model` it came from, so another endpoint never inherits it.
-  const [detectedContextEntry, setDetectedContextEntry] = usePersistentState<DetectedContextEntry | null>(
-    `${APP_ID}_detectedContextWindow`, null, detectedContextCodec);
+  // Detected context windows (tokens) per `endpoint|model`, for the active endpoint and routed ones alike,
+  // so the editor and a pinned prompt read the same value. A manual override on the preset beats it.
+  const CONTEXT_CACHE_CAP = 30;
+  const [contextCache, setContextCache] = usePersistentState<Record<string, number>>(
+    `${APP_ID}_routedContextWindows`, {}, {
+      parse: (r) => { try { const o = JSON.parse(r); return o && typeof o === 'object' && !Array.isArray(o) && Object.values(o).every((v) => typeof v === 'number') ? o : {}; } catch { return {}; } },
+      serialize: (v) => JSON.stringify(v),
+    });
+  const rememberContext = useCallback((sig: string, detected: number) => setContextCache((prev) => {
+    const next = { ...prev, [sig]: detected };
+    const keys = Object.keys(next);
+    if (keys.length > CONTEXT_CACHE_CAP) delete next[keys[0]];
+    return next;
+  }), [setContextCache]);
   const activeContextSig = endpointSignature(activeEndpointUrl, activeModelName);
-  const detectedContextWindow = detectedContextEntry?.sig === activeContextSig ? detectedContextEntry.tokens : null;
+  const detectedContextWindow = (contextCache[activeContextSig] as number | undefined) ?? null;
   const [detectStatus, setDetectStatus] = useState<DetectStatus>('idle');
 
   // Desktop bundled-model runtime. Only meaningful when the local engine is active (desktop + no custom
@@ -565,8 +604,21 @@ function useProvideSettings() {
   const [localContextSize, setLocalContextSize] = usePersistentState<number>(`${APP_ID}_localContextSize`, DEFAULT_LOCAL_CONTEXT_SIZE, intCodec);
   const [localGpuLayers, setLocalGpuLayers] = usePersistentState<number>(`${APP_ID}_localGpuLayers`, DEFAULT_LOCAL_GPU_LAYERS, intCodec);
   const [localFlashAttention, setLocalFlashAttention] = usePersistentState<boolean>(`${APP_ID}_localFlashAttention`, DEFAULT_LOCAL_FLASH_ATTENTION, boolCodec);
-  // Parallel decode slots for the bundled engine (context sequences); each slot gets ~localContextSize / N.
+  // Parallel decode slots for the bundled engine; they share one localContextSize pool unless the unified cache is off.
   const [localParallelRequests, setLocalParallelRequests] = usePersistentState<number>(`${APP_ID}_localParallelRequests`, DEFAULT_LOCAL_PARALLEL_REQUESTS, intCodec);
+  const [localUnifiedKvCache, setLocalUnifiedKvCache] = usePersistentState<boolean>(`${APP_ID}_localUnifiedKvCache`, DEFAULT_LOCAL_UNIFIED_KV_CACHE, boolCodec);
+  const cacheTypeCodec = {
+    parse: (r: string): LocalCacheType => (LOCAL_CACHE_TYPES.some((t) => t.value === r) ? (r as LocalCacheType) : 'f16'),
+    serialize: (v: LocalCacheType): string => v,
+  };
+  const [localKCacheType, setLocalKCacheType] = usePersistentState<LocalCacheType>(`${APP_ID}_localKCacheType`, DEFAULT_LOCAL_K_CACHE_TYPE, cacheTypeCodec);
+  const [localVCacheType, setLocalVCacheType] = usePersistentState<LocalCacheType>(`${APP_ID}_localVCacheType`, DEFAULT_LOCAL_V_CACHE_TYPE, cacheTypeCodec);
+  const [localKvCacheInRam, setLocalKvCacheInRam] = usePersistentState<boolean>(`${APP_ID}_localKvCacheInRam`, DEFAULT_LOCAL_KV_CACHE_IN_RAM, boolCodec);
+  const contextOverflowCodec = {
+    parse: (r: string): LocalContextOverflow => (LOCAL_CONTEXT_OVERFLOW_POLICIES.some((p) => p.value === r) ? (r as LocalContextOverflow) : DEFAULT_LOCAL_CONTEXT_OVERFLOW),
+    serialize: (v: LocalContextOverflow): string => v,
+  };
+  const [localContextOverflow, setLocalContextOverflow] = usePersistentState<LocalContextOverflow>(`${APP_ID}_localContextOverflow`, DEFAULT_LOCAL_CONTEXT_OVERFLOW, contextOverflowCodec);
   // Which GPU the engine is pinned to, by device name; 'auto' lets the policy pick (see engineDevice.cjs).
   const [localGpuDevice, setLocalGpuDevice] = usePersistentState<string>(`${APP_ID}_localGpuDevice`, DEFAULT_LOCAL_GPU_DEVICE, stringCodec);
   // Whether a model loads itself — on engine start-up and after a download — or waits for the Load button.
@@ -605,28 +657,41 @@ function useProvideSettings() {
   const detectReqRef = useRef(0);
   // The request id still matches after an unmount, so it alone cannot stop a late answer.
   const mountedRef = useMountedRef();
-  const detectContextWindow = useCallback(async (force = false) => {
+  /** Detects the active endpoint's window. Resolves true on an answer, false on none, null when superseded. */
+  const detectActiveContext = useCallback(async (force: boolean): Promise<boolean | null> => {
     // Token this probe so a slow one for a since-abandoned endpoint can't overwrite a newer endpoint's
     // detected window: switching A→B fires a new probe (higher token), and A's late result is discarded.
     const reqId = ++detectReqRef.current;
     setDetectStatus('detecting');
     const detected = await fetchContextLength(activeEndpointUrl, activeApiToken, activeModelName);
-    if (!mountedRef.current || reqId !== detectReqRef.current) return; // superseded by a newer detect
+    if (!mountedRef.current || reqId !== detectReqRef.current) return null;
     if (detected !== null) {
-      setDetectedContextEntry({ sig: activeContextSig, tokens: detected });
+      rememberContext(activeContextSig, detected);
       if (force) setContextWindowOverride(null); // snap the field back to the detected value
       setDetectStatus('success');
-    } else {
-      setDetectStatus(force ? 'error' : 'idle'); // auto-attempts fail quietly
+      return true;
     }
-  }, [activeEndpointUrl, activeApiToken, activeModelName, activeContextSig, setDetectedContextEntry, setContextWindowOverride, mountedRef]);
+    setDetectStatus(force ? 'error' : 'idle'); // auto-attempts fail quietly
+    return false;
+  }, [activeEndpointUrl, activeApiToken, activeModelName, activeContextSig, rememberContext, setContextWindowOverride, mountedRef]);
+  const detectContextWindow = useCallback(async (force = false) => { await detectActiveContext(force); }, [detectActiveContext]);
 
   // Auto-detect on connect (custom endpoint only); debounced so editing the URL doesn't fire per keystroke.
+  // A failed attempt retries on a doubling backoff, so a server started after the app is still found.
   useEffect(() => {
     if (!onUserEndpoint) return;
-    const id = setTimeout(() => { void detectContextWindow(false); }, 1000);
-    return () => clearTimeout(id);
-  }, [onUserEndpoint, detectContextWindow]);
+    let delay = PROBE_RETRY_MIN_MS;
+    let id: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+    const attempt = async () => {
+      const ok = await detectActiveContext(false);
+      if (ok !== false || cancelled) return;
+      id = setTimeout(() => { void attempt(); }, delay);
+      delay = nextProbeDelay(delay);
+    };
+    id = setTimeout(() => { void attempt(); }, 1000);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [onUserEndpoint, detectActiveContext]);
 
   // What each endpoint+model answered about its native reasoning, resolved once and remembered per
   // `endpoint|model` so flipping between endpoints (or swapping the model on one) doesn't re-detect. A missing
@@ -634,7 +699,15 @@ function useProvideSettings() {
   // An entry may also be a bare effort list, which `parseReasoningCapability` loads as a record with those
   // levels. Bounded so heavy testers don't grow it without limit; the oldest entry is dropped past the cap.
   const REASONING_CACHE_CAP = 30;
-  const reasoningCapabilitySig = `${activeEndpointUrl}|${activeModelName}`;
+  // Records key on the served model, so a swap behind `default` reads a fresh record.
+  const servedVersion = useServedModelVersion();
+  const activeServed = useMemo(
+    () => servedModel(activeEndpointUrl, activeModelName, localModelActive),
+    // servedVersion re-reads the store after a probe names another model.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeEndpointUrl, activeModelName, localModelActive, servedVersion],
+  );
+  const reasoningCapabilitySig = endpointSignature(activeEndpointUrl, activeServed.id);
   const [reasoningCapabilityCache, setReasoningCapabilityCache] = usePersistentState<Record<string, ReasoningCapability>>(
     `${APP_ID}_reasoningSupport`, {}, {
       parse: (r) => {
@@ -696,7 +769,7 @@ function useProvideSettings() {
     content: string,
     effort: ReasoningEffortField | null,
   ) => {
-    const sig = endpointSignature(target.url, target.model);
+    const sig = endpointSignature(target.url, servedModel(target.url, target.model).id);
     const prior = reasoningObservationsRef.current[sig];
     const observation = observeReply(reasoningText, content, effort);
     const before = observationAnswer(prior);
@@ -712,20 +785,69 @@ function useProvideSettings() {
     if (answer !== before || proved) setReasoningObserved((n) => n + 1);
   }, []);
 
-  const resolveActiveCapability = useCallback(async () => {
-    const sig = `${activeEndpointUrl}|${activeModelName}`;
+  /** Records that an endpoint-and-model pair refused a JSON-schema response format, so its stat requests take the text pass. */
+  const noteSchemaRejected = useCallback((target: { url: string; model: string }) => {
+    if (unmountRef.current?.signal.aborted) return;
+    const sig = endpointSignature(target.url, servedModel(target.url, target.model).id);
+    setReasoningCapabilityCache((prev) => storeCapability(prev, sig, withSchemaRejected(prev[sig] ?? null)));
+  }, [setReasoningCapabilityCache, storeCapability]);
+
+  // The latest cache, for a resolve that reads it after an await.
+  const capabilityCacheRef = useRef(reasoningCapabilityCache);
+  capabilityCacheRef.current = reasoningCapabilityCache;
+  // Bumped per signature by Recheck, so a resolve that started before it stores nothing.
+  const capabilityGenerations = useRef(new Map<string, number>());
+
+  /** Resolves a target's record under its served-model key, reading the served model first. `force` skips the needs check. */
+  const resolveTargetCapability = useCallback(async (target: CapabilityTarget, force = false) => {
+    const { url, apiToken, model, localEngine } = target;
+    if (!servedModelKnown(url, model, localEngine)) await probeTextEndpoint(url, apiToken, model);
+    if (unmountRef.current?.signal.aborted) return;
+    const served = servedModel(url, model, localEngine);
+    const sig = endpointSignature(url, served.id);
     if (resolvedSignatures.current.has(sig)) return;
+    const stored = capabilityCacheRef.current[sig] ?? null;
+    if (!force && !reasoningNeedsResolve(stored) && !reasoningRereadsPerSession(stored, served.named)) return;
     resolvedSignatures.current.add(sig);
-    const record = await resolveReasoningCapability(
-      { url: activeEndpointUrl, token: activeApiToken, model: activeModelName },
-      fetch,
-      { observation: reasoningObservationsRef.current[sig], stored: reasoningCapability, signal: unmountRef.current?.signal },
-    );
-    // A resolve that answered nothing is not an answer. Release the signature so a server that was down
-    // during the debounce is asked again, rather than staying unresolved for the rest of the session.
-    if (!record) { resolvedSignatures.current.delete(sig); return; }
-    cacheReasoningCapability(sig, record);
-  }, [activeEndpointUrl, activeApiToken, activeModelName, reasoningCapability, cacheReasoningCapability]);
+    const generation = capabilityGenerations.current.get(sig) ?? 0;
+    const superseded = () => (capabilityGenerations.current.get(sig) ?? 0) !== generation;
+    try {
+      const record = await resolveReasoningCapability(
+        { url, token: apiToken, model, served: served.id },
+        fetch,
+        { observation: reasoningObservationsRef.current[sig], stored, signal: unmountRef.current?.signal },
+      );
+      if (superseded()) return;
+      // A resolve that answered nothing is not an answer. Release the signature so a server that was down
+      // during the debounce is asked again, rather than staying unresolved for the rest of the session.
+      if (!record) { resolvedSignatures.current.delete(sig); return; }
+      cacheReasoningCapability(sig, record);
+    } catch {
+      if (!superseded()) resolvedSignatures.current.delete(sig);
+    }
+  }, [cacheReasoningCapability]);
+
+  /** Reads the served model again, forgets everything known about it, and resolves it afresh. */
+  const recheckCapability = useCallback(async (target?: CapabilityTarget) => {
+    const t = target ?? { url: activeEndpointUrl, apiToken: activeApiToken, model: activeModelName, localEngine: localModelActive };
+    if (!t.localEngine) await probeTextEndpoint(t.url, t.apiToken, t.model);
+    if (unmountRef.current?.signal.aborted) return;
+    const served = servedModel(t.url, t.model, t.localEngine);
+    const sig = endpointSignature(t.url, served.id);
+    const without = (cache: Record<string, ReasoningCapability>) => {
+      if (!(sig in cache)) return cache;
+      const next = { ...cache };
+      delete next[sig];
+      return next;
+    };
+    capabilityGenerations.current.set(sig, (capabilityGenerations.current.get(sig) ?? 0) + 1);
+    capabilityCacheRef.current = without(capabilityCacheRef.current);
+    setReasoningCapabilityCache(without);
+    delete reasoningObservationsRef.current[sig];
+    resolvedSignatures.current.delete(sig);
+    forgetCompletionProbe(t.url, served.id);
+    await resolveTargetCapability(t, true);
+  }, [activeEndpointUrl, activeApiToken, activeModelName, localModelActive, setReasoningCapabilityCache, resolveTargetCapability]);
 
 
   const [thinkingMode, setThinkingMode] = usePersistentState<ThinkingMode>(`${APP_ID}_thinkingMode`, 'off', {
@@ -799,7 +921,7 @@ function useProvideSettings() {
   const {
     systemPrompt, narrationUserPrompt, recapUserPrompt, rehydrateUserPrompt, oocDirectivePrompt, choicesPrompt, statUpdatesPrompt, locationChangePromptText, thinkingPrompt, summaryPrompt,
     diaryPrompt, directorPrompt, directorUserPrompt, characterPrompt, storyboardPrompt,
-    choicesUserPrompt, statUpdatesUserPrompt, locationChangeUserPrompt, summaryUserPrompt, nowLinePrompt, timePassedPrompt, timePassedUserPrompt,
+    choicesUserPrompt, statUpdatesUserPrompt, locationChangeUserPrompt, entityLocationPrompt, entityLocationUserPrompt, summaryUserPrompt, nowLinePrompt, timePassedPrompt, timePassedUserPrompt,
     openingTimePrompt, openingTimeUserPrompt, sceneTagsPrompt, sceneTagsUserPrompt, discoverEntityPrompt, discoverEntityUserPrompt,
     milestoneSelectPrompt, milestoneSelectUserPrompt,
     playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descCheckPrompt,
@@ -822,6 +944,8 @@ function useProvideSettings() {
   const setChoicesUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'choicesUserPrompt', v));
   const setStatUpdatesUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'statUpdatesUserPrompt', v));
   const setLocationChangeUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'locationChangeUserPrompt', v));
+  const setEntityLocationPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'entityLocationPrompt', v));
+  const setEntityLocationUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'entityLocationUserPrompt', v));
   const setSummaryUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'summaryUserPrompt', v));
   const setMilestoneSelectPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'milestoneSelectPrompt', v));
   const setMilestoneSelectUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'milestoneSelectUserPrompt', v));
@@ -889,17 +1013,23 @@ function useProvideSettings() {
     [allTools, enabledTools],
   );
 
-  // Resolve the endpoint's capability record once reasoning is engaged or a prompt offers a Tool, and only
-  // when the cache has nothing better: no record at all, one whose answers only the cache vouches for (a
-  // record stored before this session's sources existed), or one with no tools answer. An LM Studio record
-  // is read again once per session, since another loaded model may answer for the same name. Debounced so editing
-  // the URL doesn't fire per keystroke.
+  // Resolves once reasoning is engaged or a prompt offers a Tool, when the record wants it or the served
+  // model is unread. Debounced so editing the URL doesn't fire per keystroke.
+  const activeServedKnown = servedModelKnown(activeEndpointUrl, activeModelName, localModelActive);
   useEffect(() => {
     if (!(reasoningEngaged || toolsOffered)) return;
-    if (!reasoningNeedsResolve(reasoningCapability) && !reasoningRereadsPerSession(reasoningCapability)) return;
-    const id = setTimeout(() => { void resolveActiveCapability(); }, 1200);
+    if (activeServedKnown && !reasoningNeedsResolve(reasoningCapability)
+      && !reasoningRereadsPerSession(reasoningCapability, activeServed.named)) return;
+    const id = setTimeout(() => {
+      void resolveTargetCapability({
+        url: activeEndpointUrl, apiToken: activeApiToken, model: activeModelName, localEngine: localModelActive,
+      });
+    }, 1200);
     return () => clearTimeout(id);
-  }, [reasoningEngaged, toolsOffered, reasoningCapability, resolveActiveCapability]);
+  }, [
+    reasoningEngaged, toolsOffered, reasoningCapability, activeServedKnown, activeServed.named,
+    activeEndpointUrl, activeApiToken, activeModelName, localModelActive, resolveTargetCapability,
+  ]);
 
   // A reply that settled the reasons question re-runs the chain with that observation in hand, so the Native
   // Reasoning controls follow what the player can see happening without a reload. Once per signature and
@@ -921,7 +1051,7 @@ function useProvideSettings() {
     observedSignatures.current.add(key);
     const controller = new AbortController();
     void resolveReasoningCapability(
-      { url: activeEndpointUrl, token: activeApiToken, model: activeModelName },
+      { url: activeEndpointUrl, token: activeApiToken, model: activeModelName, served: activeServed.id },
       fetch,
       { observation, stored: reasoningCapability, signal: controller.signal },
     ).then((record) => {
@@ -930,7 +1060,7 @@ function useProvideSettings() {
     return () => controller.abort();
   }, [
     reasoningObserved, reasoningEngaged, reasoningCapabilitySig, reasoningCapability,
-    activeEndpointUrl, activeApiToken, activeModelName, cacheReasoningCapability,
+    activeEndpointUrl, activeApiToken, activeModelName, activeServed.id, cacheReasoningCapability,
   ]);
 
   const verbatimMap = useMemo(() => activeVerbatim(effectiveStore), [effectiveStore]);
@@ -979,6 +1109,11 @@ function useProvideSettings() {
   const activePresetId = effectiveStore.activeId;
   const activePresetIsBuiltIn = isBuiltInActive(effectiveStore);
   const activeSectionStyle = activeStyle(effectiveStore);
+  // The stat pass's text fallback: a built-in preset's styled pair; null on a user preset, whose text goes as written.
+  const statTextPrompts = useMemo(
+    () => (activePresetIsBuiltIn ? builtinStatTextPrompts(activeSectionStyle) : null),
+    [activePresetIsBuiltIn, activeSectionStyle],
+  );
   const builtinPresets = BUILTIN_PRESETS.map(({ id, name }) => ({ id, name }));
   const promptPresets = presetStore.presets.map((p) => ({ id: p.id, name: p.name }));
   // While a world is pinned, choosing a preset re-pins that world rather than moving the global selection —
@@ -1114,6 +1249,8 @@ function useProvideSettings() {
   const [locationChangeEnabled, setLocationChangeEnabled] = usePersistentState<boolean>(`${APP_ID}_locationChangeEnabled`, true, boolCodec);
   // When on, a detected in-scope move is applied immediately instead of prompting a "Move to X?" confirmation.
   const [locationAutoApply, setLocationAutoApply] = usePersistentState<boolean>(`${APP_ID}_locationAutoApply`, false, boolCodec);
+  // Off stops only the entity location requests; the authors' movement rules and the followers still hold.
+  const [entityMovement, setEntityMovement] = usePersistentState<boolean>(`${APP_ID}_entityMovement`, true, boolCodec);
   // Staged thinking: cap how many characters the director casts (each gets its own sequential pass). When off,
   // the cast is unbounded. Drives both the hard cap (matchCastToEntities) and the <ACTIVE CHARACTER GUIDANCE> chip.
   const [limitActiveCharacters, setLimitActiveCharacters] = usePersistentState<boolean>(`${APP_ID}_limitActiveCharacters`, true, boolCodec);
@@ -1157,9 +1294,9 @@ function useProvideSettings() {
     positivePrompt: imagePositivePrompt, negativePrompt: imageNegativePrompt,
     portraitWidth: imagePortraitWidth, portraitHeight: imagePortraitHeight,
     landscapeWidth: imageLandscapeWidth, landscapeHeight: imageLandscapeHeight,
-    steps: imageSteps, cfg: imageCfg, sampler: imageSampler, adetailer: imageAdetailer,
+    steps: imageSteps, cfg: imageCfg, sampler: imageSampler, adetailer: imageAdetailer, cleanTags: imageCleanTags,
     workflow: imageWorkflow, invokeEncoder: imageInvokeEncoder, invokeVae: imageInvokeVae,
-    invokeBoard: imageInvokeBoard,
+    invokeBoard: imageInvokeBoard, fileName: imageFileName,
   } = imageValues;
   // Switching provider seeds that provider's own defaults the first time, so a NovelAI preset lands
   // inside its free-generation window without hand-tuning.
@@ -1177,10 +1314,12 @@ function useProvideSettings() {
   const setImageCfg = patchImage('cfg');
   const setImageSampler = patchImage('sampler');
   const setImageAdetailer = patchImage('adetailer');
+  const setImageCleanTags = patchImage('cleanTags');
   const setImageWorkflow = patchImage('workflow');
   const setImageInvokeEncoder = patchImage('invokeEncoder');
   const setImageInvokeVae = patchImage('invokeVae');
   const setImageInvokeBoard = patchImage('invokeBoard');
+  const setImageFileName = patchImage('fileName');
   // DEV-only: let preview verification set Image Gen values in one call (`window.__fmDev.setImage({...})`)
   // instead of driving Radix dropdowns by hand. Tree-shaken from prod via the import.meta.env.DEV guard.
   useEffect(() => {
@@ -1259,21 +1398,10 @@ function useProvideSettings() {
   // before routing existed — and a built-in prompt preset carries none, so its prompts all follow.
   // Deliberately excluded from preset sharing: it names endpoint presets, whose ids mean nothing elsewhere.
 
-  // Context windows for routed endpoints, keyed by the same `endpoint|model` signature the reasoning-support
-  // cache uses. The active endpoint has its own detect effect; a routed one is probed lazily on first use.
-  const [routedContextCache, setRoutedContextCache] = usePersistentState<Record<string, number>>(
-    `${APP_ID}_routedContextWindows`, {}, {
-      parse: (r) => { try { const o = JSON.parse(r); return o && typeof o === 'object' && !Array.isArray(o) && Object.values(o).every((v) => typeof v === 'number') ? o : {}; } catch { return {}; } },
-      serialize: (v) => JSON.stringify(v),
-    });
-  // Signatures already probed this session, so a miss fires one probe rather than one per request.
+  // A routed endpoint's window is probed lazily on first use; a miss retries on a backoff, never per render.
+  const routedContextProbe = useRef(new ProbeBackoff());
+  // Signatures whose reasoning support was already resolved this session, so a miss fires one resolve.
   const routedProbedRef = useRef<Set<string>>(new Set());
-  const rememberRoutedContext = useCallback((sig: string, detected: number) => setRoutedContextCache((prev) => {
-    const next = { ...prev, [sig]: detected };
-    const keys = Object.keys(next);
-    if (keys.length > REASONING_CACHE_CAP) delete next[keys[0]];
-    return next;
-  }), [setRoutedContextCache]);
 
   /**
    * Everything one prompt kind needs to build its request. An unpinned kind returns exactly the active
@@ -1286,6 +1414,22 @@ function useProvideSettings() {
     maxTokens: activeMaxTokens, engineMaxTokens: localMaxTokens, engineModelId: engineState.modelId ?? '',
   }), [textPresetStore.activeId, textValues, textIsBuiltInActive, localModelActive, activeMaxTokens, localMaxTokens, engineState.modelId]);
 
+  /** The routing step alone: which preset a kind resolves to and its display name. No probes. */
+  const routeForKind = useCallback((kind: AIRequestType, routes?: readonly string[]) => {
+    const map = routes ? routeMap(kind, routes, textPresetStore) : promptEndpoints;
+    const resolved = resolvePromptEndpoint(kind, map, textPresetStore, activeEndpointState);
+    const presetName = resolved.presetId === null
+      ? activeTextEndpointPresetName
+      : textPresetName(textPresetStore, resolved.presetId);
+    return { resolved, presetName };
+  }, [promptEndpoints, textPresetStore, activeEndpointState, activeTextEndpointPresetName]);
+
+  /** The preset name and model a kind sends to, safe to read during render. */
+  const describeEndpointForKind = useCallback((kind: AIRequestType, routes?: readonly string[]) => {
+    const { resolved, presetName } = routeForKind(kind, routes);
+    return { presetName, model: resolved.model };
+  }, [routeForKind]);
+
   const resolveEndpointForKind = useCallback((kind: AIRequestType, routes?: readonly string[]): ResolvedPromptEndpoint & {
     /** Chat-completions URL, normalized the same way the active endpoint is. */
     url: string;
@@ -1294,12 +1438,8 @@ function useProvideSettings() {
     contextWindow: number;
     reasoning: ReasoningCapability;
   } => {
-    const map = routes ? routeMap(kind, routes, textPresetStore) : promptEndpoints;
-    const resolved = resolvePromptEndpoint(kind, map, textPresetStore, activeEndpointState);
+    const { resolved, presetName } = routeForKind(kind, routes);
     const url = normalizeEndpointUrl(resolved.endpoint);
-    const presetName = resolved.presetId === null
-      ? activeTextEndpointPresetName
-      : textPresetName(textPresetStore, resolved.presetId);
     // The bundled engine always takes a token budget and always spells it its own way, whatever detection
     // says about the rest of the record it shares with the active endpoint.
     const withEngineBudget = (record: ReasoningCapability | null): ReasoningCapability => {
@@ -1316,35 +1456,22 @@ function useProvideSettings() {
       return { ...resolved, url, presetName, contextWindow, reasoning: withEngineBudget(reasoningCapability) };
     }
     const sig = endpointSignature(url, resolved.model);
-    // Probe a routed target's real window once per signature. Fire-and-forget: this turn uses the preset's
-    // override (or the shipped default) and the detected value applies from the next request on.
-    if (!routedProbedRef.current.has(sig)) {
-      routedProbedRef.current.add(sig);
-      if (routedContextCache[sig] === undefined) {
-        void fetchContextLength(url, resolved.apiToken, resolved.model).then((detected) => {
-          if (detected === null || unmountRef.current?.signal.aborted) return;
-          rememberRoutedContext(sig, detected);
-        }).catch(() => { /* an unreachable routed endpoint surfaces as a request failure, not here */ });
-      }
-      const routedStored = reasoningCapabilityCache[sig];
-      if ((reasoningNeedsResolve(routedStored) || reasoningRereadsPerSession(routedStored)) && !resolvedSignatures.current.has(sig)) {
-        resolvedSignatures.current.add(sig);
-        void resolveReasoningCapability(
-          { url, token: resolved.apiToken, model: resolved.model },
-          fetch,
-          {
-            observation: reasoningObservationsRef.current[sig], stored: reasoningCapabilityCache[sig],
-            signal: unmountRef.current?.signal,
-          },
-        ).then((record) => {
-          if (!record) { resolvedSignatures.current.delete(sig); return; }
-          cacheReasoningCapability(sig, record);
-        }).catch(() => {
-          // Same: capability resolves fail quietly, the request itself reports. Release the signature so
-          // the next resolve for this target tries again.
-          resolvedSignatures.current.delete(sig);
-        });
-      }
+    // Probe a routed target's real window. Fire-and-forget: this turn uses the preset's override (or the
+    // shipped default) and the detected value applies from the next request on. The active endpoint's own
+    // detect effect covers its signature.
+    if (!resolved.localEngine && contextCache[sig] === undefined && sig !== activeContextSig
+      && routedContextProbe.current.begin(sig, Date.now())) {
+      void fetchContextLength(url, resolved.apiToken, resolved.model).then((detected) => {
+        routedContextProbe.current.end(sig, detected !== null, Date.now());
+        if (detected === null || unmountRef.current?.signal.aborted) return;
+        rememberContext(sig, detected);
+      });
+    }
+    // Resolve a routed target's capability record once per served-model signature.
+    const capabilitySig = endpointSignature(url, servedModel(url, resolved.model, resolved.localEngine).id);
+    if (!routedProbedRef.current.has(capabilitySig)) {
+      routedProbedRef.current.add(capabilitySig);
+      void resolveTargetCapability({ url, apiToken: resolved.apiToken, model: resolved.model, localEngine: resolved.localEngine });
     }
     return {
       ...resolved,
@@ -1353,13 +1480,15 @@ function useProvideSettings() {
       // A manual override on the preset always beats the probe; the local engine uses its own window.
       contextWindow: resolved.localEngine
         ? localContextSize
-        : resolved.contextWindowOverride ?? routedContextCache[sig] ?? DEFAULT_CONTEXT_WINDOW,
-      reasoning: withEngineBudget(reasoningCapabilityCache[sig] ?? null),
+        : resolved.contextWindowOverride ?? contextCache[sig] ?? DEFAULT_CONTEXT_WINDOW,
+      reasoning: withEngineBudget(reasoningCapabilityCache[capabilitySig] ?? null),
     };
+    // servedVersion re-reads the store after a probe names another model.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    promptEndpoints, textPresetStore, activeEndpointState,
-    contextWindow, reasoningCapability, routedContextCache, reasoningCapabilityCache, localContextSize,
-    activeTextEndpointPresetName, rememberRoutedContext, cacheReasoningCapability,
+    routeForKind, activeContextSig,
+    contextWindow, reasoningCapability, contextCache, reasoningCapabilityCache, localContextSize,
+    rememberContext, resolveTargetCapability, servedVersion,
   ]);
 
   /** The routed-cache signature of the preset `id` names. */
@@ -1369,16 +1498,16 @@ function useProvideSettings() {
   }, [textPresetStore]);
   /** The context window detected for a preset that is not the active one, or null. */
   const detectedContextWindowFor = useCallback(
-    (id: string): number | null => routedContextCache[presetSignature(id).sig] ?? null,
-    [routedContextCache, presetSignature],
+    (id: string): number | null => contextCache[presetSignature(id).sig] ?? null,
+    [contextCache, presetSignature],
   );
   /** Ask a preset that is not the active one for its context window, and remember the answer. */
   const detectContextWindowFor = useCallback(async (id: string): Promise<number | null> => {
     const { values, sig } = presetSignature(id);
     const detected = await fetchContextLength(normalizeEndpointUrl(values.endpoint), values.apiToken, values.model);
-    if (detected !== null && !unmountRef.current?.signal.aborted) rememberRoutedContext(sig, detected);
+    if (detected !== null && !unmountRef.current?.signal.aborted) rememberContext(sig, detected);
     return detected;
-  }, [presetSignature, rememberRoutedContext]);
+  }, [presetSignature, rememberContext]);
 
   // Engine claims from outside the prompt presets: Formaquestion's routes.
   const [engineClaims, setEngineClaims] = useState<ReadonlySet<string>>(() => new Set());
@@ -1634,6 +1763,8 @@ function useProvideSettings() {
     setBackgroundOverlay,
     markdownOutput,
     setMarkdownOutput,
+    stripLinksAndImages,
+    setStripLinksAndImages,
     streamNarrationAudio,
     setStreamNarrationAudio,
     memoryDigests,
@@ -1652,6 +1783,8 @@ function useProvideSettings() {
     setTimeContext,
     aiClock,
     setAiClock,
+    fixedTurnHours,
+    setFixedTurnHours,
     concurrentTurnRequests,
     setConcurrentTurnRequests,
     imageAttachments,
@@ -1660,6 +1793,12 @@ function useProvideSettings() {
     setToolsEnabled,
     autosaveEnabled,
     setAutosaveEnabled,
+    autosaveSlots,
+    setAutosaveSlots,
+    editorAutoSave,
+    setEditorAutoSave,
+    editorAutoSaveIdleSeconds,
+    setEditorAutoSaveIdleSeconds,
     characterDiaries,
     setCharacterDiaries,
     describeCharacters,
@@ -1681,6 +1820,8 @@ function useProvideSettings() {
     maxOutputOverrideEnabled: maxOutputOverride.enabled,
     setMaxOutputOverrideEnabled,
     endpointSamplerOverrides: textValues.samplerOverrides,
+    extraParams: textValues.extraParams,
+    setExtraParams,
     setEndpointSamplerEnabled,
     setEndpointSamplerValue,
     disableEndpointOverride,
@@ -1722,6 +1863,16 @@ function useProvideSettings() {
     localFlashAttention,
     setLocalFlashAttention,
     localParallelRequests,
+    localUnifiedKvCache,
+    setLocalUnifiedKvCache,
+    localKCacheType,
+    setLocalKCacheType,
+    localVCacheType,
+    setLocalVCacheType,
+    localKvCacheInRam,
+    setLocalKvCacheInRam,
+    localContextOverflow,
+    setLocalContextOverflow,
     setLocalParallelRequests,
     localGpuDevice,
     setLocalGpuDevice,
@@ -1748,6 +1899,7 @@ function useProvideSettings() {
     promptEndpoints,
     setPromptEndpoint,
     resolveEndpointForKind,
+    describeEndpointForKind,
     systemPrompt,
     setSystemPrompt,
     narrationUserPrompt,
@@ -1776,6 +1928,8 @@ function useProvideSettings() {
     setLocationChangeEnabled,
     locationAutoApply,
     setLocationAutoApply,
+    entityMovement,
+    setEntityMovement,
     limitActiveCharacters,
     setLimitActiveCharacters,
     activeCharacterLimit,
@@ -1798,8 +1952,12 @@ function useProvideSettings() {
     nativeReasoning,
     setNativeReasoning,
     reasoningCapability,
+    /** The real model the active record describes, or null where the server named none. */
+    capabilityModelName: activeServed.fromServer ? activeServed.id : null,
+    recheckCapability,
     reasoningEngaged,
     noteReasoningReply,
+    noteSchemaRejected,
     promptReasoning,
     promptReasoningSettings,
     setPromptReasoning,
@@ -1830,6 +1988,10 @@ function useProvideSettings() {
     setStatUpdatesUserPrompt,
     locationChangeUserPrompt,
     setLocationChangeUserPrompt,
+    entityLocationPrompt,
+    setEntityLocationPrompt,
+    entityLocationUserPrompt,
+    setEntityLocationUserPrompt,
     milestoneSelectPrompt,
     setMilestoneSelectPrompt,
     milestoneSelectUserPrompt,
@@ -1869,6 +2031,7 @@ function useProvideSettings() {
     activePresetId,
     activePresetIsBuiltIn,
     activeSectionStyle,
+    statTextPrompts,
     beginSessionPreset,
     endSessionPreset,
     /** True while the open world is pinned to a preset — Settings uses it to explain the selector's scope. */
@@ -1925,6 +2088,8 @@ function useProvideSettings() {
     setImageSampler,
     imageAdetailer,
     setImageAdetailer,
+    imageCleanTags,
+    setImageCleanTags,
     imageWorkflow,
     setImageWorkflow,
     imageInvokeEncoder,
@@ -1943,6 +2108,8 @@ function useProvideSettings() {
     resetImageEndpointPreset,
     imageTagPrompt,
     setImageTagPrompt,
+    imageFileName,
+    setImageFileName,
     vramHelperUrl,
     setVramHelperUrl,
     ttsVolume,
@@ -1971,6 +2138,10 @@ export const useSettings = () => {
   }
   return context;
 };
+
+/** The settings, or null outside a `SettingsProvider`. */
+// eslint-disable-next-line react-refresh/only-export-components
+export const useSettingsOptional = (): SettingsContextValue | null => useContext(SettingsContext);
 
 /** The passed source, else the live settings. A source lets a component run outside a `SettingsProvider`. */
 // eslint-disable-next-line react-refresh/only-export-components

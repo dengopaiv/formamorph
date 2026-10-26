@@ -3,14 +3,17 @@ import { decodePlaceholderToken, describePlaceholders, parsePlaceholderText } fr
 import { builtinLabel } from '@/lib/builtinPlaceholders';
 import { qualifiedPlaceholderName } from '@/lib/placeholderTree';
 import { foldSeparators, labelPlaceholders, worldPlacementLetters, type PlacementLetters } from '@/lib/placementLetters';
-import { placeholderOwners, type PlaceholderOwners } from '@/lib/placeholderHomes';
+import { allPlaceholders, placeholderOwners, type PlaceholderOwners } from '@/lib/placeholderHomes';
+import { PERSONA_TARGET_LABEL, UNKNOWN_TARGET_LABEL, YOU_TARGET } from '@/lib/entityRelationships';
 import { withPinnedValue } from '@/lib/placeholderPins';
 import { acceptsBlueprintChips, dropBlueprintChips } from '@/lib/blueprintChips';
 import {
   setWorldPromptOverride, storedWorldPrompt, worldPromptFieldKey, WORLD_PROMPT_KINDS, WORLD_PROMPT_KIND_LABELS,
 } from '@/lib/worldPrompt';
+import { hintsLinked, travelHintFieldKey, withHint, withLink } from '@/lib/connectionEditing';
+import { connectionLegs } from '@/lib/locationGraph';
 import type {
-  Dictionary, Entity, EntityGroup, GameLocation, Placeholder, PlaceholderGroup, Stat, Trait, TraitGroup, WorldOverview,
+  Connection, Dictionary, Entity, EntityGroup, GameLocation, Placeholder, PlaceholderGroup, Stat, StatGroup, Trait, TraitGroup, WorldOverview,
 } from '@/types';
 
 /**
@@ -91,18 +94,23 @@ export interface ChipSearch {
 export interface SearchSources {
   worldOverview: WorldOverview;
   stats: Stat[];
+  statGroups?: StatGroup[];
   entities: Entity[];
   entityGroups: EntityGroup[];
   locations: GameLocation[];
+  /** The travel links, when the host edits them. */
+  connections?: Connection[];
   traits: Trait[];
   traitGroups: TraitGroup[];
   dictionaries: Dictionary[];
   placeholders: Placeholder[];
   updateWorldOverview: (updates: Partial<WorldOverview>) => void;
   updateStat: (stat: Stat) => void;
+  updateStatGroup?: (group: StatGroup) => void;
   updateEntity: (entity: Entity) => void;
   updateEntityGroup: (group: EntityGroup) => void;
   updateLocation: (location: GameLocation) => void;
+  updateConnection?: (connection: Connection) => void;
   updateTrait: (trait: Trait) => void;
   updateTraitGroup: (group: TraitGroup) => void;
   updateDictionary: (book: Dictionary) => void;
@@ -220,7 +228,21 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     });
   });
 
+  (src.statGroups ?? []).forEach((group) => {
+    const where = { tab: 'stats', itemId: group.id, itemLabel: labeled(group.name, 'Group') };
+    const { add } = bind(`statGroup:${group.id}`, group, (next) => src.updateStatGroup?.(next));
+    add({ ...where, chipCapable: true }, 'name', 'Group Name', group.name, (r, v) => ({ ...r, name: v }));
+    add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', group.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
+  });
+
   // ── Entities ──────────────────────────────────────────────────────────────
+  // A relationship row is named by its target, a chip-bearing name in braces.
+  const everyPlaceholder = allPlaceholders(src);
+  const relationshipTargetName = (targetId: string) => {
+    if (targetId === YOU_TARGET) return PERSONA_TARGET_LABEL;
+    const target = src.entities?.find((e) => e.id === targetId);
+    return target ? describePlaceholders(target.name, everyPlaceholder) : UNKNOWN_TARGET_LABEL;
+  };
   (src.entities ?? []).forEach((entity) => {
     const where = { tab: 'entities', itemId: entity.id, itemLabel: labeled(entity.name, 'Entity') };
     const { add, addEach } = bind(`entity:${entity.id}`, entity, src.updateEntity);
@@ -230,9 +252,13 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', entity.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', entity.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', entity.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
-    add({ ...where, chipCapable: false }, 'pronouns', 'Pronouns', entity.pronouns, (r, v) => ({ ...r, pronouns: v }));
+    add({ ...where, chipCapable: true }, 'pronouns', 'Pronouns', entity.pronouns, (r, v) => ({ ...r, pronouns: v }));
     add({ ...where, chipCapable: false }, 'type', 'Type', entity.type, (r, v) => ({ ...r, type: v }));
     add({ ...where, chipCapable: false }, 'imageTags', 'Image Tags', entity.imageTags, (r, v) => ({ ...r, imageTags: v }));
+    (entity.relationships ?? []).forEach(({ targetId, label }, i) => {
+      add({ ...where, chipCapable: true }, `relationships[${i}].label`, `Relationship to ${relationshipTargetName(targetId)}`, label,
+        (r, v) => ({ ...r, relationships: (r.relationships ?? []).map((row, j) => (j === i ? { ...row, label: v } : row)) }));
+    });
     (entity.openings ?? []).forEach((opening, i) => {
       add({ ...where, chipCapable: true }, openingFieldKey(opening.id), `Opening ${i + 1}`, opening.text,
         (r, v) => ({ ...r, ...setOpeningText(r, opening.id, v) }));
@@ -259,6 +285,25 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
         (r, v) => ({ ...r, ...setOpeningText(r, opening.id, v) }));
     });
   });
+
+  // A leg is found on the panel of the location it leaves. A linked pair is one target on its first leg,
+  // whose write carries through the link as typing in the first box does.
+  const locationName = (id: string) => labeled(src.locations?.find((l) => l.id === id)?.name, 'Location');
+  if (src.updateConnection) {
+    const update = src.updateConnection;
+    (src.connections ?? []).forEach((connection) => {
+      const linked = hintsLinked(connection);
+      const { add } = bind(`connection:${connection.id}`, connection, update);
+      connectionLegs(connection).forEach(({ key, from, to, leg }) => {
+        if (linked && key === 'bToA') return;
+        add(
+          { tab: 'locations', itemId: from, itemLabel: locationName(from), chipCapable: true },
+          travelHintFieldKey(connection.id, key), `Travel Hint to ${locationName(to)}`, leg.hint,
+          (r, v) => (linked ? withLink(withHint(r, key, v), key) : withHint(r, key, v)),
+        );
+      });
+    });
+  }
 
   // ── Traits ────────────────────────────────────────────────────────────────
   (src.traits ?? []).forEach((trait) => {
@@ -417,7 +462,7 @@ export interface ReplaceSummary {
   fields: number;
   skipped: number;
   skippedFields: string[];
-  /** Hits that were chips. A chip is changed from its own pop-out, never by a text replace. */
+  /** Hits that were chips. A chip is changed in Chip Options, never by a text replace. */
   chips: number;
 }
 

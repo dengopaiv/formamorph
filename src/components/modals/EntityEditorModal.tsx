@@ -15,7 +15,9 @@ import { useIsMobile } from '@/lib/useIsMobile';
 import { TagsField } from '@/components/TagsField';
 import { LibraryAuthorField } from '@/components/LibraryAuthorField';
 import LibraryPlaceholdersEditor from '@/managers/LibraryPlaceholdersEditor';
-import LibraryTraitsEditor, { type LibraryEditorWorld } from '@/managers/LibraryTraitsEditor';
+import LibraryStatsEditor from '@/managers/LibraryStatsEditor';
+import LibraryTraitsEditor from '@/managers/LibraryTraitsEditor';
+import { libraryGateInput, type LibraryEditorWorld } from '@/lib/libraryGateInput';
 import PlaceholderPaletteBar from '@/components/prompt/PlaceholderPaletteBar';
 import { EMPTY_LETTERS, entityPlacementLetters, labelPlaceholders } from '@/lib/placementLetters';
 import { PlacementLettersProvider } from '@/contexts/PlacementLettersContext';
@@ -23,6 +25,7 @@ import { ChipInsertTargetProvider } from '@/components/prompt/ChipInsertTarget';
 import { EditorPreviewRollsProvider } from '@/contexts/EditorPreviewRollsContext';
 import { placeholderStore, PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
 import { NoWorld } from '@/contexts/GameDataContext';
+import { RuleSourceContext } from '@/contexts/RuleSourceContext';
 import { directChipTargets } from '@/lib/placeholders';
 import { carriedPlaceholders, splitCarriedPlaceholders } from '@/lib/placeholderHomes';
 import { exportedLibraryLinks } from '@/lib/componentExportLinks';
@@ -139,7 +142,8 @@ const EntityEditorModal = ({
     placedIds: () => {
       const e = entityRef.current;
       return directChipTargets([
-        e?.name, ...(e?.aliases ?? []), e?.playerDescription, e?.aiDescription, e?.aiSummary, e?.imageTags,
+        e?.name, ...(e?.aliases ?? []), e?.playerDescription, e?.aiDescription, e?.aiSummary, e?.imageTags, e?.pronouns,
+        ...(e?.relationships ?? []).map((r) => r.label),
       ].filter((t): t is string => !!t));
     },
     ...(ownId && { owner: { kind: 'entity' as const, id: ownId } }),
@@ -147,6 +151,12 @@ const EntityEditorModal = ({
 
   // A library character is its own document: its Unique chips letter from a walk of its fields alone.
   const letters = useMemo(() => (entity ? entityPlacementLetters(entity) : EMPTY_LETTERS), [entity]);
+
+  // Built when a rule editor opens, not on each keystroke in the entity.
+  const ruleSource = useMemo(
+    () => (entity ? () => ({ gateInput: libraryGateInput(entity, traitWorld ?? null), placeholders: pool, offWorld: true }) : null),
+    [entity, pool, traitWorld],
+  );
 
   // Returns whether the save succeeded, so a save-and-exit caller only closes on success.
   const handleSave = async (): Promise<boolean> => {
@@ -188,6 +198,7 @@ const EntityEditorModal = ({
     <PlacementLettersProvider letters={letters}>
     {/* Around the whole body, so no field reads the world's placeholder store. */}
     <PlaceholderStoreProvider value={phStore}>
+    <RuleSourceContext.Provider value={ruleSource}>
       <EditorModalShell
         surface="entityEditor"
         surfaceTabs="entityEditor"
@@ -220,6 +231,7 @@ const EntityEditorModal = ({
               {/* The right column is narrow until `lg`, so labels wait for it. */}
               <PanelTabs
                 surfaceTabs="entityEditorEntity"
+                focus={{ kind: 'entity', id: entity.id, name: entity.name }}
                 tabs={ENTITY_EDITOR_SUBTABS}
                 value={subTab}
                 onValueChange={setSubTab}
@@ -268,6 +280,13 @@ const EntityEditorModal = ({
               detailHeader={<PlaceholderPaletteBar placeholders={pool} className={DETAIL_PALETTE_CLASS} />}
             />
           </ChipInsertTargetProvider>
+        ) : entity && tab === 'stats' ? (
+          <ChipInsertTargetProvider>
+            <LibraryStatsEditor
+              entity={entity} setEntity={setEntity} placeholders={pool} world={traitWorld}
+              detailHeader={<PlaceholderPaletteBar placeholders={pool} className={DETAIL_PALETTE_CLASS} />}
+            />
+          </ChipInsertTargetProvider>
         ) : (
           // A value is a chip field too, so the palette tops the detail pane here as well.
           <ChipInsertTargetProvider>
@@ -280,6 +299,7 @@ const EntityEditorModal = ({
           </ChipInsertTargetProvider>
         )}
       </EditorModalShell>
+    </RuleSourceContext.Provider>
     </PlaceholderStoreProvider>
     </PlacementLettersProvider>
     </EditorPreviewRollsProvider>

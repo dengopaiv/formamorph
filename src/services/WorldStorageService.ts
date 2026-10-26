@@ -1,15 +1,22 @@
 import AuthService from './AuthService';
+import { authHeaders } from './authRequest';
 import { codedResponseError, readFailure, responseError } from './responseError';
 import type { CatalogKindQuery } from '@/lib/catalogKinds';
 import { API_BASE_URL } from '@/lib/apiBase';
 import type { PublishPayload } from '@/lib/publishPayload';
-import { PUBLISH_LIMITS, measurePublishBytes, publishLimitRefusal } from '@/lib/publishLimits';
-import { openDatabase, promisifyRequest } from '@/lib/idb';
-import { migrateCarriedPlaceholders } from '@/lib/version';
+import { PUBLISH_LIMITS, publishLimitRefusal } from '@/lib/publishLimits';
+import { buildPublishBodyInWorker } from '@/lib/jsonFileWorkerUtils';
+import { toast } from 'react-toastify';
+import { promisifyRequest, transactionDone, writeAfterRead } from '@/lib/idb';
+import {
+  WORLD_META_STORE, WORLD_STORE, deleteWorldRecord, libraryTransaction, listFieldsOf, openWorldLibrary,
+  putWorldRecord, readAllWorldMeta, readWorldMeta, type LinkedCopy, type WorldMetaRecord,
+} from '@/lib/worldLibrary';
 import { contentHash } from '@/lib/contentHash';
-import { describePlaceholders } from '@/lib/placeholders';
-import { allPlaceholders } from '@/lib/placeholderHomes';
-import { readDeletedDefaultWorlds, seedWorldData, tombstoneDefaultWorld, type DefaultWorldSeed } from '@/lib/defaultWorlds';
+import { announceWorldDeleted, announceWorldSaved } from '@/lib/worldChangeSignal';
+import {
+  forgetDeletedDefaultWorld, readDeletedDefaultWorlds, seedWorldData, tombstoneDefaultWorld, type DefaultWorldSeed,
+} from '@/lib/defaultWorlds';
 import { changelogOf, type ChangelogDraft, type ChangelogEntry } from '@/lib/listingChangelog';
 import type { ReviewState, WorldAssociation } from '@/lib/compatibleWorlds';
 import type { ListingVisibility } from '@/lib/publishLinks';
@@ -17,7 +24,7 @@ import type { AddonRow, DependencyRow } from '@/lib/worldDependencies';
 import type { SourceCheckStatus } from '@/lib/sourceChecks';
 import type { LikeState } from '@/lib/likeCount';
 import type {
-  AnonymousLikeRow, AnonymousLikesRemoved, ContentLink, LikerAuditRow, LikerRow, VrmLicense, WorldMetadata,
+  AnonymousLikeRow, AnonymousLikesRemoved, LikerAuditRow, LikerRow, VrmLicense, WorldMetadata,
 } from '@/types';
 import {
   INSTALL_HEADER_NAME, installHeaderInUse, noteInstallHeaderRefused, readerInstallId, storedInstallId,
@@ -77,6 +84,10 @@ export type ListingDetailsRead =
   | { status: 'gone' }
   | { status: 'unreachable' };
 
+/** The toast shown while another tab on an older build holds the library upgrade back. */
+const LIBRARY_BLOCKED_TOAST = 'world-library-upgrade-blocked';
+export const LIBRARY_BLOCKED_MESSAGE = 'Your world library is waiting to update. Close other Formamorph tabs to finish.';
+
 /** The publish refused because this author already has an entry in the contest. */
 export const CONTEST_ALREADY_ENTERED = 'CONTEST_ALREADY_ENTERED';
 
@@ -121,6 +132,7 @@ export interface StoredWorldRecord {
     version?: string; // stamped on save/export (see lib/version)
     worldOverview: unknown;
     stats: unknown[];
+    statGroups?: unknown[];
     locations: unknown[];
     entities: unknown[];
     entityGroups?: unknown[];
@@ -154,17 +166,14 @@ const DEFAULT_WORLD_RAW = import.meta.glob('../defaultworlds/*.json', {
   import: 'default',
 }) as Record<string, () => Promise<string>>;
 
-/** Singleton owning local world persistence (IndexedDB `worldsDB`/`worlds`) and community server calls
+/** Singleton owning local world persistence (the world library in `@/lib/worldLibrary`) and community server calls
  *  (fetch/publish/comments). Default-exported as one shared instance; the constructor kicks off DB init. */
 class WorldStorageService {
-  dbName: string;
-  storeName: string;
   db: IDBDatabase | null;
+  private opening: Promise<void> | null = null;
   API_URL: string;
 
   constructor() {
-    this.dbName = 'worldsDB';
-    this.storeName = 'worlds';
     this.db = null;
     this.API_URL = API_BASE_URL;
     // No eager open: every operation awaits `ensureInitialized` first, so opening here only adds an
@@ -183,7 +192,7 @@ class WorldStorageService {
    * refused the header once already.
    */
   private readerHeaders(): Record<string, string> {
-    if (AuthService.isAuthenticated()) return { Authorization: `Bearer ${AuthService.token}` };
+    if (AuthService.isAuthenticated()) return authHeaders();
 
     const install = readerInstallId();
     return install ? { [INSTALL_HEADER_NAME]: install } : {};
@@ -224,8 +233,19 @@ class WorldStorageService {
 
   /** Open the IndexedDB connection (idempotent — no-op once `db` is set). */
   async initialize() {
-    if (this.db) return; // Already initialized
-    this.db = await openDatabase(this.dbName, 1, [{ name: this.storeName, keyPath: 'id' }]);
+    if (this.db) return;
+    let blocked = false;
+    this.opening ??= openWorldLibrary(() => {
+      blocked = true;
+      toast.info(LIBRARY_BLOCKED_MESSAGE, { toastId: LIBRARY_BLOCKED_TOAST, autoClose: false });
+    }).then((db) => {
+      db.addEventListener('versionchange', () => { if (this.db === db) this.db = null; });
+      this.db = db;
+    }).finally(() => {
+      this.opening = null;
+      if (blocked) toast.dismiss(LIBRARY_BLOCKED_TOAST);
+    });
+    await this.opening;
   }
 
   /** Lazily open the DB if not yet connected; awaited at the top of every store operation. */
@@ -244,93 +264,64 @@ class WorldStorageService {
    */
   async getWorldIds(): Promise<string[]> {
     await this.ensureInitialized();
-    const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const keys = await promisifyRequest(transaction.objectStore(this.storeName).getAllKeys());
+    const transaction = this.db!.transaction([WORLD_STORE], 'readonly');
+    const keys = await promisifyRequest(transaction.objectStore(WORLD_STORE).getAllKeys());
     return keys.map(String);
   }
 
-  /** List all stored worlds as lightweight metadata (no nested `data`), for menu/library rendering. */
-  async getWorldMetadata(): Promise<WorldMetadata[]> {
+  /** Every metadata record, read from the metadata store alone. */
+  private async readMeta(): Promise<WorldMetaRecord[]> {
     await this.ensureInitialized();
-    const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const store = transaction.objectStore(this.storeName);
-    const worlds = await promisifyRequest(store.getAll());
-    return worlds.map(world => ({
-      id: world.id,
-      name: world.name,
-      // The stored blurb keeps its raw chips; the card renders them display-only against the world's defs,
-      // since a library card has no playthrough whose rolls it could read.
-      // Stored records never pass through `migrateWorld`, so their defs take the value-record conversion
-      // here — the same read-boundary treatment the dictionary library gives its keyword arrays.
-      description: describePlaceholders(world.description ?? '', allPlaceholders({ ...world.data, placeholders: migrateCarriedPlaceholders(world.data?.placeholders) })),
-      author: world.author || '',
-      // A remote (http) thumbnail can't render offline and is blocked cross-origin by the server's CORP
-      // header, so prefer the world's own embedded thumbnail (base64) when the stored one is a URL. New
-      // downloads already store the embedded thumbnail; this heals worlds downloaded before that fix.
-      thumbnail: (world.thumbnail && !/^https?:\/\//i.test(world.thumbnail))
-        ? world.thumbnail
-        : (world.data?.worldOverview?.thumbnail || world.thumbnail),
-      tags: world.data?.worldOverview?.tags || [],
-      sourceId: world.sourceId,
-      dirty: world.dirty,
-      editedAt: world.editedAt,
-      downloadedAt: world.downloadedAt,
-      sourceUpdatedAt: world.sourceUpdatedAt,
-      sourceAuthorId: world.sourceAuthorId,
-      createdAt: world.createdAt,
-      lastAccessed: world.lastAccessed
-    }));
+    return readAllWorldMeta(this.db!);
+  }
+
+  /** One world's metadata record, or undefined when it is not stored. */
+  private async readMetaOf(worldId: string): Promise<WorldMetaRecord | undefined> {
+    await this.ensureInitialized();
+    return readWorldMeta(this.db!, worldId);
+  }
+
+  /** List all stored worlds' list fields, for menu/library rendering. Reads no world data. */
+  async getWorldMetadata(): Promise<WorldMetadata[]> {
+    return (await this.readMeta()).map(listFieldsOf);
   }
 
   /**
    * Where one stored world came from: its listing and when this copy was downloaded.
    *
-   * The whole record is read and only these two fields are handed back, so a caller that needs the
-   * provenance never holds a world's megabytes of embedded art. A world stored by any other route has no
-   * listing, which is exactly the answer.
-   *
    * @param worldId - The local record's id
    * @returns The listing link, empty when the world has none or the record is gone
    */
   async getWorldListingLink(worldId: string): Promise<{ sourceId?: string; downloadedAt?: string }> {
-    await this.ensureInitialized();
     if (!worldId) return {};
+    const meta = await this.readMetaOf(worldId);
+    return { sourceId: meta?.sourceId, downloadedAt: meta?.downloadedAt };
+  }
 
-    const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const record = await promisifyRequest<{ sourceId?: string; downloadedAt?: string } | undefined>(
-      transaction.objectStore(this.storeName).get(worldId),
-    );
-    return { sourceId: record?.sourceId, downloadedAt: record?.downloadedAt };
+  /**
+   * Whether a stored world is a bundled default that no save has edited, so it still takes bundled updates.
+   *
+   * @param worldId - The local record's id
+   */
+  async isUneditedDefault(worldId: string): Promise<boolean> {
+    const meta = await this.readMetaOf(worldId);
+    return meta?.sourceHash !== undefined && !meta.dirty;
   }
 
   /**
    * The local worlds holding a copy that follows `libraryId`.
    *
-   * This is what a component's Compatible Worlds section is derived from, so it reads the whole stored
-   * record rather than the metadata projection: the links live inside each world's content. `sourceId` is
-   * the world's own listing, and a world without one has no published identity to offer the component for.
+   * This is what a component's Compatible Worlds section is derived from. `sourceId` is the world's own
+   * listing, and a world without one has no published identity to offer the component for.
    *
    * @param libraryId - The library item the copies follow
    * @returns One entry per world, in stored order
    */
   async worldsLinking(libraryId: string): Promise<{ id: string; name: string; sourceId?: string }[]> {
-    await this.ensureInitialized();
     if (!libraryId) return [];
-
-    const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const worlds = await promisifyRequest<{
-      id: string; name: string; sourceId?: string;
-      data?: { entities?: { link?: ContentLink }[]; dictionaries?: { link?: ContentLink }[] };
-    }[]>(transaction.objectStore(this.storeName).getAll());
-
-    return worlds
-      .filter((world) => [...(world.data?.entities ?? []), ...(world.data?.dictionaries ?? [])]
-        .some((item) => item.link?.libraryId === libraryId))
-      .map((world) => ({
-        id: world.id,
-        name: world.name,
-        ...(world.sourceId ? { sourceId: world.sourceId } : {}),
-      }));
+    return (await this.readMeta())
+      .filter((meta) => meta.linkedCopies.some((copy) => copy.link.libraryId === libraryId))
+      .map((meta) => ({ id: meta.id, name: meta.name, ...(meta.sourceId ? { sourceId: meta.sourceId } : {}) }));
   }
 
   /**
@@ -343,32 +334,11 @@ class WorldStorageService {
    * @param libraryId - The library item the copies follow
    * @returns One row per copy, in stored world order
    */
-  async linkedCopies(libraryId: string): Promise<{
-    worldId: string; worldName: string; itemId: string; itemName: string;
-    kind: 'entity' | 'dictionary'; link: ContentLink;
-  }[]> {
-    await this.ensureInitialized();
+  async linkedCopies(libraryId: string): Promise<(LinkedCopy & { worldId: string; worldName: string })[]> {
     if (!libraryId) return [];
-
-    type Copy = { id?: string; name?: string; link?: ContentLink };
-    const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const worlds = await promisifyRequest<{
-      id: string; name: string; data?: { entities?: Copy[]; dictionaries?: Copy[] };
-    }[]>(transaction.objectStore(this.storeName).getAll());
-
-    return worlds.flatMap((world) => [
-      ...(world.data?.entities ?? []).map((item) => ({ item, kind: 'entity' as const })),
-      ...(world.data?.dictionaries ?? []).map((item) => ({ item, kind: 'dictionary' as const })),
-    ]
-      .filter(({ item }) => item.link?.libraryId === libraryId)
-      .map(({ item, kind }) => ({
-        worldId: world.id,
-        worldName: world.name,
-        itemId: item.id ?? '',
-        itemName: item.name ?? '',
-        kind,
-        link: item.link as ContentLink,
-      })));
+    return (await this.readMeta()).flatMap((meta) => meta.linkedCopies
+      .filter((copy) => copy.link.libraryId === libraryId)
+      .map((copy) => ({ worldId: meta.id, worldName: meta.name, ...copy })));
   }
 
   /**
@@ -391,30 +361,16 @@ class WorldStorageService {
     await this.ensureInitialized();
     if (!worldId) throw new Error('World ID is required');
 
-    return new Promise<void>((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      const read = store.get(worldId);
-      read.onsuccess = () => {
-        const record = read.result;
-        if (!record?.data || typeof record.data !== 'object') {
-          reject(new Error('World not found'));
-          return;
-        }
-        let revised: Record<string, unknown>;
-        try {
-          revised = revise(record.data as Record<string, unknown>);
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-          return;
-        }
-        if (revised === record.data) { resolve(); return; }
-        const write = store.put({ ...record, data: revised });
-        write.onsuccess = () => resolve();
-        write.onerror = () => reject(new Error('Failed to store world'));
-      };
-      read.onerror = () => reject(new Error('Failed to read world'));
+    const transaction = libraryTransaction(this.db!, 'readwrite');
+    let wrote = false;
+    await writeAfterRead(transaction, transaction.objectStore(WORLD_STORE).get(worldId), (record) => {
+      if (!record?.data || typeof record.data !== 'object') throw new Error('World not found');
+      const revised = revise(record.data as Record<string, unknown>);
+      if (revised === record.data) return;
+      putWorldRecord(transaction, { ...record, data: revised });
+      wrote = true;
     });
+    if (wrote) announceWorldSaved(worldId);
   }
 
   /** Load one world's full `data` (with `id` injected); rejects if missing, malformed, or lacking any
@@ -436,8 +392,8 @@ class WorldStorageService {
 
     return new Promise((resolve, reject) => {
       try {
-        const transaction = this.db!.transaction([this.storeName], 'readonly');
-        const store = transaction.objectStore(this.storeName);
+        const transaction = this.db!.transaction([WORLD_STORE], 'readonly');
+        const store = transaction.objectStore(WORLD_STORE);
 
         // Validate the store exists
         if (!store) {
@@ -504,37 +460,34 @@ class WorldStorageService {
       throw new Error('Invalid world data: missing required fields');
     }
 
-    return new Promise<void>((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      // Read-merge so the download link survives saves: sourceId is sticky (inherited unless the
-      // caller supplies one), and dirty defaults to the existing/false unless the caller sets it.
-      const getRequest = store.get(world.id);
-      getRequest.onsuccess = () => {
-        const existing = getRequest.result;
-        const putRequest = store.put({
-          id: world.id,
-          name: world.name,
-          description: world.description || '',
-          author: world.author || '',
-          thumbnail: world.thumbnail || '',
-          sourceId: world.sourceId ?? existing?.sourceId,
-          dirty: world.dirty ?? existing?.dirty ?? false,
-          editedAt: world.editedAt ?? existing?.editedAt,
-          downloadedAt: world.downloadedAt ?? existing?.downloadedAt,
-          sourceUpdatedAt: world.sourceUpdatedAt ?? existing?.sourceUpdatedAt,
-          sourceAuthorId: world.sourceAuthorId ?? existing?.sourceAuthorId,
-          sourceHash: world.sourceHash ?? existing?.sourceHash,
-          data: world.data,
-          // createdAt is sticky: stamped once on first store, preserved across later saves.
-          createdAt: existing?.createdAt ?? new Date().toISOString(),
-          lastAccessed: new Date().toISOString()
-        });
-        putRequest.onsuccess = () => resolve();
-        putRequest.onerror = () => reject('Failed to store world');
-      };
-      getRequest.onerror = () => reject('Failed to store world');
+    const transaction = libraryTransaction(this.db!, 'readwrite');
+    // Read-merge so the download link survives saves: sourceId is sticky (inherited unless the
+    // caller supplies one), and dirty defaults to the existing/false unless the caller sets it.
+    // The sticky fields all live in the metadata record, so the old world data is never read.
+    const read = transaction.objectStore(WORLD_META_STORE).get(world.id) as IDBRequest<WorldMetaRecord | undefined>;
+    await writeAfterRead(transaction, read, (existing) => {
+      putWorldRecord(transaction, {
+        id: world.id,
+        name: world.name,
+        description: world.description || '',
+        author: world.author || '',
+        thumbnail: world.thumbnail || '',
+        sourceId: world.sourceId ?? existing?.sourceId,
+        dirty: world.dirty ?? existing?.dirty ?? false,
+        editedAt: world.editedAt ?? existing?.editedAt,
+        downloadedAt: world.downloadedAt ?? existing?.downloadedAt,
+        sourceUpdatedAt: world.sourceUpdatedAt ?? existing?.sourceUpdatedAt,
+        sourceAuthorId: world.sourceAuthorId ?? existing?.sourceAuthorId,
+        sourceHash: world.sourceHash ?? existing?.sourceHash,
+        data: world.data,
+        // createdAt is sticky: stamped once on first store, preserved across later saves.
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        lastAccessed: new Date().toISOString()
+      });
     });
+    announceWorldSaved(world.id);
+    // A default deleted in another tab and saved back here exists again.
+    forgetDeletedDefaultWorld(world.id);
   }
 
   /** Seed missing default worlds and auto-update unedited ones whose bundled content no longer matches the
@@ -547,16 +500,10 @@ class WorldStorageService {
     await this.ensureInitialized();
     const deleted = readDeletedDefaultWorlds();
     defaultWorlds = defaultWorlds.filter((w) => !deleted.has(w.id));
-    // Full records (not getWorldMetadata) so we can read each stored copy's `sourceHash` and `dirty`,
-    // but fetched by id rather than as a whole-store read: only the bundled defaults are ever compared,
-    // so reading the player's own worlds here loaded a library's worth of payload to look at none of it.
-    const transaction = this.db!.transaction([this.storeName], 'readonly');
-    const store = transaction.objectStore(this.storeName);
-    const stored = await Promise.all(
-      defaultWorlds.map((w) => promisifyRequest(store.get(w.id))),
-    );
+    // Metadata by id: only the bundled defaults are compared, and only their `sourceHash` and `dirty`.
+    const stored = await Promise.all(defaultWorlds.map((w) => readWorldMeta(this.db!, w.id)));
     const byId = new Map<string, { dirty?: boolean; sourceHash?: string }>(
-      stored.filter(Boolean).map((w) => [w.id, w]),
+      stored.filter((w): w is WorldMetaRecord => !!w).map((w) => [w.id, w]),
     );
 
     const failed: string[] = [];
@@ -627,21 +574,9 @@ class WorldStorageService {
   async linkWorldToListing(worldId: string, sourceId: string, sourceUpdatedAt?: string): Promise<void> {
     await this.ensureInitialized();
 
-    return new Promise<void>((resolve, reject) => {
-      const store = this.db!.transaction([this.storeName], 'readwrite').objectStore(this.storeName);
-      const getRequest = store.get(worldId);
-      getRequest.onsuccess = () => {
-        const existing = getRequest.result;
-        if (!existing) return resolve();
-        const putRequest = store.put({
-          ...existing,
-          sourceId,
-          sourceUpdatedAt,
-        });
-        putRequest.onsuccess = () => resolve();
-        putRequest.onerror = () => reject('Failed to link world to its listing');
-      };
-      getRequest.onerror = () => reject('Failed to link world to its listing');
+    const transaction = libraryTransaction(this.db!, 'readwrite');
+    return writeAfterRead(transaction, transaction.objectStore(WORLD_STORE).get(worldId), (existing) => {
+      if (existing) putWorldRecord(transaction, { ...existing, sourceId, sourceUpdatedAt });
     });
   }
 
@@ -653,9 +588,10 @@ class WorldStorageService {
       throw new Error('World ID is required');
     }
 
-    const transaction = this.db!.transaction([this.storeName], 'readwrite');
-    const store = transaction.objectStore(this.storeName);
-    await promisifyRequest(store.delete(worldId));
+    const transaction = libraryTransaction(this.db!, 'readwrite');
+    deleteWorldRecord(transaction, worldId);
+    await transactionDone(transaction);
+    announceWorldDeleted(worldId);
     // Deleting a default is permanent: without this the next seed pass sees it missing and re-creates it.
     // A no-op for any non-default id.
     tombstoneDefaultWorld(worldId);
@@ -684,7 +620,7 @@ class WorldStorageService {
 
       const response = await this.installFallbackFetch(`${this.API_URL}/worlds?page=1&limit=1000&kind=all`, init);
       if (response.status === 304) return { status: 'unchanged' };
-      if (!response.ok) throw new Error('Failed to fetch worlds');
+      if (!response.ok) throw await responseError(response, 'Failed to fetch worlds');
 
       const body = await response.json();
       // Absent against a server that predates the feature, which reads as off — the same answer the
@@ -713,10 +649,7 @@ class WorldStorageService {
       // Omitted entirely for 'world' so the request stays byte-identical to what shipped before kinds.
       if (kind !== 'world') url += `&kind=${encodeURIComponent(kind)}`;
 
-      const headers: Record<string, string> = {};
-      if (AuthService.isAuthenticated()) {
-        headers['Authorization'] = `Bearer ${AuthService.token}`;
-      }
+      const headers = authHeaders();
 
       // If ownedOnly is true, fetch only the user's worlds
       if (ownedOnly) {
@@ -728,9 +661,7 @@ class WorldStorageService {
 
       const response = await fetch(url, { headers });
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch worlds');
-      }
+      if (!response.ok) throw await responseError(response, 'Failed to fetch worlds');
 
       const responseData = await response.json();
 
@@ -759,10 +690,7 @@ class WorldStorageService {
   async setRemoteWorldLiked(worldId: string, liked: boolean) {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/like`, {
       method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${AuthService.token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders(true),
       body: JSON.stringify({ liked }),
     });
 
@@ -879,10 +807,7 @@ class WorldStorageService {
 
     const response = await fetch(`${this.API_URL}/users/me/anonymous-likes/claim`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${AuthService.token}`,
-        [INSTALL_HEADER_NAME]: install,
-      },
+      headers: { ...authHeaders(), [INSTALL_HEADER_NAME]: install },
     });
 
     if (!response.ok) throw await responseError(response, 'Failed to claim those likes');
@@ -902,10 +827,7 @@ class WorldStorageService {
   async quarantineRemoteWorld(worldId: string, days: number) {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/quarantine`, {
       method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${AuthService.token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders(true),
       body: JSON.stringify({ days }),
     });
 
@@ -923,7 +845,7 @@ class WorldStorageService {
   async releaseRemoteWorld(worldId: string) {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/quarantine`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
 
     if (!response.ok) throw await responseError(response, 'Failed to release this');
@@ -933,15 +855,12 @@ class WorldStorageService {
    *  a `{success:false}` shape. */
   async fetchComments(worldId: string, page = 1, limit = 20, signal?: AbortSignal) {
     try {
-      const headers: Record<string, string> = {};
-      if (AuthService.isAuthenticated()) {
-        headers['Authorization'] = `Bearer ${AuthService.token}`;
-      }
+      const headers = authHeaders();
       const response = await fetch(
         `${this.API_URL}/worlds/${worldId}/comments?page=${page}&limit=${limit}`,
         { headers, signal },
       );
-      if (!response.ok) throw new Error('Failed to fetch comments');
+      if (!response.ok) throw await responseError(response, 'Failed to fetch comments');
       const responseData = await response.json();
       return {
         success: true,
@@ -962,10 +881,7 @@ class WorldStorageService {
     }
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/comments`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AuthService.token}`,
-      },
+      headers: authHeaders(true),
       body: JSON.stringify({ content }),
     });
     if (!response.ok) throw await responseError(response, 'Failed to post comment', ['message']);
@@ -988,10 +904,7 @@ class WorldStorageService {
     }
     const response = await fetch(`${this.API_URL}/comments/${commentId}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AuthService.token}`,
-      },
+      headers: authHeaders(true),
       body: JSON.stringify({ content }),
     });
     if (!response.ok) throw await responseError(response, 'Failed to save the comment');
@@ -1010,7 +923,7 @@ class WorldStorageService {
     }
     const response = await fetch(`${this.API_URL}/comments/${commentId}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
     if (!response.ok) throw await responseError(response, 'Failed to delete the comment');
   }
@@ -1086,10 +999,7 @@ class WorldStorageService {
    */
   async checkSource(listingId: string): Promise<SourceCheckStatus> {
     try {
-      const headers: Record<string, string> = {};
-      if (AuthService.isAuthenticated()) {
-        headers['Authorization'] = `Bearer ${AuthService.token}`;
-      }
+      const headers = authHeaders();
       const response = await fetch(`${this.API_URL}/worlds/${listingId}`, { headers });
       if (response.status === 404) return 'not_found';
       return response.ok ? 'ok' : 'unavailable';
@@ -1112,10 +1022,7 @@ class WorldStorageService {
    * @param absent - What a 404 means here. Omitted, a 404 throws like any other refusal
    */
   private async fetchRelationship<T>(path: string, fallback: string, absent?: T): Promise<T> {
-    const headers: Record<string, string> = {};
-    if (AuthService.isAuthenticated()) {
-      headers['Authorization'] = `Bearer ${AuthService.token}`;
-    }
+    const headers = authHeaders();
     const response = await fetch(`${this.API_URL}${path}`, { headers });
     if (response.status === 404 && absent !== undefined) return absent;
     if (!response.ok) throw await responseError(response, fallback);
@@ -1175,10 +1082,7 @@ class WorldStorageService {
   async setAddonReview(worldId: string, componentId: string, reviewState: ReviewState): Promise<void> {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/addons/${componentId}/review`, {
       method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${AuthService.token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders(true),
       body: JSON.stringify({ reviewState }),
     });
 
@@ -1219,7 +1123,7 @@ class WorldStorageService {
 
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/changelog/${entryId}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
 
     if (!response.ok) throw await responseError(response, 'Failed to delete the entry');
@@ -1236,10 +1140,7 @@ class WorldStorageService {
 
     const response = await fetch(`${this.API_URL}${path}`, {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AuthService.token}`,
-      },
+      headers: authHeaders(true),
       body: JSON.stringify({ title: draft.title.trim(), body: draft.body.trim(), date: draft.date }),
     });
 
@@ -1258,14 +1159,10 @@ class WorldStorageService {
     const query = kind === 'world' ? '' : `?kind=${encodeURIComponent(kind)}`;
     try {
       const response = await fetch(`${this.API_URL}/users/me/worlds${query}`, {
-        headers: {
-          'Authorization': `Bearer ${AuthService.token}`
-        }
+        headers: authHeaders()
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch user worlds');
-      }
+      if (!response.ok) throw await responseError(response, 'Failed to fetch user worlds');
 
       const responseData = await response.json();
 
@@ -1290,7 +1187,8 @@ class WorldStorageService {
    * reaches the world's own shape, and a server without an events layer is sent nothing new.
    */
   async publishItem(payload: PublishPayload, targetId: string | null = null, contestEventId: string | null = null) {
-    const bytes = measurePublishBytes(payload.contentData);
+    // Sized and built in the worker: stringifying a world that carries its images blocks the page for seconds.
+    const { bytes, body } = await buildPublishBodyInWorker(payload, contestEventId);
     if (bytes > PUBLISH_LIMITS[payload.kind]) {
       throw new Error(publishLimitRefusal(payload.kind, bytes));
     }
@@ -1308,27 +1206,8 @@ class WorldStorageService {
     try {
       const response = await fetch(endpoint, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${AuthService.token}`
-        },
-        body: JSON.stringify({
-          name: payload.name,
-          description: payload.description,
-          thumbnail: payload.thumbnail,
-          contentData: payload.contentData,
-          kind: payload.kind,
-          // Sent top-level because only a world keeps a copy inside its content, where the server looks
-          // first. A character or a book has nowhere in its own shape to hide these.
-          tags: payload.tags ?? [],
-          ...(contestEventId ? { contestEventId } : {}),
-          // Each omitted unless this publish has something to declare, so a publish that says nothing
-          // about relationships leaves the listing's own exactly as they are.
-          ...(payload.visibility ? { visibility: payload.visibility } : {}),
-          ...(payload.requiredDependencies ? { requiredDependencies: payload.requiredDependencies } : {}),
-          ...(payload.compatibleWorlds ? { compatibleWorlds: payload.compatibleWorlds } : {}),
-          ...(payload.models ? { models: payload.models } : {})
-        })
+        headers: authHeaders(true),
+        body
       });
 
       if (!response.ok) {
@@ -1363,7 +1242,7 @@ class WorldStorageService {
 
     const response = await fetch(`${this.API_URL}/worlds/${listingId}/contest`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
 
     if (!response.ok) throw await codedResponseError(response, 'Failed to withdraw the entry');
@@ -1381,7 +1260,7 @@ class WorldStorageService {
    */
   async fetchLikers(worldId: string): Promise<{ total: number; rows: LikerRow[]; anonymous: number }> {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/likes`, {
-      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
 
     if (!response.ok) throw await responseError(response, 'Failed to load who liked this');
@@ -1416,7 +1295,7 @@ class WorldStorageService {
     anonymousRows: AnonymousLikeRow[];
   }> {
     const response = await fetch(`${this.API_URL}/worlds/${worldId}/likes/audit`, {
-      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
 
     if (!response.ok) throw await responseError(response, 'Failed to audit these likes');
@@ -1470,7 +1349,7 @@ class WorldStorageService {
   private async deleteAnonymousLikes(url: string): Promise<AnonymousLikesRemoved> {
     const response = await fetch(url, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${AuthService.token}` },
+      headers: authHeaders(),
     });
 
     if (!response.ok) throw await responseError(response, 'Failed to remove those Anonymous Likes');
@@ -1498,7 +1377,7 @@ class WorldStorageService {
   async removeLike(worldId: string, userId: string): Promise<number> {
     const response = await fetch(
       `${this.API_URL}/worlds/${worldId}/likes/${encodeURIComponent(userId)}`,
-      { method: 'DELETE', headers: { 'Authorization': `Bearer ${AuthService.token}` } }
+      { method: 'DELETE', headers: authHeaders() }
     );
 
     if (!response.ok) throw await responseError(response, 'Failed to remove that like');

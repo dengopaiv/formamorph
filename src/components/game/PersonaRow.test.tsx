@@ -18,7 +18,7 @@ vi.mock('react-toastify', async (importOriginal) => {
   return { ...actual, toast: Object.assign(vi.fn(), actual.toast, { warn }) };
 });
 
-const wren: Entity = { id: 'l-wren', name: 'Wren', persona: true, images: ['data:image/webp;base64,AA'] };
+const wren: Entity = { id: 'l-wren', name: 'Wren', persona: true, images: [{ data: 'data:image/webp;base64,AA' }] };
 const ash: Entity = { id: 'l-ash', name: 'Ash', persona: true };
 const store = (entity: Entity) => EntityStorageService.storeEntity({ id: entity.id, name: entity.name, data: entity });
 
@@ -56,7 +56,7 @@ describe('the persona row', () => {
     expect(h.gameplay().personaRef).toEqual(ref);
     expect(readWorldPersona('w1')).toEqual(ref);
     await waitFor(() => expect(within(row()).getByText('Wren')).toBeTruthy());
-    expect(row().querySelector('img')?.getAttribute('src')).toBe(wren.images?.[0]);
+    expect(row().querySelector('img')?.getAttribute('src')).toBe(wren.images?.[0].data);
     // No re-attribution: the memory written before the change keeps its words.
     expect(h.gameplay().fullMessageHistory).toBe(history);
     expect(warn).not.toHaveBeenCalled();
@@ -78,6 +78,23 @@ describe('the persona row', () => {
     expect(h.gameplay().personaRef).toEqual(ref);
     expect(onPersonaChange).toHaveBeenCalledWith(ref, 'Ash');
     await waitFor(() => expect(within(row()).getByText('Ash')).toBeTruthy());
+  });
+
+  it('moves the You mark to the persona picked mid-game, on the row and on the stat heading', async () => {
+    const marked: Entity = { ...ash, stats: [{ id: 'trust', name: 'Trust', type: 'number', description: '', min: 0, max: 100, regen: 0, descriptors: [], value: 30 }] };
+    await Promise.all([store(wren), store(marked)]);
+    renderRightPanel({}, { stats: [], seed: (g) => g.setPersonaRef({ source: 'library', entityId: 'l-wren' }) });
+    await waitFor(() => expect(within(row()).getByText('Wren')).toBeTruthy());
+    expect(within(row()).getByText('Wren').parentElement).toHaveTextContent(/^WrenYou$/);
+    expect(screen.queryByRole('region', { name: 'Ash stats' })).toBeNull();
+
+    await pick(await openPicker(), 'Ash');
+
+    await waitFor(() => expect(within(row()).getByText('Ash')).toBeTruthy());
+    expect(within(row()).getByText('Ash').parentElement).toHaveTextContent(/^AshYou$/);
+    expect(within(row()).queryByText('Wren')).toBeNull();
+    const section = await screen.findByRole('region', { name: 'Ash stats' });
+    expect(within(section).getByRole('heading')).toHaveTextContent(/^AshYou$/);
   });
 
   it('hands the new persona and its name on, so the traits can settle under it', async () => {

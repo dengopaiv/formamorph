@@ -4,7 +4,7 @@
 
 > 🛠️ Part of the [World Editor](WorldEditor) guide.
 
-The **Overview** tab holds the world's own details: its name, its library card, and the text the AI reads on every turn. It has two columns. On mobile, the left column shows first. The **?** button in the header row has a short version of this page.
+The **Overview** tab holds the world's own details: its name, its library card, and the text the AI reads on every turn. It has two columns. On mobile, the left column shows first.
 
 ## How to Set the World's Images
 <!-- keywords: thumbnail, cover, picture, banner, art, upload, icon, photo, logo, card artwork, drag and drop, illustration, paste a url, ai made artwork, preview graphic -->
@@ -14,7 +14,7 @@ The **Overview** tab holds the world's own details: its name, its library card, 
 2. Under **Thumbnail**, select the frame (**Click to upload image**) and pick a file. You can also drop a file on the frame.
 3. To link an image, paste its address into **Or paste an image URL** and select **Use this image URL**. See [Upload or link](#upload-or-link).
 4. To make one, select **Generate with AI**. It shows when [image generation](Image-Generation#how-to-turn-on-image-generation) is on in Settings.
-5. Select **Save** at the bottom of the editor.
+5. Select **Save**.
 
 Each location's background is on its **Media** tab. See [World Editor: Locations](World-Editor-Locations#media). Each entity's image is on its **Profile** tab.
 
@@ -24,10 +24,12 @@ Each location's background is on its **Media** tab. See [World Editor: Locations
 
 1. Open the **Overview** tab.
 2. Under **Background Music**, select **Add Sound** and pick an audio file.
-3. Select **Save** at the bottom of the editor.
+3. Select **Save**.
 
 ## The left column: how your world is listed
-<!-- keywords: rename my world, title, creator credit, byline, genre labels, categories, 3d body model, vrm glb, restrict who player is, default hero -->
+<!-- keywords: rename my world, title, creator credit, byline, genre labels, categories, restrict who player is, default hero -->
+
+The world's Avatars are on the **Media** tab. See [World Editor: Media](World-Editor-Media#avatars).
 
 | Field | What it does |
 |---|---|
@@ -35,8 +37,6 @@ Each location's background is on its **Media** tab. See [World Editor: Locations
 | **Author** | Your name on the card. |
 | **Tags** | The words the community browser filters on. |
 | **Thumbnail** | The card's image. **Generate with AI** under the frame makes one from your Player-Facing Description, or from the AI-Facing Description when that is empty. |
-| **3D Player Avatar** | Gives this world a 3D avatar. The player can [customize it](Avatars#character-customization) before they start. |
-| **Custom Player Avatar** | **Advanced mode only**, and only with **3D Player Avatar** on. Your own `.vrm` or `.glb` replaces the bundled model. See [The World Avatar](Avatars#the-world-avatar). **Preview** opens it, and **Remove** goes back to the default. |
 | **Allowed Personas** | **Advanced mode only.** Decides which personas the player can pick: **Any** or **World Only**. See [Personas for Authors](Persona-Authoring#persona-rules). |
 | **Starts On** | **Advanced mode only.** Decides which persona a new player starts on. See [Personas for Authors](Persona-Authoring#persona-rules). |
 | **Background Music** | The track the world plays. Select **Add Sound** to pick a file. **Remove sound** clears it. |

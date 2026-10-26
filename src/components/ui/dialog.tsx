@@ -3,7 +3,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { ignoreLayerPress, keepLayerFocus } from "@/components/ui/shielded-layer"
+import { ignoreLayerDismiss, keepLayerFocus } from "@/components/ui/shielded-layer"
 import { SurfaceLayer, type SurfaceIdName } from "@/components/ui/surface"
 
 const Dialog = DialogPrimitive.Root
@@ -35,6 +35,9 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
  * Height tracks the keyboard-aware `--app-h` (see `viewportHeight.ts`).
  */
 export const dialogFullHeight = 'top-[var(--app-top,0px)] translate-y-0 h-[var(--app-h,100dvh)]';
+
+/** The close button's slot: a 44px target whose 20px icon centers 24px from the corner. */
+export const dialogCornerButton = 'absolute right-0.5 top-0.5 inline-flex h-11 w-11 items-center justify-center rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground';
 
 /** The same, applied only below the `sm` breakpoint — for dialogs that keep a window on wider screens. */
 export const dialogFullHeightMobile = 'max-sm:top-[var(--app-top,0px)] max-sm:translate-y-0 max-sm:h-[var(--app-h,100dvh)]';
@@ -71,16 +74,16 @@ const DialogContent = React.forwardRef<
         className
       )}
       {...props}
-      // The shielded layer counts as inside the dialog: a press there does not close it, and a closing
-      // dialog does not take focus from it.
-      onPointerDownOutside={ignoreLayerPress(props.onPointerDownOutside)}
-      onInteractOutside={ignoreLayerPress(props.onInteractOutside)}
+      // The shielded layer counts as inside the dialog: a press or Escape there does not close it, and a
+      // closing dialog does not take focus from it.
+      onPointerDownOutside={ignoreLayerDismiss(props.onPointerDownOutside)}
+      onInteractOutside={ignoreLayerDismiss(props.onInteractOutside)}
+      onEscapeKeyDown={ignoreLayerDismiss(props.onEscapeKeyDown)}
       onCloseAutoFocus={keepLayerFocus(props.onCloseAutoFocus)}>
       <SurfaceLayer id={surface}>{children}</SurfaceLayer>
       {!hideClose && (
-        <DialogPrimitive.Close
-          className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-          <X className="h-4 w-4" />
+        <DialogPrimitive.Close className={dialogCornerButton}>
+          <X className="h-5 w-5" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
       )}

@@ -2,7 +2,8 @@ import type { ChatMessage } from '@/types';
 import { parseTurns } from './turnBanding';
 import { milestoneCandidates, agedMilestoneCandidates, resolveMilestoneKeep, type MemoryPinMap, type MilestoneSelection } from './milestoneMemory';
 import { applyMemoryOverrides, type MemoryOverrides } from './memoryOverrides';
-import { formatStampPlain, hoursByPosition, type WorldCalendar } from './gameClock';
+import { dayAndHour, daypart, formatStampPlain, hoursByPosition, type WorldCalendar } from './gameClock';
+import type { SandboxMemory } from './statCodeExecutor';
 
 /**
  * The memory ledger as the player sees it, shared by the Memory side panel and the Memory Manager so the
@@ -234,4 +235,24 @@ export function buildMemoryLedger(args: {
     keptCount: visible.filter((r) => r.kept).length,
     totalCount: visible.length,
   };
+}
+
+/** How many turns `history` holds closed, on the scale of `memories[].turn`. */
+export function closedTurns(history: readonly ChatMessage[]): number {
+  const at = history.findLastIndex((message) => message.role === 'assistant');
+  return at < 0 ? 0 : Math.ceil(at / 2);
+}
+
+/** The ledger's live rows as `memories` reads them, oldest first. Times come from the resolver the row stamps
+ *  use, at the row's history position: a turn's own, a Custom line's anchor. */
+export function scriptMemories(ledger: MemoryLedger, history: ChatMessage[], calendar?: WorldCalendar): SandboxMemory[] {
+  const hoursAt = hoursByPosition(parseTurns(history));
+  return ledger.rows.filter((row) => !row.deleted).map((row) => {
+    const timestamp = hoursAt(row.pos);
+    const { day, hour } = dayAndHour(timestamp, calendar);
+    return {
+      id: row.id, turn: Math.ceil(row.pos / 2), timestamp, day, daypart: daypart(hour, calendar), text: row.text,
+      custom: row.isNote, kept: row.kept, inContext: row.inContext, pinned: row.pin === 'keep', forgotten: row.pin === 'drop',
+    };
+  });
 }

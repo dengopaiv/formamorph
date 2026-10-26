@@ -173,7 +173,7 @@ describe('Community Creations tour', () => {
     browser.unmount();
     settle();
 
-    expect(screen.getByText('menu:Sign In')).toBeInTheDocument();
+    expect(screen.getByText('menu:Ask Morphie!')).toBeInTheDocument();
   });
 
   it('chains straight to the filters once the tabs are acknowledged', () => {
@@ -187,7 +187,19 @@ describe('Community Creations tour', () => {
   it('counts switching tabs as reading the tabs explanation', () => {
     renderBrowser();
     settle();
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Entities' }));
+    fireEvent.pointerDown(screen.getByRole('tab', { name: 'Entities' }));
+    expect(seenTutorials()).toContain('community-kind-tabs');
+    expect(screen.queryByText('Worlds, Entities, Dictionaries, Avatars & Prompts')).not.toBeInTheDocument();
+  });
+
+  it('explains the tabs on the mobile Sections bar, and opening it counts as reading', () => {
+    const desktop = window.matchMedia;
+    window.matchMedia = ((query: string) => ({ ...desktop(query), matches: true })) as typeof window.matchMedia;
+    renderBrowser();
+    settle();
+
+    expect(screen.getByText('Worlds, Entities, Dictionaries, Avatars & Prompts')).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('button', { name: /^Sections/ }));
     expect(seenTutorials()).toContain('community-kind-tabs');
     expect(screen.queryByText('Worlds, Entities, Dictionaries, Avatars & Prompts')).not.toBeInTheDocument();
   });
@@ -231,7 +243,7 @@ describe('Community Creations tour', () => {
     expect(screen.getByText('Worlds, Entities, Dictionaries, Avatars & Prompts')).toBeInTheDocument();
 
     // What Radix does to the browser's own dialog when a modal opens above it.
-    const browserDialog = screen.getByRole('button', { name: 'Worlds' }).closest('[role="dialog"]')!;
+    const browserDialog = screen.getByRole('tab', { name: 'Worlds' }).closest('[role="dialog"]')!;
     await act(async () => {
       browserDialog.setAttribute('aria-hidden', 'true');
       await Promise.resolve();

@@ -3,13 +3,14 @@ import { closestCorners, type DragEndEvent } from '@dnd-kit/core';
 import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ArrowDown, ArrowLeft, ArrowUp, BookOpen, Search, User } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp } from 'lucide-react';
+import { DictionaryIcon, EntityIcon } from '@/lib/elementIcons';
 import { EditorDndContext, StableSortableContext } from '@/components/dnd/EditorDndContext';
 import { EditorRow, EditorRowList } from '@/components/EditorRow';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Meta } from '@/components/ui/typography';
-import { Input } from '@/components/ui/input';
+import { SearchField } from '@/components/ui/search-field';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { CONTENT_LINK_LABELS } from '@/lib/contentLink';
 import type { DictionarySelectionItem } from '@/lib/dictionarySelection';
@@ -89,8 +90,8 @@ function Artwork({ src, name, fallback, large = false }: {
       ) : (
         <span role="img" aria-label={`${name} has no ${fallback}`}>
           {fallback === 'portrait'
-            ? <User aria-hidden className={cn('text-muted-foreground', large ? 'h-12 w-12' : 'h-5 w-5')} />
-            : <BookOpen aria-hidden className={cn('text-muted-foreground', large ? 'h-12 w-12' : 'h-5 w-5')} />}
+            ? <EntityIcon aria-hidden className={cn('text-muted-foreground', large ? 'h-12 w-12' : 'h-5 w-5')} />
+            : <DictionaryIcon aria-hidden className={cn('text-muted-foreground', large ? 'h-12 w-12' : 'h-5 w-5')} />}
         </span>
       )}
     </span>
@@ -223,7 +224,7 @@ function AdditionDetails({ addition, entitySelected, dictionaryTotal, worldAutho
   entitySelected: boolean;
   dictionaryTotal: number;
   worldAuthor?: string;
-  headingRef: RefObject<HTMLHeadingElement>;
+  headingRef: RefObject<HTMLHeadingElement | null>;
   showBack: boolean;
   onEntityToggle: (entityId: string, selected: boolean) => void;
   onDictionaryToggle: (key: string, enabled: boolean) => void;
@@ -446,7 +447,7 @@ export default function EnterWorldLibrary(props: EnterWorldLibraryProps) {
         role="region"
         aria-label="Library Additions List"
         aria-hidden={!listVisible}
-        {...(!listVisible ? { inert: '' } : {})}
+        inert={!listVisible}
         className={cn(
           'flex min-h-0 flex-col overflow-hidden',
           singlePane && 'col-start-1 row-start-1 transition-transform duration-200 ease-out motion-reduce:transition-none',
@@ -454,18 +455,13 @@ export default function EnterWorldLibrary(props: EnterWorldLibraryProps) {
         )}
       >
         <div className="shrink-0 pb-3">
-          <div className="relative">
-            <Search aria-hidden className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              ref={searchRef}
-              type="search"
-              aria-label="Search Library Additions"
-              placeholder="Search additions"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="pl-9"
-            />
-          </div>
+          <SearchField
+            ref={searchRef}
+            aria-label="Search Library Additions"
+            placeholder="Search additions"
+            value={query}
+            onChange={setQuery}
+          />
         </div>
         <ScrollArea type="always" className="min-h-0 flex-1">
           <div className="space-y-6">
@@ -558,7 +554,7 @@ export default function EnterWorldLibrary(props: EnterWorldLibraryProps) {
         role="region"
         aria-label="Addition Details"
         aria-hidden={!detailsVisible}
-        {...(!detailsVisible ? { inert: '' } : {})}
+        inert={!detailsVisible}
         className={cn(
           'z-10 min-h-0 overflow-hidden',
           singlePane && 'col-start-1 row-start-1 bg-background transition-transform duration-200 ease-out motion-reduce:transition-none',

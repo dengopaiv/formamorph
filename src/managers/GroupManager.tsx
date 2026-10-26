@@ -2,13 +2,15 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useEditingDraft } from '@/lib/useEditingDraft';
 import { useTraitStore } from '@/contexts/TraitStoreContext';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import PlaceholderField, { PlaceholderNameField } from '@/components/prompt/PlaceholderField';
 import { updateOwnedGroup } from '@/lib/ownedTraits';
 import type { TraitGroup } from '@/types';
 import { ListDetailFirstRow } from '@/components/ui/list-detail';
 import { Hint } from '@/components/ui/typography';
+import { WorldInput } from '@/components/editor/WorldField';
+import { fieldFrame } from '@/lib/historyField';
+import { GroupAiHeadingField } from '@/components/editor/GroupAiHeadingField';
 
 type PickPreset = 'any' | 'exactlyOne' | 'upToOne' | 'custom';
 
@@ -54,7 +56,7 @@ const GroupManager = ({ group, ownerId, readOnly = false, detailsHeader, details
   const preset = customFor === editingGroup.id ? 'custom' : presetOf(editingGroup);
 
   const nameField = (
-    <div className="space-y-2">
+    <div className="space-y-2" {...fieldFrame('name')}>
       <Label>Group Name</Label>
       <PlaceholderNameField
         trait={traitField}
@@ -78,6 +80,7 @@ const GroupManager = ({ group, ownerId, readOnly = false, detailsHeader, details
       <PlaceholderField
         trait={traitField}
         label="Player-Facing Description"
+        historyField="playerDescription"
         value={editingGroup.playerDescription || ''}
         onChange={(v) => handleChange('playerDescription', v)}
         placeholders={placeholders}
@@ -89,11 +92,18 @@ const GroupManager = ({ group, ownerId, readOnly = false, detailsHeader, details
       <PlaceholderField
         trait={traitField}
         label="AI-Facing Description"
+        historyField="aiDescription"
         value={editingGroup.aiDescription || ''}
         onChange={(v) => handleChange('aiDescription', v)}
         placeholders={placeholders}
         readOnly={readOnly}
         resizable
+      />
+      <GroupAiHeadingField
+        group={editingGroup}
+        members="traits"
+        onChange={(v) => handleChange('aiVisible', v)}
+        disabled={readOnly}
       />
       <div className="space-y-2">
         <Label htmlFor={`pick-count-${editingGroup.id}`}>Pick Count</Label>
@@ -106,7 +116,7 @@ const GroupManager = ({ group, ownerId, readOnly = false, detailsHeader, details
             if (next !== 'custom') apply(PRESETS[next]);
           }}
         >
-          <SelectTrigger id={`pick-count-${editingGroup.id}`}>
+          <SelectTrigger id={`pick-count-${editingGroup.id}`} {...fieldFrame('pickCount')}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -118,9 +128,9 @@ const GroupManager = ({ group, ownerId, readOnly = false, detailsHeader, details
         </Select>
         {preset === 'custom' && (
           <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-1">
+            <div className="space-y-1" {...fieldFrame('minPicks')}>
               <Label htmlFor={`pick-min-${editingGroup.id}`} className="text-meta text-muted-foreground">At Least</Label>
-              <Input
+              <WorldInput
                 id={`pick-min-${editingGroup.id}`}
                 type="number"
                 min={0}
@@ -131,9 +141,9 @@ const GroupManager = ({ group, ownerId, readOnly = false, detailsHeader, details
                 onChange={(e) => handleChange('minPicks', countOf(e.target.value))}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1" {...fieldFrame('maxPicks')}>
               <Label htmlFor={`pick-max-${editingGroup.id}`} className="text-meta text-muted-foreground">At Most</Label>
-              <Input
+              <WorldInput
                 id={`pick-max-${editingGroup.id}`}
                 type="number"
                 min={0}

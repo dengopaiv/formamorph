@@ -1,20 +1,26 @@
+// Must load before the services: their constructors open IndexedDB.
+import 'fake-indexeddb/auto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { canvasHistoryFor } from '@/lib/canvasHistory';
+import { GameDataProvider, useGameData } from '@/contexts/GameDataContext';
+import type { World } from '@/types';
+import { useWorldHistory } from '@/contexts/worldRecorder';
 import { LocationsCanvasReference } from './LocationsCanvasReference';
 
 afterEach(() => vi.restoreAllMocks());
 
-it('keeps canvas preferences and history local across fullscreen edits and remounts', async () => {
+it('keeps canvas preferences and history local across fullscreen edits and remounts, and never records into an open world', async () => {
   const user = userEvent.setup();
   localStorage.setItem('FORMAMORPH_canvasSnap', 'false');
-  const savedHistory = canvasHistoryFor('authored-world');
-  savedHistory.current = { past: [{ slice: 'locations', before: [], after: [] }], future: [] };
+  let openWorld!: ReturnType<typeof useWorldHistory>;
+  const WorldProbe = () => { openWorld = useWorldHistory(); return null; };
   const read = vi.spyOn(Storage.prototype, 'getItem');
   const write = vi.spyOn(Storage.prototype, 'setItem');
-  const show = () => render(<TooltipProvider><LocationsCanvasReference /></TooltipProvider>);
+  const show = () => render(
+    <GameDataProvider><WorldProbe /><TooltipProvider><LocationsCanvasReference /></TooltipProvider></GameDataProvider>,
+  );
   const first = show();
   await user.click(screen.getByRole('button', { name: 'Edit Full Screen' }));
   expect(await screen.findByRole('toolbar', { name: 'Canvas Tools' })).toBeInTheDocument();
@@ -32,6 +38,8 @@ it('keeps canvas preferences and history local across fullscreen edits and remou
   expect(screen.getByRole('button', { name: 'Redo' })).toBeEnabled();
   await user.click(screen.getByRole('button', { name: 'Redo' }));
   expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled();
+  expect(openWorld.steps).toHaveLength(0);
+  expect(openWorld.canUndo).toBe(false);
   first.unmount();
   const second = show();
   expect(screen.getByLabelText('Selected Location')).toHaveTextContent('(20, 60)');
@@ -39,11 +47,66 @@ it('keeps canvas preferences and history local across fullscreen edits and remou
   expect(await screen.findByRole('button', { name: 'Undo' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Snap To Grid' })).toHaveAttribute('aria-pressed', 'true');
   expect(screen.getByRole('button', { name: 'Show Grid' })).toHaveAttribute('aria-pressed', 'true');
-  expect(canvasHistoryFor('authored-world')).toBe(savedHistory);
-  expect(savedHistory.current.past).toHaveLength(1);
   expect(read).not.toHaveBeenCalled();
   expect(write).not.toHaveBeenCalled();
   second.unmount();
+});
+
+it('undoes and redoes its own canvas by chord, inline and full screen, and leaves an open world alone', async () => {
+  const user = userEvent.setup();
+  let world!: ReturnType<typeof useGameData>;
+  let openWorld!: ReturnType<typeof useWorldHistory>;
+  const WorldProbe = () => { world = useGameData(); openWorld = useWorldHistory(); return null; };
+  const { container } = render(
+    <GameDataProvider><WorldProbe /><TooltipProvider><LocationsCanvasReference /></TooltipProvider></GameDataProvider>,
+  );
+  await act(async () => { world.loadWorldData({ id: 'w-open', version: '3.0.0', worldOverview: { name: 'Sedge Landing' } } as World); });
+  await act(async () => { world.updateWorldOverview({ author: 'Wren' }); });
+  const position = () => screen.getByLabelText('Selected Location').textContent;
+  const before = position();
+  const press = (target: Element, shiftKey = false) => act(async () => {
+    fireEvent.keyDown(target, { key: 'z', ctrlKey: true, shiftKey });
+  });
+
+  fireEvent.contextMenu(container.querySelector('.react-flow__pane') as HTMLElement);
+  await user.click(await screen.findByRole('menuitem', { name: 'Auto Arrange All' }));
+  const arranged = position();
+  expect(arranged).not.toBe(before);
+  // A press outside the canvas is the page's own.
+  await press(document.body);
+  expect(position()).toBe(arranged);
+  await press(container.querySelector('.react-flow__pane') as HTMLElement);
+  expect(position()).toBe(before);
+
+  await user.click(screen.getByRole('button', { name: 'Edit Full Screen' }));
+  const tools = await screen.findByRole('toolbar', { name: 'Canvas Tools' });
+  await press(tools, true);
+  expect(position()).toBe(arranged);
+  await press(tools);
+  expect(position()).toBe(before);
+  expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+
+  expect(openWorld.steps).toHaveLength(1);
+  expect(openWorld.cursor).toBe(1);
+  expect(world.worldOverview.author).toBe('Wren');
+});
+
+it('clears the Find a Location text and its result list with the X, and keeps the cursor in the box', async () => {
+  const user = userEvent.setup();
+  render(<TooltipProvider><LocationsCanvasReference /></TooltipProvider>);
+  await user.click(screen.getByRole('button', { name: 'Edit Full Screen' }));
+  const box = await screen.findByRole('combobox', { name: 'Find a Location' });
+  await user.type(box, 'room');
+  await user.keyboard('{ArrowDown}');
+  expect(screen.getByRole('listbox', { name: 'Matching Locations' })).toBeInTheDocument();
+  expect(box.getAttribute('aria-activedescendant')).toMatch(/-1$/);
+
+  await user.click(screen.getByRole('button', { name: 'Clear Search' }));
+
+  expect(box).toHaveValue('');
+  expect(box).toHaveFocus();
+  expect(screen.queryByRole('listbox', { name: 'Matching Locations' })).not.toBeInTheDocument();
+  expect(box).not.toHaveAttribute('aria-activedescendant');
 });
 
 it('opens the canvas menu with titled sets, and Escape closes it and hands focus back to the canvas', async () => {

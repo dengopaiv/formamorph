@@ -1,6 +1,8 @@
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { joinedList } from '@/components/editor/joinedList';
 import { originalsOf, useTraitStore } from '@/contexts/TraitStoreContext';
-import { Folder, LayoutTemplate, Link2, Lock, Unlink, User } from 'lucide-react';
+import { Link2, Lock, Unlink } from 'lucide-react';
+import { BlueprintIcon, EntityIcon, GroupIcon } from '@/lib/elementIcons';
 import {
   getOwnedTraitDropProjection, applyOwnedTraitDrop, duplicateTraitNode, entityRootTraitTree, linkRowRemovable,
   getEntityRootDropProjection, applyEntityRootDrop,
@@ -8,18 +10,17 @@ import {
 } from '@/lib/traitTree';
 import { Tip } from '@/components/ui/tooltip';
 import { DropRefusalNotice } from '@/components/editor/DropRefusalNotice';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { removeOwnedItem, withOwnedTraits } from '@/lib/ownedTraits';
-import { detachDropsStats, detachLink, removeLink } from '@/lib/traitLinks';
+import { detachLink, removeLink } from '@/lib/traitLinks';
 import { SortableTree, type SortableTreeAdapter, type TreeRowSpec } from './SortableTree';
+import { chipInput } from './chipInput';
 import { useRemoveWorldTrait } from './useRemoveWorldTrait';
 import { TREE_INDENT } from '@/components/EditorRow';
 import { useEditorMode } from '@/lib/editorMode';
 import { EmptyListHint } from '@/components/EmptyListHint';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
 import { labelPlaceholders } from '@/lib/placementLetters';
-import { PLAYER_BEARER } from '@/lib/bearers';
-import { gateOf, gateStates, type GateState } from '@/lib/traitGates';
+import { gateConditions, gateOf, gateStates, type GateState } from '@/lib/traitGates';
 import { gateLine } from '@/lib/traitGateLine';
 import { cn } from '@/lib/utils';
 import type { Placeholder } from '@/types';
@@ -27,59 +28,57 @@ import type { Placeholder } from '@/types';
 // Red on the primary fill is unreadable, so a selected row drops the tint for the row's own color.
 const UNRESOLVED = 'text-destructive [[data-editor-row-selected]_&]:text-current';
 
-/** A gated row's lock and count, with the full rule as its tip. Red when a requirement points at nothing. */
+/** A gated tree row's lock and Condition count, with the full rule as its tip. Red when a Condition points at
+ *  nothing. */
 const gateMeta = (gate: GateState | undefined, placeholders: Parameters<typeof labelPlaceholders>[1]) => {
-  if (!gate?.requirements.length) return {};
-  const unresolved = gate.requirements.some((r) => r.unresolved);
+  if (!gate?.rows.length) return {};
+  const conditions = gateConditions(gate);
+  const unresolved = conditions.some((c) => c.unresolved);
   return {
     unresolved,
     meta: (
       <span className={cn('inline-flex items-center gap-1', unresolved && UNRESOLVED)}>
-        <Lock className="h-3.5 w-3.5" aria-hidden />{gate.requirements.length}
+        <Lock className="h-3.5 w-3.5" aria-hidden />{conditions.length}
       </span>
     ),
-    // The editor's gate input holds nothing active, so every gated row reads locked: "Requires A or B".
+    // The editor's gate input holds nothing active, so every gated row reads locked: "Requires A and B, or C".
     metaTitle: labelPlaceholders(gateLine(gate, { revealHidden: true }) ?? '', placeholders),
   };
 };
 
 /** `A`, `A and B`, `A, B and C`, each name in bold. */
-const bearerList = (names: readonly string[], placeholders: Placeholder[]) => names.map((n, i) => (
-  <Fragment key={i}>
-    {i === 0 ? '' : i === names.length - 1 ? ' and ' : ', '}
-    <strong><PlaceholderText text={n} placeholders={placeholders} /></strong>
-  </Fragment>
-));
+const ownerList = (names: readonly string[], placeholders: Placeholder[]) => {
+  const bold = (n: string) => <strong><PlaceholderText text={n} placeholders={placeholders} /></strong>;
+  return joinedList(names.map(bold));
+};
 
-/** The line after a refused drop: an entity's trait would gain stat effects, the entity already has the
- *  trait, the Custom Persona entity left the top level, or a linked Blueprint would leave Blueprints or
- *  become owned. The dragged item stays put. */
+/** The line after a refused drop: the entity already has the trait, the Custom Persona entity left the top
+ *  level, something reads an item joining Blueprints, or a linked Blueprint would leave Blueprints or become
+ *  owned. The dragged item stays put. */
 export function TraitDropRefusalNotice({ refusal, placeholders, onDismiss }: {
   refusal: TraitDropRefusal;
   placeholders: Placeholder[];
   onDismiss: () => void;
 }) {
-  const name = <strong><PlaceholderText text={refusal.name} placeholders={placeholders} /></strong>;
+  const bold = (text: string) => <strong><PlaceholderText text={text} placeholders={placeholders} /></strong>;
+  const name = bold(refusal.name);
   return (
     <DropRefusalNotice onDismiss={onDismiss}>
       {refusal.reason === 'duplicate' ? (
-        <><PlaceholderText text={refusal.bearer} placeholders={placeholders} /> already has {name}.</>
+        <><PlaceholderText text={refusal.owner} placeholders={placeholders} /> already has {name}.</>
       ) : refusal.reason === 'blueprint-linked' ? (
         <>
-          {name} stays in Blueprints, because {bearerList(refusal.bearers, placeholders)}{' '}
-          {refusal.bearers.length === 1 ? 'links' : 'link'} to it or to something in it. Remove those links first.
+          {name} stays in Blueprints, because {ownerList(refusal.owners, placeholders)}{' '}
+          {refusal.owners.length === 1 ? 'links' : 'link'} to it or to something in it. Remove those links first.
         </>
-      ) : refusal.reason === 'root' ? (
-        <>{name} stays at the top level, because the Custom Persona can&apos;t go in a group.</>
+      ) : refusal.reason === 'into-blueprints' ? (
+        refusal.reader.kind === 'requires' ? (
+          <>{name} stays out of Blueprints, because {bold(refusal.reader.trait)} requires it. Remove that requirement first.</>
+        ) : (
+          <>{name} stays out of Blueprints, because the code of {bold(refusal.reader.stat)} reads it.</>
+        )
       ) : (
-        <>
-          {name} stays {refusal.owner
-            ? <><PlaceholderText text={refusal.owner} placeholders={placeholders} />&apos;s</>
-            : 'a world'} {refusal.kind}, because only a persona&apos;s traits can change stats.{' '}
-          {refusal.kind === 'trait'
-            ? 'Remove its stat changes and stat toggles first.'
-            : <>Remove the stat changes and stat toggles from <strong><PlaceholderText text={refusal.offender} placeholders={placeholders} /></strong> first.</>}
-        </>
+        <>{name} stays at the top level, because the Custom Persona can&apos;t go in a group.</>
       )}
     </DropRefusalNotice>
   );
@@ -93,7 +92,7 @@ export function TraitDropRefusalNotice({ refusal, placeholders, onDismiss }: {
  */
 const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSelect: (id: string) => void }) => {
   const {
-    traits, traitGroups, entities, setTraits, setTraitGroups, editEntity, placeholders, gateInput, entityRoot,
+    traits, traitGroups, entities, setTraits, setTraitGroups, editEntity, placeholders, gateInput, entityRoot, stats, statGroups,
   } = useTraitStore();
   const originals = useMemo(() => originalsOf({ traits, traitGroups, entityRoot }), [traits, traitGroups, entityRoot]);
   const { advanced } = useEditorMode();
@@ -101,29 +100,30 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
   const lists = useMemo(() => ({ traits, traitGroups }), [traits, traitGroups]);
   const tree = useMemo(
     () => (entityRoot
-      ? entityRootTraitTree(entityRoot.bearer, entityRoot.world)
+      ? entityRootTraitTree(entityRoot.owner, entityRoot.world)
       : ownedTraitTree(lists, entities, [], { links: true, emptySystemNodes: advanced })),
     [lists, entities, advanced, entityRoot],
   );
   const [refusal, setRefusal] = useState<TraitDropRefusal | null>(null);
   const { ask: askRemoveOriginal, dialog: removeDialog } = useRemoveWorldTrait();
-  const [pendingDetach, setPendingDetach] = useState<{ entityId: string; linkId: string; name: string } | null>(null);
 
   const detach = (entityId: string, linkId: string) => {
-    const bearer = entityRoot?.bearer.id === entityId ? entityRoot.bearer : entities.find((e) => e.id === entityId);
-    const res = bearer && detachLink(originals, bearer, linkId);
+    const owner = entityRoot?.owner.id === entityId ? entityRoot.owner : entities.find((e) => e.id === entityId);
+    const res = owner && detachLink(originals, owner, linkId);
     if (!res) return;
     editEntity(entityId, () => res.entity);
     onSelect(res.newId);
   };
-  // A Detach that drops stat effects, on an entity that can't own them, asks first.
-  const askDetach = ({ entityId, link }: LinkRow, name: string) => {
-    const bearer = entityRoot?.bearer.id === entityId ? entityRoot.bearer : entities.find((e) => e.id === entityId);
-    if (bearer && detachDropsStats(originals, bearer, link)) setPendingDetach({ entityId, linkId: link.id, name });
-    else detach(entityId, link.id);
-  };
 
-  const linkRowSpec = (node: FlatTraitNode, linkRow: LinkRow): TreeRowSpec => {
+  // The gate a row shows. A link row reads its owner's gate on the original. A one-entity tree's own rows
+  // have no owner entry, since the editor edits them as the root; their gates are still the entity's.
+  const gateOfRow = (node: FlatTraitNode, linkRow: LinkRow | undefined): GateState | undefined => (
+    linkRow
+      ? gateOf(gates, linkRow.entityId, linkRow.originalId)
+      : gateOf(gates, tree.ownerOf.get(node.id) ?? entityRoot?.owner.id ?? null, node.id)
+  );
+
+  const linkRowSpec = (node: FlatTraitNode, linkRow: LinkRow, select: (id: string) => void): TreeRowSpec => {
     const isGroup = node.kind === 'group';
     const name = (isGroup ? node.group?.name : node.leaf?.name) ?? '';
     // No original to read: the stored name, read-only, but removable inside a world.
@@ -144,8 +144,8 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
         } : {}),
       };
     }
-    // A link row reads its bearer's gate on the original.
-    const { unresolved, meta, metaTitle } = isGroup ? {} : gateMeta(gateOf(gates, linkRow.entityId, linkRow.originalId), placeholders);
+    // A link row reads its owner's gate on the original.
+    const { unresolved, meta, metaTitle } = isGroup ? {} : gateMeta(gateOfRow(node, linkRow), placeholders);
     const overrides = linkRow.link.overrides?.[linkRow.originalId];
     const modified = overrides && Object.keys(overrides).length ? 'Modified for this link' : undefined;
     // The glyph's tip names the modification its badge marks.
@@ -175,7 +175,7 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
             <button
               type="button"
               aria-label={`Open ${labelPlaceholders(name, placeholders)}`}
-              onClick={(e) => { e.stopPropagation(); onSelect(linkRow.originalId); }}
+              onClick={(e) => { e.stopPropagation(); select(linkRow.originalId); }}
               className="shrink-0 px-0.5"
             >
               {glyph}
@@ -196,20 +196,35 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
           <button
             type="button"
             aria-label={`Open ${labelPlaceholders(name, placeholders)}`}
-            onClick={(e) => { e.stopPropagation(); onSelect(opens); }}
+            onClick={(e) => { e.stopPropagation(); select(opens); }}
             className="shrink-0 px-0.5"
           >
             <Link2 className="h-4 w-4" />
           </button>
         </Tip>
       ),
-      actions: [{ icon: <Unlink className="h-4 w-4" />, title: 'Detach', onClick: () => askDetach(linkRow, name) }],
+      actions: [{ icon: <Unlink className="h-4 w-4" />, title: 'Detach', onClick: () => detach(linkRow.entityId, linkRow.link.id) }],
       removeTitle: 'Remove Link',
       remove: () => editEntity(linkRow.entityId, (e) => removeLink(e, linkRow.link.id)),
     };
   };
 
   const adapter: SortableTreeAdapter<FlatTraitNode> = {
+    visibleDeps: [tree],
+    rowDeps: [entityRoot],
+    rowInputs: (node) => {
+      const linkRow = tree.linkRows.get(node.id);
+      const entity = tree.entityNodes.get(node.id);
+      const gate = gateOfRow(node, linkRow);
+      const gateKey = gate?.rows.length
+        ? `${gateConditions(gate).some((c) => c.unresolved)}|${gateLine(gate, { revealHidden: true })}`
+        : '';
+      return [
+        linkRow, entity, tree.ownerOf.get(node.id), gateKey,
+        chipInput(placeholders, node.group?.name, node.leaf?.name, entity?.name, linkRow?.link.originalName, gateKey),
+      ];
+    },
+    placeholders,
     getVisible: (collapsed) => ownedTraitRows(tree, collapsed),
     projectDepth: (visible, activeId, overId, offsetLeft) => (entityRoot
       ? getEntityRootDropProjection(tree, visible, activeId, overId, offsetLeft, TREE_INDENT)
@@ -217,13 +232,14 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
     onDrop: (activeId, overId, offsetLeft, collapsed) => {
       // A one-entity tree reorders the entity's own items among its links, and nothing else moves.
       if (entityRoot) {
-        const moved = applyEntityRootDrop(entityRoot.bearer, entityRoot.world, collapsed, activeId, overId, offsetLeft, TREE_INDENT);
-        if (moved) editEntity(entityRoot.bearer.id, () => moved);
+        const moved = applyEntityRootDrop(entityRoot.owner, entityRoot.world, collapsed, activeId, overId, offsetLeft, TREE_INDENT);
+        if (moved) editEntity(entityRoot.owner.id, () => moved);
         return;
       }
       // Creating a link is Advanced only; existing links still drag in Simple.
       const next = applyOwnedTraitDrop(
-        lists, entities, collapsed, activeId, overId, offsetLeft, TREE_INDENT, { createLinks: advanced, emptySystemNodes: advanced },
+        lists, entities, collapsed, activeId, overId, offsetLeft, TREE_INDENT,
+        { createLinks: advanced, emptySystemNodes: advanced, codeWorld: { stats, statGroups, placeholders } },
       );
       if (!next) return;
       if (next.kind === 'refused') {
@@ -237,15 +253,15 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
       }
       for (const entity of next.entities) editEntity(entity.id, () => entity);
     },
-    rowSpec: (node) => {
+    rowSpec: (node, select) => {
       const linkRow = tree.linkRows.get(node.id);
-      if (linkRow) return linkRowSpec(node, linkRow);
+      if (linkRow) return linkRowSpec(node, linkRow, select);
       const entity = tree.entityNodes.get(node.id);
       if (entity) {
         return {
           lead: 'chevron',
           collapseLabels: ['Expand entity', 'Collapse entity'],
-          icon: <User className="h-4 w-4 shrink-0" aria-hidden />,
+          icon: <EntityIcon className="h-4 w-4 shrink-0" aria-hidden />,
           label: <PlaceholderText text={entity.name} placeholders={placeholders} />,
           labelClass: 'font-medium',
           meta: entity.customPersona ? 'Custom Persona' : entity.persona ? 'Playable' : 'Entity',
@@ -253,15 +269,12 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
       }
       const isGroup = node.kind === 'group';
       const ownerId = tree.ownerOf.get(node.id);
-      // A one-entity tree's own rows have no owner entry, since the editor edits them as the root; their gates
-      // are still the entity's.
-      const gateBearer = ownerId ?? entityRoot?.bearer.id ?? PLAYER_BEARER;
-      const { unresolved, meta, metaTitle } = isGroup ? {} : gateMeta(gateOf(gates, gateBearer, node.id), placeholders);
+      const { unresolved, meta, metaTitle } = isGroup ? {} : gateMeta(gateOfRow(node, undefined), placeholders);
       if (node.group?.system === 'blueprints') {
         return {
           lead: 'chevron',
           collapseLabels: ['Expand group', 'Collapse group'],
-          icon: <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden />,
+          icon: <BlueprintIcon className="h-4 w-4 shrink-0" aria-hidden />,
           label: <PlaceholderText text={node.group.name} placeholders={placeholders} />,
           labelClass: 'font-medium',
           removeTitle: 'Remove Blueprints',
@@ -272,7 +285,7 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
         // Only groups collapse; traits get no leading slot (matching the original layout).
         lead: isGroup ? 'chevron' : 'none',
         collapseLabels: ['Expand group', 'Collapse group'],
-        icon: isGroup ? <Folder className="h-4 w-4 shrink-0" /> : undefined,
+        icon: isGroup ? <GroupIcon className="h-4 w-4 shrink-0" /> : undefined,
         label: <PlaceholderText text={isGroup ? node.group?.name ?? '' : node.leaf?.name ?? ''} placeholders={placeholders} />,
         labelClass: isGroup ? 'font-medium' : unresolved ? UNRESOLVED : undefined,
         meta,
@@ -308,16 +321,6 @@ const TraitTree = ({ selectedId, onSelect }: { selectedId: string | null; onSele
       {refusal && <TraitDropRefusalNotice refusal={refusal} placeholders={placeholders} onDismiss={() => setRefusal(null)} />}
       <SortableTree adapter={adapter} selectedId={selectedId} onSelect={onSelect} revealSelected />
       {removeDialog}
-      <ConfirmDialog
-        open={!!pendingDetach}
-        onOpenChange={(open) => { if (!open) setPendingDetach(null); }}
-        title={`Detach ${labelPlaceholders(pendingDetach?.name ?? '', placeholders)}?`}
-        description="The copy won't keep its stat changes and stat toggles, because only a persona's traits can change stats."
-        onConfirm={() => {
-          if (pendingDetach) detach(pendingDetach.entityId, pendingDetach.linkId);
-          setPendingDetach(null);
-        }}
-      />
     </>
   );
 };

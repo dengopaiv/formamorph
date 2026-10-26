@@ -18,6 +18,7 @@ import { STAT_PANEL_TABS } from '@/views/statPanelTabs';
 import { TRAIT_PANEL_TABS } from '@/views/traitPanelTabs';
 import { DICTIONARY_PANEL_TABS } from '@/views/dictionaryPanelTabs';
 import { DICTIONARY_BOOK_PANEL_TABS } from '@/views/dictionaryBookPanelTabs';
+import { PLACEHOLDER_PANEL_TABS } from '@/views/placeholderPanelTabs';
 import { DICTIONARY_EDITOR_TABS } from '@/views/dictionaryEditorTabs';
 import { MAIN_MENU_CARD_TABS } from '@/views/mainMenuTabs';
 import { FORMAQUESTION_TABS } from '@/components/formaquestion/formaquestionTabs';
@@ -30,6 +31,7 @@ import { POLICIES_TABS } from '@/components/menu/policiesTabs';
 import { FEEDBACK_TABS } from '@/components/menu/feedbackTabs';
 import { MY_FEEDBACK_TABS } from '@/components/menu/myFeedbackTabs';
 import { EVENT_ACK_PHASES } from '@/components/events/eventAckPhases';
+import { SCRIPT_PROMPT_SAMPLE_KEYS } from './devScriptPromptSamples';
 import { EVENTS_TAB_ROLE_VIEWS } from '@/lib/adminEvents';
 import { isSaveEnvelope } from './version';
 import whiteRoomWorld from './devFixtures/whiteRoomWorld.json';
@@ -205,6 +207,10 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.worldEditorBook]).toEqual(DICTIONARY_BOOK_PANEL_TABS.map((t) => t.value));
   });
 
+  it('ledger lists exactly the tabs the placeholder panel switches between', () => {
+    expect([...DEV_MODAL_TABS.worldEditorPlaceholder]).toEqual(PLACEHOLDER_PANEL_TABS.map((t) => t.value));
+  });
+
   // The Locations tab spends one `subtab=…` slot on both switches, so a value landing in both would make
   // the router move the panel and the view at once and neither call site could tell which was meant.
   it('keeps the Locations tab’s two subtab meanings apart', () => {
@@ -254,6 +260,10 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.eventAck]).toEqual([...EVENT_ACK_PHASES]);
   });
 
+  it('ledger lists exactly the script prompt samples', () => {
+    expect([...DEV_MODAL_TABS.scriptPrompt]).toEqual(SCRIPT_PROMPT_SAMPLE_KEYS);
+  });
+
   it('ledger lists exactly the profile dialog tabs', () => {
     expect([...DEV_MODAL_TABS.profile]).toEqual([...PROFILE_TABS]);
   });
@@ -266,8 +276,8 @@ describe('dev-router coverage guard', () => {
     // localModel is deliberately excluded (it lives inside Settings, not as a standalone modal). worldEditor
     // is an in-place MainMenu modal (no longer a top-level view).
     expect(DEV_MODALS).toEqual([
-      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'exitApp', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource', 'demoAI', 'persona', 'likePrompt', 'errorDetails', 'formaquestion', 'formaquestionSettings', 'formaquestionCompare', 'formaquestionAiContext', 'settingsCompare',
-      'customCode', 'eventForm', 'podium', 'sentMessages', 'feedbackForm', 'feedbackEdit', 'changelogEntry', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker',
+      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'exitApp', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'likePrompt', 'errorDetails', 'imageSetup', 'formaquestion', 'formaquestionSettings', 'formaquestionCompare', 'formaquestionAiContext', 'formaquestionWikiConfirm', 'settingsCompare', 'chipOptions', 'scriptPrompt',
+      'customCode', 'eventForm', 'podium', 'sentMessages', 'suspend', 'feedbackForm', 'feedbackEdit', 'changelogEntry', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash',
     ]);
   });
 

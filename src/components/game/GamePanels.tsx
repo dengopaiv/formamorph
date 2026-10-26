@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { useRequestKey } from '@/lib/surface/useRequestKey';
 import { useGameplay } from '@/contexts/GameplayContext';
 import { useGameplayText, setGameplayText } from '@/lib/gameplayTextStore';
 import { revealActive, revealAnimName, revealVars } from '@/lib/narrationRevealConfig';
@@ -6,36 +7,41 @@ import { usePlaceholderResolver } from '@/lib/usePlaceholderResolver';
 import { useSettings } from '@/contexts/SettingsContext';
 import { templateChipKeys } from '@/lib/promptTemplate';
 import { useSentenceHighlight } from '@/lib/useSentenceHighlight';
-import { findEntityNames, resolveEntityByName } from '@/lib/entityMatch';
-import { clearTurnDerived } from '@/lib/turnDigest';
-import { usePlayerModelUrl } from '@/lib/usePlayerModelUrl';
-import { mergeBodyMorphs } from '@/lib/bodyMorphs';
+import { resolveEntityByName } from '@/lib/entityMatch';
+import { clearTurnDerived, parseTurnContent } from '@/lib/turnDigest';
+import { narrationOf } from '@/lib/aiResponse';
+import { usePlayAvatars } from '@/lib/usePlayAvatars';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { traitOrderIndex, activeStatEnabled, refreshChosenTraits } from '@/lib/traitEffects';
-import { listablePlayerTraits, statTraitsInForce, traitGateInput, type TraitWorld } from '@/lib/traitRuntime';
+import { entityStatTraitsInForce, listableGlobalTraits, statTraitsInForce, traitGateInput, type TraitWorld } from '@/lib/traitRuntime';
 import {
-  activeOwnedTraitIds, bearerTraitTree, inPlayBearers, playerEntityIds, rowBearer, withBearerNames,
+  activeOwnedTraitIds, ownerTraitTree, inPlayOwners, playerEntityIds, rowOwner, withOwnerNames,
 } from '@/lib/ownedTraitsInPlay';
 import { useGameDataOptional } from '@/contexts/GameDataContext';
-import { WORLD_OWNER } from '@/lib/traitGates';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBlock } from './ReasoningBlock';
-import { ChatNarration, type ChatBubbleTurn, type ChatPlayerTurn } from './ChatNarration';
+import { ChatNarration, PLAYER_ACTION_BUBBLE, type ChatBubbleTurn, type ChatPlayerTurn } from './ChatNarration';
+import { RequestStatusStrip } from './RequestStatusRow';
+import { NARRATION_FADE, NARRATION_FADE_UNDER_STRIP, useEdgeFades } from './narrationFade';
 import { ChatChoices } from './ChatChoices';
 import { ChoiceRows } from './ChoiceRows';
 import { TurnCard } from './TurnCard';
 import { ActionLine } from './ActionLine';
 import { StatsActions } from './StatsActions';
-import { bubbleActions, choicesActions, playerBubbleActions } from '@/lib/bubbleActions';
+import { bubbleActions, choicesActions, playerBubbleActions, withEndpoints } from '@/lib/bubbleActions';
+import { useEndpointTip, withEndpointLine } from '@/lib/useEndpointTip';
 import { rewriteTurnAction } from '@/lib/turnHistory';
 import { copyWithToast } from '@/lib/clipboard';
 import { useLiveReasoning } from '@/lib/reasoningStreamStore';
 import { useAutoGrowTextarea } from '@/lib/useAutoGrowTextarea';
+import { useSlashCompletion } from '@/lib/useSlashCompletion';
+import { SuggestionList } from '@/components/SuggestionList';
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TokenAutocomplete } from "@/components/TokenAutocomplete";
 import { COMMON_LANGUAGES } from "@/lib/languages";
-import { Send, RefreshCw, Languages, Loader2, Headphones, Square, ChevronUp, ChevronDown, X, MoreHorizontal, User, Users, NotebookPen, Brain, ScrollText, ChartColumn, Sparkles, MapPin, type LucideIcon } from "lucide-react";
+import { Send, RefreshCw, Languages, Loader2, Headphones, Square, ChevronUp, ChevronDown, X, MoreHorizontal, NotebookPen, Brain, ScrollText, type LucideIcon } from "lucide-react";
+import { AvatarIcon, EntitiesIcon, LocationIcon, StatIcon, TraitIcon } from '@/lib/elementIcons';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { pageTurnId, withoutAttachment, setTurnAttachments, turnAttachments } from '@/lib/actionAttachments';
 import { useAttachmentIntake } from '@/lib/useAttachmentIntake';
@@ -48,12 +54,13 @@ import { CONTINUE_CHOICE } from "@/lib/choices";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tip } from "@/components/ui/tooltip";
 import { Pager } from "@/components/ui/pagination";
-import VRMViewer from '@/views/VRMViewer';
-import { EntityVisual, hasEntityVisual } from './EntityVisual';
+import { EntityVisual } from './EntityVisual';
+import { EntityAvatar } from './EntityAvatar';
+import { useEntityStatMorphs } from '@/lib/useEntityStatMorphs';
 import { useEntityVisualPreference } from '@/lib/useEntityVisualPreference';
 import { useEntityGallery } from '@/lib/useEntityGallery';
 import TtsPlaybackBar from './TtsPlaybackBar';
@@ -66,11 +73,11 @@ import type { TTSProgress } from './TTSModal';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { HelpButton } from '../HelpButton';
 import { EditTextModal } from '../modals/EditTextModal';
-import type { Entity, PersonaRef, SceneEntity, Trait } from '@/types';
+import type { Entity, PersonaRef, SceneEntity, Stat, StatGroup, Trait } from '@/types';
 import { gateStates } from '@/lib/traitGates';
 import { worldEntitiesOf } from '@/lib/persona';
 import type { TraitCascade } from './SetupTraitList';
-import { formatAbsolute, formatClock } from '@/lib/gameClock';
+import { daypartAt, formatAbsolute, formatClock } from '@/lib/gameClock';
 import { logKind } from '@/lib/playLog';
 import { cn } from "@/lib/utils";
 import { useResolvedWorld } from '@/lib/useResolvedWorld';
@@ -78,11 +85,28 @@ import { LocationTabBody } from './LocationTabBody';
 import { EntityListRow } from './EntityListRow';
 import { TraitsTab } from './TraitsTab';
 import { StatRow } from './StatRow';
+import { rowDelta } from '@/lib/useStatDeltas';
+import type { OwnerId } from '@/lib/scope';
+import { StatGroupSections } from './StatGroupSections';
+import { PanelOwnerCard } from './PanelOwnerCard';
+import { statPanelLayout } from '@/lib/statGroupTree';
 import { PersonaRow } from './PersonaRow';
+import { YouMark } from './YouMark';
 import { useNarrationLayout } from '@/lib/useNarrationLayout';
 import { useStatsSnap } from '@/lib/useStatsSnap';
+import { firstShowableEntity, type StatPanelOption } from '@/lib/statPanelEntities';
+import { useStatPanelEntity, type StatPanelOwner } from './useStatPanelEntity';
 
 import { parseSavedReasoning } from '@/lib/savedReasoning';
+import { scriptPrompts } from '@/lib/scriptPrompts';
+import { turnTells } from '@/lib/scriptTells';
+import { ScriptPromptLine, ScriptTellLines } from './ScriptPromptLine';
+
+/** What the entity view shows: an entity, or the played side when no entity is played. */
+type EntityViewSubject = { kind: 'entity'; entity: Entity } | { kind: 'played' };
+
+/** The played side's visual source, which shows the played side's Avatar and nothing else. */
+const PLAYED_SIDE: Pick<Entity, 'id' | 'name'> = { id: '__you', name: 'You' };
 
 /** One side-panel tab: an icon, and the label where the panel is wide enough to hold it. */
 const PanelTab = ({ value, icon: Icon, label }: { value: string; icon: LucideIcon; label: string }) => (
@@ -103,7 +127,7 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
   requestKey?: string;
   onEntityClick: (entityId: string) => void;
   /** Re-run the digest prompt for one turn (Memory Manager's regenerate); owned by GameViewer. */
-  onRegenerateMemory?: (turnId: string) => Promise<boolean>;
+  onRegenerateMemory?: (turnId: string, signal: AbortSignal) => Promise<boolean | undefined>;
   /** The narration prompt this world actually sends: the world's own unless declined, else the preset's. */
   narrationPrompt: string;
 }) => {
@@ -115,12 +139,10 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
   // The played entity heads the Entities tab in every scene; the scene parse never lists it.
   const personaEntity = persona?.entity;
   const {
-    // Aliased to the viewed-page values so paging back shows that turn's appearance + scene (they equal
-    // the live values on the latest page). Body morphs still ride live `bodyMorphValues`, which the
-    // GameViewer effect derives from the viewed stats.
-    viewCharacterData: characterData,
-    bodyMorphValues,
+    // Aliased to the viewed-page values so paging back shows that turn's scene (they equal the live values
+    // on the latest page).
     viewVisibleEntities: visibleEntities,
+    viewEntityFollowers: entityFollowers,
     logEntries,
     calendar,
     logsEndRef,
@@ -134,6 +156,9 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
     setSuppressedCharacterNames,
     setVisibleEntities,
     setIsEditMode,
+    // Shared with the stat panel's entity picker.
+    selectedEntityId,
+    setSelectedEntityId,
   } = useGameplay();
   // The discovered character awaiting delete confirmation, or null.
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
@@ -150,31 +175,35 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
     setVisibleEntities((prev) => prev.filter((se) => se.name !== name));
     setPendingRemoval(null);
   };
-  const { url: playerModelUrl, resolving: modelResolving } = usePlayerModelUrl(characterData?.playerModelId);
-  // First present entity with something to show — an image, or failing that a 3D model — displayed in the
-  // model section's Entities view (the portrait shows whether or not the name is revealed yet).
-  const firstShowableEntity = visibleEntities
-    .map((se) => resolveEntityByName(se.name, entities))
-    .find((e) => hasEntityVisual(e));
+  const avatars = usePlayAvatars();
+  // The played side with no played entity: the legacy fallback's Avatar, shown through the You row.
+  const youRow = !personaEntity && !!avatars.played;
+  const showable = (entity: Entity | undefined): entity is Entity => !!entity && avatars.shows(entity);
+  // First present entity with something to show (the image shows whether or not the name is revealed yet).
+  const firstShowable = firstShowableEntity(visibleEntities, entities, showable);
   const isMobile = useIsMobile();
-  const [showModel, setShowModel] = React.useState(true);
-  // Landscape model viewer view: the player VRM vs. the detected-entity view.
-  const [modelTab, setModelTab] = React.useState("avatar");
-  // Entity picked from the list; falls back to the first detected showable entity.
-  const [selectedEntityName, setSelectedEntityName] = React.useState<string | undefined>(undefined);
+  const [showEntityView, setShowEntityView] = React.useState(true);
   const [leftTab, setLeftTab] = React.useState(requestedTab ?? (isMobile ? "model" : "notes"));
-  React.useEffect(() => { if (requestedTab) setLeftTab(requestedTab); }, [requestedTab, requestKey]);
+  const landingKey = useRequestKey(requestKey);
+  React.useEffect(() => { if (requestedTab) setLeftTab(requestedTab); }, [requestedTab, landingKey]);
 
-  const entityViewEntity =
-    [...entities, ...(personaEntity ? [personaEntity] : [])].find((e) => e.name === selectedEntityName)
-    ?? firstShowableEntity;
+  // The shared pick when it has something to show, else the played entity, else the first showable scene
+  // entity. The stat panel's (None) and a pick with nothing to show both leave the view on that fallback.
+  const pickedEntity = [...entities, ...(personaEntity ? [personaEntity] : [])].find((e) => e.id === selectedEntityId);
+  const entityViewShown = (showable(pickedEntity) ? pickedEntity : undefined) ?? (showable(personaEntity) ? personaEntity : undefined);
+  const entityViewSubject: EntityViewSubject | undefined = entityViewShown ? { kind: 'entity', entity: entityViewShown }
+    : youRow ? { kind: 'played' }
+    : firstShowable && { kind: 'entity', entity: firstShowable };
+  const entityViewEntity = entityViewSubject?.kind === 'entity' ? entityViewSubject.entity : undefined;
+  const entityViewSource = entityViewSubject && (entityViewEntity ?? PLAYED_SIDE);
   const entityViewPreference = useEntityVisualPreference(entityViewEntity?.id);
-  const entityViewGallery = useEntityGallery(entityViewEntity);
+  const entityViewGallery = useEntityGallery(entityViewSource);
+  const entityViewMorphs = useEntityStatMorphs(entityViewSource);
+  const entityViewAvatar = entityViewSubject && (entityViewEntity ? avatars.sourceOf(entityViewEntity) : avatars.played);
 
-  // Clicking an entity swaps the in-section image when the viewer is open; otherwise it opens the
-  // entity popup (collapsed, on mobile, the entity has no image, or it's already the shown entity). A
-  // not-yet-revealed character can show its portrait but never opens the detail popup — that would spoil
-  // the name the scene is deliberately withholding.
+  // Clicking an entity with something to show selects it, so the view swaps to it. The popup opens on mobile,
+  // and in landscape when the view is hidden or already on that entity. A not-yet-revealed entity can show
+  // its image but never opens the detail popup: that would spoil the name the scene is withholding.
   const handleEntityListClick = (se: SceneEntity) => {
     const match = resolveEntityByName(se.name, entities);
     if (!match) return; // un-named (ad-hoc) participant — nothing to show
@@ -182,17 +211,12 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
   };
 
   const openEntity = (match: Entity, revealed: boolean) => {
-    const entitiesViewActive = !characterData || modelTab === "entities";
-    const alreadyShown = entitiesViewActive && match === entityViewEntity;
-    if (!isMobile && showModel && hasEntityVisual(match) && !alreadyShown) {
-      setSelectedEntityName(match.name);
-      setModelTab("entities");
-    } else if (revealed) {
-      onEntityClick(match.name);
-    }
+    const selects = showable(match) && (isMobile || (showEntityView && match.id !== entityViewEntity?.id));
+    if (selects) setSelectedEntityId(match.id);
+    if (revealed && (isMobile || !selects)) onEntityClick(match.name);
   };
 
-  // In landscape the model lives on top, not in a tab; leave the "model" tab.
+  // In landscape the view lives on top, not in a tab; leave the "model" tab.
   React.useEffect(() => {
     if (!isMobile && leftTab === "model") setLeftTab("notes");
   }, [isMobile, leftTab]);
@@ -217,28 +241,28 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
     }
   }, [devRoute?.modal, devRoute?.tab, setIsEditMode]);
 
-  const modelViewer = characterData ? (
+  const entityView = entityViewSource ? (
     // Mobile: fill the whole panel. Landscape: a fixed 1.2 aspect box sitting atop the panel.
     <div className={isMobile ? "relative w-full h-full" : "w-full relative"} style={isMobile ? undefined : { paddingTop: '120%' }}>
       <div className="absolute top-0 left-0 w-full h-full flex items-center justify-center">
-        {modelResolving ? (
-          // Hold a loader while a library model's blob resolves, so we don't transiently mount the bundled
-          // default (which would report default capabilities and flash before the real model swaps in).
-          <Loader2 className="animate-spin" size={32} />
-        ) : (
-          <VRMViewer
-            key={playerModelUrl ?? 'default'}
-            bodyMorphValues={mergeBodyMorphs(characterData.bodyMorphs, bodyMorphValues)}
-            hairColor={characterData.hairColor}
-            eyeColor={characterData.eyeColor}
-            skinColor={characterData.skinColor}
-            hairTypes={characterData.hairTypes}
-            currentHairStyle={characterData.currentHairStyle}
-            hairLength={characterData.hairLength}
-            modelUrl={playerModelUrl}
-            extraColors={characterData.extraColors}
-          />
-        )}
+        <EntityVisual
+          key={entityViewSource.id}
+          entity={entityViewSource}
+          images={entityViewGallery.images}
+          avatar={entityViewAvatar && (
+            <EntityAvatar
+              entity={entityViewSource}
+              source={entityViewAvatar}
+              played={!entityViewEntity || entityViewEntity.id === avatars.playedId}
+              resolving={avatars.resolving}
+            />
+          )}
+          preference={entityViewPreference.preference}
+          onPreferenceChange={entityViewPreference.onPreferenceChange}
+          imageIndex={entityViewGallery.imageIndex}
+          onImageStep={entityViewGallery.onImageStep}
+          morphValues={entityViewMorphs}
+        />
       </div>
     </div>
   ) : null;
@@ -246,67 +270,36 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
   return (
   <Card className="w-full md:w-1/4 md:shrink-0 md:mr-1 grow md:grow-0 min-h-0 flex flex-col bg-background/60 border-border overflow-hidden">
     <CardContent className="flex-grow flex flex-col overflow-hidden p-4 sm:p-1">
-      {/* Landscape: model on top with a show/hide toggle in the upper right */}
+      {/* Landscape: the entity view on top with a show/hide toggle in the upper right */}
       {!isMobile && (
         <div className="mb-2">
           <div className="relative flex items-center justify-center min-h-10">
-            {/* Only worlds with a player model offer the Avatar/Entities swap. */}
-            {characterData && (
-              <ToggleGroup
-                type="single"
-                value={modelTab}
-                // A single ToggleGroup clears its value when the active item is clicked again; one of the two
-                // is always shown, so an empty result is ignored rather than stored.
-                onValueChange={(v) => { if (v) setModelTab(v); }}
-              >
-                <ToggleGroupItem value="avatar">Avatar</ToggleGroupItem>
-                <ToggleGroupItem value="entities">Entities</ToggleGroupItem>
-              </ToggleGroup>
-            )}
-            <Tip tip={showModel ? "Hide Avatar" : "Show Avatar"}>
+            <Tip tip={showEntityView ? "Hide Entity View" : "Show Entity View"}>
               <Button
                 variant="ghost"
                 size="icon"
                 className="absolute right-0"
-                onClick={() => setShowModel((s) => !s)}
+                onClick={() => setShowEntityView((s) => !s)}
               >
-                {showModel ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {showEntityView ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </Button>
             </Tip>
           </div>
-          {showModel && (
-            // No model ⇒ always the Entities view (there's no Avatar to swap to).
-            characterData && modelTab === "avatar"
-              ? modelViewer
-              : entityViewEntity && (
-                  <div className="w-full relative" style={{ paddingTop: '120%' }}>
-                    <div className="absolute top-0 left-0 w-full h-full flex items-center justify-center">
-                      <EntityVisual
-                        key={entityViewEntity.id}
-                        entity={entityViewEntity}
-                        preference={entityViewPreference.preference}
-                        onPreferenceChange={entityViewPreference.onPreferenceChange}
-                        imageIndex={entityViewGallery.imageIndex}
-                        onImageStep={entityViewGallery.onImageStep}
-                      />
-                    </div>
-                  </div>
-                )
-          )}
+          {showEntityView && entityView}
         </div>
       )}
 
       <Tabs surfaceTabs="gameViewer" value={leftTab} onValueChange={setLeftTab} className="w-full flex-grow flex flex-col overflow-hidden">
         <TabsList className="grid w-full flex-shrink-0 auto-cols-fr grid-flow-col">
-          {isMobile && <PanelTab value="model" icon={User} label="Avatar" />}
-          <PanelTab value="entities" icon={Users} label="Entities" />
+          {isMobile && <PanelTab value="model" icon={AvatarIcon} label="View" />}
+          <PanelTab value="entities" icon={EntitiesIcon} label="Entities" />
           <PanelTab value="notes" icon={NotebookPen} label="Notes" />
           <PanelTab value="memory" icon={Brain} label="Memory" />
           <PanelTab value="logs" icon={ScrollText} label={`Logs (${logEntries.reduce((sum, entry) => sum + 1 + (entry.repeat || 0), 0)})`} />
         </TabsList>
         {isMobile && (
           <TabsContent value="model" className="flex-grow overflow-hidden min-h-[100px]">
-            {modelViewer}
+            {entityView}
           </TabsContent>
         )}
         {/* `flex` must be state-scoped: a plain `flex` class beats the UA `[hidden]{display:none}` Radix
@@ -320,8 +313,10 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
           <ScrollArea className="flex-grow min-h-0">
             <div className="p-2">
               {personaEntity && (
-                <EntityListRow label={`${personaEntity.name} (You)`} onClick={() => openEntity(personaEntity, true)} />
+                <EntityListRow label={personaEntity.name} you onClick={() => openEntity(personaEntity, true)} />
               )}
+              {/* No pick falls back to the played side, which is what selecting You means. */}
+              {youRow && <EntityListRow label={PLAYED_SIDE.name} onClick={() => setSelectedEntityId(undefined)} />}
               {visibleEntities.length > 0 ? (
                 visibleEntities.map((se, index) => {
                   const entityItem = resolveEntityByName(se.name, entities);
@@ -339,13 +334,14 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
                     <EntityListRow
                       key={index}
                       label={label}
+                      following={!!entityItem && entityFollowers.includes(entityItem.id)}
                       disabled={isDisabled}
                       onClick={() => handleEntityListClick(se)}
                       onRemove={isRemovable ? () => setPendingRemoval(label) : undefined}
                     />
                   );
                 })
-              ) : personaEntity ? null : (
+              ) : personaEntity || youRow ? null : (
                 <p>No entity visible.</p>
               )}
             </div>
@@ -417,13 +413,13 @@ const ACTION_INPUT_MAX_H = 240;
  */
 const ActionInput = ({
   value,
-  onChange,
+  setValue,
   onKeyDown,
   placeholder,
   disabled,
 }: {
   value: string;
-  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  setValue: (value: string) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   placeholder: string;
   disabled: boolean;
@@ -431,14 +427,28 @@ const ActionInput = ({
   // The wrapper mirrors the grown height so the box is real layout, not an overlay: the row above it moves
   // up instead of being covered, which is what lets it clear the on-screen keyboard.
   const { height, focused, stateClass, fieldProps } = useAutoGrowTextarea(value, ACTION_INPUT_LINE_H, ACTION_INPUT_MAX_H);
+  const slash = useSlashCompletion(fieldProps.ref, value, setValue);
 
   return (
     <div className="relative flex-grow mr-2 flex-shrink-0" style={{ height }} data-testid="action-input-wrap">
+      {focused && slash.items.length > 0 && (
+        // Above the box, starting under the word being typed.
+        <div className="absolute bottom-full z-30 mb-1" style={{ left: slash.left }}>
+          <SuggestionList
+            items={slash.items}
+            active={slash.active}
+            onPick={slash.accept}
+            onHover={slash.setActive}
+            className="relative mt-0 min-w-[10rem]"
+          />
+        </div>
+      )}
       <textarea
         {...fieldProps}
         value={value}
-        onChange={onChange}
-        onKeyDown={onKeyDown}
+        onChange={(e) => { setValue(e.target.value); slash.readCaret(); }}
+        onSelect={slash.readCaret}
+        onKeyDown={(e) => { if (!slash.onKeyDown(e)) onKeyDown(e); }}
         placeholder={placeholder}
         disabled={disabled}
         className={cn(
@@ -458,6 +468,12 @@ const ROLLBACK_CONFIRM = {
   title: "Confirm Rollback",
   description: "Are you sure you want to rollback to the previous state? This action cannot be undone.",
 };
+
+/** A slash-command preview's choices: the list so far, and whether its scripted turn has ended. */
+export interface CommandChoices {
+  list: string[];
+  settled: boolean;
+}
 
 export const MiddlePanel = ({
   narrationBadge,
@@ -494,7 +510,11 @@ export const MiddlePanel = ({
   likePrompt,
   locationSuggestion,
   commandPreview,
-  onDismissCommandPreview
+  commandChoices = null,
+  commandAction = null,
+  commandRunId = 0,
+  onDismissCommandPreview,
+  onRescanNarration
 }: {
   /** A status badge that leads the narration options. */
   narrationBadge?: React.ReactNode;
@@ -544,10 +564,16 @@ export const MiddlePanel = ({
   likePrompt?: React.ReactNode;
   locationSuggestion: React.ReactNode;
   commandPreview: boolean;
+  /** The preview's choices, or null when it shows narration only. */
+  commandChoices?: CommandChoices | null;
+  /** The preview turn's player action, or null when it has none. */
+  commandAction?: string | null;
+  /** Changes per preview run, so each run starts on a fresh renderer. */
+  commandRunId?: number;
   onDismissCommandPreview: () => void;
+  /** Rescans a page's edited narration: rebuilds its scene list and returns who took part. */
+  onRescanNarration: (page: number, narration: string) => string[];
 }) => {
-  // Resolved: narration is matched against these names, and a chip can never appear in AI prose.
-  const { entities } = useResolvedWorld();
   const {
     displayedMessages,
     setDisplayedMessages,
@@ -556,13 +582,14 @@ export const MiddlePanel = ({
     setPlayerInput,
     isWaitingForAI,
     isRevealingNarration,
+    narrationSettled,
     isFlashing,
     isEditMode,
     setIsEditMode,
     ttsPlayback,
     setFullMessageHistory,
     setMemoryEdits,
-    playerStats,
+    globalStats,
     isViewingPast,
     viewChoices: choices,
     choices: latestChoices,
@@ -574,6 +601,7 @@ export const MiddlePanel = ({
     setActionAttachments,
     pendingAttachments,
     setPendingAttachments,
+    scriptTells,
   } = useGameplay();
   const gameplayText = useGameplayText();
   const { ttsHighlight, choicesEnabled, setChoicesEnabled, continueChoiceMode, statUpdatesEnabled, revealSpec, revealEasing, showReasoning, memoryDigests, setMemoryDigests } = useSettings();
@@ -586,6 +614,11 @@ export const MiddlePanel = ({
     setPending: setPendingAttachments,
   });
   const chatLayout = useNarrationLayout() === 'chat';
+  // The narration fades out above the status strip while it shows.
+  const statusShowing = Boolean(progressBar);
+  const narrationFade = statusShowing ? NARRATION_FADE_UNDER_STRIP : NARRATION_FADE;
+  const pagesViewport = useRef<HTMLDivElement>(null);
+  useEdgeFades(pagesViewport, chatLayout);
   const liveReasoning = useLiveReasoning();
   // Per-word reveal: any enabled effect ⇒ animate (composed keyframe + CSS vars on the container);
   // nothing enabled ⇒ smooth crawl. The keyframe name feeds Streamdown, the amounts ride as CSS vars.
@@ -594,7 +627,7 @@ export const MiddlePanel = ({
   const revealStyle = revealVars(revealSpec) as React.CSSProperties;
   // Which partial re-generate actions to offer (mirrors the aux-request gates).
   const canRegenChoices = choicesEnabled && fullMessageHistory[fullMessageHistory.length - 1]?.role === 'assistant';
-  const canRegenStats = statUpdatesEnabled && playerStats.length > 0;
+  const canRegenStats = statUpdatesEnabled && globalStats.length > 0;
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
 
   // Ctrl/Cmd+click or a touch long-press appends a choice as a new sentence; a plain tap replaces it.
@@ -654,23 +687,18 @@ export const MiddlePanel = ({
 
   // The viewed page's narration: the editor's text when no action row opened it.
   const currentAssistantMessage = displayedMessages.find(m => m.role === 'assistant');
-  let currentPageText = gameplayText;
-  if (currentAssistantMessage) {
-    try {
-      // Read the current `narration` field, falling back to legacy `game_text` (pre-rename saves).
-      const parsed = JSON.parse(currentAssistantMessage.content);
-      currentPageText = parsed.narration ?? parsed.game_text ?? currentAssistantMessage.content;
-    } catch {
-      currentPageText = currentAssistantMessage.content;
-    }
-  }
+  const currentPageText = currentAssistantMessage
+    ? narrationOf(currentAssistantMessage.content) ?? currentAssistantMessage.content
+    : gameplayText;
 
   // A turn's Edit and Rewind to Here target that turn's own page, never the viewed one.
+  // Each request-sending action names where it goes.
+  const endpointTip = useEndpointTip();
   const [editTarget, setEditTarget] = useState<{ kind: 'narration' | 'action'; page: number; text: string; turnId?: string } | null>(null);
   const [rewindPage, setRewindPage] = useState<number | null>(null);
   const actionsFor = (turn: ChatBubbleTurn) => {
     const page = turn.index + 1;
-    return bubbleActions(
+    return withEndpoints(bubbleActions(
       {
         isLatest: turn.isLatest,
         live: turn.live,
@@ -693,7 +721,7 @@ export const MiddlePanel = ({
         copy: () => copyWithToast(turn.text),
         rewind: () => setRewindPage(page),
       },
-    );
+    ), endpointTip);
   };
   const editAction = (page: number, text: string) => {
     setEditTarget({ kind: 'action', page, text, turnId: pageTurnId(fullMessageHistory, page) });
@@ -708,23 +736,34 @@ export const MiddlePanel = ({
   const actionLine = currentPage > 1 ? displayedMessages.find((m) => m.role === 'user')?.content : undefined;
   // The live stream belongs to the latest page only; a past page shows its committed text.
   const pageLive = !isViewingPast && isRevealingNarration && !!currentAssistantMessage;
+  // GameViewer releases what arrives while a past page shows; the remount on return shows it still.
+  const [pagedAway, setPagedAway] = useState(false);
+  // Choices stream in only once a turn has played here; a loaded game's choices show at once.
+  const [playedTurn, setPlayedTurn] = useState(false);
+  React.useEffect(() => { if (isWaitingForAI) setPlayedTurn(true); }, [isWaitingForAI]);
+  React.useEffect(() => {
+    if (isViewingPast && isRevealingNarration) setPagedAway(true);
+    else if (!isRevealingNarration) setPagedAway(false);
+  }, [isViewingPast, isRevealingNarration]);
   const pageNarration = pageLive ? gameplayText : currentAssistantMessage ? parseAssistantMessage(currentAssistantMessage.content) : '';
   const pageReasoningLive = !isViewingPast && !!liveReasoning.text;
   const pageReasoning = pageReasoningLive
     ? liveReasoning
     : currentAssistantMessage ? parseSavedReasoning(currentAssistantMessage.content) : null;
+  // The card holds its actions while live, so its row can open in place once the narration settles.
   const pageActions = currentAssistantMessage ? actionsFor({
-    index: currentPage - 1, isLatest: !isViewingPast, live: pageLive, hasImage: sceneImages.length > 0, text: pageNarration,
+    index: currentPage - 1, isLatest: !isViewingPast, live: false, hasImage: sceneImages.length > 0, text: pageNarration,
   }) : [];
+  const pageChromeHeld = pageLive && !narrationSettled;
   // The turn is live from submit, before its narration exists, until the reveal ends.
   const actionLineActions = actionLine === undefined ? [] : playerActionsFor({
     index: currentPage - 1, live: !isViewingPast && (pageLive || (isWaitingForAI && !currentAssistantMessage)), text: actionLine,
   });
   /** The choices block's actions, for a block that shows `hasChoices`. */
-  const regenChoicesActions = (hasChoices: boolean) => choicesActions(
+  const regenChoicesActions = (hasChoices: boolean) => withEndpoints(choicesActions(
     { canRegenerate: canRegenChoices, hasChoices, busy: disabled || isWaitingForAI || isRevealingNarration, regenerating: choicesRegenerating && isWaitingForAI },
     () => { setChoicesRegenerating(true); handleRegenerateChoices(); },
-  );
+  ), endpointTip);
   const pageChoicesActions = isViewingPast ? [] : regenChoicesActions((choices?.length ?? 0) > 0 || showContinue);
 
   const narrationFrame = `narration-text flex-grow border border-border p-2 bg-muted/80 min-h-0 ${isFlashing ? 'flash-animation' : ''} relative`;
@@ -760,20 +799,53 @@ export const MiddlePanel = ({
       </Popover>
     </div>
   );
-  const commandPreviewBlock = commandPreview && (
-      <div className="mb-3 p-2 border border-dashed border-primary/50 rounded relative">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-meta text-muted-foreground">Markdown preview (/markdown test)</span>
-          <Tip tip="Dismiss preview">
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onDismissCommandPreview}>
-              <X className="h-4 w-4" />
-            </Button>
-          </Tip>
+  // A slash-command preview plays as a live turn in the layout's own chrome, in place of the story.
+  const commandPreviewHeader = (
+    // Left-aligned: the narration options button holds the top-right corner.
+    <div className="mb-2 flex shrink-0 items-center gap-1">
+      <span className="text-meta text-muted-foreground">{commandChoices ? 'Choices preview (/choices test)' : 'Markdown preview (/markdown test)'}</span>
+      <Tip tip="Dismiss preview">
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onDismissCommandPreview}>
+          <X className="h-5 w-5" />
+        </Button>
+      </Tip>
+    </div>
+  );
+  const commandPreviewCard = (
+    <TurnCard actions={[]} turnNumber={totalPages + 1} live style={revealStyle}>
+      {!chatLayout && commandAction && <ActionLine text={commandAction} actions={[]} />}
+      {gameplayText && (
+        <div data-testid="preview-narration">
+          {/* A reused renderer keeps the last run's shown text and would show the next run's first sentence at once. */}
+          <MarkdownRenderer key={commandRunId} text={gameplayText} animate={revealOn} animation={revealAnim} easing={revealEasing} dialogue fitShown />
         </div>
-        <div style={revealStyle}>
-          <MarkdownRenderer text={gameplayText} animate={revealOn} animation={revealAnim} easing={revealEasing} />
-        </div>
-      </div>
+      )}
+    </TurnCard>
+  );
+  const commandPreviewChoices = (
+        // A live turn's choices stay disabled until the turn settles, and Continue joins them then.
+        commandChoices && (chatLayout ? (
+          <ChatChoices
+            stream
+            choices={commandChoices.list}
+            showContinue={continueOffered && commandChoices.settled}
+            disabled={!commandChoices.settled}
+            isSelected={(choice) => playerInput.includes(choice)}
+            choicePress={choicePress}
+            actions={[]}
+          />
+        ) : (
+          <ChoiceRows
+            stream
+            choices={commandChoices.list}
+            showContinue={continueOffered && commandChoices.settled}
+            disabled={!commandChoices.settled}
+            isSelected={(choice) => playerInput.includes(choice)}
+            continueSelected={playerInput.includes(CONTINUE_CHOICE)}
+            choicePress={choicePress}
+            actions={[]}
+          />
+        ))
   );
 
   return (
@@ -822,30 +894,64 @@ export const MiddlePanel = ({
           {chatLayout ? (
             <div className={`${narrationFrame} flex flex-col`}>
               {optionsControl}
-              {commandPreviewBlock}
+              {commandPreview ? (
+                <>
+                  {commandPreviewHeader}
+                  <ScrollArea className="min-h-0 flex-grow">
+                    <div className="mx-auto max-w-3xl px-2">
+                      <article className="flow-root py-3">
+                        {commandAction && (
+                          <div className={`mb-3 ${PLAYER_ACTION_BUBBLE}`}>
+                            <MarkdownRenderer text={commandAction} />
+                          </div>
+                        )}
+                        {/* Chat shows no card until there is narration to fill it. */}
+                        {gameplayText && commandPreviewCard}
+                        {commandPreviewChoices}
+                      </article>
+                    </div>
+                  </ScrollArea>
+                </>
+              ) : (
               <ChatNarration
                 parseAssistantMessage={parseAssistantMessage}
                 actionsFor={actionsFor}
                 playerActionsFor={playerActionsFor}
                 onDeleteSceneImage={onDeleteSceneImage}
+                fadeUnderStrip={statusShowing}
                 latestFooter={
-                  <ChatChoices
-                    choices={latestChoices}
-                    showContinue={chatShowContinue}
-                    disabled={disabled || isWaitingForAI}
-                    isSelected={(choice) => playerInput.includes(choice)}
-                    choicePress={choicePress}
-                    actions={regenChoicesActions(latestChoices.length > 0 || chatShowContinue)}
-                  />
+                  <>
+                    <ScriptPromptLine store={scriptPrompts} layout="chat" className="mb-3" />
+                    <ChatChoices
+                      stream={playedTurn}
+                      choices={latestChoices}
+                      showContinue={chatShowContinue}
+                      disabled={disabled || choicesRegenerating}
+                      isSelected={(choice) => playerInput.includes(choice)}
+                      choicePress={choicePress}
+                      actions={regenChoicesActions(latestChoices.length > 0 || chatShowContinue)}
+                    />
+                  </>
                 }
               />
+              )}
             </div>
           ) : (
-          <ScrollArea className={narrationFrame}>
+          <ScrollArea
+            className={narrationFrame}
+            viewportRef={pagesViewport}
+            viewportProps={{ className: narrationFade }}
+          >
             {optionsControl}
-            {commandPreviewBlock}
-            {(actionLine !== undefined || currentAssistantMessage || (showReasoning && pageReasoning?.text)) && (
-              <TurnCard actions={pageActions} turnNumber={currentPage} live={pageLive} style={revealStyle}>
+            {commandPreview && (
+              <>
+                {commandPreviewHeader}
+                {commandPreviewCard}
+                {commandPreviewChoices}
+              </>
+            )}
+            {!commandPreview && (actionLine !== undefined || currentAssistantMessage || (showReasoning && pageReasoning?.text)) && (
+              <TurnCard actions={pageActions} turnNumber={currentPage} live={pageChromeHeld} style={revealStyle}>
                 {sceneTurnId && (
                   <ScenePlate
                     turnId={sceneTurnId}
@@ -860,13 +966,15 @@ export const MiddlePanel = ({
                 {showReasoning && pageReasoning?.text && (
                   <ReasoningBlock text={pageReasoning.text} ms={pageReasoning.ms} active={pageReasoningLive && liveReasoning.active} />
                 )}
-                {currentAssistantMessage && (
+                {currentAssistantMessage && pageNarration && (
                   <div ref={narrationRef} data-testid="narration">
                     {/* Streamdown memoizes on source position, not text, so committed text keys by its content. */}
                     <MarkdownRenderer
                       key={pageLive ? 'live' : `committed:${pageNarration}`}
                       text={pageNarration}
                       animate={pageLive && revealOn}
+                      resume={pagedAway}
+                      fitShown
                       animation={revealAnim}
                       easing={revealEasing}
                       dialogue
@@ -875,7 +983,8 @@ export const MiddlePanel = ({
                 )}
               </TurnCard>
             )}
-            {sceneImagesAvailable && (
+            {!commandPreview && <ScriptTellLines tells={turnTells(scriptTells, sceneTurnId)} className="mt-3" />}
+            {!commandPreview && sceneImagesAvailable && (
               <SceneImagePanel
                 // Keyed by turn: paging to another turn remounts the panel, so the tag draft and open
                 // editor can't carry one turn's state onto another.
@@ -891,16 +1000,20 @@ export const MiddlePanel = ({
                 onCancel={onCancelSceneImage}
               />
             )}
-            <ChoiceRows
-              choices={choices ?? []}
-              showContinue={showContinue}
-              disabled={disabled || isViewingPast}
-              // Past: the choice the player took. Live: any choice staged in the input.
-              isSelected={(choice, index) => isViewingPast ? viewSelectedChoice.includes(index) : playerInput.includes(choice)}
-              continueSelected={continueSelected}
-              choicePress={choicePress}
-              actions={pageChoicesActions}
-            />
+            {!commandPreview && <ScriptPromptLine store={scriptPrompts} className="mt-4" />}
+            {!commandPreview && (
+              <ChoiceRows
+                stream={playedTurn && !isViewingPast}
+                choices={choices ?? []}
+                showContinue={showContinue}
+                disabled={disabled || isViewingPast}
+                // Past: the choice the player took. Live: any choice staged in the input.
+                isSelected={(choice, index) => isViewingPast ? viewSelectedChoice.includes(index) : playerInput.includes(choice)}
+                continueSelected={continueSelected}
+                choicePress={choicePress}
+                actions={pageChoicesActions}
+              />
+            )}
           </ScrollArea>
           )}
           <ConfirmDialog
@@ -928,25 +1041,26 @@ export const MiddlePanel = ({
               if (page === totalPages) setGameplayText(text);
               // Update the message in history for the edited page
               const messageIndex = (page - 1) * 2 + 1; // +1 for assistant message
+              // Only a stored narration turn is rescanned, so its participants and scene list stay in step.
+              const participants = fullMessageHistory[messageIndex]?.role === 'assistant' ? onRescanNarration(page, text) : [];
               setFullMessageHistory(prev => {
                 const updatedHistory = [...prev];
                 let editedTurnId: string | undefined;
                 if (messageIndex < updatedHistory.length) {
                   const message = updatedHistory[messageIndex];
                   if (message.role === 'assistant') {
-                    try {
-                      const content = JSON.parse(message.content);
+                    const content = parseTurnContent(message.content);
+                    if (content) {
                       editedTurnId = content.turnId;
                       updatedHistory[messageIndex] = {
                         role: 'assistant',
                         content: JSON.stringify({
                           ...content,
                           narration: text,
-                          // Re-derive participants from the edited text so they don't go stale.
-                          entities: findEntityNames(text, entities)
+                          entities: participants
                         })
                       };
-                    } catch {
+                    } else {
                       // If parsing fails, create new content object
                       updatedHistory[messageIndex] = {
                         role: 'assistant',
@@ -954,7 +1068,7 @@ export const MiddlePanel = ({
                           narration: text,
                           choices: choices,
                           stat_changes: [],
-                          entities: findEntityNames(text, entities)
+                          entities: participants
                         })
                       };
                     }
@@ -981,8 +1095,8 @@ export const MiddlePanel = ({
                 const updatedMessages = [...prev];
                 const assistantMessageIndex = updatedMessages.findIndex(m => m.role === 'assistant');
                 if (assistantMessageIndex !== -1) {
-                  try {
-                    const content = JSON.parse(updatedMessages[assistantMessageIndex].content);
+                  const content = parseTurnContent(updatedMessages[assistantMessageIndex].content);
+                  if (content) {
                     updatedMessages[assistantMessageIndex] = {
                       role: 'assistant',
                       content: JSON.stringify({
@@ -990,7 +1104,7 @@ export const MiddlePanel = ({
                         narration: text
                       })
                     };
-                  } catch {
+                  } else {
                     updatedMessages[assistantMessageIndex] = {
                       role: 'assistant',
                       content: JSON.stringify({
@@ -1005,6 +1119,9 @@ export const MiddlePanel = ({
               });
             }}
           />
+          {/* The footer. The status strip floats above it, so a request starting or ending moves nothing. */}
+          <div className="relative flex flex-col gap-2">
+          {progressBar && <RequestStatusStrip>{progressBar}</RequestStatusStrip>}
           <div className="flex flex-col items-center gap-2">
             {likePrompt}
             {locationSuggestion}
@@ -1015,7 +1132,6 @@ export const MiddlePanel = ({
               </div>
             )}
           </div>
-          {progressBar}
           <div className={cn('flex flex-col gap-2', attachDragOver && 'rounded-md ring-2 ring-inset ring-ring')} {...intakeProps}>
             {imageAttachments && (
               <AttachmentThumbs
@@ -1031,7 +1147,7 @@ export const MiddlePanel = ({
               )}
               <ActionInput
                 value={playerInput}
-                onChange={(e) => setPlayerInput(e.target.value)}
+                setValue={setPlayerInput}
                 onKeyDown={handleKeyPress}
                 placeholder="Type your action... [square brackets] direct the story as the author"
                 disabled={disabled}
@@ -1070,16 +1186,20 @@ export const MiddlePanel = ({
                   <Square className="h-4 w-4" />
                 </Button>
               ) : (
-                <Button
-                  onClick={handleSendAction}
-                  disabled={disabled}
-                  aria-label="Send"
-                  className="border-dashed border-2 w-12 sm:w-32"
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
+                // The narration's endpoint: the turn's other passes may route elsewhere, and their buttons name theirs.
+                <Tip tip={withEndpointLine('Send', endpointTip('narration'))} labelsChild={false}>
+                  <Button
+                    onClick={handleSendAction}
+                    disabled={disabled}
+                    aria-label="Send"
+                    className="border-dashed border-2 w-12 sm:w-32"
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </Tip>
               )}
             </div>
+          </div>
           </div>
         </div>
       </CardContent>
@@ -1087,13 +1207,22 @@ export const MiddlePanel = ({
   );
 };
 
+/** The (None) item's value: Radix Select has no empty item value. */
+const NO_ENTITY = '__none';
+const NO_STAT_GROUPS: StatGroup[] = [];
+const NO_AUTHORED_STATS: Stat[] = [];
+const entityItems = (options: StatPanelOption[]) =>
+  options.map((option) => (
+    <SelectItem key={option.id} value={option.id}>{option.label}{option.you && <YouMark />}</SelectItem>
+  ));
+
 export const RightPanel = ({
   onLocationClick, onToggleTrait, onPersonaChange, traitCascade, onDismissTraitCascade, onRegenerateStats, sceneImageJob,
   language, setLanguage,
 }: {
   onLocationClick: () => void;
-  /** Switch a bearer's trait on or off mid-play; owned by GameViewer, which reverses its stat changes. */
-  onToggleTrait: (traitId: string, enabled: boolean, bearerId: string) => void;
+  /** Switch an owner's trait on or off mid-play; owned by GameViewer, which reverses its stat changes. */
+  onToggleTrait: (traitId: string, enabled: boolean, ownerId: OwnerId) => void;
   /** Settle the traits after the player picks another persona. `name` is that persona's; null for None. */
   onPersonaChange: (ref: PersonaRef, name: string | null) => void;
   /** What the player's last trait switch or persona change turned off. */
@@ -1122,17 +1251,19 @@ export const RightPanel = ({
     traitsView,
     setTraitsView,
     commitManualStatEdit,
+    commitManualEntityStatEdit,
     viewTraits: savedTraits,
     viewDisabledTraitIds,
     viewOwnedTraits,
-    viewStatChanges: recentStatChanges,
-    recentStatFading,
-    heldStatChanges,
-    drainingStatChanges,
+    viewEntityStatChanges,
+    viewEntityStats,
+    viewStatChanges,
+    statDeltas,
     personaRef,
+    setSelectedEntityId,
   } = useGameplay();
   const {
-    locations, connections, traits, traitGroups, viewStats: playerStats, currentLocation, resolveTraitText, resolveEntityText,
+    locations, connections, traits, traitGroups, viewStats: globalStats, currentLocation, resolveTraitText, resolveEntityText,
     entities: cast, persona, traitEntities, traitLibrary,
   } = useResolvedWorld();
   // In Chat a scroll moves the viewed turn, so the stat rows snap to it.
@@ -1144,28 +1275,28 @@ export const RightPanel = ({
   const disabledTraits = React.useMemo(() => new Set(viewDisabledTraitIds), [viewDisabledTraitIds]);
   // The save froze each chosen trait as the world stood on turn 1, so its authoring is re-read from the
   // world — otherwise a trait made switchable after this playthrough began would never get its control.
-  const playerTraits = React.useMemo(() => refreshChosenTraits(savedTraits, traits), [savedTraits, traits]);
-  const heldTraitIds = React.useMemo(() => new Set(playerTraits.map((t) => t.id)), [playerTraits]);
-  // The one tree from the bearer resolver: the player's rows at the top, then a node per present bearer with
-  // its owned traits and links expanded. A trait under two bearers is two rows, told apart by their node.
+  const globalTraits = React.useMemo(() => refreshChosenTraits(savedTraits, traits), [savedTraits, traits]);
+  const heldTraitIds = React.useMemo(() => new Set(globalTraits.map((t) => t.id)), [globalTraits]);
+  // The one tree from the owner resolver: the player's rows at the top, then a node per present owner with
+  // its owned traits and links expanded. A trait under two owners is two rows, told apart by their node.
   const gameData = useGameDataOptional();
-  const bearerWorld = React.useMemo(
+  const ownerWorld = React.useMemo(
     () => ({ traits, traitGroups, entities: traitEntities }),
     [traits, traitGroups, traitEntities],
   );
   // A linked row's name reads its entity as the Character Name, from the original's authored text.
   const traitTree = React.useMemo(
-    () => withBearerNames(
-      bearerTraitTree(bearerWorld, personaRef, traitLibrary),
+    () => withOwnerNames(
+      ownerTraitTree(ownerWorld, personaRef, traitLibrary),
       { traits: gameData?.traits ?? [], traitGroups: gameData?.traitGroups ?? [] },
-      (text, bearer, trait) => (trait ? resolveTraitText(trait, text, bearer) : resolveEntityText(bearer, text)),
+      (text, owner, trait) => (trait ? resolveTraitText(trait, text, owner) : resolveEntityText(owner, text)),
     ),
-    [bearerWorld, personaRef, traitLibrary, gameData?.traits, gameData?.traitGroups, resolveTraitText, resolveEntityText],
+    [ownerWorld, personaRef, traitLibrary, gameData?.traits, gameData?.traitGroups, resolveTraitText, resolveEntityText],
   );
-  // A bearer's trait card reads that bearer as the Character Name, as the AI does.
+  // An owner's trait card reads that owner as the Character Name, as the AI does.
   const resolveTreeTraitText = React.useCallback(
-    (trait: Trait, text: string, bearerId: string) =>
-      resolveTraitText(trait, text, bearerId === WORLD_OWNER ? null : traitTree.entityNodes.get(bearerId) ?? null),
+    (trait: Trait, text: string, ownerId: OwnerId) =>
+      resolveTraitText(trait, text, ownerId === null ? null : traitTree.entityNodes.get(ownerId) ?? null),
     [traitTree, resolveTraitText],
   );
   const activeOwned = React.useMemo(() => activeOwnedTraitIds(viewOwnedTraits), [viewOwnedTraits]);
@@ -1173,45 +1304,91 @@ export const RightPanel = ({
   // could take, together in authored order — owned and unowned differ only by the checkbox. A past turn shows
   // only what was held then: acquirables can't be acted on there. An entity's rows list the same way.
   const listedTraits = React.useMemo(() => {
-    const playerRows = traitTree.traits.filter((t) => rowBearer(traitTree, t) === WORLD_OWNER);
+    const globalRows = traitTree.traits.filter((t) => rowOwner(traitTree, t) === null);
     const entityRows = traitTree.traits.filter((t) => {
-      const bearer = rowBearer(traitTree, t);
-      return bearer !== WORLD_OWNER && (!!viewOwnedTraits[bearer]?.chosen.includes(t.id) || (!isViewingPast && !!t.playerToggle));
+      const owner = rowOwner(traitTree, t);
+      return owner !== null && (!!viewOwnedTraits[owner]?.chosen.includes(t.id) || (!isViewingPast && !!t.playerToggle));
     });
-    const playerOrder = traitOrderIndex(playerRows, traitTree.groups);
+    const globalOrder = traitOrderIndex(globalRows, traitTree.groups);
     // A Custom Persona pick lies dormant under a world persona: it has no row until a return to None.
-    const heldRows = new Set(playerRows.map((t) => t.id));
-    const held = playerTraits.filter((t) => heldRows.has(t.id));
-    return [...(isViewingPast ? held : listablePlayerTraits(held, playerRows, playerOrder)), ...entityRows];
-  }, [isViewingPast, playerTraits, traitTree, viewOwnedTraits]);
-  // The played world entity is out of the cast, and a "playing as" gate has to find it.
+    const heldRows = new Set(globalRows.map((t) => t.id));
+    const held = globalTraits.filter((t) => heldRows.has(t.id));
+    return [...(isViewingPast ? held : listableGlobalTraits(held, globalRows, globalOrder)), ...entityRows];
+  }, [isViewingPast, globalTraits, traitTree, viewOwnedTraits]);
+  // The played world entity is out of the cast, and a "playing as" gate has to find it. Time Conditions read
+  // the viewed turn's clock.
+  const daypart = daypartAt(gameTime, calendar);
   const gateWorld = React.useMemo<TraitWorld>(() => ({
-    traits, groups: traitGroups, entities: worldEntitiesOf(cast, persona), persona: personaRef ?? { source: 'none' },
-    bearers: inPlayBearers(bearerWorld, personaRef, traitLibrary),
-  }), [traits, traitGroups, cast, persona, personaRef, bearerWorld, traitLibrary]);
+    traits, groups: traitGroups, entities: worldEntitiesOf(cast, persona), persona: personaRef ?? { source: 'none' }, daypart,
+    ...inPlayOwners(ownerWorld, personaRef, traitLibrary),
+  }), [traits, traitGroups, cast, persona, personaRef, daypart, ownerWorld, traitLibrary]);
   const viewTraitState = React.useMemo(
-    () => ({ traits: playerTraits, disabledTraitIds: viewDisabledTraitIds, ownedTraits: viewOwnedTraits }),
-    [playerTraits, viewDisabledTraitIds, viewOwnedTraits],
+    () => ({ traits: globalTraits, disabledTraitIds: viewDisabledTraitIds, ownedTraits: viewOwnedTraits }),
+    [globalTraits, viewDisabledTraitIds, viewOwnedTraits],
   );
-  // The stats a trait switched off stay off under the player's world traits and the played persona's linked ones.
+  // The stats a trait switched off stay off under the global traits and every entity's global rows.
   const statEnabled = React.useMemo(
-    () => activeStatEnabled(playerStats, statTraitsInForce(viewTraitState, gateWorld)),
-    [playerStats, viewTraitState, gateWorld],
+    () => activeStatEnabled(globalStats, statTraitsInForce({ ...viewTraitState, entityStats: viewEntityStats }, gateWorld)),
+    [globalStats, viewTraitState, viewEntityStats, gateWorld],
   );
-  const traitGates = React.useMemo(() => gateStates(traitGateInput(viewTraitState, gateWorld)), [viewTraitState, gateWorld]);
+  // Stat Conditions read the viewed turn's stats.
+  const traitGates = React.useMemo(
+    () => gateStates(traitGateInput({ ...viewTraitState, stats: globalStats, entityStats: viewEntityStats }, gateWorld)),
+    [viewTraitState, globalStats, viewEntityStats, gateWorld],
+  );
+  // Each entity's own traits switch its stats on and off, on the viewed turn.
+  const entityInForce = React.useCallback(
+    (ownerId: string) => entityStatTraitsInForce(viewOwnedTraits, gateWorld, ownerId),
+    [viewOwnedTraits, gateWorld],
+  );
+  const {
+    options: entityOptions, shown: shownEntity, section: entitySection, players: playedOwners, showPicker: entitiesShowStats,
+  } = useStatPanelEntity(entityInForce);
+  const playedRows = playedOwners.filter((owner) => owner.rows.length > 0);
+  // Stats the player sees besides the world's own.
+  const ownersShowStats = entitiesShowStats || playedRows.length > 0;
+  const presentOptions = entityOptions.filter((option) => option.present);
+  const absentOptions = entityOptions.filter((option) => !option.present);
   // Filtered for display but carrying each stat's index in the full array, which the edit slider writes back to.
   // Hidden stats stay live for the AI, regen and code — they just never render, which also drops their
   // delta chip, bar band and history deltas (all keyed off the row).
-  const visibleStats = playerStats
+  const visibleStats = globalStats
     .map((stat, index) => ({ stat, index }))
     .filter(({ stat }) => statEnabled[stat.id] !== false && stat.hidden !== true);
   // Whether the descriptor line is part of this world's stat list at all. Held across every row so the list
   // keeps its shape as values move in and out of bands; a world that names none of them pays nothing, and a
   // stat the player never sees can't put the line there for the ones they do.
   // A world with no stat the player can see gets no Stats tab; the panel then opens on Traits.
-  const hasShownStats = playerStats.some((stat) => stat.hidden !== true);
+  const hasShownStats = globalStats.some((stat) => stat.hidden !== true) || ownersShowStats;
   const shownTab = !hasShownStats && activeTab === 'stats' ? 'traits' : activeTab;
   const anyDescriptors = visibleStats.some(({ stat }) => (stat.descriptors?.length ?? 0) > 0);
+  // The author's groups decide where each row sits, so a save made before a regrouping follows it.
+  const playerLayout = statPanelLayout(
+    gameData?.statGroups ?? NO_STAT_GROUPS, gameData?.stats ?? NO_AUTHORED_STATS, visibleStats, ({ stat }) => stat.id,
+  );
+
+  /** One owner's stat rows, under its own groups. Keyed by owner, so a pick starts every row's band flash fresh. */
+  const ownerStatRows = (owner: StatPanelOwner) => (
+    <StatGroupSections
+      key={owner.entity.id}
+      nodes={statPanelLayout(owner.groups, owner.stats, owner.rows, (stat) => stat.id)}
+      idOf={(stat) => stat.id}
+      nameOf={(name) => resolveEntityText(owner.entity, name)}
+      renderStat={(stat) => (
+        <StatRow
+          stat={stat}
+          {...rowDelta(statDeltas, owner.entity.id, stat.id,
+            isViewingPast ? (viewEntityStatChanges[owner.entity.id]?.[stat.id] ?? 0) : null)}
+          page={currentPage}
+          isViewingPast={isViewingPast}
+          snap={snapStats}
+          editable={isEditMode && !isViewingPast}
+          reserveDescriptorLine={owner.rows.some((row) => (row.descriptors?.length ?? 0) > 0)}
+          onCommitValue={(value) => commitManualEntityStatEdit(owner.entity.id, stat.id, value)}
+        />
+      )}
+    />
+  );
   // On a past page show the viewed turn's location (Location tab); live otherwise.
   const displayLocation = isViewingPast
     ? (locations.find((l) => l.id === viewLocationId) ?? currentLocation)
@@ -1242,46 +1419,97 @@ export const RightPanel = ({
 
       <Tabs value={shownTab} onValueChange={setActiveTab} className="w-full flex-grow flex flex-col overflow-hidden">
         <TabsList className="grid w-full flex-shrink-0 auto-cols-fr grid-flow-col">
-          {hasShownStats && <PanelTab value="stats" icon={ChartColumn} label="Stats" />}
-          <PanelTab value="traits" icon={Sparkles} label="Traits" />
-          <PanelTab value="location" icon={MapPin} label="Location" />
+          {hasShownStats && <PanelTab value="stats" icon={StatIcon} label="Stats" />}
+          <PanelTab value="traits" icon={TraitIcon} label="Traits" />
+          <PanelTab value="location" icon={LocationIcon} label="Location" />
         </TabsList>
-        <TabsContent value="stats" className="flex-grow overflow-hidden">
-          <ScrollArea className="h-[calc(100%-1rem)] relative">
-            {visibleStats.map(({ stat, index }) => {
-              const key = stat.name.toLowerCase();
-              return (
-                <StatRow
-                  key={index}
-                  stat={stat}
-                  change={recentStatChanges[key] || 0}
-                  // Live: a held change grows, else a draining change collapses. History: the turn's own
-                  // change grows in (never drains).
-                  barDelta={isViewingPast
-                    ? (recentStatChanges[key] || 0)
-                    : (heldStatChanges[key] || drainingStatChanges[key] || 0)}
-                  draining={!isViewingPast && !heldStatChanges[key] && !!drainingStatChanges[key]}
-                  page={currentPage}
-                  isViewingPast={isViewingPast}
-                  snap={snapStats}
-                  fading={recentStatFading}
-                  editable={isEditMode && !isViewingPast}
-                  reserveDescriptorLine={anyDescriptors}
-                  onCommitValue={(value) => {
-                    const newStats = [...playerStats];
-                    newStats[index] = { ...stat, value };
-                    commitManualStatEdit(newStats);
-                  }}
-                />
-              );
-            })}
+        {/* `flex` is state-scoped for the same reason as on the Entities tab. */}
+        <TabsContent value="stats" className="flex-grow overflow-hidden flex-col data-[state=active]:flex">
+          {entitiesShowStats && (
+            <div className="flex-shrink-0 px-2 pb-2">
+              <Select
+                value={shownEntity?.id ?? NO_ENTITY}
+                onValueChange={(value) => setSelectedEntityId(value === NO_ENTITY ? null : value)}
+              >
+                <SelectTrigger aria-label="Entity stats" className="h-8 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {entityItems(presentOptions)}
+                  {presentOptions.length > 0 && absentOptions.length > 0 && <SelectSeparator />}
+                  {entityItems(absentOptions)}
+                  <SelectSeparator />
+                  <SelectItem value={NO_ENTITY}>(None)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <ScrollArea className="min-h-0 flex-grow mb-4 relative">
+            <div className="space-y-2 pb-2">
+              {visibleStats.length > 0 && (
+                <PanelOwnerCard role="region" aria-label="Global stats" data-testid="global-stats" name="Global">
+                  <StatGroupSections
+                    nodes={playerLayout}
+                    idOf={({ stat }) => stat.id}
+                    nameOf={resolvePH}
+                    renderStat={({ stat, index }) => {
+                      const key = stat.name.toLowerCase();
+                      return (
+                        <StatRow
+                          stat={stat}
+                          {...rowDelta(statDeltas, null, key, isViewingPast ? (viewStatChanges[key] || 0) : null)}
+                          page={currentPage}
+                          isViewingPast={isViewingPast}
+                          snap={snapStats}
+                          editable={isEditMode && !isViewingPast}
+                          reserveDescriptorLine={anyDescriptors}
+                          onCommitValue={(value) => {
+                            const newStats = [...globalStats];
+                            newStats[index] = { ...stat, value };
+                            commitManualStatEdit(newStats);
+                          }}
+                        />
+                      );
+                    }}
+                  />
+                </PanelOwnerCard>
+              )}
+              {playedRows.map((owner) => (
+                <PanelOwnerCard
+                  key={owner.entity.id}
+                  role="region"
+                  aria-label={`${owner.entity.name} stats`}
+                  data-testid="persona-stats"
+                  name={owner.entity.name}
+                  entity
+                  you
+                >
+                  {ownerStatRows(owner)}
+                </PanelOwnerCard>
+              ))}
+              {entitiesShowStats && shownEntity && entitySection && (
+                <PanelOwnerCard
+                  // Keyed by entity, so a new pick opens its card.
+                  key={shownEntity.id}
+                  role="region"
+                  aria-label={`${shownEntity.label} stats`}
+                  data-testid="entity-stats"
+                  name={shownEntity.label}
+                  entity
+                >
+                  {entitySection.rows.length === 0 ? (
+                    <p role="status" className="py-4 text-center text-muted-foreground">No stats to show.</p>
+                  ) : ownerStatRows(entitySection)}
+                </PanelOwnerCard>
+              )}
+            </div>
             <StatsActions
               className="absolute bottom-2 right-2"
               past={isViewingPast}
               busy={totalPages === 0 || isWaitingForAI || isRevealingNarration || sceneImageJob !== null}
               editing={isEditMode}
               onEditingChange={setIsEditMode}
-              onRegenerate={statUpdatesEnabled && playerStats.length > 0 ? () => onRegenerateStats(currentPage) : undefined}
+              onRegenerate={statUpdatesEnabled && (globalStats.length > 0 || ownersShowStats) ? () => onRegenerateStats(currentPage) : undefined}
             />
           </ScrollArea>
         </TabsContent>
@@ -1293,10 +1521,11 @@ export const RightPanel = ({
             groups={traitTree.groups}
             entityNodes={traitTree.entityNodes}
             playerEntityIds={playerEntityIds(traitTree)}
-            stats={playerStats}
-            isOff={(id, bearerId) => (bearerId === WORLD_OWNER
+            stats={globalStats}
+            ownerStats={viewEntityStats}
+            isOff={(id, ownerId) => (ownerId === null
               ? disabledTraits.has(id) || !heldTraitIds.has(id)
-              : !activeOwned[bearerId]?.includes(id))}
+              : !activeOwned[ownerId]?.includes(id))}
             readOnly={isViewingPast}
             onToggleTrait={onToggleTrait}
             resolveTraitText={resolveTreeTraitText}

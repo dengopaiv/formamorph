@@ -1,4 +1,5 @@
 import { PromptNavigationRail } from './PromptNavigationRail';
+import { useRequestKey } from '@/lib/surface/useRequestKey';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useTheme } from '../theme-provider';
@@ -13,11 +14,13 @@ import { EMPTY_TOOLS_VIEW, TOOL_EDIT_TABS, type ToolsView } from '@/components/m
 import { blankTool } from '@/lib/tools/toolDraft';
 import { randomUUID } from '@/lib/uuid';
 import type { ToolSnapshot } from '@/lib/tools/toolSnapshot';
-import { readSettingsMode, writeSettingsMode, type SettingsMode } from '@/lib/settingsMode';
+import { readSettingsMode, writeSettingsMode, SETTINGS_MODE_DESCRIPTIONS, SETTINGS_HIDDEN_NOTICE, type SettingsMode } from '@/lib/settingsMode';
 import { settingsUseAdvancedValues, sectionHiddenFields } from '@/lib/settingsAdvancedData';
 import { TutorialPopover } from '@/components/TutorialPopover';
 import { useDevRoute } from '@/lib/devRouter';
-import { Row, CheckRow, Section, HintInfo } from '@/components/SettingsRows';
+import { Row, CheckRow, Section, HintInfo, ValueSlider, SettingsNote } from '@/components/SettingsRows';
+import { MIN_EDITOR_AUTO_SAVE_IDLE_S, MAX_EDITOR_AUTO_SAVE_IDLE_S, EDITOR_AUTO_SAVE_IDLE_STEP_S } from '@/contexts/settingsDefaults';
+import { formatPause } from '@/lib/formatPause';
 import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_NOTES, ENDPOINT_CLEARTEXT_WARNING } from '@/components/modals/settingsCopy';
 import { endpointSendsInTheClear } from '@/lib/endpointUrl';
 import { rowCopy } from '@/components/modals/settingsRowCopy';
@@ -29,7 +32,7 @@ import { DisplaySettingsSection } from './DisplaySettingsSection';
 import { OutputSettingsSection } from './OutputSettingsSection';
 import type { SettingsSource } from './settingsSource';
 import { useEmbeddingDownload } from './useEmbeddingDownload';
-import { SettingsModeSwitch } from './SettingsModeSwitch';
+import { ModeSelect } from '@/components/ui/mode-select';
 import { ExportPresetDialog, ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
 import { usePresetPublish } from '@/components/modals/usePresetPublish';
 import { type SharedPreset } from '@/lib/promptPresetShare';
@@ -55,6 +58,7 @@ import { cn } from "@/lib/utils";
 import { PanelShell } from "@/components/PanelShell";
 import { useMorphFullscreen } from "@/lib/useMorphFullscreen";
 import { composePreviewValues, languagePreviewValue } from "@/lib/previewValuePool";
+import { layerValues, type TokenValues } from "@/lib/promptValues";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -67,6 +71,7 @@ import PromptField from '../prompt/PromptField';
 import { PROMPT_KIND_VARIABLES, PROMPT_KIND_USER_VARIABLES, NOW_LINE_VARIABLES, SUBJECT, type PromptVariable } from '@/lib/promptVariables';
 import { defaultPromptSampler } from '@/lib/promptSamplers';
 import { numInput } from '@/lib/numInput';
+import { MAX_AUTOSAVE_SLOTS } from '@/lib/autosave';
 import { FieldError } from '@/components/ui/typography';
 import { SamplerControl, type SamplerControlProps } from './SamplerControl';
 import { EndpointRouteField } from './EndpointRouteField';
@@ -76,6 +81,7 @@ import { TextEndpointEditor } from './TextEndpointEditor';
 import { activePresetEditor } from './textEndpointEditorModel';
 import { ReadOnlyNotice } from '@/components/prompt/ReadOnlyNotice';
 import { PromptCompareDialog } from '@/components/prompt/PromptCompareDialog';
+import { DevChipOptions } from '@/components/prompt/DevChipOptions';
 import { PromptResetCompare } from '@/components/prompt/PromptResetCompare';
 import { promptVocabulary } from '@/lib/chipVocabulary';
 import { ATTACHMENT_PROMPTS, includesAttachments } from '@/lib/promptAttachments';
@@ -89,10 +95,13 @@ import { cachedImageBytes, clearCachedImages } from '@/lib/remoteImageCache';
 import { formatBytes } from '@/lib/imageOptim';
 import { DEFAULT_WORLDS, readDeletedDefaultWorlds, clearDeletedDefaultWorlds } from '@/lib/defaultWorlds';
 import { PresetNameDialog } from './PresetNameDialog';
+import { workflowOwnModels } from '@/lib/imageGen/comfyui';
+import { DEFAULT_IMAGE_FILE_NAME } from '@/lib/imageGen/fileName';
 import { PresetHeader } from '@/components/presetHeader/PresetHeader';
 import { presetHeaderActions } from '@/lib/presetHeaderActions';
 import { OPENING_SCENE_CUE, PROMPT_TEXT_DEFAULTS } from '../game/GamePrompts';
 import { buildStyledValues } from '@/lib/sectionStyle';
+import { statTextFor } from '@/lib/statTextPrompts';
 import { isDesktop } from '@/lib/imageGen/desktop';
 import { fetchComfyMeta, DEFAULT_COMFY_WORKFLOW, type ComfyMeta } from '@/lib/imageGen/comfyui';
 import { fetchInvokeMeta, invokeConnectionMessage, encodersFor, vaesFor, PREFIXED_BASES, type InvokeMeta } from '@/lib/imageGen/invokeai';
@@ -232,22 +241,22 @@ function PromptOptionsPanel({ endpoint, attachments, maxOutput, verbatim, reason
   );
 }
 
-/** The mode switch is the target of the tab it sits over; the other tabs use Data's. */
-const MODE_SWITCH_TARGETS: Record<string, TargetAttribute> & { data: TargetAttribute } = {
+/** The mode select is the target of the tab it sits over; the other tabs use Data's. */
+const MODE_SELECT_TARGETS: Record<string, TargetAttribute> & { data: TargetAttribute } = {
   output: targetAttribute('settings.output', 'settings-mode'),
   data: targetAttribute('settings.data', 'settings-mode'),
 };
 
-export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, initialTab, initialEndpointTab, initialPromptTab, initialPromptSurface, initialPromptField, initialTarget, requestKey, onWorldsRestored, onStartAuthoringTour, forcedMode }: {
+export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, initialTab, initialEndpointTab, initialPromptTab, initialPromptSurface, initialPromptField, initialTarget, requestKey: landingKey, onWorldsRestored, onStartAuthoringTour, forcedMode }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called after Restore Default Worlds re-seeds, so a world list on screen can refresh. */
   onWorldsRestored?: () => void;
   /** Starts the Authoring Tour on a new world. Only the main menu supplies it, so a running game hides the row. */
   onStartAuthoringTour?: () => void;
-  /** Live variable values for the prompt-editor Preview tab. Supplied only in-game; absent → no Preview. */
-  previewValues?: Record<string, string>;
-  /** The open world as a Tool Snapshot, for Try It. Supplied only in-game; absent, Try It uses the sample world. */
+  /** Live variable values for the prompt-editor Preview tab. Supplied only in game; absent → no Preview. */
+  previewValues?: TokenValues;
+  /** The open world as a Tool Snapshot, for Try It. Supplied only in game; absent, Try It uses the sample world. */
   toolWorld?: () => ToolSnapshot;
   /** DEV dev-router: open on this top-level tab instead of the default (see `devRouter.ts`). */
   initialTab?: SettingsTabId;
@@ -271,6 +280,9 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   // DEV dev-router: `#dev?modal=settingsCompare` opens the compare view on a canned Narration edit.
   const [devCompare, setDevCompare] = useState(false);
   useEffect(() => { if (import.meta.env.DEV && devRoute?.modal === 'settingsCompare') setDevCompare(true); }, [devRoute]);
+  // DEV dev-router: `#dev?modal=chipOptions` opens Chip Options on a canned Entities chip.
+  const [devChipOptions, setDevChipOptions] = useState(false);
+  useEffect(() => { if (import.meta.env.DEV && devRoute?.modal === 'chipOptions') setDevChipOptions(true); }, [devRoute]);
   const routeMode = import.meta.env.DEV && (devRoute?.mode === 'simple' || devRoute?.mode === 'advanced')
     ? devRoute.mode
     : undefined;
@@ -296,6 +308,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     else if (wantsAdvancedTab) setModeState('advanced');
   }, [devRoute, routeMode, wantsAdvancedTab]);
   useEffect(() => { if (forcedMode) setModeState(forcedMode); }, [forcedMode]);
+  const requestKey = useRequestKey(landingKey);
   useEffect(() => {
     if (requestKey && wantsAdvancedTab) setModeState('advanced');
     // Only a new request switches the mode; the player's own switch afterwards stands.
@@ -317,7 +330,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   // may have deleted a world since it last rendered.
   const [deletedDefaultCount, setDeletedDefaultCount] = useState(0);
   useEffect(() => { if (isOpen) setDeletedDefaultCount(readDeletedDefaultWorlds().size); }, [isOpen]);
-  // Same reasoning for the linked-image cache: it grows during play, so re-measure on open rather than once.
+  // Same reasoning for the linked-image cache: it grows during the game, so re-measure on open rather than once.
   const [cachedBytes, setCachedBytes] = useState(0);
   const seenTutorialCount = useSeenTutorialCount();
   // The read outlives a quick close, so the cleanup drops the late answer rather than writing to a gone modal.
@@ -385,6 +398,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     statUpdatesEnabled,
     locationChangeEnabled,
     locationAutoApply,
+    entityMovement,
     narrationVerbatimTurns,
     setNarrationVerbatimTurns,
     thinkingVerbatimTurns,
@@ -401,6 +415,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     limitActiveCharacters,
     activeCharacterLimit,
     reasoningCapability,
+    nativeReasoning,
     promptReasoningSettings,
     setPromptReasoning,
     promptReasoningBudget,
@@ -438,6 +453,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     setStatUpdatesUserPrompt,
     locationChangeUserPrompt,
     setLocationChangeUserPrompt,
+    entityLocationPrompt,
+    setEntityLocationPrompt,
+    entityLocationUserPrompt,
+    setEntityLocationUserPrompt,
     summaryUserPrompt,
     milestoneSelectPrompt,
     setMilestoneSelectPrompt,
@@ -476,6 +495,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     builtinPresets,
     activePresetId,
     activeSectionStyle,
+    statTextPrompts,
     presetPinnedToWorld,
     activePresetIsBuiltIn,
     selectPreset,
@@ -501,6 +521,12 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     toolsEnabled,
     autosaveEnabled,
     setAutosaveEnabled,
+    autosaveSlots,
+    setAutosaveSlots,
+    editorAutoSave,
+    setEditorAutoSave,
+    editorAutoSaveIdleSeconds,
+    setEditorAutoSaveIdleSeconds,
     characterDiaries,
     describeCharacters,
     genTemperature,
@@ -541,8 +567,12 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     setImageSampler,
     imageAdetailer,
     setImageAdetailer,
+    imageCleanTags,
+    setImageCleanTags,
     imageWorkflow,
     setImageWorkflow,
+    imageFileName,
+    setImageFileName,
     imageInvokeEncoder,
     imageInvokeBoard,
     setImageInvokeBoard,
@@ -562,6 +592,10 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     imageTagPrompt,
     setImageTagPrompt,
   } = settings;
+  // Autosaves Kept as it stood when Settings opened: lowering it below that warns until Settings closes.
+  const [autosaveSlotsAtOpen, setAutosaveSlotsAtOpen] = useState(autosaveSlots);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- taken on open only; the edits after it are what it is compared with
+  useEffect(() => { if (isOpen) setAutosaveSlotsAtOpen(autosaveSlots); }, [isOpen]);
   const themeState = useTheme();
   const desktop = isDesktop();
   const [connectionGuideOpen, setConnectionGuideOpen] = useState(false);
@@ -619,13 +653,16 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   const [showComfyWorkflow, setShowComfyWorkflow] = useState(false);
   useEffect(() => {
     if (!isOpen || imageProvider !== 'comfyui') return;
+    // The lists belong to one server; a changed endpoint must not name the old server's checkpoint.
+    setComfyMeta(null);
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
         const meta = await fetchComfyMeta(resolveImageEndpoint(imageProvider, imageEndpoint), imageApiToken);
         if (!cancelled) setComfyMeta(meta);
       } catch {
-        // silent: ComfyUI not running / unreachable — the fields fall back to free text
+        // Silent: the fields fall back to free text.
+        if (!cancelled) setComfyMeta(null);
       }
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
@@ -704,7 +741,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   );
   // The choices prompt's language chip names itself in the directive, so its preview says "choices" where
   // the pool's default says "narration".
-  const choicesPreviewValues = { ...effectivePreviewValues, ...languagePreviewValue('choices', language) };
+  const choicesPreviewValues = layerValues(effectivePreviewValues, languagePreviewValue('choices', language));
 
   // The selected prompt sub-tab, so the Reset button can target just that prompt.
   const [promptTab, setPromptTab] = useState(initialPromptTab ?? 'narration');
@@ -734,6 +771,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     choices: { label: PROMPT_LABELS.choices, value: choicesPrompt, def: styledDefaults.choicesPrompt, set: setChoicesPrompt, variables: PROMPT_KIND_VARIABLES.choices },
     statupdates: { label: PROMPT_LABELS.statupdates, value: statUpdatesPrompt, def: styledDefaults.statUpdatesPrompt, set: setStatUpdatesPrompt, variables: PROMPT_KIND_VARIABLES.statupdates },
     location: { label: PROMPT_LABELS.location, value: locationChangePromptText, def: styledDefaults.locationChangePromptText, set: setLocationChangePromptText, variables: PROMPT_KIND_VARIABLES.location },
+    entitylocation: { label: PROMPT_LABELS.entitylocation, value: entityLocationPrompt, def: styledDefaults.entityLocationPrompt, set: setEntityLocationPrompt, variables: PROMPT_KIND_VARIABLES.entitylocation },
     summary: { label: PROMPT_LABELS.summary, value: summaryPrompt, def: styledDefaults.summaryPrompt, set: setSummaryPrompt, variables: PROMPT_KIND_VARIABLES.summary },
     milestone: { label: PROMPT_LABELS.milestone, value: milestoneSelectPrompt, def: styledDefaults.milestoneSelectPrompt, set: setMilestoneSelectPrompt, variables: PROMPT_KIND_VARIABLES.milestone },
     timepassed: { label: PROMPT_LABELS.timepassed, value: timePassedPrompt, def: styledDefaults.timePassedPrompt, set: setTimePassedPrompt, variables: PROMPT_KIND_VARIABLES.timepassed },
@@ -767,7 +805,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   // its governing setting for Thinking/Summary). If the open tab is no longer available (disabled since,
   // or on reopen), fall back to Narration so the panel isn't blank.
   const promptAvailable = computePromptTabAvailability({
-    thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, memoryDigests, characterDiaries, describeCharacters, aiClock,
+    thinkingMode, choicesEnabled, statUpdatesEnabled, locationChangeEnabled, entityMovement, memoryDigests, characterDiaries, describeCharacters, aiClock,
     sceneImages: !imageGenDisabled, advanced,
   });
   const activePromptTab = promptAvailable[promptTab] ? promptTab : 'narration';
@@ -842,6 +880,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     choices: { value: choicesUserPrompt, set: setChoicesUserPrompt, def: styledDefaults.choicesUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.choices ?? NO_VARIABLES },
     statupdates: { value: statUpdatesUserPrompt, set: setStatUpdatesUserPrompt, def: styledDefaults.statUpdatesUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.statupdates ?? NO_VARIABLES },
     location: { value: locationChangeUserPrompt, set: setLocationChangeUserPrompt, def: styledDefaults.locationChangeUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.location ?? NO_VARIABLES },
+    entitylocation: { value: entityLocationUserPrompt, set: setEntityLocationUserPrompt, def: styledDefaults.entityLocationUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.entitylocation ?? NO_VARIABLES },
     summary: { value: summaryUserPrompt, set: setSummaryUserPrompt, def: styledDefaults.summaryUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.summary ?? NO_VARIABLES },
     milestone: { value: milestoneSelectUserPrompt, set: setMilestoneSelectUserPrompt, def: styledDefaults.milestoneSelectUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.milestone ?? NO_VARIABLES },
     timepassed: { value: timePassedUserPrompt, set: setTimePassedUserPrompt, def: styledDefaults.timePassedUserPrompt, variables: PROMPT_KIND_USER_VARIABLES.timepassed ?? NO_VARIABLES },
@@ -917,6 +956,8 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     turn: {
       locationChange: locationChangePromptText || '',
       locationChangeUser: locationChangeUserPrompt,
+      entityLocation: entityLocationPrompt,
+      entityLocationUser: entityLocationUserPrompt,
       thinking: thinkingPrompt,
       director: directorPrompt,
       directorUser: directorUserPrompt,
@@ -932,6 +973,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
       choicesUser: choicesUserPrompt,
       statUpdates: statUpdatesPrompt,
       statUpdatesUser: statUpdatesUserPrompt,
+      statText: statTextFor(statTextPrompts, { worldPrompt: false }),
       summary: summaryPrompt,
       summaryUser: summaryUserPrompt,
       milestoneSelect: milestoneSelectPrompt,
@@ -946,9 +988,9 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     },
   }), [
     systemPrompt, recapUserPrompt, nowLinePrompt, rehydrateUserPrompt,
-    locationChangePromptText, locationChangeUserPrompt, thinkingPrompt, directorPrompt, directorUserPrompt,
+    locationChangePromptText, locationChangeUserPrompt, entityLocationPrompt, entityLocationUserPrompt, thinkingPrompt, directorPrompt, directorUserPrompt,
     characterPrompt, storyboardPrompt, narrationUserPrompt, oocDirectivePrompt,
-    choicesPrompt, choicesUserPrompt, statUpdatesPrompt, statUpdatesUserPrompt,
+    choicesPrompt, choicesUserPrompt, statUpdatesPrompt, statUpdatesUserPrompt, statTextPrompts,
     summaryPrompt, summaryUserPrompt, timePassedPrompt, timePassedUserPrompt,
     openingTimePrompt, openingTimeUserPrompt, diaryPrompt, sceneTagsPrompt, sceneTagsUserPrompt,
     discoverEntityPrompt, discoverEntityUserPrompt, milestoneSelectPrompt, milestoneSelectUserPrompt,
@@ -1008,6 +1050,13 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   // controls even while the engine is running, and vice versa.
   const promptTarget = resolveEndpointForKind(activeKind);
   const promptLocalEngine = promptTarget.localEngine;
+  // The model a ComfyUI workflow loads itself, when it ignores the Model setting.
+  const workflowModels = useMemo(
+    () => (imageProvider === 'comfyui' ? workflowOwnModels(imageWorkflow) : []),
+    [imageProvider, imageWorkflow],
+  );
+  // A custom workflow without %prefix% ignores the File Name setting.
+  const workflowIgnoresFileName = imageWorkflow.trim() !== '' && !imageWorkflow.includes('%prefix%');
   const pinnedEndpoint = routableEndpoints.find((p) => p.id === pinnedEndpointId);
   const endpointControl = {
     label: SETTINGS_COPY.promptEndpoint.label,
@@ -1079,6 +1128,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
     kind: activeKind,
     setting: promptReasoningSettings[activeKind] ?? defaultPromptReasoningSetting(activeKind),
     budgetPct: resolveReasoningBudgetPct(activeKind, promptReasoningBudget),
+    global: nativeReasoning,
     suppressed: nativeReasoningSuppressed(thinkingMode, activeKind),
     onChange: (v: PromptReasoningSetting) => setPromptReasoning(activeKind, v),
     onBudgetChange: (v: number) => setPromptReasoningBudget(activeKind, v),
@@ -1112,18 +1162,20 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
         className={SETTINGS_DIALOG_SIZE}
       >
         <DialogHeader className="flex-shrink-0">
-          {/* The close cross is absolutely placed over this row, so the switch is kept clear of it. */}
-          <div className="flex items-center gap-4 pr-8">
+          {/* The close cross is absolutely placed over this row, so the select is kept clear of it. */}
+          <div className="flex items-center justify-between gap-4 pr-8">
             <DialogTitle className="flex items-center gap-2"><Settings className="h-4 w-4" /> Settings</DialogTitle>
             <TutorialPopover entry={tutorial} nav={tutorialNav}>
-              <SettingsModeSwitch
+              <ModeSelect
                 mode={mode}
-                // Using the switch is itself the lesson, so it retires the tutorial as surely as the button does.
+                // Using the select is itself the lesson, so it retires the tutorial as surely as the button does.
                 onModeChange={(next) => { dismissTutorial(); setMode(next); }}
-                hasHiddenValues={hasHiddenValues}
-                className="ml-auto"
-                // The Data and Output tabs' guide sections need Advanced, so they land on this switch.
-                {...(MODE_SWITCH_TARGETS[activeTab] ?? MODE_SWITCH_TARGETS.data)}
+                descriptions={SETTINGS_MODE_DESCRIPTIONS}
+                hiddenNotice={hasHiddenValues ? SETTINGS_HIDDEN_NOTICE : undefined}
+                size="sm"
+                aria-label="Settings mode"
+                // The Data and Output tabs' guide sections need Advanced, so they land on this select.
+                {...(MODE_SELECT_TARGETS[activeTab] ?? MODE_SELECT_TARGETS.data)}
               />
             </TutorialPopover>
           </div>
@@ -1266,14 +1318,20 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                 <Input id="imageApiToken" type="password" value={imageApiToken} onChange={(e) => setImageApiToken(e.target.value)} />
               </Row>
               <Row htmlFor="imageModel" {...rowCopy('imageModel')}>
-                {imageProvider === 'comfyui' ? (
+                {imageProvider === 'comfyui' && workflowModels.length > 0 ? (
+                  // A workflow without %ckpt% loads its own model; the Model setting would change nothing.
+                  <div className="grid gap-1">
+                    <Input id="imageModel" value={workflowModels.join(', ')} disabled readOnly />
+                    <SettingsNote text={SETTINGS_NOTES.imageModelFromWorkflow} />
+                  </div>
+                ) : imageProvider === 'comfyui' ? (
                   <TokenAutocomplete
                     single
                     openOnFocus
                     values={imageModel ? [imageModel] : []}
                     onChange={(v) => setImageModel(v[0] ?? '')}
                     options={comfyMeta?.checkpoints ?? []}
-                    placeholder="(server default)"
+                    placeholder={comfyMeta?.checkpoints[0] ? `(first on the server: ${comfyMeta.checkpoints[0]})` : '(first checkpoint on the server)'}
                   />
                 ) : imageProvider === 'novelai' ? (
                   <Select value={imageModel} onValueChange={setImageModel}>
@@ -1364,6 +1422,12 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                   <Input id="imageSampler" value={imageSampler} onChange={(e) => setImageSampler(e.target.value)} placeholder="Euler a" />
                 )}
               </Row>
+              <CheckRow
+                htmlFor="imageCleanTags"
+                checked={imageCleanTags}
+                onChange={setImageCleanTags}
+                {...rowCopy('cleanTags')}
+              />
               {(imageProvider === 'a1111' || imageProvider === 'invokeai') && (
                 <CheckRow
                   htmlFor="imageAdetailer"
@@ -1383,7 +1447,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                   {...rowCopy('imageWorkflow')}
                   info={<HintInfo>{`Tokens filled in for you:
 
-\`%prompt%\` \`%negative%\` \`%ckpt%\` \`%width%\` \`%height%\` \`%steps%\` \`%cfg%\` \`%seed%\` \`%sampler%\``}</HintInfo>}
+\`%prompt%\` \`%negative%\` \`%ckpt%\` \`%width%\` \`%height%\` \`%steps%\` \`%cfg%\` \`%seed%\` \`%sampler%\` \`%prefix%\``}</HintInfo>}
                 >
                   <div className="grid gap-1.5">
                     <Textarea
@@ -1405,6 +1469,18 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                       <Button variant="outline" size="sm" onClick={() => setShowComfyWorkflow(true)}>{SETTINGS_BUTTONS.howToGetThis}</Button>
                     </div>
                   </div>
+                </Row>
+              )}
+              {advanced && imageProvider === 'comfyui' && (
+                <Row htmlFor="imageFileName" {...rowCopy('imageFileName')}>
+                  {workflowIgnoresFileName ? (
+                    <div className="grid gap-1">
+                      <Input id="imageFileName" value={imageFileName} placeholder={DEFAULT_IMAGE_FILE_NAME} disabled readOnly />
+                      <SettingsNote text={SETTINGS_NOTES.imageFileNameNoPrefix} />
+                    </div>
+                  ) : (
+                    <Input id="imageFileName" value={imageFileName} onChange={(e) => setImageFileName(e.target.value)} placeholder={DEFAULT_IMAGE_FILE_NAME} />
+                  )}
                 </Row>
               )}
               {advanced && imageProvider === 'invokeai' && (
@@ -1482,7 +1558,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                   The prompt sent to your text model to turn a subject’s description into booru tags. The
                   <span className="mx-1 font-medium">Subject</span>chip expands per kind — character: “{SUBJECT_GUIDANCE.character}”; location: “{SUBJECT_GUIDANCE.location}”; world: “{SUBJECT_GUIDANCE.world}”.
                 </p>
-                <PromptField value={imageTagPrompt} onChange={setImageTagPrompt} variables={[SUBJECT]} />
+                <PromptField value={imageTagPrompt} onChange={setImageTagPrompt} variables={[SUBJECT]} chipReads={effectivePreviewValues} />
                 <div className="flex justify-start flex-shrink-0">
                   <ConfirmDialog
                     {...SETTINGS_CONFIRMS.resetTagPrompt}
@@ -1794,6 +1870,23 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                     value={showingUser ? locationChangeUserPrompt : locationChangePromptText}
                     onChange={showingUser ? setLocationChangeUserPrompt : setLocationChangePromptText}
                     variables={showingUser ? (PROMPT_KIND_USER_VARIABLES.location ?? []) : PROMPT_KIND_VARIABLES.location}
+                    previewValues={effectivePreviewValues}
+                    sampleData={usingSampleValues}
+                    readOnlyReason={readOnlyReason}
+                    onRequestEdit={duplicatePreset}
+                    fullscreen={promptsFullscreen}
+                    onRequestFullscreen={promptsMorph.toggle}
+                    readOnly={activePresetIsBuiltIn}
+                  />
+                </TabsContent>
+              )}
+
+              {locationChangeEnabled && entityMovement && (
+                <TabsContent value="entitylocation" className="mt-4 flex-1 min-h-0 data-[state=active]:flex flex-col gap-1">
+                  <PromptField
+                    value={showingUser ? entityLocationUserPrompt : entityLocationPrompt}
+                    onChange={showingUser ? setEntityLocationUserPrompt : setEntityLocationPrompt}
+                    variables={showingUser ? (PROMPT_KIND_USER_VARIABLES.entitylocation ?? []) : PROMPT_KIND_VARIABLES.entitylocation}
                     previewValues={effectivePreviewValues}
                     sampleData={usingSampleValues}
                     readOnlyReason={readOnlyReason}
@@ -2174,17 +2267,56 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                 onChange={setAutosaveEnabled}
                 {...rowCopy('autosave')}
               />
+              {autosaveEnabled && (
+                <Row htmlFor="autosaveSlots" {...rowCopy('autosaveSlots')}>
+                  <div className="grid gap-1">
+                    <ValueSlider
+                      id="autosaveSlots"
+                      value={autosaveSlots}
+                      min={1}
+                      max={MAX_AUTOSAVE_SLOTS}
+                      step={1}
+                      onChange={setAutosaveSlots}
+                      format={String}
+                    />
+                    {autosaveSlots < autosaveSlotsAtOpen && (
+                      <p role="status" className="text-helper text-destructive">
+                        Deletes each world&apos;s oldest autosaves past {autosaveSlots} on its next autosave
+                      </p>
+                    )}
+                  </div>
+                </Row>
+              )}
               </Section>
 
-              {onStartAuthoringTour && (
               <Section title="Authoring">
+              <CheckRow
+                htmlFor="editorAutoSave"
+                checked={editorAutoSave}
+                onChange={setEditorAutoSave}
+                {...rowCopy('editorAutoSave')}
+              />
+              {editorAutoSave && (
+              <Row htmlFor="editorAutoSaveIdleSeconds" {...rowCopy('editorAutoSavePause')}>
+                <ValueSlider
+                  id="editorAutoSaveIdleSeconds"
+                  value={editorAutoSaveIdleSeconds}
+                  min={MIN_EDITOR_AUTO_SAVE_IDLE_S}
+                  max={MAX_EDITOR_AUTO_SAVE_IDLE_S}
+                  step={EDITOR_AUTO_SAVE_IDLE_STEP_S}
+                  onChange={setEditorAutoSaveIdleSeconds}
+                  format={formatPause}
+                />
+              </Row>
+              )}
+              {onStartAuthoringTour && (
               <Row {...rowCopy('authoringTour')}>
                 <Button variant="outline" size="sm" onClick={onStartAuthoringTour} {...targetAttribute('settings.data', 'start-authoring-tour')}>
                   {SETTINGS_BUTTONS.startAuthoringTour}
                 </Button>
               </Row>
-              </Section>
               )}
+              </Section>
 
               {/* Housekeeping rather than settings — every one is a "put it back" a normal player never
                   needs, so Simple keeps the whole section out of the way. */}
@@ -2267,6 +2399,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
         surface="settingsCompare"
       />
     )}
+    {import.meta.env.DEV && <DevChipOptions open={devChipOptions && isOpen} onOpenChange={setDevChipOptions} />}
     </>
   );
 };

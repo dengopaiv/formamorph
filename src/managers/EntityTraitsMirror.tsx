@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { useGameData } from '@/contexts/GameDataContext';
 import { Hint } from '@/components/ui/typography';
 import type { EntityRoot, TraitStore } from '@/contexts/TraitStoreContext';
-import { editorGateInput } from '@/lib/bearers';
+import { editorGateInput } from '@/lib/owners';
+import { startingGateStats } from '@/lib/gateStats';
 import { ownedTraitWrites } from '@/lib/ownedTraits';
 import type { Entity } from '@/types';
 import EntityTraitsEditor, { type EntityTraitStore } from './EntityTraitsEditor';
@@ -14,20 +15,21 @@ import EntityTraitsEditor, { type EntityTraitStore } from './EntityTraitsEditor'
  */
 function useWorldEntityTraitStore(entity: Entity): EntityTraitStore {
   const world = useGameData();
-  const { traits, traitGroups, entities, placeholders, stats, placementLetters, placeholderOwners, editEntity } = world;
+  const { traits, traitGroups, entities, placeholders, stats, statGroups, placementLetters, placeholderOwners, editEntity } = world;
   const gateInput = useMemo(
-    () => editorGateInput({ traits, traitGroups, entities }),
-    [traits, traitGroups, entities],
+    () => editorGateInput({ traits, traitGroups, entities }, startingGateStats({ stats, statGroups, entities })),
+    [traits, traitGroups, entities, stats, statGroups],
   );
   return useMemo(() => {
     const edit = (change: (e: Entity) => Entity) => editEntity(entity.id, change);
-    const entityRoot: EntityRoot = { bearer: entity, world: { traits, traitGroups, placeholders } };
+    const entityRoot: EntityRoot = { owner: entity, world: { traits, traitGroups, placeholders } };
     const store: TraitStore = {
       traits: entity.traits ?? [],
       traitGroups: entity.traitGroups ?? [],
       entities: [],
       placeholders,
       stats,
+      statGroups,
       placementLetters,
       placeholderOwners,
       ...ownedTraitWrites(edit),
@@ -36,7 +38,7 @@ function useWorldEntityTraitStore(entity: Entity): EntityTraitStore {
       pinWorld: world,
     };
     return { ...store, entityRoot };
-  }, [entity, traits, traitGroups, placeholders, stats, placementLetters, placeholderOwners, editEntity, gateInput, world]);
+  }, [entity, traits, traitGroups, placeholders, stats, statGroups, placementLetters, placeholderOwners, editEntity, gateInput, world]);
 }
 
 /**
@@ -57,6 +59,7 @@ const EntityTraitsMirror = ({ entity, selectedId, onSelect }: {
       selectedId={selectedId}
       onSelect={onSelect}
       ownerLine={false}
+      placeholder="Filter Traits"
       emptyHint={<Hint className="p-2">Add a trait to give this entity a node on the <strong>Traits</strong> tab</Hint>}
     />
   );

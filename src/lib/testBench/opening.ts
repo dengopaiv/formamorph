@@ -16,13 +16,20 @@
  */
 import { defaultNarrationUserPrompt, defaultSystemPrompt } from '@/components/game/GamePrompts';
 import { copyLookup, readerFor, type CopyLookup } from '@/lib/blueprints';
-import { bearerPriming } from '@/lib/ownedTraitsInPlay';
+import { ownerPriming } from '@/lib/ownedTraitsInPlay';
+import { resolveOwners } from '@/lib/owners';
+import { startingGateStats } from '@/lib/gateStats';
+import { seedEntityStats } from '@/lib/entityStats';
 import { allPlaceholders } from '@/lib/placeholderHomes';
+import { playStatWorld, globalStatsOf } from '@/lib/statLinks';
+import { settle, settleDefaults } from '@/lib/traitGates';
 import { DEFAULT_MAX_TOKENS } from '@/contexts/settingsDefaults';
 import { authoredChipScene } from '@/lib/chipValues/authoredScene';
 import { chipValues } from '@/lib/chipValues/chipValues';
 import { estimateTokens } from '@/lib/memoryUtils';
 import { newGamePool } from '@/lib/newGameOpening';
+import { openingStateOf, type OpeningPicks } from '@/lib/openingState';
+import type { SandboxState } from '@/lib/statCodeTurn';
 import {
   collectPlaceholderPlacements, decodePlaceholderToken, describePlaceholders, lonePlaceholderToken,
   placeholderChances, primeRolls, resolveEntityText, resolvePlaceholders,
@@ -32,15 +39,15 @@ import { DEFAULT_OPENING, openingOwner, openingsEnabled, poolChances, poolKey } 
 import { renderPromptTemplate } from '@/lib/promptTemplate';
 import { activeDescriptor } from '@/lib/statContext';
 import { allPinTexts, collectPins, valuePinRollChips } from '@/lib/placeholderPins';
-import { activeStatEnabled, enabledStats } from '@/lib/traitEffects';
-import { acquireTrait, seedStatBases, type TraitRuntimeState } from '@/lib/traitRuntime';
+import { enabledStats } from '@/lib/traitEffects';
+import { seedNewGameStats } from '@/lib/traitRuntime';
 import { buildNarrationPrompt } from '@/lib/turnPipeline/narrationPrompt';
 import { startingLocations } from '@/lib/startingLocation';
 import type {
-  Entity, GameLocation, Opening, PlaceholderRolls, PlayerStat, Stat, StatDescriptor, ThresholdUnit, Trait,
+  Entity, GameLocation, Opening, PersonaRef, PlaceholderRolls, PlayerStat, Stat, StatDescriptor, ThresholdUnit, Trait,
 } from '@/types';
-import { lensActiveTraits, lensPinTraits, resolveLensText, type BenchLens } from './lens';
-import { bearerWorldOf, chipBearingTexts, type RuleWorld } from './rules';
+import { lensActiveTraits, lensPersonaPicks, lensPinTraits, lensStartingStats, resolveLensText, type BenchLens } from './lens';
+import { ownerWorldOf, chipBearingTexts, type RuleWorld } from './rules';
 import { scannedEntries } from './triggers';
 
 /** The instrument reads the whole authored world — the first prompt pulls from every slice. */
@@ -54,6 +61,8 @@ export interface OpeningStat {
   /** The effective bounds after the active traits — the range the slider scrubs. */
   min: number;
   max: number;
+  /** The effective regen after the active traits, per in-world hour. */
+  regen: number;
   /** The settled starting value: seeded, trait deltas applied, clamped — the real turn-one number. */
   value: number;
   /** What the active traits moved the start by, clamp included; 0 when they left it alone. */
@@ -66,6 +75,16 @@ export interface OpeningStat {
   thresholdUnit?: ThresholdUnit;
   /** Bands exist but none covers the starting value — the AI is told no status (the contradiction class). */
   uncovered: boolean;
+}
+
+/** One authored entity's stats as a fresh game holds them at the top of turn one. */
+export interface OpeningEntityStats {
+  id: string;
+  name: string;
+  /** The live stats, settled under the entity's own traits in force. */
+  stats: OpeningStat[];
+  /** The entity's stats its own traits leave switched off, named as the stat list names them. */
+  disabledStats: string[];
 }
 
 /** One trait in force at game start, with what it imposes. */
@@ -147,6 +166,8 @@ export interface OpeningData {
   stats: OpeningStat[];
   /** Stats the world holds but this opening switches off, named as the stat list names them. */
   disabledStats: string[];
+  /** Each entity that owns stats, in authored order. */
+  entityStats: OpeningEntityStats[];
   traits: OpeningTrait[];
   rolls: OpeningRollGroup[];
   /** The narration system prompt of turn one, as the shipped default prompts and settings assemble it.
@@ -161,28 +182,50 @@ export interface OpeningData {
 export const EMPTY_OPENING: OpeningData = {
   pcName: null, location: null, locationName: '', startPool: 0, starts: [], personas: [], personaId: null, pool: [], selectedKey: null,
   opening: { kind: DEFAULT_OPENING.kind, text: '' }, openingsEnabled: true,
-  stats: [], disabledStats: [], traits: [], rolls: [], system: '', user: '', totalTokens: 0,
+  stats: [], disabledStats: [], entityStats: [], traits: [], rolls: [], system: '', user: '', totalTokens: 0,
 };
 
 /** What a fresh game as the lens PC stands on at turn one: the traits in force, the stats they settle, and
  *  the starting location — the three sources the opening pins come from. */
 interface OpeningStart {
   active: Trait[];
+  /** The turn-one state the opening fold builds under the persona. */
+  state: SandboxState;
   settled: PlayerStat[];
-  seeded: PlayerStat[];
   /** The random pool play draws the start from. */
   pool: GameLocation[];
   /** The author's chosen member of `pool`, or its first. */
   location: GameLocation | null;
 }
 
-function openingStart(world: OpeningWorld, lens: BenchLens, startLocationId?: string | null): OpeningStart {
+function openingStart(world: OpeningWorld, lens: BenchLens, startLocationId?: string | null, persona: PersonaRef = { source: 'none' }): OpeningStart {
   const active = lensActiveTraits(world, lens);
   const locations = world.locations ?? [];
   const flagged = startingLocations(locations);
   const pool = flagged.length > 0 ? flagged : locations;
   const location = pool.find((l) => l.id === startLocationId) ?? pool[0] ?? null;
-  return { active, ...settleOpeningStats(world, active), pool, location };
+  const state = openingStateOf(world, openingPicks(world, active, persona), { ref: persona });
+  return { active, state, settled: [...state.stats], pool, location };
+}
+
+/** The picks Enter World starts from under `persona`: the lens PC's traits, and each owner's default picks.
+ *  The Custom Persona entity holds the lens PC when it is the persona's (Q33). */
+function openingPicks(world: OpeningWorld, active: readonly Trait[], persona: PersonaRef): OpeningPicks {
+  const { gate: ownerGate } = resolveOwners(ownerWorldOf(world), persona);
+  // Stat Conditions read the authored start, as Enter World's do (Q23).
+  const gate = { ...ownerGate, stats: startingGateStats({ ...world, entities: world.entities ?? [] }) };
+  const custom = lensPersonaPicks(world, active);
+  const defaults = settleDefaults(gate).active;
+  const owned = settle({
+    ...gate,
+    active: {
+      global: active.map((t) => t.id),
+      owners: custom && gate.owners.some((o) => o.id === custom.personaId)
+        ? { ...defaults.owners, [custom.personaId]: custom.ids }
+        : defaults.owners,
+    },
+  }).active.owners;
+  return { traits: active.map((t) => t.id), owned: Object.fromEntries(Object.entries(owned).map(([id, ids]) => [id, [...ids]])) };
 }
 
 /** The pins the fresh game opens under, from every source — the active traits (a default trait's pin binds
@@ -212,8 +255,8 @@ export function primeOpeningRolls(
   const placeholders = allPlaceholders(world);
   const pinTexts = openingPinTexts(world);
   const rolled = primeRolls(placeholders, [...chipBearingTexts(world), ...valuePinRollChips(placeholders)], existing, pick, pinTexts);
-  // Each bearer's trait text again through its copies, as Enter World primes it.
-  return bearerPriming(bearerWorldOf(world), [], world.placeholders ?? []).copyTexts
+  // Each owner's trait text again through its copies, as Enter World primes it.
+  return ownerPriming(ownerWorldOf(world), [], world.placeholders ?? []).copyTexts
     .reduce((rolls, { texts, copies }) => primeRolls(placeholders, texts, rolls, pick, pinTexts, copies), rolled);
 }
 
@@ -268,23 +311,9 @@ function collisionChance(chances: number[], draws: number): number {
   return Math.min(1, Math.max(0, 1 - factorial * distinct[draws]));
 }
 
-/** The fresh game's starting stats: seeded exactly as a new game seeds them, then every active trait
- *  acquired in authored order — bounds derived, deltas applied, clamps allowed to bite. */
-function settleOpeningStats(world: OpeningWorld, active: Trait[]): { settled: PlayerStat[]; seeded: PlayerStat[] } {
-  const seeded = seedStatBases((world.stats ?? []).map((stat) => {
-    const value = stat.value || stat.min || 0;
-    return { ...stat, value, starting: stat.starting ?? value };
-  }));
-  let state: TraitRuntimeState = { stats: seeded, traits: [], disabledTraitIds: [], appliedValues: {} };
-  for (const trait of active) {
-    state = acquireTrait(state, trait, { traits: world.traits ?? [], groups: world.traitGroups ?? [] }).state;
-  }
-  return { settled: state.stats, seeded };
-}
-
 /** Every stat a fresh game as the lens PC starts with, settled, including any the PC switches off. */
 export function settledOpeningStats(world: OpeningWorld, lens: BenchLens): PlayerStat[] {
-  return settleOpeningStats(world, lensActiveTraits(world, lens)).settled;
+  return lensStartingStats(world, globalStatsOf(world.stats ?? [], world.statGroups ?? []), lensActiveTraits(world, lens));
 }
 
 /** What the author picked to look at: the persona, a start from the start pool and a row from its opening
@@ -308,8 +337,12 @@ export function buildOpening(
   choice: OpeningChoice = {},
 ): OpeningData {
   const placeholders = allPlaceholders(world);
-  const start = openingStart(world, lens, choice.startLocationId);
-  const { active, settled, seeded, location } = start;
+  const worldEntities = world.entities ?? [];
+  const personas = worldEntities.filter((e) => e.persona && !e.customPersona);
+  const personaId = personas.find((e) => e.id === choice.personaId)?.id ?? null;
+  const personaRef: PersonaRef = personaId ? { source: 'world', entityId: personaId } : { source: 'none' };
+  const start = openingStart(world, lens, choice.startLocationId, personaRef);
+  const { active, settled, location } = start;
   const pins = openingPins(world, start, rolls);
   const resolve = (text: string, copies?: CopyLookup) => resolvePlaceholders(text, { placeholders, rolls, pins, copies });
   // Each cast entity's trait text reads its own copies.
@@ -318,27 +351,43 @@ export function buildOpening(
     placeholders, rolls, pins, copies: copyLookup(blueprints, readerFor(undefined, entity, false)),
   });
 
-  const seededValue = new Map(seeded.map((stat) => [stat.id, stat.value]));
-  const enabled = activeStatEnabled(world.stats ?? [], active);
+  const globalStats = globalStatsOf(world.stats ?? [], world.statGroups ?? []);
+  const { enabled } = start.state;
   const liveStats = enabledStats(settled, enabled);
+  const openingStats = (live: readonly PlayerStat[], from: readonly PlayerStat[]): OpeningStat[] => {
+    const seededValue = new Map(from.map((stat) => [stat.id, stat.value]));
+    return live.map((stat): OpeningStat => {
+      const descriptor = activeDescriptor(stat, stat.value);
+      const descriptors = stat.descriptors ?? [];
+      return {
+        id: stat.id,
+        name: resolve(stat.name),
+        type: stat.type,
+        min: stat.min,
+        max: stat.max,
+        regen: stat.regen ?? 0,
+        value: stat.value,
+        traitShift: stat.value - (seededValue.get(stat.id) ?? stat.value),
+        descriptor: descriptor?.description ?? null,
+        descriptors,
+        thresholdUnit: stat.thresholdUnit,
+        uncovered: descriptors.length > 0 && !descriptor,
+      };
+    });
+  };
+  // The trait shift reads against the stats as a new game seeds them, before any trait applies.
+  const stats = openingStats(liveStats, seedNewGameStats(globalStats));
+  const seededEntities = seedEntityStats(
+    playStatWorld({ stats: world.stats ?? [], statGroups: world.statGroups ?? [], entities: worldEntities }).entities,
+  );
 
-  const stats = liveStats.map((stat): OpeningStat => {
-    const descriptor = activeDescriptor(stat, stat.value);
-    const descriptors = stat.descriptors ?? [];
-    return {
-      id: stat.id,
-      name: resolve(stat.name),
-      type: stat.type,
-      min: stat.min,
-      max: stat.max,
-      value: stat.value,
-      traitShift: stat.value - (seededValue.get(stat.id) ?? stat.value),
-      descriptor: descriptor?.description ?? null,
-      descriptors,
-      thresholdUnit: stat.thresholdUnit,
-      uncovered: descriptors.length > 0 && !descriptor,
-    };
-  });
+  const entityNames = new Map(worldEntities.map((e) => [e.id, e.name]));
+  const entityStats = (start.state.owners ?? []).map((owner): OpeningEntityStats => ({
+    id: owner.id,
+    name: resolve(entityNames.get(owner.id) ?? owner.id),
+    stats: openingStats(enabledStats([...owner.stats], owner.enabled), seededEntities[owner.id]),
+    disabledStats: owner.stats.filter((stat) => !owner.enabled[stat.id]).map((stat) => resolve(stat.name || stat.id)),
+  }));
 
   const placeholderName = new Map(placeholders.map((p) => [p.id, p.name || p.id]));
   const statName = new Map((world.stats ?? []).map((s) => [s.id, s.name || s.id]));
@@ -404,17 +453,14 @@ export function buildOpening(
   }));
   // The opening pool for this persona at this start, as new-game play reads it. The Bench has no library, so
   // the persona is a world entity or None; picked library entities are a player choice.
-  const worldEntities = world.entities ?? [];
-  const personas = worldEntities.filter((e) => e.persona && !e.customPersona);
-  const personaId = personas.find((e) => e.id === choice.personaId)?.id ?? null;
   const { persona, cast, customPersona, pool: entries } = newGamePool({
-    pick: { ref: personaId ? { source: 'world', entityId: personaId } : { source: 'none' } },
+    pick: { ref: personaRef },
     worldEntities, overview: world.worldOverview, locations: world.locations ?? [], startingLocationId: location?.id, picked: [],
   });
   const chances = poolChances(entries);
   const entityName = new Map([...cast, persona?.entity, customPersona].flatMap((e) => (e ? [[e.id, e.name] as const] : [])));
   const locationName = new Map((world.locations ?? []).map((l) => [l.id, l.name]));
-  // The Player Name chip names the played entity: the persona, or the Custom Persona entity under None. A
+  // The Persona Name chip names the played entity: the persona, or the Custom Persona entity under None. A
   // world with neither reads "you".
   const player = { name: persona ? resolve(persona.entity.name) : undefined, kind: 'opening' as const };
   const openingText = (text: string, owner: Entity | null = null) =>
@@ -467,9 +513,10 @@ export function buildOpening(
     opening,
     openingsEnabled: openingsEnabled(world.worldOverview, world.entities),
     stats,
-    disabledStats: (world.stats ?? [])
+    disabledStats: globalStats
       .filter((stat) => !enabled[stat.id])
       .map((stat) => resolve(stat.name || stat.id)),
+    entityStats,
     traits,
     rolls: rollGroups,
     system,

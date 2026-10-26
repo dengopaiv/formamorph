@@ -106,11 +106,11 @@ describe('scatterPlaceholders', () => {
     expect(next.entities[1]).toBe(w.entities[1]);
   });
 
-  it('keeps an owned placeholder beside its holder, whichever list it started in', () => {
+  it('keeps an owned placeholder beside its parent placeholder, whichever list it started in', () => {
     // A drop makes Weather a part of Molly's Eyes: the value points at it, so it belongs to Molly's list.
-    const holder = { ...EYES, values: [{ id: 'v:w', text: chip('shared') }] };
+    const parent = { ...EYES, values: [{ id: 'v:w', text: chip('shared') }] };
     const owned = { ...SHARED, ownerId: 'eyes' };
-    const next = scatterPlaceholders(world(), [owned, holder, HAIR, LORE]);
+    const next = scatterPlaceholders(world(), [owned, parent, HAIR, LORE]);
     expect(next.placeholders).toEqual([]);
     expect(next.entities[0].placeholders?.map((p) => p.id)).toEqual(['shared', 'eyes']);
   });
@@ -220,12 +220,17 @@ describe('duplicateEntityPlaceholders', () => {
       aiDescription: chip('eyes', 'd'),
       aiSummary: chip('eyes', 'e'),
       imageTags: chip('eyes', 'f'),
+      pronouns: chip('eyes', 'g'),
+      relationships: [{ targetId: 'you', label: chip('eyes', 'h') }],
     });
     const copy = duplicateEntityPlaceholders(src);
     const fresh = copy.placeholders?.[0].id;
     expect(fresh).toBeDefined();
     expect(fresh).not.toBe('eyes');
-    for (const text of [copy.name, copy.aliases?.[0], copy.playerDescription, copy.aiDescription, copy.aiSummary, copy.imageTags]) {
+    for (const text of [
+      copy.name, copy.aliases?.[0], copy.playerDescription, copy.aiDescription, copy.aiSummary, copy.imageTags, copy.pronouns,
+      copy.relationships?.[0].label,
+    ]) {
       expect(decodePlaceholderToken(text!.match(/\{\{ph:[^}]+\}\}/)![0])?.id).toBe(fresh);
     }
     // The source is untouched.
@@ -279,11 +284,11 @@ describe('placeholderHomeFor', () => {
     expect(placeholderHomeFor(world, P('n', 'N'), { kind: 'dictionary', ownerId: 'book' })).toEqual({ kind: 'dictionary', ownerId: 'book' });
   });
 
-  it('puts a placeholder born owned beside its holder', () => {
+  it('puts a placeholder born owned beside its parent placeholder', () => {
     expect(placeholderHomeFor(world, P('n', 'N', [], { ownerId: 'eyes' }))).toEqual({ kind: 'entity', ownerId: 'molly' });
   });
 
-  it('falls back to the world list for no home, a gone owner, or a holder nothing has', () => {
+  it('falls back to the world list for no home, a gone owner, or a parent placeholder nothing has', () => {
     expect(placeholderHomeFor(world, P('n', 'N'))).toEqual({ kind: 'world' });
     expect(placeholderHomeFor(world, P('n', 'N'), { kind: 'entity', ownerId: 'gone' })).toEqual({ kind: 'world' });
     expect(placeholderHomeFor(world, P('n', 'N', [], { ownerId: 'gone' }))).toEqual({ kind: 'world' });
@@ -333,7 +338,7 @@ describe('movePlaceholderHome', () => {
     expect(back.entities[0].placeholders?.map((p) => p.id)).toEqual(['eyes']);
   });
 
-  it('takes what the placeholder owns along with it, and releases the moved one from its own holder', () => {
+  it('takes what the placeholder owns along with it, and releases the moved one from its own parent placeholder', () => {
     // Eyes holds Shade privately; Weather holds Eyes privately. Moving Eyes to the book takes Shade, not Weather.
     const shade = P('shade', 'Shade', ['dusk'], { ownerId: 'eyes' });
     const eyes = P('eyes', 'Eyes', [chip('shade')], { ownerId: 'shared' });
@@ -345,7 +350,7 @@ describe('movePlaceholderHome', () => {
     const moved = next.dictionaries[0].placeholders?.find((p) => p.id === 'eyes');
     expect(moved).not.toHaveProperty('ownerId');
     expect(next.dictionaries[0].placeholders?.find((p) => p.id === 'shade')?.ownerId).toBe('eyes');
-    // The holder keeps its value: the row it drew is now a shared reference to the book's copy.
+    // The parent placeholder keeps its value: the row it drew is now a shared reference to the book's copy.
     expect(next.placeholders[0].values.map((v) => v.text)).toEqual([chip('eyes')]);
   });
 
@@ -413,6 +418,18 @@ describe('adoptEntityPlaceholders', () => {
     const { entity } = adoptEntityPlaceholders(card, [P('w-weather', 'Weather', ['rain', 'sun'])]);
     expect(chipIds(entity.openings![0].text)).toEqual([entity.placeholders?.[0].id, 'w-weather']);
     expect(entity.openings![0]).toMatchObject({ id: 'o1', kind: 'narration' });
+  });
+
+  it('re-aims the chips in an entity’s relationship labels at the defs they land on', () => {
+    const card: Entity = {
+      id: 'card', name: 'Molly',
+      relationships: [{ targetId: 'you', label: `${chip('eyes', 'a')} kin from ${chip('shared', 'b')}` }],
+      placeholders: [P('eyes', 'Eyes', ['amber'])],
+      sharedPlaceholders: [P('shared', 'Weather', ['rain', 'sun'])],
+    };
+    const { entity } = adoptEntityPlaceholders(card, [P('w-weather', 'Weather', ['rain', 'sun'])]);
+    expect(chipIds(entity.relationships![0].label)).toEqual([entity.placeholders?.[0].id, 'w-weather']);
+    expect(entity.relationships![0].targetId).toBe('you');
   });
 
   it('adds a shared def the world has no match for, and re-aims a chip inside an owned value at it', () => {

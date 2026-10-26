@@ -8,6 +8,7 @@ import { useEffect, type ComponentProps, type ReactNode } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { GameDataProvider, useGameData } from '@/contexts/GameDataContext';
+import { useWorldHistory, useWorldHistoryMoves } from '@/contexts/worldRecorder';
 import { writeEditorMode, type EditorMode } from '@/lib/editorMode';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -28,6 +29,7 @@ export const asMobile = () => {
   const realMatchMedia = window.matchMedia;
   const realWidth = window.innerWidth;
   window.innerWidth = 400;
+  // A stub with only the members the two readers call.
   window.matchMedia = ((query: string) => ({
     matches: query.includes('max-width: 767px'),
     media: query, onchange: null,
@@ -39,6 +41,12 @@ export const asMobile = () => {
     window.innerWidth = realWidth;
   };
 };
+
+/** What the Save face's live region says; the region follows the split button. */
+export const saveAnnouncement = (face: HTMLElement) => face.parentElement?.nextElementSibling?.textContent ?? null;
+
+/** Desktop's Search World field in the app bar. */
+export const searchWorldField = () => screen.getByRole('textbox', { name: 'Search World' });
 
 /** Ends a closed sheet's exit animation, which jsdom never runs, so vaul unmounts the sheet. */
 export const finishSheetExit = (sheet: HTMLElement) => {
@@ -56,7 +64,7 @@ export const benchEditorWorld = (over: Partial<World>): World => ({
   id: 'w1',
   worldOverview: {
     name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
-    systemPrompt: 'Narrate the fen.', readme: 'A fen primer.', use3DModel: true, tags: [],
+    systemPrompt: 'Narrate the fen.', readme: 'A fen primer.', tags: [],
   },
   stats: [],
   locations: [{ id: 'harbor', name: 'Harbor Steps', isStarting: true }],
@@ -69,16 +77,20 @@ export const benchEditorWorld = (over: Partial<World>): World => ({
 } as unknown as World);
 
 type GameDataHandle = ReturnType<typeof useGameData>;
+type HistoryMoves = ReturnType<typeof useWorldHistoryMoves>;
+type HistoryState = ReturnType<typeof useWorldHistory>;
 
 // eslint-disable-next-line react-refresh/only-export-components -- test-only module; nothing is hot-reloaded
 const Harness = ({ world, children, onReady }: {
   world: World;
   children?: ReactNode;
-  onReady: (ctx: GameDataHandle) => void;
+  onReady: (ctx: GameDataHandle, moves: HistoryMoves, state: HistoryState) => void;
 }) => {
   const ctx = useGameData();
+  const moves = useWorldHistoryMoves();
+  const state = useWorldHistory();
   useEffect(() => { ctx.loadWorldData(world); /* once */ }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  onReady(ctx);
+  onReady(ctx, moves, state);
   return <>{children}</>;
 };
 
@@ -93,35 +105,71 @@ export const renderWorldEditorBench = (
   world: World,
   mode: EditorMode,
   props: Partial<Omit<ComponentProps<typeof WorldEditor>, 'onClose'>> = {},
+  /** Wraps the whole tree, as the app's root boundary does. */
+  wrap: (tree: ReactNode) => ReactNode = (tree) => tree,
 ) => {
   let ctx!: GameDataHandle;
+  let moves!: HistoryMoves;
+  let historyState!: HistoryState;
   writeEditorMode(mode);
   const onClose = vi.fn();
-  const tree = (editorProps: typeof props) => (
+  // A new key remounts the editor over the same provider, as closing it and opening it again does.
+  let visit = 0;
+  const tree = (editorProps: typeof props) => wrap(
     <SettingsProvider>
       <TooltipProvider>
         <GameDataProvider>
-          <Harness world={world} onReady={(c) => { ctx = c; }}>
-            <WorldEditor onClose={onClose} embedded backButton {...editorProps} />
+          <Harness world={world} onReady={(c, m, h) => { ctx = c; moves = m; historyState = h; }}>
+            <WorldEditor key={visit} onClose={onClose} embedded backButton {...editorProps} />
           </Harness>
         </GameDataProvider>
       </TooltipProvider>
-    </SettingsProvider>
+    </SettingsProvider>,
   );
   const view = render(tree(props));
   return {
     ctx: () => ctx,
+    /** The host's close, which the editor calls to leave. */
+    onClose,
+    /** The history's moves, called as a hook caller would, past the chords and the pill. */
+    history: () => moves,
+    /** The Steps, the cursor and the Saved marker as the last render read them. */
+    historyState: () => historyState,
     unmount: view.unmount,
     /** Renders the editor again with new props, as a host does for a later request. */
     rerender: (next: typeof props) => view.rerender(tree(next)),
+    /** Closes the editor and opens it again over the same world, as a host that keeps its provider does. */
+    reopen: (next: typeof props = props) => { visit += 1; view.rerender(tree(next)); },
   };
 };
 
-/** Open one of the editor's own tabs. The entity panel's Traits tab shares a name with the editor's, so the
- *  strip is told apart by its label. These tabs switch on mouseDown, not click. */
-export const openEditorTab = (name: RegExp) => fireEvent.mouseDown(
-  screen.getAllByRole('tab', { name }).find((t) => t.closest('[role="tablist"]')?.getAttribute('aria-label') !== 'Entity Fields')!,
-);
+/** The label of the editor tab that is showing. */
+export const shownEditorTab = () =>
+  within(screen.getByRole('tablist', { name: 'Editor Sections' })).getByRole('tab', { selected: true }).textContent;
+
+/** Open one of the editor's own tabs, from the rail or, on mobile, through the Sections bar. Panel strips
+ *  share tab names with the editor's, so the list is found by its label. These tabs switch on mouseDown. */
+export const openEditorTab = (name: RegExp) => {
+  const sections = screen.queryByRole('button', { name: /^Sections/, expanded: false });
+  if (sections) fireEvent.click(sections);
+  fireEvent.mouseDown(within(screen.getByRole('tablist', { name: 'Editor Sections' })).getByRole('tab', { name }));
+};
+
+/** Open a list's + menu on Entities or Dictionary and pick Add From Library…, which opens the picker. */
+export const openAddFromLibrary = (kind: 'dictionary' | 'entity') => {
+  fireEvent.click(screen.getByRole('button', { name: kind === 'dictionary' ? 'Add to Dictionary' : 'Add to Entities' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Add From Library…' }));
+};
+
+/** The editor's mode select, in the desktop app bar or the mobile header. */
+export const editorModeSelect = () => screen.getByRole('combobox', { name: 'Editor mode' });
+
+/** Pick a mode from the mode select, by keyboard: a click needs pointer capture, which jsdom has not
+ *  got, and the keyboard works under fake timers too. */
+export const pickEditorMode = (name: 'Simple' | 'Advanced') => {
+  fireEvent.keyDown(editorModeSelect(), { key: 'Enter' });
+  fireEvent.keyDown(screen.getByRole('option', { name: new RegExp(`^${name}`) }), { key: 'Enter' });
+};
 
 /** The entity panel's own tab, apart from the editor's tab of the same name. */
 export const entityFieldsTab = (name: string) =>

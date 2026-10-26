@@ -5,6 +5,7 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DesignSystemShowcase } from './DesignSystemShowcase';
 import { SETTINGS_COPY } from '@/components/modals/settingsCopy';
+import { NAV_RAIL_REFERENCE_STORAGE_KEY } from '@/components/design-system/NavRailReference';
 import { loadEmbeddingModel, disposeEmbeddingModel } from '@/lib/embeddingWorkerClient';
 
 vi.mock('@/lib/embeddingWorkerClient', async (importOriginal) => ({
@@ -62,14 +63,17 @@ describe('settings design reference', () => {
     const user = userEvent.setup();
     renderShowcase();
 
-    const modeSwitch = screen.getByRole('radiogroup', { name: 'Settings mode' });
+    const modeSelect = screen.getByRole('combobox', { name: 'Settings mode' });
+    expect(modeSelect).toHaveTextContent('Advanced');
     await user.click(screen.getByRole('checkbox', { name: SETTINGS_COPY.markdownFormatting.label }));
-    await user.click(within(modeSwitch).getByRole('radio', { name: 'Simple' }));
+    await user.click(modeSelect);
+    await user.click(screen.getByRole('option', { name: /^Simple/ }));
     expect(screen.queryByRole('checkbox', { name: SETTINGS_COPY.markdownFormatting.label })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Memory' })).toBeNull();
-    expect(screen.getByLabelText('Hidden settings are off their defaults')).toBeInTheDocument();
+    expect(modeSelect).toHaveAccessibleDescription('Hidden settings are off their defaults');
 
-    await user.click(within(modeSwitch).getByRole('radio', { name: /^Advanced/ }));
+    await user.click(modeSelect);
+    await user.click(screen.getByRole('option', { name: /^Advanced/ }));
     expect(screen.getByRole('checkbox', { name: SETTINGS_COPY.markdownFormatting.label })).not.toBeChecked();
     expect(screen.getByRole('heading', { name: 'Memory' })).toBeInTheDocument();
   });
@@ -335,5 +339,161 @@ describe('supporter flair reference', () => {
       for (const staff of ['Mod', 'Dev', 'Admin']) expect(within(panel).getAllByText(staff).length).toBeGreaterThan(0);
       expect(panel.querySelectorAll('[class*="ring-supporter"]').length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('sections bar reference', () => {
+  it('draws the editor registry as a Sections bar, and follows the mode switch', async () => {
+    const user = userEvent.setup();
+    renderShowcase();
+    await user.click(screen.getByRole('tab', { name: 'Sections Bar' }));
+
+    const region = screen.getByRole('region', { name: 'Sections Bar' });
+    const sections = () => within(region).getByRole('button', { name: /^Sections/ });
+    const bar = () => within(region).getByRole('tablist', { name: 'Editor Sections' });
+    await user.click(sections());
+    expect(within(bar()).getAllByRole('tab')).toHaveLength(10);
+    // Lines split the groups; no group name is drawn.
+    expect(bar().querySelectorAll('[data-sections-separator]')).toHaveLength(3);
+    expect(within(bar()).queryByText('Content')).toBeNull();
+    await user.click(within(bar()).getByRole('tab', { name: 'Traits' }));
+    expect(sections()).toHaveTextContent('Traits');
+    expect(within(region).getByText('The trait tree beside the selected trait\'s details.')).toBeInTheDocument();
+
+    await user.click(within(region).getByRole('radio', { name: 'Simple' }));
+    await user.click(sections());
+    expect(within(bar()).getAllByRole('tab')).toHaveLength(7);
+    expect(localStorage).toHaveLength(0);
+  });
+});
+
+describe('nav rail reference', () => {
+  it('draws the editor registry as the rail, collapses under its own key, and follows No Room and Disabled', async () => {
+    const user = userEvent.setup();
+    renderShowcase();
+    await user.click(screen.getByRole('tab', { name: 'Nav Rail' }));
+
+    const region = screen.getByRole('region', { name: 'Nav Rail' });
+    const rail = within(region).getByRole('tablist', { name: 'Sample Editor Sections' });
+    expect(within(rail).getAllByRole('tab')).toHaveLength(10);
+    await user.click(within(rail).getByRole('tab', { name: 'Traits' }));
+    expect(within(region).getByText('The trait tree beside the selected trait\'s details.')).toBeInTheDocument();
+
+    await user.click(within(region).getByRole('button', { name: 'Collapse' }));
+    expect(within(region).getByRole('button', { name: 'Expand' })).toBeEnabled();
+    expect(Object.keys(localStorage)).toEqual([NAV_RAIL_REFERENCE_STORAGE_KEY]);
+    await user.click(within(region).getByRole('button', { name: 'Expand' }));
+
+    await user.click(within(region).getByRole('checkbox', { name: 'No Room' }));
+    expect(within(region).getByRole('button', { name: 'Expand' })).toBeDisabled();
+
+    await user.click(within(region).getByRole('checkbox', { name: 'Disabled' }));
+    within(rail).getAllByRole('tab').forEach((tab) => expect(tab).toBeDisabled());
+    expect(within(rail).getByRole('tab', { selected: true })).toHaveAccessibleName('Traits');
+  });
+});
+
+describe('history controls reference', () => {
+  it('shows the desktop pill and the mobile icon over one sample history, touching no storage', async () => {
+    const user = userEvent.setup();
+    renderShowcase();
+    await user.click(screen.getByRole('tab', { name: 'History Controls' }));
+
+    const region = screen.getByRole('region', { name: 'History Controls' });
+    const pill = within(region).getByRole('group', { name: 'History' });
+    expect(within(pill).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Undo', 'Redo', 'History']);
+    expect(within(within(region).getByRole('region', { name: 'Mobile sample' })).getAllByRole('button', { name: 'History' })).toHaveLength(1);
+
+    await user.click(within(pill).getByRole('button', { name: 'History' }));
+    expect(within(region).getByRole('dialog', { name: 'History' })).toBeInTheDocument();
+    expect(localStorage).toHaveLength(0);
+  });
+});
+
+describe('chip options reference', () => {
+  it('opens the production dialog on each sample and writes no storage', async () => {
+    const user = userEvent.setup();
+    renderShowcase();
+    await user.click(screen.getByRole('tab', { name: 'Chip Options' }));
+    expect(screen.getByRole('region', { name: 'Chip Options Reference' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Open Entities Chip' }));
+    const entities = await screen.findByRole('dialog', { name: 'Chip Options' });
+    expect(within(entities).getByText('What the AI Reads')).toBeInTheDocument();
+    for (const row of ['Only With', 'Include', 'Stat Detail']) {
+      expect(within(entities).getByRole('group', { name: row })).toBeInTheDocument();
+    }
+    const onlyWithStats = within(within(entities).getByRole('group', { name: 'Only With' })).getByRole('checkbox', { name: 'Stats' });
+    expect(onlyWithStats).not.toBeChecked();
+    await user.click(onlyWithStats);
+    expect(onlyWithStats).toBeChecked();
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('button', { name: 'Open Placeholder Chip' }));
+    const placeholder = await screen.findByRole('dialog', { name: 'Chip Options' });
+    expect(within(placeholder).queryByText('What the AI Reads')).toBeNull();
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Editable' }));
+    await user.click(screen.getByRole('button', { name: 'Open Stats Chip' }));
+    const readOnly = await screen.findByRole('dialog', { name: 'Chip Options' });
+    within(within(readOnly).getByRole('group', { name: 'Stat Detail' })).getAllByRole('checkbox')
+      .forEach((box) => expect(box).toBeDisabled());
+    expect(localStorage).toHaveLength(0);
+  });
+});
+
+describe('code hover card reference', () => {
+  it('shows the card and the Find All Uses list in both themes, writing no storage', async () => {
+    const user = userEvent.setup();
+    renderShowcase();
+    await user.click(screen.getByRole('tab', { name: 'Code Hover Card' }));
+
+    const region = screen.getByRole('region', { name: 'Code Hover Card Reference' });
+    for (const theme of ['Light Theme', 'Dark Theme']) {
+      expect(within(within(region).getByRole('region', { name: theme })).getByRole('region', { name: 'Stat' })).toHaveTextContent('stats.Fatigue');
+    }
+    expect(localStorage).toHaveLength(0);
+  });
+});
+
+describe('surface app bar reference', () => {
+  it('draws the bar in order with a sample world name and its controls, touching no storage', async () => {
+    const user = userEvent.setup();
+    renderShowcase();
+    await user.click(screen.getByRole('tab', { name: 'Surface App Bar' }));
+
+    const region = screen.getByRole('region', { name: 'Surface App Bar' });
+    const order = [
+      within(region).getByRole('button', { name: 'Back' }),
+      within(region).getByRole('heading', { name: 'World Editor' }),
+      within(region).getByText('Sedge Landing'),
+      within(region).getByRole('textbox', { name: 'Search World' }),
+      within(region).getByRole('combobox', { name: 'Sample editor mode' }),
+      within(region).getByRole('button', { name: 'Test Bench' }),
+      within(region).getByRole('button', { name: 'Save' }),
+      within(region).getByRole('button', { name: 'Save options' }),
+    ];
+    order.slice(1).forEach((el, i) => {
+      expect(order[i].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+    // The Save face's own stacked labels are not save-state text.
+    expect(within(region).queryByText(/^(Saved|Unsaved changes)$/, { ignore: '[data-save-face] *' })).toBeNull();
+    expect(within(region).queryByRole('radiogroup')).toBeNull();
+
+    await user.click(within(region).getByRole('button', { name: 'Save' }));
+    expect(within(region).getByText('Last action: Save.')).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Saving…' })).toBeInTheDocument();
+    expect(await within(region).findByRole('button', { name: 'Saved' })).toBeInTheDocument();
+
+    await user.click(within(region).getByRole('checkbox', { name: 'Fail Saves' }));
+    await user.click(within(region).getByRole('button', { name: 'Make a Change' }));
+    await user.click(within(region).getByRole('button', { name: 'Save' }));
+    expect(await within(region).findByRole('button', { name: 'Failed' })).toBeEnabled();
+
+    await user.click(within(region).getByRole('button', { name: 'Save options' }));
+    await user.click(await screen.findByRole('button', { name: 'Export World' }));
+    expect(within(region).getByText('Last action: Export World.')).toBeInTheDocument();
+    expect(localStorage).toHaveLength(0);
   });
 });

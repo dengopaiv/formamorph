@@ -6,7 +6,7 @@ import EntityEditorModal from './EntityEditorModal';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import EntityStorageService from '@/services/EntityStorageService';
 import { SELF_ENTITY } from '@/lib/portableTraits';
-import type { LibraryEditorWorld } from '@/managers/LibraryTraitsEditor';
+import type { LibraryEditorWorld } from '@/lib/libraryGateInput';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { phValues } from '@/test/placeholderValues';
 import type { Entity } from '@/types';
@@ -37,7 +37,7 @@ const wolf: Entity = {
     { id: 't-tamed', name: 'Tamed', groupId: 'g-bond', statChanges: [] },
     {
       id: 't-oath', name: 'Oath', statChanges: [],
-      requires: [{ kind: 'trait', id: 'w-paladin', name: 'Paladin' }, { kind: 'playingAs', id: SELF_ENTITY, name: 'Wolf' }],
+      requires: [{ all: [{ kind: 'trait', id: 'w-paladin', name: 'Paladin' }] }, { all: [{ kind: 'playingAs', id: SELF_ENTITY, name: 'Wolf' }] }],
     },
   ],
 };
@@ -69,11 +69,11 @@ describe('the library entity Traits tab', () => {
     await openTraits();
     await userEvent.click(screen.getByText('Oath'));
     await userEvent.click(screen.getByRole('tab', { name: 'Availability' }));
-    const chip = screen.getByText('Paladin').closest('[data-unresolved]');
+    const chip = within(document.querySelector<HTMLElement>('[data-requirement-row]')!).getByText('Paladin').closest('[data-unresolved]');
     expect(chip).not.toBeNull();
     // "Playing as" the entity itself points inside it, so it reads resolved.
     expect(screen.getByRole('button', { name: 'playing as Wolf' }).closest('[data-unresolved]')).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Add Requirement' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Or Another Way' }));
     expect(screen.getByRole('option', { name: /Tamed/ })).toBeInTheDocument();
     expect(screen.getByText('Any Trait in a Group')).toBeInTheDocument();
     expect(screen.queryByText('Playing As')).not.toBeInTheDocument();
@@ -208,7 +208,7 @@ describe("the library entity Traits tab's links", () => {
   const world: LibraryEditorWorld = {
     traits: [
       { id: 'n-paladin', name: 'Paladin', groupId: 'n-class', statChanges: [], placeholderPins: [{ placeholderId: 'p-garb', value: 'plate' }] },
-      { id: 'n-wizard', name: 'Wizard', groupId: 'n-class', statChanges: [], requires: [{ kind: 'trait', id: 'n-paladin' }] },
+      { id: 'n-wizard', name: 'Wizard', groupId: 'n-class', statChanges: [], requires: [{ all: [{ kind: 'trait', id: 'n-paladin' }] }] },
     ],
     traitGroups: [
       { id: 'n-blueprints', name: 'Blueprints', parentId: null, system: 'blueprints' },

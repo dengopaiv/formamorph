@@ -25,7 +25,7 @@ An AI model can only hold so much text at once. A story that runs 50 turns doesn
 <!-- keywords: change, fix, rewrite, summary, correct, wrong, remember, inaccurate recap, misremembered, alter, amend, pencil, revert, modify history, search for one -->
 <!-- route: memoryManager -->
 
-1. During play, open the side panel's **Memory** tab.
+1. During the game, open the side panel's **Memory** tab.
 2. Select **Manage Memories**. The **Memories** dialog opens.
 3. Find the memory. Type in **Search memories…**, or select a filter chip.
 4. Select the pencil button, **Edit This Memory**.
@@ -77,7 +77,7 @@ To bring back one deleted memory instead, select the **Deleted** filter chip, th
 3. Open the **Output** tab.
 4. In the **Memory** section, turn off **Memory Summaries**.
 
-During play, the **How to Play** help has the same **Memory Summaries** checkbox on its **Memory & Notes** tab, in every mode.
+During the game, the **How to Play** help has the same **Memory Summaries** checkbox on its **Memory & Notes** tab, in every mode.
 
 ## How to Date Each Memory
 <!-- keywords: time, timestamp, day, calendar, clock, when it happened, how long ago, time passing, hours, chronology, time of day, elapsed, story date -->
@@ -93,7 +93,7 @@ During play, the **How to Play** help has the same **Memory Summaries** checkbox
 <!-- keywords: ledger, crossed out, faded lines, filters, list in sidebar, recent divider, greyed out, icons meaning -->
 <!-- route: gameViewer.memory -->
 
-Open the side panel's **Memory** tab during play to see the whole ledger. Faded, struck-through lines are the ones the story let go.
+Open the side panel's **Memory** tab during the game to see the whole ledger. Faded, struck-through lines are the ones the story let go.
 
 | Control | What It Does |
 |---|---|
@@ -192,7 +192,7 @@ The side panel's clock reads the same way: **Day 1, morning**, not a count of ho
 | **Times of Day** | Coarse: *dawn*, *morning*, *midday*, *afternoon*, *evening*, *night*. Never a clock reading. |
 
 > [!NOTE]
-> **The Memory tab dates nothing while Measured Clock is off.** Without it every turn costs a flat hour, so a date would only be a turn count. **Time in Memory** still dates what it sends to the AI, at that flat hour. Turn Measured Clock on partway through a story, and the earlier turns are dated at that flat hour. The scale is wrong, but the order is right.
+> **The Memory tab dates nothing while Measured Clock is off.** Without it every turn costs the same **Time Per Turn** (one hour unless you change it), so a date would only be a turn count. **Time in Memory** still dates what it sends to the AI, at that time per turn. Turn Measured Clock on partway through a story, and the earlier turns are dated at that time per turn. The scale is wrong, but the order is right.
 
 Both settings are in Settings → **Output** → **Time**, in **Advanced** mode. **Measured Clock** decides whether the game measures time. **Time in Memory** decides whether the AI is told.
 

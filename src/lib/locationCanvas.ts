@@ -1,11 +1,13 @@
+import { ancestors } from "@/lib/ancestors";
 import type { Connection, GameLocation, LegKey } from "@/types";
 import {
   createConnection, directionFrom, withDirection, type ConnectionDirection,
 } from "./connectionEditing";
 import {
-  connectionLegs, implicitPairs, isTwoWay, overriddenPairs, pairKey, reachableFromStarts,
+  connectionLegs, implicitNeighbors, isTwoWay, pairKey, parentIndex, reachableFromStarts,
 } from "./locationGraph";
-import { holderOf, isDescendantLocation } from "./locationTree";
+import { holderOf } from "./locationTree";
+import type { StepKey } from "./editorHistory";
 
 /**
  * The canvas's mapping layer: world data in, node and edge descriptions out. Everything the map means lives
@@ -15,6 +17,9 @@ import { holderOf, isDescendantLocation } from "./locationTree";
  * because being inside the box *is* the free travel between them. Implicit sibling travel gets one dashed
  * arrow per direction. An authored Connection gets one solid arrow per travelable direction, and takes that
  * pair's implicit arrows off the map, since the Connection is now the pair's whole travel rule.
+ *
+ * Implicit arrows are drawn for focused locations only: a sibling mesh is quadratic in a large group, and an
+ * author reads one location's travel at a time.
  */
 
 /** A plain location node's footprint. Groups are measured around their children instead. */
@@ -80,15 +85,66 @@ export interface LocationCanvasMap {
 }
 
 /**
+ * Who a canvas shows implicit travel for: the hovered location and every selected one. A drag in flight
+ * shows none, so the arrows are not redrawn on every frame of a move.
+ */
+export function canvasFocus(
+  { hovered, selected, dragging }: { hovered: string | null; selected: readonly string[]; dragging: boolean },
+): string[] {
+  if (dragging) return [];
+  return hovered !== null && !selected.includes(hovered) ? [...selected, hovered] : [...selected];
+}
+
+/** Who the Map shows implicit travel for: the box the player stands in, plus the one under the pointer. */
+export function mapFocus({ current, hovered }: { current: string | null; hovered: string | null }): string[] {
+  return canvasFocus({ hovered, selected: current === null ? [] : [current], dragging: false });
+}
+
+/**
+ * The dashed arrows of the focused locations: each sibling pair gets one per direction. A parent and its
+ * child get none (the box is the link), and neither does a pair an authored Connection has replaced.
+ */
+export function implicitCanvasEdges(
+  locations: GameLocation[],
+  connections: Connection[],
+  focus: Iterable<string>,
+): CanvasEdge[] {
+  const index = parentIndex(locations);
+  const known = new Set(locations.map((l) => l.id));
+  const authored = new Set(connections.map((c) => pairKey(c.a, c.b)));
+  const drawn = new Set<string>();
+  const edges: CanvasEdge[] = [];
+  for (const id of focus) {
+    if (!known.has(id)) continue;
+    for (const other of implicitNeighbors(id, index)) {
+      if (other === id || !known.has(other)) continue;
+      if (index.parentOf.get(id) === other || index.parentOf.get(other) === id) continue; // containment draws it
+      const key = pairKey(id, other);
+      if (drawn.has(key) || authored.has(key)) continue; // the Connection's arrows stand in its place
+      drawn.add(key);
+      edges.push({ id: `implicit:${id}>${other}`, source: id, target: other, kind: "implicit", paired: true });
+      edges.push({ id: `implicit:${other}>${id}`, source: other, target: id, kind: "implicit", paired: true });
+    }
+  }
+  return edges;
+}
+
+/**
  * World → the map. Nodes come out parents-first (xyflow resolves a nested position against a parent it has
- * already seen), and each group is sized around the children it holds.
+ * already seen), and each group is sized around the children it holds. Implicit arrows come only for `focus`.
  */
 export function buildLocationCanvas(
   locations: GameLocation[],
   connections: Connection[],
-  opts: { resolveName?: (location: GameLocation) => string } = {},
+  opts: {
+    resolveName?: (location: GameLocation) => string;
+    /** How a hint reads on its arrow. */
+    describeHint?: (hint: string) => string;
+    focus?: Iterable<string>;
+  } = {},
 ): LocationCanvasMap {
   const resolveName = opts.resolveName ?? ((location: GameLocation) => location.name);
+  const describeHint = opts.describeHint ?? ((hint: string) => hint);
   const known = new Set(locations.map((l) => l.id));
   const parentOf = (loc: GameLocation) => holderOf(locations, loc);
   const childrenOf = new Map<string | null, GameLocation[]>();
@@ -169,24 +225,13 @@ export function buildLocationCanvas(
   };
   emit(null);
 
-  const byId = new Map(locations.map((l) => [l.id, l]));
-  const parentChild = (a: string, b: string) =>
-    parentOf(byId.get(a)!) === b || parentOf(byId.get(b)!) === a;
-  const overridden = new Set(overriddenPairs(locations, connections).map(([a, b]) => pairKey(a, b)));
-
-  const edges: CanvasEdge[] = [];
-  for (const [a, b] of implicitPairs(locations)) {
-    if (parentChild(a, b)) continue; // containment already draws this: the child sits in the box
-    if (overridden.has(pairKey(a, b))) continue; // the Connection's arrows stand in its place
-    edges.push({ id: `implicit:${a}>${b}`, source: a, target: b, kind: "implicit", paired: true });
-    edges.push({ id: `implicit:${b}>${a}`, source: b, target: a, kind: "implicit", paired: true });
-  }
+  const edges = implicitCanvasEdges(locations, connections, opts.focus ?? []);
   for (const connection of connections) {
     if (!known.has(connection.a) || !known.has(connection.b)) continue;
     const paired = isTwoWay(connection);
     const shared = paired && connection.aToB?.hint === connection.bToA?.hint;
     for (const { key, from, to, leg } of connectionLegs(connection)) {
-      const label = shared && key === "bToA" ? undefined : leg.hint;
+      const label = shared && key === "bToA" ? undefined : leg.hint && describeHint(leg.hint);
       edges.push({
         id: `connection:${connection.id}:${key}`,
         source: from,
@@ -257,11 +302,11 @@ export function newLocationPosition(
   const nested = parentId !== null && locations.some((l) => l.id === parentId);
   const originX = nested ? GROUP_PADDING : 0;
   const originY = nested ? GROUP_HEADER : 0;
-  const holder = nested ? parentId : null;
+  const parent = nested ? parentId : null;
   const nodes = buildLocationCanvas(locations, []).nodes;
   let bottom: number | null = null;
   for (const loc of locations) {
-    if (holderOf(locations, loc) !== holder) continue;
+    if (holderOf(locations, loc) !== parent) continue;
     const node = nodes.find((n) => n.id === loc.id);
     if (node) bottom = Math.max(bottom ?? originY, node.position.y + node.height);
   }
@@ -340,16 +385,48 @@ export interface CanvasDragSession {
   locations: GameLocation[];
   rects: Map<string, CanvasRect>;
   byId: Map<string, GameLocation>;
+  /** Each location's depth in the tree: 0 at the top level. */
+  depths: Map<string, number>;
+  /** Each ancestor's descendants, so "is this inside that" is one lookup. A location has no entry until it holds one. */
+  descendants: Map<string, Set<string>>;
+  /** Every location that holds at least one other: the ones drawn as group boxes. */
+  parents: Set<string>;
 }
 
 /** The map, measured once for a whole gesture. */
 export function beginCanvasDrag(locations: GameLocation[]): CanvasDragSession {
+  const byId = new Map(locations.map((l) => [l.id, l]));
+  const depths = new Map<string, number>();
+  const descendants = new Map<string, Set<string>>();
+  const parents = new Set<string>();
+  const heldBy = (id: string) => {
+    const parentId = byId.get(id)?.parentId;
+    return parentId && byId.has(parentId) ? parentId : null;
+  };
+  for (const loc of locations) {
+    if (loc.parentId) parents.add(loc.parentId);
+    // Walk up once per location, through parents that exist.
+    const above = ancestors(loc.id, heldBy);
+    for (const id of above) {
+      const held = descendants.get(id);
+      if (held) held.add(loc.id);
+      else descendants.set(id, new Set([loc.id]));
+    }
+    depths.set(loc.id, above.length);
+  }
   return {
     locations,
     rects: absoluteRects(buildLocationCanvas(locations, [])),
-    byId: new Map(locations.map((l) => [l.id, l])),
+    byId,
+    depths,
+    descendants,
+    parents,
   };
 }
+
+/** Whether `candidateId` is `ancestorId` or sits anywhere beneath it. */
+const isWithin = ({ descendants }: CanvasDragSession, ancestorId: string, candidateId: string): boolean =>
+  ancestorId === candidateId || !!descendants.get(ancestorId)?.has(candidateId);
 
 /** Every judging function takes either a running session or the bare world — the latter measures a one-shot
  *  session of its own, so a single question needs no ceremony and a drag's frames share one measurement. */
@@ -377,7 +454,7 @@ function measureDrag(
   const self = session.rects.get(id);
   if (!self) return null;
 
-  const held = holderOf(session.locations, target);
+  const held = target.parentId && session.byId.has(target.parentId) ? target.parentId : null;
   const heldOrigin = (held && session.rects.get(held)) || { x: 0, y: 0 };
   return {
     session,
@@ -397,32 +474,29 @@ function measureDrag(
  * containment test read against a different set of candidates, so they share one answer to differ from.
  */
 function innermostAt(
-  { session: { locations, byId, rects }, id, center }: DragGeometry,
+  { session, id, center }: DragGeometry,
   accepts: (loc: GameLocation) => boolean,
 ): string | null {
-  const depthOf = (loc: GameLocation) => {
-    let depth = 0;
-    for (let at = byId.get(loc.parentId ?? ""); at; at = byId.get(at.parentId ?? "")) depth += 1;
-    return depth;
-  };
+  const { locations, rects, depths } = session;
   // The innermost box wins: a nested group sits wholly inside the one holding it, so both contain the drop.
   let into: { id: string; depth: number } | null = null;
   for (const loc of locations) {
     const rect = rects.get(loc.id);
     if (!rect) continue;
-    if (!accepts(loc)) continue;
-    if (isDescendantLocation(locations, id, loc.id)) continue; // a location cannot come to hold itself
     const inside = center.x >= rect.x && center.x <= rect.x + rect.width
       && center.y >= rect.y && center.y <= rect.y + rect.height;
-    const depth = depthOf(loc);
-    if (inside && (!into || depth > into.depth)) into = { id: loc.id, depth };
+    if (!inside) continue;
+    if (!accepts(loc)) continue;
+    if (isWithin(session, id, loc.id)) continue; // a location cannot come to hold itself
+    const depth = depths.get(loc.id) ?? 0;
+    if (!into || depth > into.depth) into = { id: loc.id, depth };
   }
   return into?.id ?? null;
 }
 
 /** The box a measured drag would come to rest in. A leaf is a name, not a container. */
 const landsIn = (drag: DragGeometry): string | null =>
-  innermostAt(drag, (loc) => drag.session.locations.some((l) => l.parentId === loc.id));
+  innermostAt(drag, (loc) => drag.session.parents.has(loc.id));
 
 /**
  * The childless location a drag is currently over, which the canvas may arm after a dwell — the one gesture
@@ -439,13 +513,12 @@ export function leafTarget(
   carried: string[] = [],
 ): string | null {
   const session = asSession(world);
-  const { locations } = session;
   const drag = measureDrag(session, id, position);
   if (!drag) return null;
   return innermostAt(drag, (loc) => {
-    if (locations.some((l) => l.parentId === loc.id)) return false; // a group already takes drops on contact
+    if (session.parents.has(loc.id)) return false; // a group already takes drops on contact
     if (loc.id === id) return false;
-    return !carried.some((other) => other === loc.id || isDescendantLocation(locations, other, loc.id));
+    return !carried.some((other) => isWithin(session, other, loc.id));
   });
 }
 
@@ -454,10 +527,10 @@ export function leafTarget(
  * world rather than trusted: arming happened frames ago, and a location that has gained a child since is a
  * group box, which takes its drops by containment rather than by being aimed at.
  */
-const armable = (locations: GameLocation[], id: string, armed: string | null | undefined): armed is string =>
-  !!armed && armed !== id && locations.some((l) => l.id === armed)
-  && !locations.some((l) => l.parentId === armed)
-  && !isDescendantLocation(locations, id, armed);
+const armable = (session: CanvasDragSession, id: string, armed: string | null | undefined): armed is string =>
+  !!armed && armed !== id && session.byId.has(armed)
+  && !session.parents.has(armed)
+  && !isWithin(session, id, armed);
 
 /**
  * Drop geometry → what the world becomes. `position` is the resting place as the canvas reports it, measured
@@ -476,12 +549,12 @@ export function dropIntent(
   const session = asSession(world);
   const drag = measureDrag(session, id, position);
   if (!drag) return null;
-  const { rects, locations } = session;
+  const { rects } = session;
   const { held, heldOrigin } = drag;
 
   // An armed leaf outranks containment: it sits inside whatever box the drag is also over, so nesting into it
   // is the innermost answer, and it is the one the author watched light up.
-  const parentId = armable(locations, id, armed) ? armed : landsIn(drag);
+  const parentId = armable(session, id, armed) ? armed : landsIn(drag);
   if (parentId === held) return { kind: "move", id, parentId, position };
   const origin = (parentId && rects.get(parentId)) || { x: 0, y: 0 };
   return {
@@ -523,7 +596,7 @@ export function multiDropIntents(
 ): CanvasDrop[] {
   const session = asSession(world);
   const carried = (id: string) =>
-    moves.some((other) => other.id !== id && isDescendantLocation(session.locations, other.id, id));
+    moves.some((other) => other.id !== id && isWithin(session, other.id, id));
   // A leaf traveling in the drag is not a place to land: it is being moved, not aimed at.
   const into = armed && moves.some((move) => move.id === armed) ? null : armed;
   return moves
@@ -589,8 +662,15 @@ export type CanvasIntent =
   | { kind: "update"; connection: Connection }
   | { kind: "remove"; connectionId: string };
 
-/** What an intent leaves the world's Connections as. Kept beside the intents themselves so the canvas's own
- *  undo records the same array the editor writes, rather than one built to look like it. */
+/** Keys a run of typing in one Travel Hint box, so the run is one Step. */
+export const hintKey = (connectionId: string, leg: LegKey): StepKey => ({ slice: "connections", id: connectionId, field: leg });
+
+/** Keys a run of keyboard nudges. The key names what is moving, so picking something else starts a new Step. */
+export const nudgeKey = (selectedIds: string[]): StepKey => ({
+  slice: "locations", ids: [...selectedIds], field: "canvasPosition",
+});
+
+/** What an intent leaves the world's Connections as. */
 export function applyCanvasIntent(connections: Connection[], intent: CanvasIntent): Connection[] {
   if (intent.kind === "add") return [...connections, intent.connection];
   if (intent.kind === "update") {

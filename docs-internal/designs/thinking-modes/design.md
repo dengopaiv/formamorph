@@ -59,20 +59,20 @@ Bounding to 3–4 bullets is the whole point: it captures the continuity value S
 
 ## Reasoning Budget — per-prompt token cap (Slice 4 — SHIPPED + desktop end-to-end confirmed)
 
-A per-prompt cap on **reasoning** length, distinct from the effort level. Proven exact on the desktop engine (node-llama-cpp `budgets.thoughtTokens`): capping thought to 200/100/40/0 tokens landed *exactly* on the cap, narration stayed coherent at every level (even 0), latency scaled 15s→2.2s. `reasoning_effort` levels, by contrast, are binary/noise on `meromero` (Ollama). Interview-locked spec:
+A per-prompt cap on **reasoning** length, distinct from the effort level. Proven exact on the first desktop engine (node-llama-cpp, before the move to `llama-server`; not re-measured since): capping thought to 200/100/40/0 tokens landed *exactly* on the cap, narration stayed coherent at every level (even 0), latency scaled 15s→2.2s. `reasoning_effort` levels, by contrast, are binary/noise on `meromero` (Ollama). Interview-locked spec:
 
 | Aspect | Decision |
 |---|---|
 | **Two controls, not one** | Keep **Reasoning Effort** (Slice 2, `Global\|None\|levels`); add a **separate Reasoning Budget**. They don't merge. |
 | **Engine-aware visibility** | On the **desktop local engine** (`localModelActive`) show **Budget**, hide the (inert) Effort; on **external** endpoints show **Effort**, hide the (inert) Budget. Exactly one visible per engine; both stored per-prompt. |
-| **Unit** | **% of Max Output Tokens** → `thoughtTokens = round(pct × maxTokens)`. |
+| **Unit** | **% of Max Output Tokens** → `thinking_budget_tokens = round(pct × maxTokens)`. |
 | **Default / range** | Default **40%**; slider **0–100%**. `0%` = no reasoning (== None). High % squeezes narration's token share (accepted). |
 | **Scope** | narration + choices both get a budget field; it only bites when that prompt actually reasons — narration reasons by default (active), choices defaults to no reasoning (inert until enabled). |
 | **Storage** | Per-prompt, in the now-exportable Options/preset data (the fork's domain); travels with preset export/import. |
-| **Mechanism** | node-llama-cpp `session.prompt(…, { budgets: { thoughtTokens: N } })`. Also self-hosted llama.cpp-server (`thinking_budget_tokens`). Does **not** reach Ollama/LM Studio/most cloud. |
+| **Mechanism** | The request carries `thinking_budget_tokens: N`; `electron/llmEngine.cjs` passes it to the bundled `llama-server` with the other request fields. Self-hosted llama.cpp-server reads the same field. Does **not** reach Ollama/LM Studio/most cloud. |
 
 **Two build-time gaps, both closed:**
-1. **Bridge plumbing — done.** `electron/llmEngine.cjs` `promptOptions` maps `body.thinking_budget_tokens → { budgets: { thoughtTokens } }`. The desktop path is a local OpenAI-compat server, so one field mapping was all it needed (no native rewrite).
+1. **Bridge plumbing — done.** `electron/llmEngine.cjs` passes `thinking_budget_tokens` through to `llama-server` with the other request fields. `--reasoning-format deepseek` moves each template's thoughts to `reasoning_content`; a prompted `<think>` (Inline) stays in `content`.
 2. **Slice 1 desktop suppression — done.** The local engine ignores `reasoning_effort`, so `reasoningBudgetBody` returns `thinking_budget_tokens: 0` for guided modes AND uncontrolled prompts — that's how "off" is enforced on the local engine now.
 
 **Shipped shape:** `reasoningBudget?: ReasoningBudgetMap` on `PromptPreset` (percent per kind, preset-scoped, exported); `reasoningBudgetBody`/`resolveReasoningBudgetPct`/`defaultReasoningBudgetPct` in `reasoningEffort.ts` (unit-tested); engine-split control in `PromptOptionsPanel` (`PromptReasoningBudgetField` slider on `localModelActive`, effort tabs otherwise); `makeAIRequest` spreads the budget body on the local engine, effort body on external. Additive preset-share shape change (`FORMAT_VERSION` unchanged). **Desktop end-to-end confirmed** by driving the real `llmEngine.cjs` server standalone (require → `start({modelPath})` → POST `/chat/completions` with `thinking_budget_tokens`): omit/200/40/0 capped the `<think>` block to 1785/873/161/0 chars, narration coherent at every budget. Full path proven minus only the renderer's typechecked field-add.
@@ -111,7 +111,7 @@ Supersedes Slice 1's blanket suppression and Slice 2's two-kind control list.
 | **Shipped tiers** | narration `global` / 40% · planning passes (`thinking`, `director`, `character`, `storyboard`) and memory passes (`summary`, `diary`) `low` / 25% · parsers and `choices` `none` / 0%. |
 | **Guided modes** | No blanket suppression. Each pass follows its own per-prompt choice in every mode. |
 | **The one exception** | Inline narration: that call writes its own `<think>` block, so native reasoning stays off there (`nativeReasoningSuppressed(mode, kind)`), effort and budget alike. Keeps the MeroMero double-think stall from returning under the defaults. |
-| **Global control** | Settings → Output → Native Reasoning shows in every Thinking mode, since any `global` prompt follows it. |
+| **Global control** | Settings → Output → Native Reasoning shows in every Thinking mode, since any `global` prompt follows its strength. **Its switch is a master off (2026-10-23):** unchecked, every prompt resolves to `none` (`resolvePromptReasoning`), `isReasoningEngaged` stays true so that `none` reaches the wire, and each prompt's field reads inert with its own setting kept. An endpoint that refuses off still sends each prompt's kept strength. |
 | **Control shape (same day)** | One checkbox switch + a strength beside it, on the Output row and every prompt. Strength is a dropdown (Global / Model Default / accepted levels, full-word labels) outside, the budget slider (floor 5%) on the built-in engine. Stored as `{ enabled, level }`; the strength is kept while off. Plain-string values and 0% budgets migrate on read (`parse*ReasoningSetting`, `migratePresetReasoning`). `PromptReasoning` now includes `auto`, so a prompt can pick Model Default. Shared-preset `reasoning` values changed from strings to objects (imports of older exports still read). |
 | **Engagement** | The tiered defaults carry positive levels, so `isReasoningEngaged` is true out of the box and the effort probe runs on connect. The probe/capability guard already sends the field only when the endpoint accepts it. |
 | **Backend budget reality (live docs)** | LM Studio: level only (`reasoning: off/low/medium/high/on`; compat `reasoning_effort`). Ollama: `think: bool or low/medium/high/max`. llama.cpp server: `--reasoning-budget` is launch-only; per request there is `reasoning_control` + `/v1/chat/completions/control` `reasoning_end` (not built). Desktop engine: exact cap, unchanged. |

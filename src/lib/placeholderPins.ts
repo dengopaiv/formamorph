@@ -3,9 +3,9 @@
 // writes at runtime. A pin masks the roll under it and never overwrites it, so every collector here is an
 // overlay computed fresh from the current state.
 //
-// Precedence: Code Pin > descriptor > location > trait > value pin. Traits lay per bearer (see
-// `bearerPins`): world-level text reads the player's traits, an entity's own text reads that entity's. Within
-// traits, and within one location or one band, the later row wins.
+// Precedence: Code Pin > descriptor > location > trait > value pin. Traits lay per owner (see
+// `ownerPins`): world-level text reads the global and persona traits, an entity's own text reads that
+// entity's. Within traits, and within one location or one band, the later row wins.
 
 import type {
   CodePins, Entity, GameLocation, Placeholder, PlaceholderGroup, PlaceholderPin, PlaceholderRolls, PlaceholderValue, Stat, StatDescriptor,
@@ -17,7 +17,7 @@ import { labelPlaceholders, placeholderDisplayName, type PlacementLetters } from
 import { activeDescriptor } from './statContext';
 import { thresholdUnitOf, type BandedStat } from './statDescriptorGeometry';
 import { activeStatEnabled, exclusiveSiblings, inAuthoredOrder, traitOrderIndex } from './traitEffects';
-import { PLAYER_BEARER, canBePlayer, resolveBearers, type Bearer } from './bearers';
+import { canBePlayer, resolveOwners, type Owner } from './owners';
 import { effectiveCopy, isCopy, lookupCopy, type BlueprintWorld, type CopyReader } from './blueprints';
 import { blueprintIds, rootPlaceholder } from './placeholderBlueprints';
 import { setLinkField } from './traitLinks';
@@ -338,9 +338,9 @@ export function hasDeadValueId(pin: PlaceholderPin, ph: Placeholder | undefined)
 
 // ---- The editor's view: every pin aimed at one placeholder, and who wins among them ----
 
-/** A link's own pins list for a trait it brings: the bearer and the link that override it. */
+/** A link's own pins list for a trait it brings: the owner and the link that override it. */
 export interface LinkPinRef {
-  bearerId: string;
+  ownerId: string;
   linkId: string;
 }
 
@@ -385,33 +385,79 @@ export interface PinEditorWorld {
   placementLetters?: PlacementLetters;
 }
 
-/** A trait with the lists its exclusive siblings live in: the world's, or its entity's own. */
-function traitHome(world: PinEditorWorld, id: string): { trait: Trait; traits: readonly Trait[]; groups: readonly TraitGroup[] } | null {
-  const own = (world.traits ?? []).find((t) => t.id === id);
-  if (own) return { trait: own, traits: world.traits ?? [], groups: world.traitGroups ?? [] };
-  for (const entity of world.entities ?? []) {
-    const trait = entity.traits?.find((t) => t.id === id);
-    if (trait) return { trait, traits: entity.traits ?? [], groups: entity.traitGroups ?? [] };
+/** A trait with the lists its exclusive siblings live in. */
+interface TraitHome {
+  trait: Trait;
+  traits: readonly Trait[];
+  groups: readonly TraitGroup[];
+}
+
+/** What the never-together tests look up, indexed once per world object. */
+interface PinWorldFacts {
+  /** Trait id → its home: the world's lists, else those of the first entity that owns it. */
+  homes: ReadonlyMap<string, TraitHome>;
+  /** Owned trait id → the first entity that owns it. */
+  owners: ReadonlyMap<string, string>;
+  /** Entities whose traits can be the player's. */
+  playable: ReadonlySet<string>;
+  /** The first placeholder carrying each id. */
+  placeholders: ReadonlyMap<string, Placeholder>;
+  /** Trait id → its exclusive siblings, filled as rows ask. */
+  siblings: Map<string, ReadonlySet<string>>;
+}
+
+function worldFacts(world: PinEditorWorld): PinWorldFacts {
+  const hit = factsCache.get(world);
+  if (hit) return hit;
+  const homes = new Map<string, TraitHome>();
+  const owners = new Map<string, string>();
+  const playable = new Set<string>();
+  const placeholders = new Map<string, Placeholder>();
+  for (const trait of world.traits ?? []) {
+    if (!homes.has(trait.id)) homes.set(trait.id, { trait, traits: world.traits ?? [], groups: world.traitGroups ?? [] });
   }
-  return null;
+  for (const entity of world.entities ?? []) {
+    if (canBePlayer(entity)) playable.add(entity.id);
+    for (const trait of entity.traits ?? []) {
+      if (!homes.has(trait.id)) homes.set(trait.id, { trait, traits: entity.traits ?? [], groups: entity.traitGroups ?? [] });
+      if (!owners.has(trait.id)) owners.set(trait.id, entity.id);
+    }
+  }
+  for (const ph of world.placeholders) if (!placeholders.has(ph.id)) placeholders.set(ph.id, ph);
+  const facts = { homes, owners, playable, placeholders, siblings: new Map() };
+  factsCache.set(world, facts);
+  return facts;
+}
+const factsCache = new WeakMap<PinEditorWorld, PinWorldFacts>();
+
+/** The traits that can never be picked beside `id`: its exclusive siblings in its home list. */
+function exclusiveOf(world: PinEditorWorld, id: string): ReadonlySet<string> {
+  const facts = worldFacts(world);
+  let set = facts.siblings.get(id);
+  if (!set) {
+    const home = facts.homes.get(id);
+    set = new Set(home ? exclusiveSiblings(home.trait, home.traits, home.groups) : []);
+    facts.siblings.set(id, set);
+  }
+  return set;
 }
 
 type PinList = readonly PlaceholderPin[];
 /** What a write does to a source's pin list; null leaves the world untouched. */
 type PinListChange = (pins: PinList) => PinList | null;
 
-/** Every entity bearer the editor shows, each with its effective tree. Cached per world object, since every
+/** Every entity owner the editor shows, each with its effective tree. Cached per world object, since every
  *  row and note reads it. */
-function editorBearers(world: PinEditorWorld): { bearer: Bearer; entity: Entity }[] {
-  const hit = bearersCache.get(world);
+function editorOwners(world: PinEditorWorld): { owner: Owner; entity: Entity }[] {
+  const hit = ownersCache.get(world);
   if (hit) return hit;
   const { traits = [], traitGroups = [], entities = [] } = world;
-  const { bearers } = resolveBearers({ traits, traitGroups, entities }, undefined);
-  const result = bearers.flatMap((bearer) => (bearer.entity ? [{ bearer, entity: bearer.entity }] : []));
-  bearersCache.set(world, result);
+  const { owners: trees } = resolveOwners({ traits, traitGroups, entities }, undefined);
+  const result = trees.map((tree) => ({ owner: tree, entity: tree.entity }));
+  ownersCache.set(world, result);
   return result;
 }
-const bearersCache = new WeakMap<PinEditorWorld, { bearer: Bearer; entity: Entity }[]>();
+const ownersCache = new WeakMap<PinEditorWorld, { owner: Owner; entity: Entity }[]>();
 
 /** One trait as a source row, named with its owner when an entity owns it. */
 function traitEntry(name: ReturnType<typeof labeler>, trait: Trait, entity: Entity | null): PinSourceEntry<'trait'> {
@@ -420,34 +466,33 @@ function traitEntry(name: ReturnType<typeof labeler>, trait: Trait, entity: Enti
 }
 
 /** A link's own pins list for `trait`, when the link overrides it: one row holding that list. `trait` is
- *  the trait as the bearer reads it, so its pins are the override. */
+ *  the trait as the owner reads it, so its pins are the override. */
 function linkEntries(name: ReturnType<typeof labeler>, trait: Trait, link: TraitLink, entity: Entity): PinSourceEntry<'trait'>[] {
   if (!link.overrides?.[trait.id]?.placeholderPins) return [];
   const entry = traitEntry(name, trait, entity);
-  return [{ ...entry, source: { ...entry.source, link: { bearerId: entity.id, linkId: link.id } } }];
+  return [{ ...entry, source: { ...entry.source, link: { ownerId: entity.id, linkId: link.id } } }];
 }
 
-/** The text a trait source's pins lay in: the player's for a world trait, else the entity's own. */
-function pinContext(world: PinEditorWorld, source: SourceOf<'trait'>): string {
-  if (source.link) return source.link.bearerId;
-  return (world.entities ?? []).find((e) => e.traits?.some((t) => t.id === source.id))?.id ?? PLAYER_BEARER;
+/** The text a trait source's pins lay in: the owning entity's, or null for the global slot when no entity owns it. */
+function pinContext(world: PinEditorWorld, source: SourceOf<'trait'>): string | null {
+  if (source.link) return source.link.ownerId;
+  return worldFacts(world).owners.get(source.id) ?? null;
 }
 
-/** Whether the entity's traits can be the player's. */
-const playable = (world: PinEditorWorld, entityId: string): boolean =>
-  !!world.entities?.some((e) => e.id === entityId && canBePlayer(e));
+/** Whether the entity's traits can be the player's; false for the global slot (null). */
+const playable = (world: PinEditorWorld, entityId: string | null): boolean => entityId !== null && worldFacts(world).playable.has(entityId);
 
 /** The world with the link's pins list for `traitId` rewritten through `change`. */
 function writeLinkPin<W extends PinEditorWorld>(world: W, traitId: string, ref: LinkPinRef, change: PinListChange): W {
-  const holder = world.entities?.find((e) => e.id === ref.bearerId);
-  const link = holder?.traitLinks?.find((l) => l.id === ref.linkId);
+  const owner = world.entities?.find((e) => e.id === ref.ownerId);
+  const link = owner?.traitLinks?.find((l) => l.id === ref.linkId);
   const original = world.traits?.find((t) => t.id === traitId);
-  if (!holder || !link || !original) return world;
+  if (!owner || !link || !original) return world;
   const next = change(link.overrides?.[traitId]?.placeholderPins?.value ?? original.placeholderPins ?? []);
   if (!next) return world;
   const lists = { traits: world.traits ?? [], traitGroups: world.traitGroups ?? [] };
-  const edited = setLinkField(lists, holder, link.id, traitId, 'placeholderPins', [...next]);
-  return { ...world, entities: world.entities!.map((e) => (e.id === ref.bearerId ? edited : e)) };
+  const edited = setLinkField(lists, owner, link.id, traitId, 'placeholderPins', [...next]);
+  return { ...world, entities: world.entities!.map((e) => (e.id === ref.ownerId ? edited : e)) };
 }
 
 /** One source of one kind, with everything the surfaces read off it. */
@@ -554,37 +599,34 @@ const PIN_SOURCE_KINDS: { [K in PinSourceKind]: PinSourceSpec<K> } = {
     label: 'Trait',
     empty: 'No traits to pin from.',
     // The world's traits list first and each entity's after them, owned traits and link rows in its own tree
-    // order: in an entity's text its pins lay over the player's, so they win by order.
+    // order: in an entity's text its pins lay over the played text's, so they win by order.
     sources(world) {
       const name = labeler(world);
       const { traits = [], traitGroups = [] } = world;
       const order = traitOrderIndex(traits, traitGroups);
       const worldRows = inAuthoredOrder(traits, order).map((trait) => traitEntry(name, trait, null));
-      const bearerRows = editorBearers(world).flatMap(({ bearer, entity }) =>
-        inAuthoredOrder(bearer.traits, traitOrderIndex(bearer.traits, bearer.groups)).flatMap((trait) => {
-          const link = bearer.linkOf.get(trait.id);
+      const ownerRows = editorOwners(world).flatMap(({ owner, entity }) =>
+        inAuthoredOrder(owner.traits, traitOrderIndex(owner.traits, owner.groups)).flatMap((trait) => {
+          const link = owner.linkOf.get(trait.id);
           return link ? linkEntries(name, trait, link, entity) : [traitEntry(name, trait, entity)];
         }));
-      // A Persona's or the Custom Persona entity's traits can be the player's, so they list before the
-      // cast's, which win in their own text.
-      const rank = (row: PinSourceEntry<'trait'>) => {
-        const ctx = pinContext(world, row.source);
-        return ctx === PLAYER_BEARER ? 0 : playable(world, ctx) ? 1 : 2;
-      };
-      return [...worldRows, ...[0, 1, 2].flatMap((r) => bearerRows.filter((row) => rank(row) === r))];
+      // Global traits list first, then a Persona's or the Custom Persona entity's, then the cast's, which win
+      // in their own text.
+      const personaRow = (row: PinSourceEntry<'trait'>) => playable(world, pinContext(world, row.source));
+      return [...worldRows, ...ownerRows.filter(personaRow), ...ownerRows.filter((row) => !personaRow(row))];
     },
-    key: (s) => `trait:${s.id}${s.link ? `:link:${s.link.bearerId}:${s.link.linkId}` : ''}`,
-    same: (a, b) => a.id === b.id && a.link?.bearerId === b.link?.bearerId && a.link?.linkId === b.link?.linkId,
-    // Two traits meet in one text on one bearer, or the player's against a cast entity's in that entity's text.
-    // A Persona's traits are the player's while it is played. Two Personas never both play, so neither is a rival.
+    key: (s) => `trait:${s.id}${s.link ? `:link:${s.link.ownerId}:${s.link.linkId}` : ''}`,
+    same: (a, b) => a.id === b.id && a.link?.ownerId === b.link?.ownerId && a.link?.linkId === b.link?.linkId,
+    // Two traits meet in one text on one owner, or the played text's (global and Persona) against a cast entity's
+    // in that entity's text. A Persona's traits are in the played text while it is played. Two Personas never
+    // both play, so neither is a rival.
     neverTogether: (world, a, b) => {
-      const home = traitHome(world, a.id);
-      if (home && exclusiveSiblings(home.trait, home.traits, home.groups).includes(b.id)) return true;
+      if (exclusiveOf(world, a.id).has(b.id)) return true;
       const [ca, cb] = [pinContext(world, a), pinContext(world, b)];
       if (ca === cb) return false;
       if (playable(world, ca) && playable(world, cb)) return true;
-      const player = (ctx: string) => ctx === PLAYER_BEARER || playable(world, ctx);
-      return !player(ca) && !player(cb);
+      const played = (ctx: string | null) => ctx === null || playable(world, ctx);
+      return !played(ca) && !played(cb);
     },
     ownerId: (s) => s.id,
     write: (world, source, change) => {
@@ -598,11 +640,11 @@ const PIN_SOURCE_KINDS: { [K in PinSourceKind]: PinSourceSpec<K> } = {
       return entities ? { ...world, entities } : world;
     },
     // An owned trait goes back through its entity, so either writer takes a trait pin; a link's list through
-    // its bearer.
+    // its owner.
     commit: ({ updateTrait, updateEntity }) => (updateTrait || updateEntity) && ((next, source) => {
       if (source.link) {
-        const bearer = next.entities?.find((e) => e.id === source.link!.bearerId);
-        if (bearer) updateEntity?.(bearer);
+        const owner = next.entities?.find((e) => e.id === source.link!.ownerId);
+        if (owner) updateEntity?.(owner);
         return;
       }
       const trait = next.traits?.find((t) => t.id === source.id);
@@ -632,7 +674,7 @@ const PIN_SOURCE_KINDS: { [K in PinSourceKind]: PinSourceSpec<K> } = {
     // A Wildcard reads as one of its values; an Object holds them all, so those two can both be in force.
     neverTogether: (world, a, b) => {
       if (a.placeholderId !== b.placeholderId) return false;
-      const ph = world.placeholders.find((p) => p.id === a.placeholderId);
+      const ph = worldFacts(world).placeholders.get(a.placeholderId);
       return !!ph && placeholderIsChoice(ph);
     },
     ownerId: (s) => s.placeholderId,
@@ -685,7 +727,7 @@ function blueprintIndex(world: PinEditorWorld): { blueprints: ReadonlySet<string
 const blueprintCache = new WeakMap<PinEditorWorld, ReturnType<typeof blueprintIndex>>();
 
 /**
- * Which placeholders a pin on `source` may name. Never a copy: a trait pins the blueprint, and each bearer
+ * Which placeholders a pin on `source` may name. Never a copy: a trait pins the blueprint, and each owner
  * reads its own copy. A blueprint only from a blueprint-side source: a world trait (a link's pins list names
  * its original), or a value under a blueprint or a copy. Without a world no blueprint is known, so only
  * copies are left out.
@@ -739,27 +781,79 @@ export function pinSourceOwnerId(source: PinSourceRef): string {
  * The rows are read-only views; the pin itself still lives on its source.
  */
 export function pinsTargeting(world: PinEditorWorld, placeholderId: string): PinRow[] {
-  return allPinRows(world).filter((row) => row.pin.placeholderId === placeholderId);
+  return [...(pinIndex(world).byTarget.get(placeholderId) ?? [])];
 }
 
 /** Every pin every source carries, strongest kind first and in authored order within a kind — what a pass
  *  over the whole world reads, empty and broken rows included. */
 export function allPinRows(world: PinEditorWorld): PinRow[] {
-  return KINDS_BY_RANK.flatMap((kind) => specFor(kind).sources(world).flatMap((entry) =>
-    (entry.pins ?? []).map((pin): PinRow => ({ source: entry.source, pin, name: entry.name, label: entry.label }))));
+  return KINDS_BY_RANK.flatMap((kind) => specFor(kind).sources(world).flatMap(entryRows));
+}
+
+const entryRows = (entry: PinSourceEntry<PinSourceKind>): PinRow[] =>
+  (entry.pins ?? []).map((pin): PinRow => ({ source: entry.source, pin, name: entry.name, label: entry.label }));
+
+/** Every pin row by its target, in {@link allPinRows} order, and each source's place in its kind's list. */
+interface PinIndex {
+  byTarget: ReadonlyMap<string, readonly PinRow[]>;
+  /** `pinSourceKey` → index in its kind's list. Later lays last, so later wins. */
+  order: ReadonlyMap<string, number>;
+}
+
+function pinIndex(world: PinEditorWorld): PinIndex {
+  const hit = indexCache.get(world);
+  if (hit) return hit;
+  const byTarget = new Map<string, PinRow[]>();
+  const order = new Map<string, number>();
+  for (const kind of KINDS_BY_RANK) {
+    specFor(kind).sources(world).forEach((entry, i) => {
+      order.set(pinSourceKey(entry.source), i);
+      for (const row of entryRows(entry)) {
+        const rows = byTarget.get(row.pin.placeholderId);
+        if (rows) rows.push(row);
+        else byTarget.set(row.pin.placeholderId, [row]);
+      }
+    });
+  }
+  const index = { byTarget, order };
+  indexCache.set(world, index);
+  return index;
+}
+const indexCache = new WeakMap<PinEditorWorld, PinIndex>();
+
+/** Each placeholder's display name, read once per placeholder list: every value row of a placeholder shares
+ *  one entry, and a world object that only moved a trait keeps the list. */
+interface NameBook {
+  owners: PinEditorWorld['placeholderOwners'];
+  letters: PinEditorWorld['placementLetters'];
+  names: Map<string, string>;
+}
+const nameBooks = new WeakMap<readonly Placeholder[], NameBook>();
+
+function nameBook({ placeholders, placeholderOwners: owners, placementLetters: letters }: PinEditorWorld): NameBook {
+  const hit = nameBooks.get(placeholders);
+  if (hit && hit.owners === owners && hit.letters === letters) return hit;
+  const book = { owners, letters, names: new Map<string, string>() };
+  nameBooks.set(placeholders, book);
+  return book;
 }
 
 /** The spellings every pin surface shares: chips labeled, a band as `Hunger ≤ 20`, a value as
  *  `Region = Northern`. */
 function labeler(world: PinEditorWorld) {
   const { placeholders, placeholderOwners: owners, placementLetters: letters } = world;
+  const { names } = nameBook(world);
   const text = (s: string) => labelPlaceholders(s, placeholders, { letters, owners });
+  const nameOf = (id: string) => {
+    let name = names.get(id);
+    if (name === undefined) names.set(id, (name = placeholderDisplayName(id, placeholders, { letters, owners })));
+    return name;
+  };
   return {
     text,
     band: (stat: Stat, band: StatDescriptor) =>
       `${text(stat.name)} ≤ ${band.threshold}${thresholdUnitOf(stat) === 'percent' ? '%' : ''}`,
-    value: (ph: Placeholder, value: PlaceholderValue) =>
-      `${placeholderDisplayName(ph.id, placeholders, { letters, owners })} = ${placeholderValueLine(text(value.text))}`,
+    value: (ph: Placeholder, value: PlaceholderValue) => `${nameOf(ph.id)} = ${placeholderValueLine(text(value.text))}`,
   };
 }
 
@@ -767,7 +861,7 @@ function labeler(world: PinEditorWorld) {
  *  the precedence rules pick. */
 export interface PinConflict {
   /** Strongest kind first. */
-  rivals: PinRow[];
+  rivals: readonly PinRow[];
   /** The rival that wins, or null when the source being edited does. */
   winner: PinRow | null;
   /** How it was decided: by kind (a band outranks a location, a location a trait, a trait a value pin), or
@@ -781,34 +875,70 @@ export interface PinConflict {
  * exclusive trait siblings. Null when nothing else can claim the placeholder.
  */
 export function pinConflict(world: PinEditorWorld, placeholderId: string, source: PinSourceRef): PinConflict | null {
-  const rows = pinsTargeting(world, placeholderId);
-  const self = rows.find((r) => sameSource(r.source, source)) ?? null;
-  const rivals = rows.filter((r) => !sameSource(r.source, source)
-    && !(r.source.kind === source.kind && specOf(source).neverTogether(world, source, r.source)));
-  if (!rivals.length) return null;
+  const competition = pinCompetition(world, placeholderId);
+  const key = pinSourceKey(source);
+  let conflict = competition.conflicts.get(key);
+  if (conflict === undefined) {
+    conflict = conflictFrom(world, competition, source);
+    competition.conflicts.set(key, conflict);
+  }
+  return conflict;
+}
 
-  // Within a kind, the later in its list lays its pin last and so wins — the same order `collectPins`
-  // walks. Only rows of one kind are ever compared this way, so each kind's index is built when needed.
-  const indexes = new Map<PinSourceKind, ReadonlyMap<string, number>>();
-  const inKind = (s: PinSourceRef): number => {
-    let index = indexes.get(s.kind);
-    if (!index) {
-      index = new Map(specFor(s.kind).sources(world).map((entry, i) => [pinSourceKey(entry.source), i]));
-      indexes.set(s.kind, index);
-    }
-    return index.get(pinSourceKey(s)) ?? -1;
-  };
-  const beats = (a: PinSourceRef, b: PinSourceRef): boolean =>
-    KIND_RANK[a.kind] !== KIND_RANK[b.kind] ? KIND_RANK[a.kind] < KIND_RANK[b.kind] : inKind(a) > inKind(b);
+/** Every pin on one placeholder with its strength, once per world object; each source's conflict is kept. */
+interface PinCompetition {
+  rows: readonly PinRow[];
+  strength: readonly PinStrength[];
+  conflicts: Map<string, PinConflict | null>;
+}
 
-  let strongest = rivals[0];
-  for (const r of rivals.slice(1)) if (beats(r.source, strongest.source)) strongest = r;
-  const winner = beats(strongest.source, self?.source ?? source) ? strongest : null;
+/** A pin's kind rank (lower is stronger) and its place in its kind's list (later is stronger). */
+interface PinStrength {
+  rank: number;
+  place: number;
+}
+
+function pinCompetition(world: PinEditorWorld, placeholderId: string): PinCompetition {
+  let byTarget = competitionCache.get(world);
+  if (!byTarget) competitionCache.set(world, (byTarget = new Map()));
+  let competition = byTarget.get(placeholderId);
+  if (!competition) {
+    const { byTarget: rowsByTarget, order } = pinIndex(world);
+    const rows = rowsByTarget.get(placeholderId) ?? [];
+    competition = { rows, strength: rows.map((r) => strengthOf(order, r.source)), conflicts: new Map() };
+    byTarget.set(placeholderId, competition);
+  }
+  return competition;
+}
+const competitionCache = new WeakMap<PinEditorWorld, Map<string, PinCompetition>>();
+
+const strengthOf = (order: PinIndex['order'], source: PinSourceRef): PinStrength =>
+  ({ rank: KIND_RANK[source.kind], place: order.get(pinSourceKey(source)) ?? -1 });
+
+/** A stronger kind wins; within a kind, the later in its list lays its pin last and so wins — the same
+ *  order `collectPins` walks. */
+const beats = (a: PinStrength, b: PinStrength): boolean => (a.rank !== b.rank ? a.rank < b.rank : a.place > b.place);
+
+function conflictFrom(world: PinEditorWorld, { rows, strength }: PinCompetition, source: PinSourceRef): PinConflict | null {
+  const spec = specOf(source);
+  let selfAt = -1;
+  const rivalsAt: number[] = [];
+  rows.forEach((r, i) => {
+    if (sameSource(r.source, source)) {
+      if (selfAt < 0) selfAt = i;
+    } else if (!(r.source.kind === source.kind && spec.neverTogether(world, source, r.source))) rivalsAt.push(i);
+  });
+  if (!rivalsAt.length) return null;
+
+  let strongest = rivalsAt[0];
+  for (const i of rivalsAt) if (beats(strength[i], strength[strongest])) strongest = i;
+  const own = selfAt >= 0 ? strength[selfAt] : strengthOf(pinIndex(world).order, source);
+  const winner = beats(strength[strongest], own) ? rows[strongest] : null;
   // The rule is read from the source's side: what decided between the winner and the source, or, when the
   // source wins, between it and the strongest rival.
-  const loser = winner ? source : strongest.source;
+  const loser = winner ? source : rows[strongest].source;
   const rule = (winner?.source ?? source).kind === loser.kind ? 'order' : 'kind';
-  return { rivals, winner, rule };
+  return { rivals: rivalsAt.map((i) => rows[i]), winner, rule };
 }
 
 // ---- Writing a pin back to its source ----
@@ -825,14 +955,14 @@ function indexOfPin(pins: PinList, pin: PlaceholderPin): number {
   return byRef >= 0 ? byRef : pins.findIndex((p) => samePin(p, pin));
 }
 
-/** `holder` with its pin list under `field` rewritten; an emptied list is dropped, so a source that pins
+/** `record` with its pin list under `field` rewritten; an emptied list is dropped, so a source that pins
  *  nothing stores nothing. Null when the change declined. */
 function rewritten<T extends { [P in K]?: PlaceholderPin[] }, K extends 'placeholderPins' | 'pins'>(
-  holder: T, field: K, change: PinListChange,
+  record: T, field: K, change: PinListChange,
 ): T | null {
-  const next = change(holder[field] ?? []);
+  const next = change(record[field] ?? []);
   if (!next) return null;
-  const { [field]: _drop, ...rest } = holder;
+  const { [field]: _drop, ...rest } = record;
   return { ...rest, ...(next.length ? { [field]: [...next] } : {}) } as T;
 }
 

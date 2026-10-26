@@ -1,15 +1,16 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useHistoryChords } from '@/components/editor/useHistoryChords';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Meta } from '@/components/ui/typography';
 import { LocationCanvasWorkspace } from '@/managers/LocationCanvas';
-import type { CanvasHistory } from '@/lib/canvasHistory';
+import { useWorldRecorder, WorldHistoryContext } from '@/contexts/worldRecorder';
 import { EMPTY_LETTERS } from '@/lib/placementLetters';
 import { NO_OWNERS } from '@/lib/placeholderHomes';
 import {
   DEFAULT_CANVAS_CONNECTION_STYLE, DEFAULT_CANVAS_GRID_VISIBLE, DEFAULT_CANVAS_SNAP,
 } from '@/contexts/settingsDefaults';
 import type { ConnectionStyle } from '@/lib/canvasEdgePath';
-import type { Connection, GameLocation } from '@/types';
+import type { Connection, GameLocation, WorldOverview } from '@/types';
 
 const SAMPLE_LOCATIONS: GameLocation[] = [
   { id: 'harbor', name: 'Harbor District', isStarting: true, canvasPosition: { x: 0, y: 0 } },
@@ -28,11 +29,26 @@ const SAMPLE_CONNECTIONS: Connection[] = [
   { id: 'garden-station', a: 'garden', b: 'station', aToB: { hint: 'up the survey steps' } },
 ];
 
+function noop() { /* the sample has no such slice */ }
+
+// The sample is a world of two slices; the recorder reads the others as empty and never writes them.
+const NO_SLICES = {
+  worldOverview: {} as WorldOverview, stats: [], statGroups: [], entities: [], entityGroups: [], traits: [], traitGroups: [],
+  statUpdates: [], dictionaries: [], placeholders: [], placeholderGroups: [], scripts: [], tools: [],
+};
+const NO_WRITES = { worldOverview: noop, stats: noop, statGroups: noop, entities: noop, entityGroups: noop, traits: noop, traitGroups: noop,
+  statUpdates: noop, dictionaries: noop, placeholders: noop, placeholderGroups: noop, scripts: noop, tools: noop };
+
 export function LocationsCanvasReference() {
   const [locations, setLocations] = useState(() => structuredClone(SAMPLE_LOCATIONS));
   const [connections, setConnections] = useState(() => structuredClone(SAMPLE_CONNECTIONS));
   const [selectedId, setSelectedId] = useState<string | null>('reading');
-  const historyRef = useRef<CanvasHistory>({ past: [], future: [] });
+  // The canvas records into the history above it, so the sample gets its own and never touches an open world's.
+  const slices = useMemo(() => ({ ...NO_SLICES, locations, connections }), [locations, connections]);
+  const writes = useMemo(() => ({ ...NO_WRITES, locations: setLocations, connections: setConnections }), []);
+  const { controls } = useWorldRecorder(slices, 'locations-reference', writes);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  useHistoryChords(controls, canvasRef, { scoped: true });
   const snap = useState(DEFAULT_CANVAS_SNAP);
   const grid = useState(DEFAULT_CANVAS_GRID_VISIBLE);
   const connectionStyle = useState<ConnectionStyle>(DEFAULT_CANVAS_CONNECTION_STYLE);
@@ -45,15 +61,16 @@ export function LocationsCanvasReference() {
         <CardDescription>Select “Edit Full Screen”.</CardDescription>
       </CardHeader>
       <CardContent className="min-w-0 space-y-3">
-        <div className="h-[34rem] min-w-0 overflow-hidden rounded-md border border-border">
-          <LocationCanvasWorkspace
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            data={{ locations, setLocations, connections, setConnections,
-              placeholders: [], placementLetters: EMPTY_LETTERS, placeholderOwners: NO_OWNERS }}
-            preferences={{ snap, grid, connectionStyle }}
-            historyRef={historyRef}
-          />
+        <div ref={canvasRef} className="h-[34rem] min-w-0 overflow-hidden rounded-md border border-border">
+          <WorldHistoryContext.Provider value={controls}>
+            <LocationCanvasWorkspace
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              data={{ locations, setLocations, connections, setConnections,
+                placeholders: [], placementLetters: EMPTY_LETTERS, placeholderOwners: NO_OWNERS }}
+              preferences={{ snap, grid, connectionStyle }}
+            />
+          </WorldHistoryContext.Provider>
         </div>
         <Meta as="output" aria-label="Selected Location" className="block break-words">
           {selected?.name}

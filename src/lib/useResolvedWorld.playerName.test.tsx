@@ -46,7 +46,7 @@ const mount = () => {
   };
 };
 
-// The greeting holds the marker as an import before the Player Name chip stored it.
+// The greeting holds the marker as an import before the Persona Name chip stored it.
 const greeting = '{{user}} steps off the boat. Vos takes {{user}}’s bag.';
 const mira: Entity = { id: 'w-mira', name: 'Mira', persona: true, locations: ['dock'] };
 const vos: Entity = {
@@ -74,7 +74,7 @@ describe('the game view renders every opening through resolveOpening', () => {
   });
 });
 
-describe('the Player Name chip in play', () => {
+describe('the Persona Name chip in play', () => {
   it('names the persona on page one at the first draw, before the persona is in state', async () => {
     const live = mount();
     await loadWorld(live);
@@ -159,14 +159,14 @@ describe('the Character Name chip in play', () => {
 describe('the Character Name chip in a trait card', () => {
   const oath = { id: 't-oath', name: 'Paladin', aiDescription: '{{char}} keeps the oath.', statChanges: [] };
 
-  it('names a cast bearer', async () => {
+  it('names a cast owner', async () => {
     const live = mount();
     await loadWorld(live);
     const cast = live().world.entities.find((e) => e.id === vos.id)!;
     expect(live().world.resolveTraitText(oath, oath.aiDescription, cast)).toBe('Captain Vos keeps the oath.');
   });
 
-  it('names the player on the player bearer: the persona, or "the player" with none', async () => {
+  it('names the player on the player owner: the persona, or "the player" with none', async () => {
     const live = mount();
     await loadWorld(live);
     await act(async () => { live().gameplay.setPersonaRef({ source: 'none' }); });

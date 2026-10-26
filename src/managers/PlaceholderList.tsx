@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Link2, ArrowUpFromLine, BookOpen, CornerDownRight, Folder, LayoutTemplate, User } from 'lucide-react';
+import { Link2, ArrowUpFromLine, CornerDownRight } from 'lucide-react';
+import { BlueprintIcon, DictionaryIcon, EntityIcon, GroupIcon } from '@/lib/elementIcons';
 import { removePlaceholderGroup } from '@/lib/placeholderGroups';
 import { blueprintMoveRefusal, copyName, type BlueprintRefusal } from '@/lib/placeholderBlueprints';
 import { allPlaceholders, placeholderList, withPlaceholderList } from '@/lib/placeholderHomes';
@@ -20,10 +21,11 @@ import type { PlaceholderSlices } from '@/lib/placeholderHomes';
 import { BlueprintRefusalNotice } from './BlueprintRefusalNotice';
 import { usePlaceholderRowActions } from './usePlaceholderRowActions';
 import { SortableTree, type SortableTreeAdapter } from './SortableTree';
+import { chipInput } from './chipInput';
 
 /**
  * The Placeholders tab's tree. A value that is exactly one chip nests what it names, so the list already
- * knew the structure; what this draws is who each nested row *belongs* to. An owned row is the holder's own
+ * knew the structure; what this draws is who each nested row *belongs* to. An owned row is the parent placeholder's own
  * and appears nowhere else; a shared row points at an original that stays at the top level, and carries the
  * link icon that opens it.
  *
@@ -60,7 +62,7 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
   // The tree, the rows that hold at least one other (which drives the chevron), and who holds whom — each
   // derived once per change. `getVisible` runs on every drag frame, so re-walking there is a per-frame cost.
   // Over a world the tree spans every list; bound to one owner's section it draws that list, still looking
-  // chip targets and holders up across the world; bound to a lone list (the library) it is that list.
+  // chip targets and parent placeholders up across the world; bound to a lone list (the library) it is that list.
   const nodes = useMemo((): PlaceholderTreeNode[] => {
     if (lists) return scope ? ownerPlaceholderNodes(lists, scope) : placeholderTreeNodes(lists);
     return placeholderRows(placeholders, placeholders).map((row) => ({ ...row, kind: 'placeholder', home: scope ?? { kind: 'world' } }));
@@ -89,6 +91,20 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
   };
 
   const adapter: SortableTreeAdapter<PlaceholderTreeNode> = {
+    visibleDeps: [nodes],
+    rowDeps: [scope],
+    rowInputs: (node) => {
+      if (node.kind === 'owner') return [chipInput(placeholders, node.owner.name)];
+      if (node.kind !== 'placeholder') return [];
+      const { copy, removeBlocked } = rowRules(node);
+      const usedBy = node.holderId === null ? usedByMap.get(node.placeholder.id) : undefined;
+      return [
+        parentRowIds.has(node.id), copy?.owner.name, copy?.blueprint, copy?.untouched, removeBlocked,
+        usedBy?.count, usedBy?.names.join('\n'),
+        chipInput(placeholders, copy && copyName(copy.owner.name, copy.blueprint?.name ?? node.placeholder.name)),
+      ];
+    },
+    placeholders,
     getVisible: (collapsed) => removeCollapsedPlaceholderRows(nodes, collapsed),
     // Over a world the indicator refuses what the drop would (a scoped row into a folder, a folder under
     // a row), so the indent never promises a landing that will not happen.
@@ -98,12 +114,12 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
       return depth;
     },
     onDrop,
-    rowSpec: (node) => {
+    rowSpec: (node, select) => {
       if (node.kind === 'group' && node.group.system === 'blueprints') {
         return {
           lead: 'chevron',
           collapseLabels: ['Expand group', 'Collapse group'],
-          icon: <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden />,
+          icon: <BlueprintIcon className="h-4 w-4 shrink-0" aria-hidden />,
           label: node.group.name,
           labelClass: 'font-medium',
           removeTitle: 'Remove Blueprints',
@@ -121,7 +137,7 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
         return {
           lead: 'chevron',
           collapseLabels: ['Expand group', 'Collapse group'],
-          icon: <Folder className="h-4 w-4 shrink-0" />,
+          icon: <GroupIcon className="h-4 w-4 shrink-0" />,
           label: node.group.name,
           labelClass: 'font-medium',
           remove: () => {
@@ -139,8 +155,8 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
           lead: 'chevron',
           collapseLabels: [`Expand ${node.owner.name}`, `Collapse ${node.owner.name}`],
           icon: node.owner.kind === 'entity'
-            ? <User className="h-4 w-4 shrink-0" />
-            : <BookOpen className="h-4 w-4 shrink-0" />,
+            ? <EntityIcon className="h-4 w-4 shrink-0" />
+            : <DictionaryIcon className="h-4 w-4 shrink-0" />,
           label: <PlaceholderText text={node.owner.name} placeholders={placeholders} />,
           labelClass: 'font-medium',
           fixed: true,
@@ -160,7 +176,7 @@ const PlaceholderList = ({ selectedId, onSelect, openDuplicate }: {
           <button
             type="button"
             aria-label={`Open ${to === placeholder.id ? placeholder.name : blueprintName}`}
-            onClick={(e) => { e.stopPropagation(); onSelect(to); }}
+            onClick={(e) => { e.stopPropagation(); select(to); }}
             className="shrink-0 px-0.5"
           >
             {glyph}

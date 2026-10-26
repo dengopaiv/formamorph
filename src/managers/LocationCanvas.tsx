@@ -10,20 +10,24 @@ import {
 import '@xyflow/react/dist/base.css';
 import {
   AlertTriangle, AlignHorizontalDistributeCenter, AlignStartHorizontal, AlignStartVertical,
-  AlignVerticalDistributeCenter, ArrowLeft, ArrowLeftRight, ArrowRight, CornerDownRight, Grid2x2,
-  LayoutGrid, Magnet, Maximize2, Minimize2, Minus, Pencil, Redo2, Search, Spline, SquareCheck, Star, Trash2,
-  Undo2, X,
+  AlignVerticalDistributeCenter, ArrowLeft, ArrowLeftRight, ArrowRight, CornerDownRight, Grid2x2, ImagePlus,
+  LayoutGrid, Magnet, Maximize2, Megaphone, Minus, Pencil, Redo2, Spline, SquareCheck, Star,
+  Trash2, Undo2, X,
 } from 'lucide-react';
+import EntityPickCard, { type PickState } from '@/managers/EntityPickCard';
+import { pickMarks, togglePick, type PickMark } from '@/lib/entityPicking';
+import { LocationIcon } from '@/lib/elementIcons';
 import { useGameData } from '@/contexts/GameDataContext';
 import FullscreenShell from '@/components/FullscreenShell';
 import { FloatingEdge } from '@/components/FloatingEdge';
 import { toFlowEdge } from '@/lib/canvasEdges';
+import { fieldFrame } from '@/lib/historyField';
 import { useCanvasConnectionStyle, useCanvasGridVisible, useCanvasSnap } from '@/lib/canvasPrefs';
 import { CONNECTION_STYLES, isConnectionStyle, type ConnectionStyle } from '@/lib/canvasEdgePath';
 import { useDevRoute } from '@/lib/devRouter';
 import { useMorphFullscreen } from '@/lib/useMorphFullscreen';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchField } from '@/components/ui/search-field';
 import { Separator } from '@/components/ui/separator';
 import {
   ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGroup, ContextMenuItem,
@@ -31,10 +35,12 @@ import {
 } from '@/components/ui/context-menu';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { labelPlaceholders } from '@/lib/placementLetters';
+import { describePlaceholders } from '@/lib/placeholders';
 import type { ConnectionDirection } from '@/lib/connectionEditing';
 import {
-  applyCanvasDrops, applyCanvasIntent, beginCanvasDrag, buildLocationCanvas, CANVAS_GRID, connectIntent,
-  connectionEnds, deleteIntent, directionIntent, directionOf, updateIntent, isStationaryClick, leafTarget,
+  applyCanvasDrops, applyCanvasIntent, beginCanvasDrag, buildLocationCanvas, canvasFocus, CANVAS_GRID,
+  connectIntent, connectionEnds, deleteIntent, directionIntent, directionOf, hintKey, implicitCanvasEdges,
+  nudgeKey, updateIntent, isStationaryClick, leafTarget,
   LONG_PRESS_MS, multiDropIntents, TOUCH_SLOP, UNNAMED_LOCATION,
   type CanvasDragSession, type CanvasIntent, type CanvasNodeData,
 } from '@/lib/locationCanvas';
@@ -43,10 +49,10 @@ import { TravelHintPair, type TravelHintFocus } from '@/components/editor/Travel
 import {
   canvasMenuSections, type CanvasMenuItem, type CanvasMenuSection,
 } from '@/lib/canvasMenu';
-import {
-  canvasHistoryFor, historyShortcut, recordCanvasEdit, redoCanvasEdit, undoCanvasEdit,
-  type CanvasHistory,
-} from '@/lib/canvasHistory';
+import { useWorldHistory } from '@/contexts/worldRecorder';
+import type { StepKey } from '@/lib/editorHistory';
+import { useCanvasCommits } from '@/managers/useCanvasCommits';
+import { isEditableTarget } from '@/lib/editableTarget';
 import { holderOf } from '@/lib/locationTree';
 import { autoArrange, autoArrangeAll } from '@/lib/locationArrange';
 import {
@@ -55,9 +61,13 @@ import {
 import { searchLocations, type LocationMatch } from '@/lib/locationSearch';
 import { usePrefersReducedMotion } from '@/lib/usePrefersReducedMotion';
 import { cn } from '@/lib/utils';
-import type { Connection, GameLocation } from '@/types';
+import type { Connection, Entity, GameLocation, LegKey, Placeholder } from '@/types';
 import { CanvasControlButton, CanvasControls } from '@/components/CanvasControls';
 import { Tip } from '@/components/ui/tooltip';
+import { MapBackgroundLayer, type MapGesture } from '@/components/MapBackgroundLayer';
+import { mapImages } from '@/lib/mapBackground';
+import { MapBackgroundPanel, type MapBackgroundPanelMode } from '@/managers/MapBackgroundPanel';
+import { useMapBackground } from '@/managers/useMapBackground';
 
 /**
  * The Locations canvas: the world's navigable shape as a map, and the primary place to draw on it. What a
@@ -85,6 +95,16 @@ interface DropTarget {
 
 const IDLE: DropTarget = { active: false, into: [], toTopLevel: false };
 
+/** A canvas with no world overview holds no Map Background. */
+const NO_OVERVIEW = {};
+const IGNORE_OVERVIEW = () => {};
+
+const MAP_STEP_LABELS: Record<MapGesture, string> = { move: 'Move Map Background', resize: 'Resize Map Background' };
+
+const sameDropTarget = (a: DropTarget, b: DropTarget) =>
+  a.active === b.active && a.toTopLevel === b.toTopLevel
+  && a.into.length === b.into.length && a.into.every((id, i) => id === b.into[i]);
+
 /**
  * The childless location the drag has rested on long enough to nest into. Its own channel rather than a field
  * of the drop target: that is written on a drag frame, and a dwell fires while the pointer is *still*, so a
@@ -107,11 +127,32 @@ const FlashContext = createContext<string | null>(null);
 /** How long a box stays marked after the map travels to it. */
 const FLASH_MS = 1400;
 
+/** How long a hover outlasts the pointer leaving a box or an arrow. */
+const HOVER_GRACE_MS = 250;
+
 /** Marked as arrived-at: the ring a selected box wears, in the accent color and pulsing where motion is
  *  welcome. Stands in place of the selection ring rather than beside it — two rings on one box is one ring. */
 const flashRing = 'ring-2 ring-primary motion-safe:animate-pulse';
 
 const UNREACHABLE_TITLE = 'No starting location can reach here';
+
+/** Every location's mark while an entity is picked; null when none is. */
+const PickMarkContext = createContext<Map<string, PickMark> | null>(null);
+
+/** How a box draws its pick mark: a solid tint for the entity's locations, a dashed outline over each pick
+ *  (a group's box encloses its whole subtree), and a fade for the rest. */
+const pickClass = (mark: PickMark | undefined) => cn(
+  mark?.kind === 'member' && 'bg-primary/20 ring-2 ring-primary',
+  mark?.pick && 'outline-dashed outline-2 outline-offset-2 outline-primary',
+  mark?.kind === 'faded' && 'opacity-30',
+);
+
+const PickIcons = ({ mark }: { mark: PickMark | undefined }) => (
+  <>
+    {mark?.kind === 'member' && <LocationIcon className="h-4 w-4 shrink-0 text-primary" aria-label="Entity Location" />}
+    {mark?.pick && <Megaphone className="h-4 w-4 shrink-0 text-primary" aria-label="Known In Pick" />}
+  </>
+);
 
 /** The badges a node carries: where a new game may begin, and where a player can never arrive. */
 const NodeBadges = ({ data }: { data: CanvasNodeData }) => (
@@ -134,13 +175,18 @@ const NodeBadges = ({ data }: { data: CanvasNodeData }) => (
  */
 const EdgeAnchors = ({ dropHeight }: { dropHeight: string }) => {
   const drawing = useConnection((c) => c.inProgress);
+  // Hidden rather than removed while picking: edges attach to the handles xyflow measured at mount.
+  const picking = useContext(PickMarkContext) !== null;
   return (
     <>
-      <Tip tip="Drag To Connect">
+      <Tip tip={picking ? undefined : 'Drag To Connect'}>
         <Handle
           type="source"
           position={Position.Right}
-          className="!h-3 !w-3 !border-2 !border-background !bg-primary opacity-0 transition-opacity group-hover/node:opacity-100"
+          className={cn(
+            '!h-3 !w-3 !border-2 !border-background !bg-primary opacity-0 transition-opacity',
+            picking ? '!pointer-events-none' : 'group-hover/node:opacity-100',
+          )}
         />
       </Tip>
       <Handle
@@ -166,15 +212,18 @@ const LocationNode = ({ id, data, selected }: NodeProps<LocationNodeType>) => {
   // Armed by a drag resting on it: this box is about to become one holding what is being dragged, and saying
   // so before the release is what lets the author bail by moving away.
   const armed = useContext(ArmedLeafContext) === id;
+  const mark = useContext(PickMarkContext)?.get(id);
   return (
     // The box already carries its own name; the tip only says it cannot be reached.
     <Tip tip={data.unreachable ? UNREACHABLE_TITLE : undefined} labelsChild={false}>
       <div
         data-drop-target={armed || undefined}
         data-flash={flashing || undefined}
+        data-pick-mark={mark?.kind}
         className={cn(
           'group/node flex h-full w-full items-center justify-center gap-1.5 rounded-md border bg-card px-3 text-label text-card-foreground',
           data.unreachable && 'border-destructive',
+          pickClass(mark),
           flashing ? flashRing : selected && 'ring-2 ring-ring',
           armed && 'bg-primary/10 ring-2 ring-primary',
         )}
@@ -182,6 +231,7 @@ const LocationNode = ({ id, data, selected }: NodeProps<LocationNodeType>) => {
         <EdgeAnchors dropHeight="!h-full" />
         <NodeBadges data={data} />
         <span className="truncate">{data.label}</span>
+        <PickIcons mark={mark} />
       </div>
     </Tip>
   );
@@ -193,14 +243,17 @@ const LocationGroupNode = ({ id, data, selected }: NodeProps<LocationNodeType>) 
   // Named while the drag is still in the air: this is the box that would come to hold what is being moved.
   const willTakeTheDrop = useContext(DropTargetContext).into.includes(id);
   const flashing = useContext(FlashContext) === id;
+  const mark = useContext(PickMarkContext)?.get(id);
   return (
     <Tip tip={data.unreachable ? UNREACHABLE_TITLE : undefined} labelsChild={false}>
       <div
         data-drop-target={willTakeTheDrop || undefined}
         data-flash={flashing || undefined}
+        data-pick-mark={mark?.kind}
         className={cn(
           'group/node h-full w-full rounded-md border bg-muted/40',
           data.unreachable && 'border-destructive',
+          pickClass(mark),
           flashing ? flashRing : selected && 'ring-2 ring-ring',
           willTakeTheDrop && 'bg-primary/10 ring-2 ring-primary',
         )}
@@ -209,6 +262,7 @@ const LocationGroupNode = ({ id, data, selected }: NodeProps<LocationNodeType>) 
         <div className="flex items-center gap-1.5 rounded-t-md border-b bg-card px-3 py-1.5 text-label text-card-foreground">
           <NodeBadges data={data} />
           <span className="truncate">{data.label}</span>
+          <PickIcons mark={mark} />
         </div>
       </div>
     </Tip>
@@ -257,18 +311,19 @@ const DIRECTIONS: { value: ConnectionDirection; Icon: typeof ArrowRight; label: 
  * describe making the trip, and whether the link exists at all. Every control hands its intent back, so the
  * panel decides nothing about what an edit means.
  */
-const ConnectionInspector = ({ connection, focus, nameOf, onIntent, onClose }: {
+const ConnectionInspector = ({ connection, focus, nameOf, onIntent, onClose, placeholders }: {
   connection: Connection;
+  placeholders: Placeholder[];
   /** The leg whose arrow was clicked last. */
   focus: TravelHintFocus | null;
   nameOf: (id: string) => string;
-  onIntent: (intent: CanvasIntent, mergeKey?: string) => void;
+  onIntent: (intent: CanvasIntent, typedLeg?: LegKey) => void;
   onClose: () => void;
 }) => {
   const [a, b] = connectionEnds(connection);
   const names = [nameOf(a), nameOf(b)] as const;
   return (
-    <Panel position="top-right" className="!m-2 w-72 space-y-2 rounded-md border bg-card p-3 shadow-md">
+    <div className="space-y-2 rounded-md border bg-card p-3 shadow-md">
       <div className="flex items-center gap-1">
         <Tip tip={`${names[0]} — ${names[1]}`} labelsChild={false}>
           <span className="min-w-0 flex-grow truncate text-label">
@@ -283,7 +338,7 @@ const ConnectionInspector = ({ connection, focus, nameOf, onIntent, onClose }: {
         </Tip>
         <Tip tip="Close">
           <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onClose}>
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </Button>
         </Tip>
       </div>
@@ -292,6 +347,7 @@ const ConnectionInspector = ({ connection, focus, nameOf, onIntent, onClose }: {
         className="w-full"
         value={directionOf(connection)}
         aria-label="Direction of Travel"
+        {...fieldFrame('connections', connection.id, 'direction')}
         // A single ToggleGroup clears its value when the active item is clicked again; a Connection always
         // runs some direction, so an empty result is ignored rather than stored.
         onValueChange={(v) => { if (v) onIntent(directionIntent(connection, v as ConnectionDirection)); }}
@@ -320,10 +376,11 @@ const ConnectionInspector = ({ connection, focus, nameOf, onIntent, onClose }: {
           };
         })}
         idPrefix={`canvas-connection-${connection.id}`}
-        onChange={(next, mergeKey) => onIntent(updateIntent(next), mergeKey)}
+        placeholders={placeholders}
+        onChange={(next, typedLeg) => onIntent(updateIntent(next), typedLeg)}
         focus={focus}
       />
-    </Panel>
+    </div>
   );
 };
 
@@ -351,9 +408,9 @@ type MenuTarget =
 const CanvasMenu = ({ sections, menuRef, frameRef }: {
   sections: CanvasMenuSection[];
   /** Lets the keydown scope count the portaled menu as the canvas (see `trackPointer`). */
-  menuRef: RefObject<HTMLDivElement>;
+  menuRef: RefObject<HTMLDivElement | null>;
   /** Where focus goes back to on close — the pane takes none of its own, so nothing else is left holding it. */
-  frameRef: RefObject<HTMLDivElement>;
+  frameRef: RefObject<HTMLDivElement | null>;
 }) => (
   <ContextMenuContent
     ref={menuRef}
@@ -451,22 +508,19 @@ const LocationSearch = ({ find, onPick }: {
     // Below the toolbar on a window too narrow to hold both across: the tools span the top edge there, and a
     // box sitting under them is a box that cannot be typed into.
     <Panel position="top-left" className="!m-2 w-64 max-sm:!mt-16">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setActive(0); }}
-          onKeyDown={onKeyDown}
-          placeholder="Find a Location"
-          aria-label="Find a Location"
-          role="combobox"
-          aria-expanded={matches.length > 0}
-          aria-controls={listId}
-          aria-activedescendant={matches.length ? `${listId}-${at}` : undefined}
-          autoComplete="off"
-          className="bg-card pl-8"
-        />
-      </div>
+      <SearchField
+        value={query}
+        onChange={(next) => { setQuery(next); setActive(0); }}
+        onKeyDown={onKeyDown}
+        placeholder="Find a Location"
+        aria-label="Find a Location"
+        role="combobox"
+        aria-expanded={matches.length > 0}
+        aria-controls={listId}
+        aria-activedescendant={matches.length ? `${listId}-${at}` : undefined}
+        autoComplete="off"
+        inputClassName="bg-card"
+      />
       {!!query.trim() && (
         <ul
           id={listId}
@@ -592,8 +646,9 @@ const CanvasToolbar = ({
   onRedo: () => void;
 }) => (
   // Scrolls sideways rather than spilling off a narrow window: every tool stays reachable at any width, and
-  // the row keeps its own height so the search box beneath it has a fixed place to sit.
-  <Panel position="top-center" className="!m-2 max-w-[calc(100%-1rem)] overflow-x-auto">
+  // the row keeps its own height so the search box beneath it has a fixed place to sit. Centered, it keeps
+  // the window's corner button clear on both sides.
+  <Panel position="top-center" className="!m-2 max-w-[calc(100%-4.5rem)] overflow-x-auto">
     <div
       role="toolbar"
       aria-label="Canvas Tools"
@@ -700,16 +755,17 @@ interface CanvasSession {
   reportSelection: (ids: string[]) => void;
   /** The author has their hand on this canvas: whatever it reports from here is theirs, not teardown's. */
   wake: () => void;
-  /** What Ctrl+Z walks back. A ref rather than state — nothing on the map is drawn from the stack, and the
-   *  trip to full screen has to carry it as it carries the selection. */
-  historyRef: React.MutableRefObject<CanvasHistory>;
   selectedConnectionId: string | null;
   setSelectedConnectionId: (id: string | null) => void;
 }
 
 type CanvasData = Pick<ReturnType<typeof useGameData>,
   'locations' | 'setLocations' | 'connections' | 'setConnections' | 'placeholders' |
-  'placementLetters' | 'placeholderOwners'>;
+  'placementLetters' | 'placeholderOwners'>
+  // The cast, for picking an entity on the full-screen canvas. A canvas without one has no entity card.
+  & Partial<Pick<ReturnType<typeof useGameData>, 'entities' | 'updateEntity'>>
+  // The Map Background's home. A canvas without one draws and offers none.
+  & Partial<Pick<ReturnType<typeof useGameData>, 'worldOverview' | 'updateWorldOverview'>>;
 
 export interface LocationCanvasInputs {
   data: CanvasData;
@@ -718,27 +774,47 @@ export interface LocationCanvasInputs {
     grid: ReturnType<typeof useCanvasGridVisible>;
     connectionStyle: ReturnType<typeof useCanvasConnectionStyle>;
   };
-  historyRef: React.MutableRefObject<CanvasHistory>;
 }
 
-const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullscreen, data, preferences }: {
+const CanvasInner = ({
+  selectedId, onSelect, session, fullscreen, onToggleFullscreen, data, preferences, revealSelection, onSelectionRevealed,
+}: {
   selectedId: string | null;
   onSelect: (id: string) => void;
   session: CanvasSession;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
-} & Pick<LocationCanvasInputs, 'data' | 'preferences'>) => {
-  const { locations, setLocations, connections, setConnections, placeholders, placementLetters, placeholderOwners } = data;
+} & Pick<LocationCanvasInputs, 'data' | 'preferences'> & Pick<CanvasReveal, 'revealSelection' | 'onSelectionRevealed'>) => {
   const {
-    selectedIdsRef, lastSyncedRef, reportSelection, wake, historyRef, selectedConnectionId,
-    setSelectedConnectionId,
+    locations, setLocations, connections, setConnections, placeholders, placementLetters, placeholderOwners,
+    entities, updateEntity, worldOverview, updateWorldOverview,
+  } = data;
+  // The entity the full-screen canvas picks for. While one is picked, the canvas is a read-only picker.
+  const [pickState, setPickState] = useState<PickState | null>(null);
+  const pickedEntity = fullscreen && pickState ? entities?.find((e) => e.id === pickState.entityId) : undefined;
+  const picking = !!pickedEntity;
+  const pickMode = pickedEntity?.customPersona ? 'locations' : pickState?.mode ?? 'locations';
+  const marks = useMemo(() => (pickedEntity ? pickMarks(pickedEntity, locations) : null), [pickedEntity, locations]);
+  const {
+    selectedIdsRef, lastSyncedRef, reportSelection, wake, selectedConnectionId, setSelectedConnectionId,
   } = session;
   const store = useStoreApi();
-  const { fitView, setCenter, getInternalNode, getZoom } = useReactFlow();
+  const { fitView, setCenter, getInternalNode, getZoom, screenToFlowPosition } = useReactFlow();
   const reduceMotion = usePrefersReducedMotion();
   const [snap, setSnap] = preferences.snap;
   const [gridVisible, setGridVisible] = preferences.grid;
   const [connectionStyle, setConnectionStyle] = preferences.connectionStyle;
+  const mapBackground = useMapBackground({
+    worldOverview: worldOverview ?? NO_OVERVIEW, updateWorldOverview: updateWorldOverview ?? IGNORE_OVERVIEW, locations,
+  });
+  // Authoring always shows slot 0, whatever its rule says.
+  const mapPrimary = worldOverview ? mapImages(worldOverview)[0] : undefined;
+  const [mapPanel, setMapPanel] = useState<MapBackgroundPanelMode | null>(null);
+  // Adjust ends with the last image, and a picker never adjusts.
+  const shownMapPanel = picking || (mapPanel === 'adjust' && !mapPrimary) ? null : mapPanel;
+  const adjustingMap = shownMapPanel === 'adjust';
+  // A picker and Adjust both hold the boxes still: no drag, Connection, selection or key moves.
+  const boxesHeld = picking || adjustingMap;
   // What the next menu will be a menu of. Radix owns whether one is open and where; all this holds is which
   // target the right-click that is about to open it landed on.
   const [menuTarget, setMenuTarget] = useState<MenuTarget>({ kind: 'pane' });
@@ -811,8 +887,16 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   );
 
   const map = useMemo(
-    () => buildLocationCanvas(locations, connections, { resolveName }),
-    [locations, connections, resolveName],
+    () => buildLocationCanvas(locations, connections, {
+      resolveName,
+      describeHint: (hint) => describePlaceholders(hint, placeholders),
+    }),
+    [locations, connections, resolveName, placeholders],
+  );
+
+  const entityLabel = useCallback(
+    (entity: Entity) => labelPlaceholders(entity.name, placeholders, { letters: placementLetters, owners: placeholderOwners }),
+    [placeholders, placementLetters, placeholderOwners],
   );
 
   const findLocations = useCallback(
@@ -829,7 +913,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     const node = getInternalNode(id);
     if (!node) return;
     const { x, y } = node.internals.positionAbsolute;
-    setCenter(x + (node.measured.width ?? 0) / 2, y + (node.measured.height ?? 0) / 2, {
+    // A box culled off screen was never measured, so its authored size stands in.
+    setCenter(x + (node.measured.width ?? node.width ?? 0) / 2, y + (node.measured.height ?? node.height ?? 0) / 2, {
       zoom: Math.max(getZoom(), 0.8),
       duration: reduceMotion ? 0 : 400,
     });
@@ -844,56 +929,20 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   // exist, so the panel would close under the author's hand if it were pinned to an arrow's id.
   const selectedConnection = connections.find((c) => c.id === selectedConnectionId) ?? null;
 
-  // The stack itself is a ref — nothing on the map is drawn from it — but the chrome that offers it is, so
-  // what each side holds is mirrored here and read back after every edit and every step taken.
-  const [history, setHistory] = useState({ canUndo: false, canRedo: false });
-  const syncHistory = useCallback(() => {
-    const { past, future } = historyRef.current;
-    setHistory({ canUndo: past.length > 0, canRedo: future.length > 0 });
-  }, [historyRef]);
-  // The stack outlives this component: arriving at a canvas mid-session finds whatever the last one left.
-  useEffect(syncHistory, [syncHistory]);
+  // The world's history holds the canvas's edits with every other edit; the canvas only reads its moves.
+  const history = useWorldHistory();
+  const { commitLocations, commitConnections } = useCanvasCommits({ locations, setLocations, connections, setConnections });
 
-  // Every write the canvas makes goes through one of these two, which is what leaves the stack holding the map's
-  // whole edit history rather than the part of it someone remembered to record.
-  const commitLocations = useCallback((next: GameLocation[], mergeKey?: string) => {
-    historyRef.current = recordCanvasEdit(historyRef.current, {
-      slice: 'locations', before: locations, after: next, mergeKey,
-    });
-    syncHistory();
-    setLocations(next);
-  }, [locations, setLocations, historyRef, syncHistory]);
-
-  const commitConnections = useCallback((next: Connection[], mergeKey?: string) => {
-    historyRef.current = recordCanvasEdit(historyRef.current, {
-      slice: 'connections', before: connections, after: next, mergeKey,
-    });
-    syncHistory();
-    setConnections(next);
-  }, [connections, setConnections, historyRef, syncHistory]);
-
-  const applyIntent = useCallback((intent: CanvasIntent | null, mergeKey?: string) => {
+  const applyIntent = useCallback((intent: CanvasIntent | null, typedLeg?: LegKey) => {
     if (!intent) return;
-    commitConnections(applyCanvasIntent(connections, intent), mergeKey);
+    const key = typedLeg && intent.kind === 'update' ? hintKey(intent.connection.id, typedLeg) : undefined;
+    commitConnections(applyCanvasIntent(connections, intent), key);
     if (intent.kind === 'add') setSelectedConnectionId(intent.connection.id); // a fresh one opens for annotation
     else if (intent.kind === 'remove') setSelectedConnectionId(null);
   }, [connections, commitConnections, setSelectedConnectionId]);
 
   // The leg whose arrow was clicked last, tied to its record so a later selection never inherits it.
   const [hintFocus, setHintFocus] = useState<TravelHintFocus & { connectionId: string } | null>(null);
-
-  // A dashed arrow is a click away from being authored; a solid one opens the record it came from.
-  const handleEdgeClick = useCallback((_: unknown, edge: Edge) => {
-    const clicked = map.edges.find((e) => e.id === edge.id);
-    if (!clicked) return;
-    if (!clicked.connectionId) {
-      applyIntent(connectIntent(clicked.source, clicked.target, connections));
-      return;
-    }
-    setSelectedConnectionId(clicked.connectionId);
-    const { connectionId, leg } = clicked;
-    if (leg) setHintFocus((last) => ({ connectionId, leg, nonce: (last?.nonce ?? 0) + 1 }));
-  }, [map, connections, applyIntent, setSelectedConnectionId]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<LocationNodeType>([]);
 
@@ -908,12 +957,15 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     });
   }, [setNodes, selectedIdsRef]);
 
-  // A selection made in the list view is the canvas's whole selection; one made here is already on the nodes.
+  // A location selected outside the canvas becomes its whole selection; one made here is already on the nodes.
+  // The editor closing its detail panel clears `selectedId`, which is not the author letting go of the
+  // location on the map: a finger has no hover, so the selection is what keeps its implicit arrows drawn.
+  // A location the selection already holds, such as one an undo reveals, keeps the whole selection.
   useEffect(() => {
     if (selectedId === lastSyncedRef.current) return;
     lastSyncedRef.current = selectedId;
-    setSelection((id) => id === selectedId);
-  }, [selectedId, setSelection, lastSyncedRef]);
+    if (selectedId !== null && !selectedIdsRef.current.includes(selectedId)) setSelection((id) => id === selectedId);
+  }, [selectedId, setSelection, lastSyncedRef, selectedIdsRef]);
 
   // The mapper owns what is on the map; xyflow owns only the in-flight drag, so a world edit anywhere
   // (a rename, a new Connection, a deletion) redraws from the world rather than from stale canvas state.
@@ -934,12 +986,76 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     })));
   }, [map, setNodes, selectedIdsRef]);
 
+  // Restores an undone edit's whole selection; the first id is marked synced so its prop can't collapse the rest.
+  useEffect(() => {
+    if (!revealSelection) return;
+    const { ids } = revealSelection;
+    lastSyncedRef.current = ids[0] ?? null;
+    setSelection((id) => ids.includes(id));
+    onSelectionRevealed?.();
+  }, [revealSelection, onSelectionRevealed, setSelection, lastSyncedRef]);
+
+  // Implicit arrows belong to the locations the author is looking at: the hovered one and the selected ones,
+  // and none while a drag is in flight. The hover outlives the pointer by a beat, so the pointer can cross
+  // the gap to a dashed arrow without the arrow leaving.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const hoverTimer = useRef<number | null>(null);
+  const cancelHoverClear = useCallback(() => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  }, []);
+  const hoverOn = useCallback((id: string) => {
+    cancelHoverClear();
+    setHoveredId(id);
+  }, [cancelHoverClear]);
+  const hoverOff = useCallback(() => {
+    cancelHoverClear();
+    hoverTimer.current = window.setTimeout(() => setHoveredId(null), HOVER_GRACE_MS);
+  }, [cancelHoverClear]);
+  // Clicking a dashed arrow removes it, and its pointer-leave never comes.
+  const hoverEnd = useCallback(() => {
+    cancelHoverClear();
+    setHoveredId(null);
+  }, [cancelHoverClear]);
+  useEffect(() => cancelHoverClear, [cancelHoverClear]);
+
+  // A node change on every drag frame rebuilds `selectedIds`; the focus keeps its identity until it differs.
+  const focusRef = useRef<string[]>([]);
+  const focus = useMemo(() => {
+    // A picker draws no Connections, so it shows no implicit arrow to draw one from.
+    const next = picking ? [] : canvasFocus({ hovered: hoveredId, selected: selectedIds, dragging });
+    const last = focusRef.current;
+    if (next.length === last.length && next.every((id, i) => id === last[i])) return last;
+    focusRef.current = next;
+    return next;
+  }, [hoveredId, selectedIds, dragging, picking]);
+
+  const implicitEdges = useMemo(
+    () => implicitCanvasEdges(locations, connections, focus),
+    [locations, connections, focus],
+  );
+
   const edges = useMemo(
-    () => map.edges.map(
+    () => [...map.edges, ...implicitEdges].map(
       (edge) => toFlowEdge(edge, connectionStyle, { selected: edge.connectionId === selectedConnectionId }),
     ),
-    [map, selectedConnectionId, connectionStyle],
+    [map, implicitEdges, selectedConnectionId, connectionStyle],
   );
+
+  // A dashed arrow is a click away from being authored; a solid one opens the record it came from.
+  const handleEdgeClick = useCallback((_: unknown, edge: Edge) => {
+    const clicked = implicitEdges.find((e) => e.id === edge.id) ?? map.edges.find((e) => e.id === edge.id);
+    if (!clicked) return;
+    if (!clicked.connectionId) {
+      hoverEnd();
+      applyIntent(connectIntent(clicked.source, clicked.target, connections));
+      return;
+    }
+    setSelectedConnectionId(clicked.connectionId);
+    const { connectionId, leg } = clicked;
+    if (leg) setHintFocus((last) => ({ connectionId, leg, nonce: (last?.nonce ?? 0) + 1 }));
+  }, [map, implicitEdges, connections, applyIntent, setSelectedConnectionId, hoverEnd]);
 
   const [dropInto, setDropInto] = useState<DropTarget>(IDLE);
 
@@ -977,6 +1093,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   );
   const handleDragStart = useCallback(() => {
     dragSessionRef.current = beginCanvasDrag(locations);
+    setDragging(true);
   }, [locations]);
 
   /** What the nodes a drag is carrying are asking the world to become — the one answer the highlight is drawn
@@ -991,11 +1108,13 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
     // The leaf under the node the author is actually holding, never one traveling with it.
     dwellOn(leafTarget(session, node.id, node.position, moved.map((n) => n.id)));
     const drops = dropsFor(session, moved);
-    setDropInto({
+    const next: DropTarget = {
       active: true,
       into: drops.map((drop) => drop.parentId).filter((id): id is string => id !== null),
       toTopLevel: drops.some((drop) => drop.kind === 'reparent' && drop.parentId === null),
-    });
+    };
+    // Every group frame reads this context, so a frame that lands on the same target must not replace it.
+    setDropInto((prev) => (sameDropTarget(prev, next) ? prev : next));
   }, [sessionFor, dropsFor, dwellOn]);
 
   // A drag either moves a location or changes what holds it, and where it came to rest decides which — so
@@ -1003,6 +1122,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   // A whole selection dragged at once is that one gesture, made of every node it carried.
   const handleDragStop = useCallback((_: unknown, node: Node, dragged: Node[]) => {
     setDropInto(IDLE);
+    setDragging(false);
     const session = sessionFor();
     dragSessionRef.current = null;
     const drops = dropsFor(session, dragged.length ? dragged : [node]);
@@ -1022,20 +1142,6 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   const handleSelectionChange = useCallback(({ nodes: picked }: { nodes: Node[] }) => {
     reportSelection(picked.map((n) => n.id));
   }, [reportSelection]);
-
-  /** Walking the map's own edits back and forward, against the world as it stands — which is what leaves an
-   *  edit made in the list panel in the meantime alone. Both surfaces read what is written here at once. */
-  const travelHistory = useCallback((direction: 'undo' | 'redo') => {
-    const world = { locations, connections };
-    const step = direction === 'undo'
-      ? undoCanvasEdit(historyRef.current, world)
-      : redoCanvasEdit(historyRef.current, world);
-    if (!step) return;
-    historyRef.current = step.history;
-    syncHistory();
-    if (step.restore.slice === 'locations') setLocations(step.restore.locations);
-    else setConnections(step.restore.connections);
-  }, [historyRef, locations, connections, setLocations, setConnections, syncHistory]);
 
   /**
    * Which box the toolbar's Auto Arrange lays out: the selected group itself where the author picked one, the
@@ -1060,8 +1166,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
   // Each of these is asked for on a selection that may turn out to have nothing to do — two boxes one of which
   // carries the other is one box to line up. A command that moved nothing is not a step to take back, so the
   // world it hands back untouched is left alone rather than pushed onto the stack as a press that does nothing.
-  const commitIfMoved = useCallback((next: GameLocation[], mergeKey?: string) => {
-    if (next !== locations) commitLocations(next, mergeKey);
+  const commitIfMoved = useCallback((next: GameLocation[], key?: StepKey) => {
+    if (next !== locations) commitLocations(next, key);
   }, [commitLocations, locations]);
 
   const alignSelection = useCallback((edge: AlignEdge) => {
@@ -1077,7 +1183,7 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
    * rather than one per press — keyed by what is being moved, so picking something else starts a fresh step.
    */
   const nudgeSelection = useCallback((delta: { x: number; y: number }) => {
-    commitIfMoved(nudgeLocations(locations, selectedIds, delta), `nudge:${selectedIds.join(',')}`);
+    commitIfMoved(nudgeLocations(locations, selectedIds, delta), nudgeKey(selectedIds));
   }, [commitIfMoved, locations, selectedIds]);
 
   /** The map framed on what the author is working on, or on the whole world when they are working on none of
@@ -1093,10 +1199,6 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
    * since the pane itself takes no focus. Typing into the Connection inspector is not the canvas's keyboard.
    */
   useEffect(() => {
-    const focusing = (target: EventTarget | null) => {
-      const el = target as HTMLElement | null;
-      return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
-    };
     // The toolbar's own picker walks its options with the arrows, so a press that lands there is the toolbar's
     // rather than the map's — stepping the selection under the author at the same time is two things per press.
     // Undo and the rest still answer: only the keys the chrome itself uses are handed over.
@@ -1109,18 +1211,19 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       activeRef.current = !!frameRef.current?.contains(target) || !!menuRef.current?.contains(target);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!activeRef.current || focusing(event.target)) return;
+      if (picking || !activeRef.current || isEditableTarget(event.target)) return;
+      // Adjusting the map holds the boxes still from the keys too; Ctrl+A stays the canvas's, selecting nothing.
+      if (adjustingMap) {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') event.preventDefault();
+        return;
+      }
       // In full screen, Escape is the way out of the window — a keypress meaning "leave" must not also empty
       // the selection the author is taking back to the pane with them.
-      const travel = historyShortcut(event);
       const nudge = NUDGES[event.key];
       if (event.key === 'Escape') { if (!fullscreen) setSelection(() => false); }
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
         event.preventDefault();
         setSelection(() => true);
-      } else if (travel) {
-        event.preventDefault();
-        travelHistory(travel);
       } else if (event.ctrlKey || event.metaKey || event.altKey) {
         // Every other chord belongs to the browser or the app around the map, not to the map.
       } else if (nudge && !inChrome(event.target)) {
@@ -1137,7 +1240,48 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       document.removeEventListener('pointerdown', trackPointer, true);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [setSelection, fullscreen, travelHistory, nudgeSelection, zoomToSelection]);
+  }, [setSelection, fullscreen, nudgeSelection, zoomToSelection, picking, adjustingMap]);
+
+  // Picking starts from a clean canvas: nothing selected, no Connection open.
+  useEffect(() => {
+    if (!picking) return;
+    setSelection(() => false);
+    setSelectedConnectionId(null);
+  }, [picking, setSelection, setSelectedConnectionId]);
+
+  // Escape leaves picking before the window hears it, so a second Escape leaves full screen. An open list
+  // in the card takes its own Escape first.
+  useEffect(() => {
+    if (!picking) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if ((event.target as HTMLElement | null)?.closest?.('[role="listbox"]')) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setPickState(null);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [picking]);
+
+  // A canvas click on a location toggles it for the picked entity. A drag that ends on the box was a pan.
+  const togglePicked = (event: React.MouseEvent, locationId: string) => {
+    if (!pickedEntity || !updateEntity) return;
+    if (!isStationaryClick(pointerDownRef.current, { x: event.clientX, y: event.clientY })) return;
+    // Keyed by the location, so each click is its own Step rather than a typing run on the entity.
+    history.keyNext({
+      slice: 'entities', id: pickedEntity.id, field: pickMode === 'knownIn' ? 'knownIn' : 'locations', ids: [locationId],
+    });
+    updateEntity(togglePick(pickedEntity, pickMode, locationId));
+  };
+
+  // DEV dev-router: `pick=<entity id>` (or `<entity id>:knownIn`) picks an entity on the full-screen canvas.
+  const devPick = useDevRoute()?.pick;
+  useEffect(() => {
+    if (!import.meta.env.DEV || !devPick || !fullscreen) return;
+    const [entityId, mode] = devPick.split(':');
+    setPickState({ entityId, mode: mode === 'knownIn' ? 'knownIn' : 'locations' });
+  }, [devPick, fullscreen]);
 
   /**
    * Composing a selection on a touch screen. Shift and Ctrl are what a mouse adds a location to a selection
@@ -1186,6 +1330,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       frameRef.current?.removeEventListener('click', swallowClickRef.current, { capture: true });
       swallowClickRef.current = null;
     }
+    // A picker's boxes don't hold the pan back, so xyflow pans from them with every button on its own.
+    if (picking) return;
     const overNode = (event.target as HTMLElement).closest?.('.react-flow__node');
     if (overNode && event.pointerType === 'touch') holdToToggle(overNode, event);
     if (!overNode || (event.button !== 1 && event.button !== 2)) return;
@@ -1254,14 +1400,34 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
         icon: LayoutGrid,
         onSelect: () => commitLocations(autoArrangeAll(locations, connections)),
       },
+      ...(updateWorldOverview
+        ? [{
+          label: mapPrimary ? 'Replace Background Image…' : 'Set Background Image…',
+          icon: ImagePlus,
+          onSelect: () => setMapPanel('set'),
+        }]
+        : []),
     ];
   };
+
+  /** The canvas's view in canvas units, which a first image covers when there are no locations. */
+  const visibleArea = () => {
+    const rect = frameRef.current?.getBoundingClientRect();
+    if (!rect?.width) return null;
+    const a = screenToFlowPosition({ x: rect.left, y: rect.top });
+    const b = screenToFlowPosition({ x: rect.right, y: rect.bottom });
+    return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
+  };
+
+  const mapBackgroundRows: CanvasMenuItem[] = mapPrimary && !picking
+    ? [{ label: 'Adjust Background', checked: adjustingMap, onSelect: () => setMapPanel(adjustingMap ? null : 'adjust') }]
+    : [];
 
   return (
     // The frame is the menu's trigger, so the browser's own menu never opens over the canvas — Radix takes
     // every right-click the pane, a node or the selection did not already stop as a pan's release.
     <ContextMenu>
-    <ContextMenuTrigger asChild>
+    <ContextMenuTrigger asChild disabled={picking}>
     <div
       ref={frameRef}
       // Programmatically focusable but out of the Tab order, exactly as the pane itself is: the map takes no
@@ -1269,11 +1435,13 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       tabIndex={-1}
       className="relative h-full w-full"
       onPointerDownCapture={handlePointerDown}
-      onContextMenu={reraiseForTrigger}
+      // A picker has no menu, and the browser's own stays shut too.
+      onContextMenu={picking ? (event) => event.preventDefault() : reraiseForTrigger}
     >
       <DropTargetContext.Provider value={dropHighlight}>
       <ArmedLeafContext.Provider value={armedLeaf}>
       <FlashContext.Provider value={flashId}>
+      <PickMarkContext.Provider value={marks}>
       <ReactFlow<LocationNodeType, Edge>
         nodes={nodes}
         edges={edges}
@@ -1283,7 +1451,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
         onNodeDragStart={handleDragStart}
         onNodeDrag={handleDrag}
         onNodeDragStop={handleDragStop}
-        onNodeClick={(_, node) => {
+        onNodeClick={(event, node) => {
+          if (picking) return togglePicked(event, node.id);
           setSelectedConnectionId(null);
           // The editor tracks the last node clicked; announcing it here is what keeps the prop coming back
           // from collapsing a multi-selection this click may have just added to.
@@ -1291,17 +1460,29 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
           onSelect(node.id);
         }}
         onSelectionChange={handleSelectionChange}
-        onEdgeClick={handleEdgeClick}
+        onEdgeClick={picking ? undefined : handleEdgeClick}
+        // A picker is read-only: no drag, nesting, Connection or selection, and a drag with any button pans.
+        // Adjusting the map holds the boxes still the same way, so every left press goes to the map.
+        nodesDraggable={!boxesHeld}
+        nodesConnectable={!boxesHeld}
+        elementsSelectable={!boxesHeld}
+        edgesFocusable={!picking}
+        onNodeMouseEnter={(_, node) => hoverOn(node.id)}
+        onNodeMouseLeave={hoverOff}
+        onEdgeMouseEnter={cancelHoverClear}
+        onEdgeMouseLeave={hoverOff}
+        // A big map holds far more than the pane shows, and a box off screen costs a render for nothing.
+        onlyRenderVisibleElements
         onPaneClick={() => setSelectedConnectionId(null)}
         onPaneContextMenu={(e) => openMenu(e, { kind: 'pane' })}
         onNodeContextMenu={(e, node) => openMenu(e, menuTargetFor(node.id))}
         onSelectionContextMenu={(e) => openMenu(e, { kind: 'selection' })}
         // Node-editor controls: left-drag draws a marquee over the pane and moves a node on a node, the other
         // two buttons pan, and Shift or Ctrl composes a selection a node at a time.
-        panOnDrag={[1, 2]}
-        selectionOnDrag
+        panOnDrag={picking ? [0, 1, 2] : [1, 2]}
+        selectionOnDrag={!boxesHeld}
         selectionKeyCode={null}
-        multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
+        multiSelectionKeyCode={picking ? null : ['Shift', 'Control', 'Meta']}
         // Snapping applies to the drag itself, so what the author sees land is exactly what is stored.
         snapToGrid={snap}
         snapGrid={[CANVAS_GRID, CANVAS_GRID]}
@@ -1316,24 +1497,31 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
         attributionPosition="bottom-left"
         minZoom={0.2}
         fitView
-        className="h-full w-full"
+        className={cn('h-full w-full', picking && 'canvas-picking', adjustingMap && 'canvas-adjusting')}
       >
         {/* The dots mark the grid's own intersections; hiding it keeps the pane's color and drops the pattern. */}
         <Background className="!bg-background" color={gridVisible ? 'hsl(var(--border))' : 'transparent'} gap={CANVAS_GRID} />
+        {mapPrimary && mapBackground.background && (
+          <MapBackgroundLayer
+            src={mapPrimary.data}
+            frame={mapBackground.background.frame}
+            opacity={mapBackground.background.opacity}
+            adjust={adjustingMap ? { onCommit: (frame, gesture) => void mapBackground.setFrame(frame, MAP_STEP_LABELS[gesture]) } : undefined}
+          />
+        )}
         {/* The embedded canvas's whole chrome: the zoom controls, and the way to the big one. Everything
             heavier belongs to full screen, so the quick view stays a view. */}
         <CanvasControls>
-          <CanvasControlButton
-            tip={fullscreen ? 'Exit Full Screen' : 'Edit Full Screen'}
-            onClick={onToggleFullscreen}
-          >
-            {fullscreen ? <Minimize2 /> : <Maximize2 />}
-          </CanvasControlButton>
+          {!fullscreen && (
+            <CanvasControlButton tip="Edit Full Screen" onClick={onToggleFullscreen}>
+              <Maximize2 />
+            </CanvasControlButton>
+          )}
         </CanvasControls>
         <TopLevelDrop />
         {/* The window's own orientation aids and power tools. The pane is a view of a map the author can
             already take in; these are for the map that has grown past it. */}
-        {fullscreen && (
+        {fullscreen && !picking && (
           <CanvasToolbar
             arrangeLabel={arrangeScope() === undefined ? 'Auto Arrange All' : 'Auto Arrange'}
             onArrange={arrangeFromToolbar}
@@ -1349,8 +1537,8 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
             setConnectionStyle={setConnectionStyle}
             canUndo={history.canUndo}
             canRedo={history.canRedo}
-            onUndo={() => travelHistory('undo')}
-            onRedo={() => travelHistory('redo')}
+            onUndo={history.undo}
+            onRedo={history.redo}
           />
         )}
         {fullscreen && <LocationSearch find={findLocations} onPick={revealLocation} />}
@@ -1359,16 +1547,56 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
             onNavigate={(at) => setCenter(at.x, at.y, { duration: reduceMotion ? 0 : 200 })}
           />
         )}
-        {selectedConnection && (
-          <ConnectionInspector
-            connection={selectedConnection}
-            focus={hintFocus?.connectionId === selectedConnection.id ? hintFocus : null}
-            nameOf={nameOf}
-            onIntent={applyIntent}
-            onClose={() => setSelectedConnectionId(null)}
-          />
+        {/* One column on the right: an open Connection above the entity card, so neither covers the other.
+            Below the toolbar and the search box on a narrow window. */}
+        {((selectedConnection && !picking) || (fullscreen && entities && updateEntity) || shownMapPanel) && (
+          <Panel
+            position="top-right"
+            // Full screen drops the column under the window's corner button.
+            className={cn('!m-2 flex max-h-[calc(100%-1rem)] w-72 flex-col gap-2 overflow-y-auto', fullscreen && 'sm:!mt-10 sm:max-h-[calc(100%-3rem)] max-sm:!mt-28 max-sm:max-h-[40%]')}
+          >
+            {shownMapPanel && worldOverview && (
+              <MapBackgroundPanel
+                mode={shownMapPanel}
+                overview={worldOverview}
+                placeholders={placeholders}
+                opacity={mapBackground.background?.opacity ?? 1}
+                onImagesChange={(images) => {
+                  // A first image goes straight to Adjust, where it can be placed.
+                  if (!mapPrimary && images.some((img) => img.data)) setMapPanel('adjust');
+                  void mapBackground.setGallery(images, visibleArea());
+                }}
+                onOpacity={mapBackground.setOpacity}
+                onRemove={() => void mapBackground.removePrimary()}
+                onClose={() => setMapPanel(null)}
+              />
+            )}
+            {selectedConnection && !picking && (
+              <ConnectionInspector
+                connection={selectedConnection}
+                focus={hintFocus?.connectionId === selectedConnection.id ? hintFocus : null}
+                nameOf={nameOf}
+                placeholders={placeholders}
+                onIntent={applyIntent}
+                onClose={() => setSelectedConnectionId(null)}
+              />
+            )}
+            {fullscreen && entities && updateEntity && (
+              <EntityPickCard
+                entities={entities}
+                entityLabel={entityLabel}
+                locationName={nameOf}
+                locations={locations}
+                connections={connections}
+                picking={pickedEntity && pickState ? { ...pickState, mode: pickMode } : null}
+                onPickingChange={setPickState}
+                onChange={updateEntity}
+              />
+            )}
+          </Panel>
         )}
       </ReactFlow>
+      </PickMarkContext.Provider>
       </FlashContext.Provider>
       </ArmedLeafContext.Provider>
       </DropTargetContext.Provider>
@@ -1378,40 +1606,76 @@ const CanvasInner = ({ selectedId, onSelect, session, fullscreen, onToggleFullsc
       menuRef={menuRef}
       frameRef={frameRef}
       sections={canvasMenuSections(
-        { ...history, snap, gridVisible, connectionStyle },
+        { canUndo: history.canUndo, canRedo: history.canRedo, snap, gridVisible, connectionStyle },
         {
-          undo: () => travelHistory('undo'),
-          redo: () => travelHistory('redo'),
+          undo: history.undo,
+          redo: history.redo,
           setSnap,
           setGridVisible,
           setConnectionStyle,
         },
         menuActions(menuTarget),
+        mapBackgroundRows,
       )}
     />
     </ContextMenu>
   );
 };
 
-/** Embedded and fullscreen canvas with caller-owned data, preferences, and history. */
-export const LocationCanvasWorkspace = (props: LocationCanvasInputs & {
+/** A request from the editor to select a connection, or to drop the selection when that connection is gone. */
+export interface ConnectionReveal {
+  id: string;
+  gone?: boolean;
+}
+
+/** A request from the editor to make these locations the canvas's whole selection, as an undo restores it. */
+export interface SelectionReveal {
+  ids: readonly string[];
+}
+
+interface CanvasReveal {
+  revealConnection?: ConnectionReveal | null;
+  /** Called once the canvas has taken the request, so a later mount does not take it again. */
+  onConnectionRevealed?: () => void;
+  revealSelection?: SelectionReveal | null;
+  onSelectionRevealed?: () => void;
+  /** Every selection the canvas reports, so the editor knows the whole of it. */
+  onSelectionChange?: (ids: string[]) => void;
+}
+
+/** Embedded and fullscreen canvas with caller-owned data and preferences. It records into the world history
+ *  above it, so a caller with a world of its own provides one. */
+export const LocationCanvasWorkspace = (props: LocationCanvasInputs & CanvasReveal & {
   selectedId: string | null; onSelect: (id: string) => void;
 }) => {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const morph = useMorphFullscreen(hostRef);
   const selectedIdsRef = useRef<string[]>(props.selectedId ? [props.selectedId] : []);
   const lastSyncedRef = useRef<string | null>(props.selectedId);
-  const { historyRef } = props;
+  const { revealConnection, onConnectionRevealed } = props;
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!revealConnection) return;
+    const { id, gone } = revealConnection;
+    // A removed connection drops the selection only when it is the open one.
+    setSelectedConnectionId((open) => {
+      if (!gone) return id;
+      return open === id ? null : open;
+    });
+    onConnectionRevealed?.();
+  }, [revealConnection, onConnectionRevealed]);
 
   // Set while the canvas is moving between the pane and the window. The old one reports an empty selection as
   // it goes and the new one before it has drawn, and neither is the author letting go of anything.
   const inTransitRef = useRef(false);
   const wake = useCallback(() => { inTransitRef.current = false; }, []);
+  const onSelectionChange = useRef(props.onSelectionChange);
+  onSelectionChange.current = props.onSelectionChange;
   const reportSelection = useCallback((ids: string[]) => {
     if (inTransitRef.current && !ids.length) return;
     inTransitRef.current = false;
     selectedIdsRef.current = ids;
+    onSelectionChange.current?.(ids);
   }, []);
   // Every way in and out of the window goes through the same pair, so Escape and the dialog's own close carry
   // the selection exactly as the toggle does.
@@ -1425,8 +1689,7 @@ export const LocationCanvasWorkspace = (props: LocationCanvasInputs & {
   );
 
   const session: CanvasSession = {
-    selectedIdsRef, lastSyncedRef, reportSelection, wake, historyRef, selectedConnectionId,
-    setSelectedConnectionId,
+    selectedIdsRef, lastSyncedRef, reportSelection, wake, selectedConnectionId, setSelectedConnectionId,
   };
 
   // DEV dev-router: `#dev?…&subtab=canvas&fullscreen=1` lands on the big canvas in one call. Tree-shaken in prod.
@@ -1457,6 +1720,7 @@ export const LocationCanvasWorkspace = (props: LocationCanvasInputs & {
         <FullscreenShell
           morph={windowMorph}
           title="Locations Canvas"
+          worldWindow
           // The control that opened the window went with the canvas, so closing has to be told where to land.
           returnFocus={() => hostRef.current?.querySelector<HTMLElement>('.react-flow__controls button:last-child')}
         >
@@ -1469,14 +1733,12 @@ export const LocationCanvasWorkspace = (props: LocationCanvasInputs & {
   );
 };
 
-const LocationCanvas = (props: { selectedId: string | null; onSelect: (id: string) => void }) => {
+const LocationCanvas = (props: CanvasReveal & { selectedId: string | null; onSelect: (id: string) => void }) => {
   const data = useGameData();
   const snap = useCanvasSnap();
   const grid = useCanvasGridVisible();
   const connectionStyle = useCanvasConnectionStyle();
-  // The authored world's history survives switching between its canvas and list views.
-  return <LocationCanvasWorkspace {...props} data={data}
-    preferences={{ snap, grid, connectionStyle }} historyRef={canvasHistoryFor(data.worldId)} />;
+  return <LocationCanvasWorkspace {...props} data={data} preferences={{ snap, grid, connectionStyle }} />;
 };
 
 export default LocationCanvas;

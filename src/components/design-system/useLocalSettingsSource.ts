@@ -7,6 +7,7 @@ import {
   DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_ITALIC, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_THEME_COLOR,
 } from '@/contexts/settingsDefaults';
 import { HIDDEN_SETTING_DEFAULTS } from '@/lib/settingsAdvancedData';
+import { FLAT_HOURS_PER_TURN } from '@/lib/gameClock';
 import { DEFAULT_REASONING_SETTING, resolveReasoningSetting } from '@/lib/reasoningEffort';
 import { withFontTuning } from '@/lib/fontTuning';
 import { usePrefersReducedMotion } from '@/lib/usePrefersReducedMotion';
@@ -21,16 +22,16 @@ import {
 type LocalSettingsValues = Pick<SettingsSource,
   | 'theme' | 'themeColor' | 'fontFamily' | 'fontTunings'
   | 'bgmEnabled' | 'locationBackground' | 'backgroundOverlay' | 'sceneImageAuto'
-  | 'narrationLayout' | 'language' | 'paragraphLimit' | 'markdownOutput'
+  | 'narrationLayout' | 'language' | 'paragraphLimit' | 'markdownOutput' | 'stripLinksAndImages'
   | 'narrationFont' | 'narrationScale' | 'narrationLineHeight' | 'quoteColor' | 'quoteItalic'
   | 'showReasoning' | 'showSilentRequests'
   | 'revealFade' | 'revealMove' | 'revealMoveDirection' | 'revealMoveDistance'
   | 'revealScale' | 'revealScaleMode' | 'revealScaleDirection' | 'revealScaleAmount'
   | 'revealBlur' | 'revealBlurAmount' | 'revealEasing' | 'revealMinDuration' | 'revealMinStagger'
-  | 'choicesEnabled' | 'statUpdatesEnabled' | 'locationChangeEnabled' | 'locationAutoApply'
+  | 'choicesEnabled' | 'statUpdatesEnabled' | 'locationChangeEnabled' | 'locationAutoApply' | 'entityMovement'
   | 'thinkingMode' | 'limitActiveCharacters' | 'activeCharacterLimit' | 'nativeReasoning' | 'toolsEnabled'
   | 'memoryDigests' | 'semanticMemory' | 'semanticBandCap' | 'semanticRehydration'
-  | 'timeContext' | 'aiClock' | 'semanticLore' | 'describeCharacters' | 'characterDiaries' | 'semanticDiaries'
+  | 'timeContext' | 'aiClock' | 'fixedTurnHours' | 'semanticLore' | 'describeCharacters' | 'characterDiaries' | 'semanticDiaries'
   | 'continueChoiceMode' | 'concurrentTurnRequests' | 'imageAttachments'
 > & { quoteColorLight: string | null; quoteColorDark: string | null };
 
@@ -48,6 +49,7 @@ export const LOCAL_SETTINGS_DEFAULTS: LocalSettingsValues = {
   language: 'English',
   paragraphLimit: HIDDEN_SETTING_DEFAULTS.paragraphLimit,
   markdownOutput: HIDDEN_SETTING_DEFAULTS.markdownOutput,
+  stripLinksAndImages: HIDDEN_SETTING_DEFAULTS.stripLinksAndImages,
   narrationFont: DEFAULT_NARRATION_FONT,
   narrationScale: DEFAULT_NARRATION_SCALE,
   narrationLineHeight: DEFAULT_NARRATION_LINE_HEIGHT,
@@ -74,6 +76,7 @@ export const LOCAL_SETTINGS_DEFAULTS: LocalSettingsValues = {
   statUpdatesEnabled: true,
   locationChangeEnabled: true,
   locationAutoApply: false,
+  entityMovement: true,
   thinkingMode: 'off',
   limitActiveCharacters: HIDDEN_SETTING_DEFAULTS.limitActiveCharacters,
   activeCharacterLimit: HIDDEN_SETTING_DEFAULTS.activeCharacterLimit,
@@ -85,6 +88,7 @@ export const LOCAL_SETTINGS_DEFAULTS: LocalSettingsValues = {
   semanticRehydration: HIDDEN_SETTING_DEFAULTS.semanticRehydration,
   timeContext: HIDDEN_SETTING_DEFAULTS.timeContext,
   aiClock: HIDDEN_SETTING_DEFAULTS.aiClock,
+  fixedTurnHours: FLAT_HOURS_PER_TURN,
   semanticLore: HIDDEN_SETTING_DEFAULTS.semanticLore,
   describeCharacters: HIDDEN_SETTING_DEFAULTS.describeCharacters,
   characterDiaries: HIDDEN_SETTING_DEFAULTS.characterDiaries,
@@ -130,6 +134,7 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
       setLanguage: set('language'),
       setParagraphLimit: set('paragraphLimit'),
       setMarkdownOutput: set('markdownOutput'),
+      setStripLinksAndImages: set('stripLinksAndImages'),
       setNarrationFont: set('narrationFont'),
       setNarrationScale: set('narrationScale'),
       setNarrationLineHeight: set('narrationLineHeight'),
@@ -156,6 +161,7 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
       setStatUpdatesEnabled: set('statUpdatesEnabled'),
       setLocationChangeEnabled: set('locationChangeEnabled'),
       setLocationAutoApply: set('locationAutoApply'),
+      setEntityMovement: set('entityMovement'),
       setThinkingMode: set('thinkingMode'),
       setLimitActiveCharacters: set('limitActiveCharacters'),
       setActiveCharacterLimit: set('activeCharacterLimit'),
@@ -167,6 +173,7 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
       setSemanticRehydration: set('semanticRehydration'),
       setTimeContext: set('timeContext'),
       setAiClock: set('aiClock'),
+      setFixedTurnHours: set('fixedTurnHours'),
       setSemanticLore: set('semanticLore'),
       setDescribeCharacters: set('describeCharacters'),
       setCharacterDiaries: set('characterDiaries'),
@@ -208,6 +215,8 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
     prefersReducedMotion,
     reasoningEffort: resolveReasoningSetting(values.nativeReasoning),
     reasoningCapability: null,
+    capabilityModelName: null,
+    recheckCapability: async () => {},
     imageGenDisabled: false,
   };
 }

@@ -56,7 +56,7 @@ export interface VrmCustomization {
   /** Pass to `VRMViewer.onCapabilities` so the controls learn what the loaded model supports. */
   setCaps: (caps: VRMCapabilities) => void;
   /** Attach to the `VRMViewer` — the extras color revert reads its live material colors. */
-  vrmViewerRef: React.RefObject<VRMViewerHandle>;
+  vrmViewerRef: React.RefObject<VRMViewerHandle | null>;
   /** Spread onto `VRMViewer`: the morph/color/hair inputs the sliders drive, plus the animate toggle. */
   viewerProps: {
     bodyMorphValues: Record<string, number>;
@@ -72,7 +72,7 @@ export interface VrmCustomization {
   /** The rendered slider/picker controls, gated to the model's detected capabilities. */
   controls: ReactNode;
   /** The composed choices, for a caller that finalizes a character (CharacterCustomization). */
-  characterData: Omit<CharacterData, 'playerModelId'>;
+  characterData: Omit<CharacterData, 'chosenVrm'>;
 }
 
 /**
@@ -166,7 +166,7 @@ export function useVrmCustomization(includeAnimateToggle = true): VrmCustomizati
     animate,
   };
 
-  const characterData: Omit<CharacterData, 'playerModelId'> = {
+  const characterData: Omit<CharacterData, 'chosenVrm'> = {
     bodyMorphs,
     hairColor: colorTouched.hair ? hairColor : undefined,
     eyeColor: colorTouched.eye ? eyeColor : undefined,

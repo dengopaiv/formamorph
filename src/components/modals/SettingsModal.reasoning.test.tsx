@@ -11,6 +11,7 @@ import { DEFAULT_ENDPOINT, DEFAULT_MODEL_NAME } from '@/contexts/settingsDefault
 import type { ReasoningCapability } from '@/lib/reasoningEffort';
 import { reasoningIdentityAnswer } from '@/lib/reasoningIdentity';
 import { REASONING_NOTES } from './settingsCopy';
+import { DEFAULT_TEXT_ENDPOINT_VALUES, textEndpointPresetCodec } from '@/lib/textEndpointPresets';
 
 /**
  * Which strength a prompt's Options tab offers. The record on the routed target decides it: a target that
@@ -36,16 +37,16 @@ const seedCapability = (record: ReasoningCapability) =>
 const levels = ['none', 'low', 'medium', 'high'] as const;
 /** A reasoning model on LM Studio: its native list answered the reasons and budget questions. */
 const takesBudget: ReasoningCapability = {
-  reasons: true, levels: [...levels], budget: true, dialect: 'lmstudio', offAllowed: null, tools: null,
+  reasons: true, levels: [...levels], budget: true, dialect: 'lmstudio', offAllowed: null, tools: null, structuredOutput: null,
   sources: { reasons: 'native', levels: 'probe', budget: 'native' },
 };
 /** A plain OpenAI-compatible endpoint: the probe narrowed the levels and nothing answered the budget. */
 const effortOnly: ReasoningCapability = {
-  reasons: null, levels: [...levels], budget: null, dialect: 'unknown', offAllowed: null, tools: null, sources: { levels: 'probe' },
+  reasons: null, levels: [...levels], budget: null, dialect: 'unknown', offAllowed: null, tools: null, structuredOutput: null, sources: { levels: 'probe' },
 };
 /** A model whose endpoint refuses to switch reasoning off, such as Kimi k3. */
 const alwaysReasons: ReasoningCapability = {
-  reasons: true, levels: ['low', 'high', 'max'], budget: null, dialect: 'moonshot-k3', offAllowed: null, tools: null,
+  reasons: true, levels: ['low', 'high', 'max'], budget: null, dialect: 'moonshot-k3', offAllowed: null, tools: null, structuredOutput: null,
   sources: { reasons: 'native', levels: 'native', dialect: 'native' },
 };
 
@@ -94,6 +95,35 @@ describe('the prompt Options strength follows the capability record', () => {
   });
 });
 
+describe('the Thinking Room readout beside the strength', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('reads the room of the strength where no budget slider shows, and follows a change of strength', () => {
+    seedCapability({ ...takesBudget, dialect: 'openai' });
+    openNarrationOptions();
+    makeEditable();
+    // Narration ships on at Global, which follows Model Default, so the room is Medium's.
+    expect(screen.getByText('Model Default · 2,048 tok')).toBeTruthy();
+    const strength = screen.getAllByRole('combobox').find((c) => c.textContent?.includes('Global'))!;
+    // Radix opens a Select from the keyboard; a click needs pointer capture, which jsdom has not got.
+    fireEvent.keyDown(strength, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('option', { name: 'High' }));
+    expect(screen.getByText('High · 4,096 tok')).toBeTruthy();
+    expect(screen.queryByText('Model Default · 2,048 tok')).toBeNull();
+  });
+
+  it('keeps the slider and shows no readout where Max Output gives the budget a base', () => {
+    localStorage.setItem('FORMAMORPH_textEndpointPresets', textEndpointPresetCodec.serialize({
+      activeId: 'mine',
+      presets: [{ id: 'mine', name: 'Mine', values: { ...DEFAULT_TEXT_ENDPOINT_VALUES, maxOutputOverride: { enabled: true, value: 800 } } }],
+    }));
+    seedCapability(takesBudget);
+    openNarrationOptions();
+    expect(screen.getByRole('slider', { name: 'Reasoning Budget' })).toBeTruthy();
+    expect(screen.queryByText(/^(Model Default|Low|Medium|High) · [\d,]+ tok$/)).toBeNull();
+  });
+});
+
 describe('a model that always reasons', () => {
   beforeEach(() => localStorage.clear());
 
@@ -136,7 +166,7 @@ describe('an OpenRouter model', () => {
   beforeEach(() => localStorage.clear());
 
   const openRouter = (over: Partial<ReasoningCapability>): ReasoningCapability => ({
-    reasons: true, levels: [...levels], budget: false, dialect: 'openrouter', offAllowed: true, tools: null,
+    reasons: true, levels: [...levels], budget: false, dialect: 'openrouter', offAllowed: true, tools: null, structuredOutput: null,
     sources: { reasons: 'native', levels: 'native', budget: 'native', dialect: 'native', offAllowed: 'native' },
     ...over,
   });
@@ -206,11 +236,11 @@ describe('a vLLM server before and after a reply proves it separates its reasoni
 
   /** What the model list alone leaves behind: the dialect, and no answer to anything else. */
   const unproven: ReasoningCapability = {
-    reasons: null, levels: null, budget: null, dialect: 'vllm', offAllowed: null, tools: null, sources: { dialect: 'native' },
+    reasons: null, levels: null, budget: null, dialect: 'vllm', offAllowed: null, tools: null, structuredOutput: null, sources: { dialect: 'native' },
   };
   /** What one reply carrying a reasoning field adds: the budget answered, and the safe levels to pick from. */
   const proven: ReasoningCapability = {
-    reasons: true, levels: [...levels], budget: true, dialect: 'vllm', offAllowed: null, tools: null,
+    reasons: true, levels: [...levels], budget: true, dialect: 'vllm', offAllowed: null, tools: null, structuredOutput: null,
     sources: { dialect: 'native', reasons: 'observed', levels: 'observed', budget: 'observed' },
   };
 
@@ -241,7 +271,7 @@ describe('an Anthropic or Google model, named from the endpoint host', () => {
 
   /** What `reasoningIdentityAnswer` proves, as `identitySource` stamps it onto the record. */
   const identified = (over: Partial<ReasoningCapability>): ReasoningCapability => ({
-    reasons: true, levels: [], budget: false, dialect: 'anthropic-adaptive', offAllowed: null, tools: null,
+    reasons: true, levels: [], budget: false, dialect: 'anthropic-adaptive', offAllowed: null, tools: null, structuredOutput: null,
     sources: { reasons: 'identity', budget: 'identity', dialect: 'identity', levels: 'identity' },
     ...over,
   });
@@ -330,7 +360,7 @@ describe('the Native Reasoning controls on a Kimi model', () => {
     const answer = reasoningIdentityAnswer('https://api.moonshot.ai/v1/chat/completions', model)!;
     return {
       ...answer,
-      offAllowed: answer.offAllowed ?? null, tools: null,
+      offAllowed: answer.offAllowed ?? null, tools: null, structuredOutput: null,
       sources: { reasons: 'identity', budget: 'identity', dialect: 'identity', levels: 'identity' },
       ...over,
     };

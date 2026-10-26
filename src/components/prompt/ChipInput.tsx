@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import {
   $getRoot, $createTextNode, $selectAll, LineBreakNode,
   KEY_ENTER_COMMAND, KEY_ESCAPE_COMMAND, COMMAND_PRIORITY_LOW,
@@ -6,17 +6,18 @@ import {
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
-import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import { ChipVocabularyContext, type ChipVocabulary } from '@/lib/chipVocabulary';
 import { cn } from '@/lib/utils';
 import { VariableNode, PromptDragContext } from './VariableNode';
-import { buildEditorState, createEchoLedger, serializeRoot } from './promptFieldState';
+import { buildEditorState } from './promptFieldState';
 import { ChipTypeaheadPlugin } from './ChipTypeahead';
 import { ChipInsertTargetPlugin } from './ChipInsertTarget';
 import { ChipDragPlugin } from './ChipDrag';
 import { RefusedChipPastePlugin } from './PromptTokenPastePlugin';
+import { FieldHistoryPlugin } from './fieldHistory';
+import { ValueSyncPlugin, EditablePlugin } from './ValueSyncPlugin';
 
 /**
  * A one-line chip editor shaped like an ordinary text input — for name fields, where the full prompt editor's
@@ -38,36 +39,6 @@ const INPUT_CLASS =
   '[&>p]:min-w-full ' +
   'px-3 py-2 text-label outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ' +
   'disabled:cursor-not-allowed disabled:opacity-50';
-
-/** Two-way sync between the controlled string and the editor state (the single-line twin of PromptField's). */
-function ValueSyncPlugin({ value, onChange, parse }: {
-  value: string;
-  onChange: (v: string) => void;
-  parse: ChipVocabulary['parse'];
-}) {
-  const [editor] = useLexicalComposerContext();
-  const [echoes] = useState(() => createEchoLedger(value));
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  const parseRef = useRef(parse);
-  parseRef.current = parse;
-
-  useEffect(() => {
-    if (echoes.receive(value)) return;
-    editor.update(() => buildEditorState(value, parseRef.current));
-  }, [value, editor, echoes]);
-
-  useEffect(
-    () => editor.registerUpdateListener(({ editorState }) => {
-      editorState.read(() => {
-        const next = serializeRoot();
-        if (echoes.send(next)) onChangeRef.current(next);
-      });
-    }),
-    [editor, echoes],
-  );
-  return null;
-}
 
 /** Keeps the field to one line: Enter never breaks the line, and any line break that arrives by paste or
  *  by the external value becomes a space. A host that wants Enter to mean something (a tag input, where it
@@ -136,13 +107,6 @@ function CancelPlugin({ onCancel }: { onCancel: () => void }) {
   return null;
 }
 
-/** Reflects `readOnly` into editability (initialConfig only applies it at mount). */
-function EditablePlugin({ readOnly }: { readOnly: boolean }) {
-  const [editor] = useLexicalComposerContext();
-  useEffect(() => editor.setEditable(!readOnly), [editor, readOnly]);
-  return null;
-}
-
 /** Puts the caret at the end when the field is clicked in its empty right-hand space, so clicking the box
  *  anywhere behaves like clicking an input rather than doing nothing. */
 function useFocusEnd() {
@@ -153,9 +117,28 @@ function useFocusEnd() {
   };
 }
 
-function Surface({ placeholder, ariaLabel, className, multiline }: {
+/** What a caller can do to the field from outside it, as an input's ref allows. */
+export interface ChipFocusHandle {
+  focus: () => void;
+}
+
+/** Hands `handle` a focus call that focuses at once, as an input's does, with the caret at the end. */
+function FocusHandlePlugin({ handle }: { handle: Ref<ChipFocusHandle> }) {
+  const [editor] = useLexicalComposerContext();
+  const focusEnd = useFocusEnd();
+  useImperativeHandle(handle, () => ({
+    focus: () => {
+      editor.getRootElement()?.focus({ preventScroll: true });
+      focusEnd();
+    },
+  }));
+  return null;
+}
+
+function Surface({ placeholder, ariaLabel, ariaDescribedBy, className, multiline }: {
   placeholder?: string;
   ariaLabel?: string;
+  ariaDescribedBy?: string;
   className?: string;
   multiline?: boolean;
 }) {
@@ -207,6 +190,7 @@ function Surface({ placeholder, ariaLabel, className, multiline }: {
             ref={editableRef}
             className={cn(INPUT_CLASS, className)}
             aria-label={ariaLabel}
+            aria-describedby={ariaDescribedBy}
             style={multiline && hintFloor ? { minHeight: hintFloor } : undefined}
           />
         )}
@@ -230,7 +214,7 @@ function Surface({ placeholder, ariaLabel, className, multiline }: {
   );
 }
 
-const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, className, readOnly = false, trigger = '{', onSubmit, onFocus, onBlur, multiline = false, children, autoFocus = false, onCancel, ownerId }: {
+const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, className, readOnly = false, trigger = '{', onSubmit, onFocus, onBlur, multiline = false, children, autoFocus = false, onCancel, ownerId, focusRef, ariaDescribedBy }: {
   value: string;
   onChange: (v: string) => void;
   vocabulary: ChipVocabulary;
@@ -240,6 +224,8 @@ const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, classN
   placeholder?: string;
   /** Names the editor for a screen reader — Lexical renders a `div`, so `<label htmlFor>` cannot reach it. */
   ariaLabel?: string;
+  /** The id of the element that describes the editor. */
+  ariaDescribedBy?: string;
   className?: string;
   readOnly?: boolean;
   /** Character that opens the insert menu; pass `undefined` to leave typing untouched. */
@@ -258,6 +244,8 @@ const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, classN
   autoFocus?: boolean;
   /** Escape pressed with no menu open — abandon the edit. */
   onCancel?: () => void;
+  /** Receives the field's focus call. */
+  focusRef?: Ref<ChipFocusHandle>;
 }) => {
   const dragKey = useRef<string | null>(null);
   const initialConfig = useMemo(
@@ -276,14 +264,15 @@ const ChipInput = ({ value, onChange, vocabulary, placeholder, ariaLabel, classN
     <LexicalComposer initialConfig={initialConfig}>
       <ChipVocabularyContext.Provider value={vocabulary}>
         <PromptDragContext.Provider value={dragKey}>
-          <Surface placeholder={placeholder} ariaLabel={ariaLabel} className={className} multiline={multiline} />
-          <HistoryPlugin />
+          <Surface placeholder={placeholder} ariaLabel={ariaLabel} ariaDescribedBy={ariaDescribedBy} className={className} multiline={multiline} />
+          <FieldHistoryPlugin />
           <ValueSyncPlugin value={value} onChange={onChange} parse={vocabulary.parse} />
           {vocabulary.refuses && <RefusedChipPastePlugin vocab={vocabulary} />}
           {!multiline && <SingleLinePlugin onSubmit={onSubmit} />}
           {(onFocus || onBlur) && <FocusPlugin onFocus={onFocus} onBlur={onBlur} />}
           {autoFocus && <AutoFocusPlugin />}
           {onCancel && <CancelPlugin onCancel={onCancel} />}
+          {focusRef && <FocusHandlePlugin handle={focusRef} />}
           <EditablePlugin readOnly={readOnly} />
           <ChipInsertTargetPlugin vocab={vocabulary} ownerId={ownerId} />
           <ChipDragPlugin dragKey={dragKey} vocab={readOnly ? undefined : vocabulary} />

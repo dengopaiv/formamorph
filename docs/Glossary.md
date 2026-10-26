@@ -58,14 +58,14 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | Term | Meaning |
 |---|---|
 | [Entity](World-Editor-Entities) | Anything in a world the narrator can name: a person, a creature, a plant or an object |
-| [Story-Invented Entity](Entities#entities-the-story-invents) | An entity the story names during play that no author wrote. It joins the scene for that playthrough. |
+| [Story-Invented Entity](Entities#entities-the-story-invents) | An entity the story names during the game that no author wrote. It joins the scene for that playthrough. |
 | [Memory](Memory) | What the story keeps from older turns. Recent turns go to the AI word for word; older ones go as short memories. |
 | [Memory Summaries](Memory#memory-settings) | The setting that condenses older turns into memories |
 | [Let Go](Memory#why-memory-exists) | A memory the story judged not worth sending. It stays in the list, struck through. |
 | [Pinned Memory](Memory#how-to-pin-or-forget-a-memory) | A memory you made the story keep. **Forget This Memory** does the opposite. |
 | [Semantic Memory](Memory#memory-settings) | Sends the memories most related to your action, not only the newest |
 | [Scene Recall](Memory#memory-settings) | Sends a past scene word for word when your action goes back to it |
-| [Measured Clock](Memory#when-each-memory-happened) | Lets each turn's events set how much story time passes. Without it, each turn is one hour. |
+| [Measured Clock](Memory#when-each-memory-happened) | Lets each turn's events set how much story time passes. Without it, each turn takes the **Time Per Turn** setting, one hour by default. |
 | [Character Diaries](Memory#memory-settings) | First-person diary entries that each entity present writes. They shape its motivation. |
 
 ## 📚 Your Library and Saves
@@ -81,9 +81,10 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | [Local Replacement](LinkedContent#the-three-link-states) | A linked copy of another author's item that you edited. No update overwrites it. |
 | [Entity Card](Library#how-to-export-an-entity-or-a-dictionary) | An exported entity: a `.webp` image of its portrait with the entity's data inside |
 | [Save](Saves-and-Backup) | One game's progress, with every turn, your notes and your memories |
-| [Autosave](Saves-and-Backup#autosave) | The save slot that each world gets, written after every turn |
+| [Autosave](Saves-and-Backup#autosave) | The saves each world keeps, written after every turn: one by default, more with **Autosaves Kept** |
 | [Backup](Saves-and-Backup#the-backup--restore-dialog) | One file with your worlds, saves, library entities and library dictionaries |
-| [Avatar](Avatars) | A 3D model of you, the player, from a VRM file |
+| [Avatar](Avatars) | A 3D model from a VRM file, chosen for an entity |
+| [User's Default](Avatars#how-to-set-your-default-avatar) | The Avatar you mark as your default. An entity set to it shows your default, or the bundled Avatar when you have none. |
 | [Permissive License](Avatars#the-permissive-license) | A VRM license that allows every use the community needs. An Avatar needs it to publish. |
 | [Profile Image](Avatars#avatars-3d-models-and-profile-images) | The image on your Community Creations account. It is not an Avatar. |
 
@@ -116,6 +117,7 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | [Prompt](Prompts#the-prompts) | The text the app sends to the AI for one request, such as **Narration** or **Choices** |
 | [Prompt Preset](Prompts#prompt-presets) | One full set of prompts with their options |
 | [Chip](World-Editor-Placeholders) | A box in text that the app fills with a value. In world text, a chip places a placeholder. In a [prompt](Prompts#the-chip-editor), it places game data, such as your stats. |
+| [Chip Options](Prompts#chip-options) | The dialog a placed chip opens. A prompt chip shows **What the AI Reads** beside its rows. The **Entities** and **Persona** chips add **Only With**, **Include** and **Stat Detail**. |
 | [Request Anatomy](Prompts#anatomy) | A labeled map of every message in one request, which marks the text you typed |
 | [Custom Prompts](Prompts#world-prompts-and-the-diff-viewer) | A world's own narration, choices or stats prompt, which replaces yours while you play it |
 | [Tool](Tools) | A function the AI can call during a request to get information it does not have. A Tool only reads. Formaquestion has its own list of Tools, which you switch on and off on this device. |
@@ -130,7 +132,7 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | [World Editor](WorldEditor) | Where you build and change a world |
 | [Simple and Advanced](WorldEditor#editor-modes) | The two modes of the World Editor and of Settings. Simple hides fields; it never removes them. |
 | [Authoring Tour](WorldEditor#the-authoring-tour) | A guided run in which you build a new world one field at a time |
-| [In Play](WorldEditor#the-authoring-tour) | The Authoring Tour's pane. It shows where a field appears in play and what each prompt reads from it. |
+| [In Game](WorldEditor#the-authoring-tour) | The Authoring Tour's pane. It shows where a field appears in the game and what each prompt reads from it. |
 | [AI-Facing, Player-Facing](World-Editor-Entities#descriptions-and-summaries) | The AI reads only the AI-Facing fields. The player reads only the Player-Facing ones. |
 | [Location](World-Editor-Locations) | A place in the story. The player is always in one location. |
 | [Sub-Location](World-Editor-Locations#nesting-is-the-ais-map-not-the-players) | A location nested inside another. Nesting decides where the story can move the player. |
@@ -139,17 +141,30 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | [Locations Canvas](World-Editor-Locations#list-and-canvas) | The visual view of the **Locations** tab, with boxes for locations and arrows for Connections |
 | [Auto Arrange](World-Editor-Locations#list-and-canvas) | The canvas command that lays out boxes for you. Nothing on the canvas moves without it or you. |
 | [Map](How-to-Play#the-change-location-dialog) | The read-only canvas the player sees in game, on the **Map** tab |
-| [Stat](World-Editor-Stats) | A number that describes the player, between a **Min** and a **Max** |
+| [Stat](World-Editor-Stats) | A number the game tracks, between a **Min** and a **Max**. It is global or an entity's own. |
 | [Stat Descriptor](World-Editor-Stats#stat-descriptors) | A word the AI gets for a band of a stat's values |
 | [Regen](World-Editor-Stats#the-fields) | The amount a stat changes for each hour of story time |
-| [Stat Code](StatCodeGuide) | JavaScript that a stat runs each turn, in its **Before the AI** and **After the AI** boxes |
-| [Trait](World-Editor-Traits) | A fact about the player or an entity, such as a class or a fear |
-| [Acquired](StatCodeGuide#traits) | A trait the player has. A trait switched off is still acquired. |
-| [Trait Modes](World-Editor-Traits#mode) | **Optional**: the player chooses. **Always On**: active while its requirements hold. **Hidden**: Always On, and the player never sees it. |
-| [Curse](World-Editor-Traits#curses) | An Always On trait that requires the cursed item |
+| [Script](ScriptsGuide) | One box of JavaScript with a timing, on a stat, a trait or the world. It was called stat code. |
+| [Timing](ScriptsGuide#the-five-timings) | When a script runs. Pick it in the script's **Timing** menu. |
+| [Before the AI](ScriptsGuide#the-five-timings) | The timing that runs at the start of a turn, before the prompt is built |
+| [After the AI](ScriptsGuide#the-five-timings) | The timing that runs after the AI's stat changes and Regen apply |
+| [During AI Output](ScriptsGuide#during-ai-output) | The timing that runs once for each completed narration sentence, and can rewrite it |
+| [At Game Start](ScriptsGuide#at-game-start) | The timing that runs once on the opening turn of a new game |
+| [When a Trait Switches](ScriptsGuide#when-a-trait-switches) | The timing that runs each time a trait turns on or off in play |
+| [Trait](World-Editor-Traits) | A fact about the player or an entity, such as a class or a fear. It is global or an entity's own. |
+| [Acquired](ScriptsGuide#traits) | A trait the player has. A trait switched off is still acquired. |
+| [Trait Modes](World-Editor-Traits#mode) | **Optional**: the player chooses. **Automatic**: active while its requirements hold. **Hidden**: Automatic, and the player never sees it. |
+| [Curse](World-Editor-Traits#curses) | An Automatic trait that requires the cursed item |
 | [Pick Count](World-Editor-Traits#pick-count) | How many traits the player must and can pick from a group: **Any**, **Exactly One**, **Up to One** or **Custom** |
-| [Requirement](World-Editor-Traits#requirements) | A trait, a group or a persona that a trait needs before it is available |
-| [Bearer](World-Editor-Traits#whose-trait-counts) | The entity that has a trait. You are the bearer **You**. |
+| [Requirement](World-Editor-Traits#requirements) | What a trait needs before it is available: a list of rows. The trait opens when any one row holds. |
+| [Requirement Row](World-Editor-Traits#rows) | One way to open a trait. It holds when every Condition in it holds. |
+| [Condition](World-Editor-Traits#conditions) | One check in a row: a trait, any trait in a group, a persona, or a stat. **Not** makes it hold while the target is off. |
+| [Stat Condition](World-Editor-Traits#stat-conditions) | A Condition that compares a stat to a number, raw or as a percent of the stat's range. *Rage >= 80* |
+| [Visibility Rule](World-Editor-Entities#visibility-rules) | Rows on a gallery image that decide when it shows in play. With no rows, it always shows. |
+| [Owner](World-Editor-Traits#whose-trait-counts) | The entity or dictionary that has a trait, a stat or a placeholder, as its own or through a link or copy. The played persona is the owner **Persona**. An item with no owner is global. |
+| [Global Stat](World-Editor-Stats#how-the-ai-tracks-stat-changes) | A stat on the **Stats** tab, outside every entity. No one owns it. The AI reads it under **Global Stats**. |
+| [Global Trait](World-Editor-Traits#whose-trait-counts) | A trait outside every entity, such as one the player picks at the start. No one owns it. The AI reads the picked ones under **Global Traits**. |
+| [Persona Stat](Persona-Authoring#persona-stats) | A stat of the entity the player plays. The AI reads it in the **Persona** block, under the `Player Character` key. |
 | [Blueprint](World-Editor-Traits#blueprints) | A trait or [placeholder](World-Editor-Placeholders#blueprints) in the **Blueprints** group. It exists to be linked or copied. |
 | [Link](World-Editor-Traits#links) | Gives a Blueprint trait to an entity. It reads the Blueprint live until you change a field. |
 | [Original](World-Editor-Traits#links) | The Blueprint trait or group that a Link points at |
@@ -162,12 +177,14 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | [World or Unique](World-Editor-Placeholders#world-or-unique) | Every World chip of a placeholder shows the same roll. Each Unique chip rolls on its own. |
 | [Draw Weight](World-Editor-Placeholders#draw-weight) | How often a value comes up, compared with the others. Weight 0 never draws it. |
 | [Pin](World-Editor-Placeholders#pins) | Holds a placeholder at one value while its source is active: a stat band, a location, a trait or a value |
-| [Player Name, Character Name](World-Editor-Placeholders#built-in-chips) | The two built-in chips. Type `{{user}}` for your name, or `{{char}}` for the entity that owns the text. |
+| [Persona Name, Character Name](World-Editor-Placeholders#built-in-chips) | The two built-in chips. Type `{{user}}` for your name, or `{{char}}` for the entity that owns the text. |
 | [Dictionary](World-Editor-Dictionary) | A world's lorebook. Its entries reach the AI only when a keyword matches. |
 | [Book](World-Editor-Dictionary#books) | A group of dictionary entries. A library dictionary is one book. |
 | [Entry](World-Editor-Dictionary#the-entry-panel) | One piece of lore: **Trigger Keywords** and the **Value** the AI gets |
 | [Scan Depth](World-Editor-Dictionary#matching) | How many earlier messages the game scans for an entry's keywords |
 | [Semantic Lore](World-Editor-Dictionary#semantic-lore) | Activates dictionary entries by meaning, as well as by keyword |
+| [Step](WorldEditor#what-makes-one-step) | One edit in the World Editor that **Undo** takes back as a whole: a run of typing, a drag or a multi-part change |
+| [History Popover](WorldEditor#the-history-list) | The app-bar control that opens the list of Steps, from **World opened** to the newest. Select a row to move the world to that point. |
 | [Test Bench](Test-Bench) | The World Editor's place to check a world without the AI |
 | [Bench Popover](Test-Bench#the-bench-popover) | The first view of the Test Bench, with the World Doctor's list only |
 | [Instrument](Test-Bench#the-full-panel) | One tab of the Test Bench. Each one answers one question about your world. |

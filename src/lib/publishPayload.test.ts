@@ -105,6 +105,11 @@ describe('entityPublishPayload', () => {
     expect(entityPublishPayload(entity({ image: 'data:portrait' })).thumbnail).toBe('data:portrait');
   });
 
+  it('sends slot 0 as the listing art, its Visibility rule ignored', () => {
+    const images = [{ data: 'data:slot0', requires: [{ all: [{ kind: 'trait' as const, id: 'knight' }] }] }, { data: 'data:slot1' }];
+    expect(entityPublishPayload(entity({ images })).thumbnail).toBe('data:slot0');
+  });
+
   it('omits the thumbnail when there is no portrait, so the server supplies stand-in art', () => {
     expect(entityPublishPayload(entity()).thumbnail).toBeUndefined();
   });
@@ -227,12 +232,12 @@ describe('linked images survive publishing', () => {
   it('leaves a world’s linked entity and location images alone in the published content', () => {
     const payload = worldPublishPayload(world({}, {
       entities: [{ id: 'e1', name: 'Mara', images: ['https://files.example/a.png'] }],
-      locations: [{ id: 'l1', name: 'Fen', backgroundImage: 'https://files.example/bg.png' }],
+      locations: [{ id: 'l1', name: 'Fen', images: [{ data: 'https://files.example/bg.png', requires: [{ all: [{ kind: 'trait', id: 't' }] }] }] }],
     }));
     const content = payload.contentData as World;
 
     expect(content.entities[0].images).toEqual(['https://files.example/a.png']);
-    expect(content.locations[0].backgroundImage).toBe('https://files.example/bg.png');
+    expect(content.locations[0].images).toEqual([{ data: 'https://files.example/bg.png', requires: [{ all: [{ kind: 'trait', id: 't' }] }] }]);
   });
 });
 

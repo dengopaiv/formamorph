@@ -1,4 +1,6 @@
-import type { DictionaryEntry, Entity, GameLocation, StatDescriptor, Trait, TraitGroup } from '@/types';
+import type {
+  Connection, ConnectionLeg, DictionaryEntry, Entity, GameLocation, StatDescriptor, StatGroup, Trait, TraitGroup,
+} from '@/types';
 import { hasPlaceholders } from './placeholders';
 import { mapPreservingIdentity } from './utils';
 
@@ -39,16 +41,23 @@ export function resolveEntityNames(entities: Entity[], resolve: (text: string, e
 /** Resolves one entity's own text with that entity as the Character Name. */
 export type ResolveEntityText = (entity: Entity, text: string) => string;
 
-/** Each entity's descriptions and summary, resolved with that entity as their owner. Names stay as they are. */
+/** Each entity's descriptions, summary, pronouns and relationship labels, resolved with that entity as their
+ *  owner. Names stay as they are. */
 export function resolveEntityTexts(entities: readonly Entity[], resolve: ResolveEntityText): Entity[] {
   return mapPreservingIdentity(entities, (e) => {
     const own: ResolveText = (text) => resolve(e, text);
     const playerDescription = one(e.playerDescription, own);
     const aiDescription = one(e.aiDescription, own);
     const aiSummary = one(e.aiSummary, own);
+    const pronouns = one(e.pronouns, own);
+    const relationships = e.relationships && mapPreservingIdentity(e.relationships, (r) => {
+      const label = one(r.label, own) ?? r.label;
+      return label === r.label ? r : { ...r, label };
+    });
     return playerDescription === e.playerDescription && aiDescription === e.aiDescription && aiSummary === e.aiSummary
+      && pronouns === e.pronouns && relationships === e.relationships
       ? e
-      : { ...e, playerDescription, aiDescription, aiSummary };
+      : { ...e, playerDescription, aiDescription, aiSummary, pronouns, ...(relationships ? { relationships } : {}) };
   });
 }
 
@@ -78,10 +87,27 @@ export function resolveOwnedTraitTexts(
   });
 }
 
+/** Each stat group's name and AI description under `resolve`. */
+export const resolveStatGroupTexts = (groups: StatGroup[], resolve: ResolveText): StatGroup[] =>
+  resolveAiTexts(groups, () => resolve) ?? [];
+
 export function resolveLocationNames(locations: GameLocation[], resolve: ResolveText): GameLocation[] {
   return mapPreservingIdentity(locations, (l) => {
     const name = one(l.name, resolve);
     return name === l.name ? l : { ...l, name: name ?? '' };
+  });
+}
+
+/** Resolve each leg's Travel Hint. A connection has no owner, so `resolve` carries world-level pins. */
+export function resolveConnectionHints(connections: Connection[], resolve: ResolveText): Connection[] {
+  const leg = (l: ConnectionLeg | undefined): ConnectionLeg | undefined => {
+    const hint = one(l?.hint, resolve);
+    return !l || hint === l.hint ? l : { ...l, hint };
+  };
+  return mapPreservingIdentity(connections, (c) => {
+    const aToB = leg(c.aToB);
+    const bToA = leg(c.bToA);
+    return aToB === c.aToB && bToA === c.bToA ? c : { ...c, ...(aToB ? { aToB } : {}), ...(bToA ? { bToA } : {}) };
   });
 }
 

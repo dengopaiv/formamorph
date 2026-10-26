@@ -19,6 +19,7 @@ import {
 import { blankDictionaryEntry } from '@/lib/dictionaryTree';
 import { parseKeywords } from '@/lib/dictionaryUtils';
 import { entityImages } from '@/lib/entityImages';
+import { locationImages } from '@/lib/locationImages';
 import { withEntityLocations } from '@/lib/entityPresence';
 import { createConnection, legFrom, withHint } from '@/lib/connectionEditing';
 import { connectionLegs, isTwoWay, travelEnds } from '@/lib/locationGraph';
@@ -101,11 +102,11 @@ export interface TourStep {
   replay?: (api: TourEditApi, world: TourWorld, items: TourItems) => void;
   /** Runs each time the step becomes current. */
   onReach?: () => void;
-  /** What In Play shows for this step. */
+  /** What In Game shows for this step. */
   inPlay: InPlaySpec;
 }
 
-/** The In Play slice of a step that points at no field, such as an ending step. */
+/** The In Game slice of a step that points at no field, such as an ending step. */
 export const NO_IN_PLAY: InPlaySpec = { sees: 'none', readers: [] };
 
 /** Whether the author chose `name`: the untouched name the editor gave does not count. */
@@ -229,7 +230,7 @@ export function tourConnection(world: TourWorld, items: TourItems): Connection |
     || (c.a === secondLocation && c.b === location));
 }
 
-/** Where the tour Connection's in-play lens stands: the start of its one leg when one-way, else the first
+/** Where the tour Connection’s in-game lens stands: the start of its one leg when one-way, else the first
  *  tour location. */
 export function tourConnectionStart(world: TourWorld, items: TourItems): string | null {
   const connection = tourConnection(world, items);
@@ -419,9 +420,9 @@ const LOCATION_STEPS: readonly TourStep[] = [
     panelTab: 'media',
     title: 'Background Image',
     body: 'Add a picture of the place. Players see it behind the story while they’re here, and the AI never reads it.',
-    isComplete: (world, items) => !!tourLocation(world, items, 'location')?.backgroundImage,
+    isComplete: (world, items) => locationImages(tourLocation(world, items, 'location')).length > 0,
     useExample: async (api, world, items) => patchLocation(api, world, items, 'location', {
-      backgroundImage: await loadTourImage('tidewell'),
+      images: [{ data: await loadTourImage('tidewell') }],
     }),
     inPlay: { sees: 'locationTab', readers: [{ prompt: 'Narration Prompt', reads: 'location' }] },
   },
@@ -457,7 +458,7 @@ const LOCATION_STEPS: readonly TourStep[] = [
       name: SALT_LANTERN.name,
       playerDescription: SALT_LANTERN.playerDescription,
       aiDescription: SALT_LANTERN.aiDescription,
-      backgroundImage: await loadTourImage('saltLantern'),
+      images: [{ data: await loadTourImage('saltLantern') }],
     }),
     inPlay: {
       sees: 'locationTab',
@@ -501,7 +502,7 @@ const ENTITY_STEPS: readonly TourStep[] = [
     tab: 'entities',
     item: 'entity',
     title: 'Add an Entity',
-    body: 'Press the + button to add an entity for players to meet',
+    body: 'Select Add Entity in the + menu to add an entity for players to meet',
     add: addEntityItem,
   }),
   {
@@ -573,7 +574,7 @@ const ENTITY_STEPS: readonly TourStep[] = [
     title: 'Image',
     body: 'Add a picture of the entity. Players see it on the entity’s card, and the AI never reads it.',
     isComplete: (world, items) => entityImages(tourEntity(world, items)).length > 0,
-    useExample: async (api, world, items) => patchEntity(api, world, items, { images: [await loadTourImage('maren')] }),
+    useExample: async (api, world, items) => patchEntity(api, world, items, { images: [{ data: await loadTourImage('maren') }] }),
     inPlay: { sees: 'entityCard', scene: 'entity', readers: [{ prompt: 'Narration Prompt', reads: 'entities' }] },
   },
   {
@@ -633,7 +634,7 @@ const STAT_STEPS: readonly TourStep[] = [
     anchor: 'stat-name',
     item: 'stat',
     title: 'Stat Name',
-    body: 'Name the stat. "Min", "Max" and "Initial Value" set its range and where it starts. Players see the name '
+    body: 'Name the stat. "Base Value" sets where it starts, and "Min" and "Max" set its range. Players see the name '
       + 'and the number, and the narration prompt never reads the number.',
     isComplete: (world, items) => isChosenName(tourStat(world, items)?.name, NEW_STAT_NAME),
     useExample: (api, world, items) => patchStat(api, world, items, {
@@ -799,7 +800,7 @@ const DICTIONARY_STEPS: readonly TourStep[] = [
     anchor: 'dictionary-value',
     item: 'entry',
     title: 'Value',
-    body: 'Write what the AI learns when a message has a keyword. Change the test line in the In Play pane to try it.',
+    body: 'Write what the AI learns when a message has a keyword. Change the test line in the In Game pane to try it.',
     isComplete: (world, items) => hasValue((tourEntry(world, items)?.value ?? '').trim()),
     useExample: (api, world, items) => patchEntry(api, world, items, { value: DROWNED_BELL.value }),
     inPlay: {

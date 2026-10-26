@@ -7,15 +7,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_HELP_SETTINGS, helpSettingsOf, type HelpSettings } from '@/lib/formaquestion/helpSettings';
 import { DEFAULT_MASCOT_RIG } from '@/lib/formaquestion/mascot';
 import { LANDING_PULSE_CLASS } from '@/lib/landingPulse';
+import { ringOn } from '@/test/landing';
 import { UNKNOWN_REASONING_CAPABILITY } from '@/lib/reasoningEffort';
 import { findTargetRow, routeText } from '@/lib/surface/surfaceTargets';
 import { mascotStoreOf } from '@/test/helpFixtures';
 import { renderReporting } from '@/test/surfaceReporter';
 import { FormaquestionSettings } from './FormaquestionSettings';
 import type { FormaquestionSettingsTab } from './formaquestionSettingsTabs';
-import type { SemanticSearch } from './useSemanticSearch';
+import { IDLE_SEMANTIC_SEARCH } from './useSemanticSearch';
 
-const SEMANTIC: SemanticSearch = { on: false, downloading: false, progress: null, error: null, setOn: () => {} };
+const SEMANTIC = IDLE_SEMANTIC_SEARCH;
 const OFF_LINE = 'The Mascot is off. Enable it in “General” to customize it.';
 
 let current: HelpSettings;
@@ -50,12 +51,13 @@ const tab = (name: string) => within(dialog()).getByRole('tab', { name, hidden: 
 const offStatus = () => within(dialog()).getByTestId('mascot-off-status');
 const openMascotTab = () => userEvent.click(tab('Mascot'));
 
+const SCALE_KEY = 'formamorph.formaquestion.mascotScale';
+
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
 describe('the Mascot switch on General', () => {
-  it('opens the Window section with Mascot, then Chat Style, Mascot Position and Backdrop', () => {
-    // Bubble hides Mascot Position; Minimal shows every row.
+  it('opens the Window section with Mascot, then Chat Style, Mascot Position, Mascot Scale and Backdrop', () => {
     mount({ chatStyle: 'minimal' });
     const section = within(dialog()).getByRole('heading', { name: 'Window' }).closest('section')!;
     const controls = [...section.querySelectorAll<HTMLElement>('[role="checkbox"], [role="combobox"], [role="slider"]')];
@@ -63,9 +65,38 @@ describe('the Mascot switch on General', () => {
       within(section).getByRole('checkbox', { name: 'Mascot' }),
       within(section).getByRole('combobox', { name: 'Chat Style' }),
       within(section).getByRole('combobox', { name: 'Mascot Position' }),
+      within(section).getByRole('slider', { name: 'Mascot Scale' }),
       within(section).getByRole('slider', { name: 'Backdrop' }),
     ];
-    expect(ordered.map((el) => controls.indexOf(el))).toEqual([0, 1, 2, 3]);
+    expect(ordered.map((el) => controls.indexOf(el))).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('hides Mascot Position and Mascot Scale while the Mascot is off', () => {
+    mount({ mascot: false });
+    expect(within(dialog()).queryByRole('combobox', { name: 'Mascot Position' })).toBeNull();
+    expect(within(dialog()).queryByRole('slider', { name: 'Mascot Scale' })).toBeNull();
+  });
+
+  it('starts Mascot Scale at the smallest percent, steps to Auto and back, and stores each on this device', async () => {
+    mount();
+    const slider = within(dialog()).getByRole('slider', { name: 'Mascot Scale' });
+    // The readout beside the slider; Chat Style's Auto sits elsewhere on the tab.
+    const row = findTargetRow(dialog(), routeText('formaquestionSettings.general', 'mascot-scale'))!;
+    expect(within(row).getByText('25%')).toBeInTheDocument();
+    expect(slider).toHaveAttribute('aria-valuetext', '25%');
+    slider.focus();
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(localStorage.getItem(SCALE_KEY)).toBe('auto');
+    expect(slider).toHaveAttribute('aria-valuetext', 'Auto');
+    expect(within(row).getByText('Auto')).toBeInTheDocument();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(localStorage.getItem(SCALE_KEY)).toBe('25');
+    expect(slider).toHaveAttribute('aria-valuetext', '25%');
+    await userEvent.keyboard('{End}');
+    expect(localStorage.getItem(SCALE_KEY)).toBe('150');
+    await userEvent.keyboard('{Home}');
+    expect(localStorage.getItem(SCALE_KEY)).toBe('auto');
+    expect(current).toEqual(expect.not.objectContaining({ scale: expect.anything() }));
   });
 
   it('turns the Mascot on and off at once, with no Save', async () => {
@@ -98,7 +129,7 @@ describe('the Mascot tab off state', () => {
     expect(tab('General')).toHaveAttribute('data-state', 'active');
     // The link lands on the Mascot row: the Landing Pulse ring and focus on the switch, as Take Me There does.
     const row = findTargetRow(dialog(), routeText('formaquestionSettings.general', 'mascot-switch'))!;
-    await waitFor(() => expect(row).toHaveClass(LANDING_PULSE_CLASS));
+    await waitFor(() => expect(ringOn(row, LANDING_PULSE_CLASS)).toBe(true));
     expect(within(row).getByRole('checkbox', { name: 'Mascot' })).toHaveFocus();
     // The switch is the way back: on again, and the tab's controls work.
     await userEvent.click(within(dialog()).getByRole('checkbox', { name: 'Mascot' }));

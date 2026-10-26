@@ -1,6 +1,5 @@
-import type { PlayerStat, Trait } from '@/types';
+import type { PlayerStat } from '@/types';
 import { clamp } from './utils';
-import { deriveEffectiveStats } from './traitRuntime';
 
 /**
  * Merge an array of AI stat-change objects (each a name→delta map) into one map
@@ -85,13 +84,10 @@ export function parseStatUpdates(text: string): {
  *
  * The movement is also accumulated into `aiMaxDelta`, which is what keeps the maximum derivable: a later
  * trait toggle recomputes the cap from base + traits + this, so the AI's work survives the recompute.
- * Under a code max the cap holds and the ask moves the cap underneath, which `active` derives; stat code
- * reads the ask itself as `delta.ai.max`.
  */
 export function applyAiMaxChanges(
   stats: PlayerStat[],
   maxChanges: Record<string, number>,
-  active: readonly Trait[] = [],
 ): PlayerStat[] {
   return stats.map((stat) => {
     // Percentage stats are pinned to a 0–100 cap; the AI can never move their max.
@@ -100,12 +96,6 @@ export function applyAiMaxChanges(
     if (typeof delta !== 'number' || delta === 0) return stat;
     const allowed = (delta > 0 && !stat.noIncreaseMax) || (delta < 0 && !stat.noDecreaseMax);
     if (!allowed) return stat;
-    if (stat.codeBounds?.max !== undefined) {
-      const { max: _held, ...others } = stat.codeBounds;
-      const [under] = deriveEffectiveStats([{ ...stat, codeBounds: others }], active);
-      const booked = Math.max(under.min, under.max + delta) - under.max;
-      return booked === 0 ? stat : { ...stat, aiMaxDelta: (stat.aiMaxDelta ?? 0) + booked };
-    }
     const newMax = Math.max(stat.min, stat.max + delta);
     const newValue = clamp(stat.value, stat.min, newMax);
     // Record what the cap actually moved, not what was asked for, so a delta the floor refused isn't
@@ -127,6 +117,7 @@ export function pageStatDeltas(
 ): Record<string, number> {
   const map: Record<string, number> = {};
   for (const s of stats) {
+    // `starting` is the delta baseline, not the start value.
     const before = prevStats?.find((p) => p.name === s.name)?.value ?? s.starting ?? s.min;
     map[s.name.toLowerCase()] = typeof before === 'number' ? s.value - before : 0;
   }
@@ -167,5 +158,16 @@ export function appliedStatDeltas(
     const delta = s.value - (before[i]?.value ?? s.value);
     if (delta !== 0) map[s.name.toLowerCase()] = delta;
   });
+  return map;
+}
+
+/** Two per-stat change maps laid end to end: a stat that moved in both shows the sum, and one that nets zero drops out. */
+export function sumDeltas(first: Readonly<Record<string, number>>, second: Readonly<Record<string, number>>): Record<string, number> {
+  const map: Record<string, number> = { ...first };
+  for (const [name, delta] of Object.entries(second)) {
+    const total = (map[name] ?? 0) + delta;
+    if (total === 0) delete map[name];
+    else map[name] = total;
+  }
   return map;
 }

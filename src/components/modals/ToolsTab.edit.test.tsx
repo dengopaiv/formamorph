@@ -138,12 +138,23 @@ describe('editing a Tool', () => {
     await pickHandler(user, 'Script');
     await user.click(screen.getByRole('button', { name: 'What a Script Can Read' }));
     const readable = within(await screen.findByLabelText('What the script can read'));
-    expect(readable.getAllByRole('term').map((t) => t.textContent)).toEqual(['args', 'world', 'scene', 'placeholders', 'console']);
+    expect(readable.getAllByRole('term').map((t) => t.textContent)).toEqual([
+      'args', 'stats', 'clock', 'turn', 'locations', 'location', 'memories', 'notes', 'placeholders', 'traits', 'entities', 'persona', 'dictionaries', 'console',
+    ]);
     expect(readable.getAllByRole('definition')[0]).toHaveTextContent('{ place }');
     await user.keyboard('{Escape}');
     expect(screen.getByRole('textbox', { name: 'Script' })).toBeInTheDocument();
     await user.click(saveButton());
     expect(saved()[0].handler).toEqual({ kind: 'script', code: '' });
+  });
+
+  it('shows a Template scene chip its value on the world Try It runs on', async () => {
+    const user = userEvent.setup();
+    await openEditor(user, [weather({ handler: { kind: 'template', body: '<LOCATION>' } })]);
+    await user.click(tab('Handler'));
+    await user.click(document.querySelector<HTMLElement>('[data-chip]')!);
+    const reads = within(screen.getByRole('dialog', { name: 'Chip Options' })).getByRole('region', { name: 'What the AI Reads' });
+    expect(reads).toHaveTextContent('The Landing');
   });
 
   it('restores each handler type’s fields when you switch back, until the edit ends', async () => {
@@ -284,14 +295,14 @@ describe('the editor layout', () => {
   it('keeps the fixed Try It track when docked', async () => {
     const user = userEvent.setup();
     await openEditor(user);
-    expect(grid()).toHaveClass('lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]');
+    expect(grid()).toHaveClass('grid-cols-[minmax(0,1fr)_minmax(0,22rem)]');
   });
 
   it('gives Try It one third of the width in full screen, with a 22rem floor', async () => {
     const user = userEvent.setup();
     await openEditor(user, [weather()], true);
-    expect(grid()).toHaveClass('lg:grid-cols-[minmax(0,2fr)_minmax(22rem,1fr)]');
-    expect(grid()).not.toHaveClass('lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]');
+    expect(grid()).toHaveClass('grid-cols-[minmax(0,2fr)_minmax(22rem,1fr)]');
+    expect(grid()).not.toHaveClass('grid-cols-[minmax(0,1fr)_minmax(0,22rem)]');
   });
 });
 
@@ -395,7 +406,7 @@ describe('Try It', () => {
     render(<Harness initial={userStore([weather({ params: [], handler: { kind: 'script', code: 'return nobody.name;' } })])} />);
     await user.click(list().getByRole('button', { name: 'get_weather' }));
     await user.click(tryIt().getByRole('button', { name: 'Run' }));
-    const alert = await tryIt().findByRole('alert', {}, { timeout: 5000 });
+    const alert = await tryIt().findByRole('alert');
     expect(alert).toHaveTextContent(/^The script failed: .*nobody/);
     expect(alert.textContent).not.toContain('{');
   });

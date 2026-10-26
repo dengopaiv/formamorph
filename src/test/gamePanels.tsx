@@ -10,10 +10,11 @@ import { GameplayProvider, useGameplay } from '@/contexts/GameplayContext';
 import { PlaceholderSessionProvider } from '@/contexts/PlaceholderSessionContext';
 import { setGameplayText } from '@/lib/gameplayTextStore';
 import { pageAssistantIndex } from '@/lib/turnHistory';
+import { useNarrationRescan } from '@/components/game/useNarrationRescan';
 import { LeftPanel, MiddlePanel, RightPanel } from '@/components/game/GamePanels';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { defaultSystemPrompt } from '@/components/game/GamePrompts';
-import type { AITurnResult, ChatMessage, GameState, PlayerStat, Stat, Trait, World } from '@/types';
+import type { AITurnResult, ChatMessage, Entity, EntityStatChanges, EntityStatValues, GameState, PlayerStat, SceneEntity, Stat, Trait, World } from '@/types';
 
 /**
  * Render helper for the three gameplay panels (`GamePanels.tsx`).
@@ -36,6 +37,8 @@ import type { AITurnResult, ChatMessage, GameState, PlayerStat, Stat, Trait, Wor
  */
 
 type MiddlePanelProps = ComponentProps<typeof MiddlePanel>;
+/** The rescan defaults to the view's real one, mounted by the harness, unless a case passes its own. */
+type HarnessMiddlePanelProps = Omit<MiddlePanelProps, 'onRescanNarration'> & Partial<Pick<MiddlePanelProps, 'onRescanNarration'>>;
 type LeftPanelProps = ComponentProps<typeof LeftPanel>;
 type RightPanelProps = ComponentProps<typeof RightPanel>;
 
@@ -69,6 +72,12 @@ export interface TurnFixture {
   /** The stats as this turn left them, for the history view's stat rows. Defaults to the harness-wide
    *  `stats`, which is what makes every turn read the same unless a case wants them to move. */
   stats?: PlayerStat[];
+  /** Who stood in this turn's scene, with each name's reveal state. */
+  scene?: SceneEntity[];
+  /** Each entity's stat values as this turn left them. */
+  entityStats?: EntityStatValues;
+  /** What this turn moved each entity stat. */
+  entityStatChanges?: EntityStatChanges;
 }
 
 export interface PanelHarnessOptions {
@@ -79,7 +88,7 @@ export interface PanelHarnessOptions {
   page?: number;
   /** Fields merged over the blank authored world. */
   world?: Partial<World>;
-  /** The player's stats (also seeded as the world's stat definitions). */
+  /** The player's stats, also seeded as the world's stat definitions unless `world.stats` names its own. */
   stats?: PlayerStat[];
   /** The live narration-reveal text, which lives in its own store rather than in context. */
   gameplayText?: string;
@@ -95,7 +104,7 @@ export function worldFixture(overrides: Partial<World> = {}): World {
     id: 'test-world',
     worldOverview: {
       name: 'Sedge Landing', description: '', author: '', thumbnail: null, bgm: null,
-      systemPrompt: '<NOTES>', use3DModel: true, tags: [],
+      systemPrompt: '<NOTES>', tags: [],
     },
     stats: [], locations: [], entities: [], traits: [], statUpdates: [],
     ...overrides,
@@ -145,9 +154,11 @@ export function turnHistory(turns: TurnFixture[]): ChatMessage[] {
 /** The per-turn mechanical snapshot paging back reads; only the fields the panels display are filled. */
 function snapshotFixture(turn: TurnFixture, stats: PlayerStat[]): GameState {
   return {
-    playerStats: turn.stats ?? stats,
-    playerTraits: turn.traits ?? [],
-    visibleEntities: [],
+    globalStats: turn.stats ?? stats,
+    globalTraits: turn.traits ?? [],
+    ...(turn.entityStats ? { entityStats: turn.entityStats } : {}),
+    ...(turn.entityStatChanges ? { entityStatChanges: turn.entityStatChanges } : {}),
+    visibleEntities: turn.scene ?? [],
     logEntries: [],
     gameplayText: turn.narration,
     gameTime: 0,
@@ -188,9 +199,9 @@ const Stage =({ options, stats, expose, children }: {
   expose({ gameplay, gameData, settings });
 
   useEffect(() => {
-    gameData.loadWorldData(worldFixture({ ...options.world, stats: stats as unknown as Stat[] }));
+    gameData.loadWorldData(worldFixture({ ...options.world, stats: options.world?.stats ?? (stats as unknown as Stat[]) }));
     options.settings?.(settings);
-    gameplay.setPlayerStats(stats);
+    gameplay.setGlobalStats(stats);
     if (options.turns?.length) {
       seedTurns(gameplay, options.turns, options.page ?? options.turns.length, stats);
     }
@@ -266,7 +277,7 @@ function renderPanel<P extends object>(
 export function middlePanelProps(
   overrides: Partial<MiddlePanelProps> = {},
   options: PanelHarnessOptions = {},
-): MiddlePanelProps {
+): HarnessMiddlePanelProps {
   const turns = options.turns ?? [];
   const page = options.page ?? Math.max(1, turns.length);
   const job = overrides.sceneImageJob ?? null;
@@ -313,16 +324,26 @@ export function middlePanelProps(
   };
 }
 
+const NO_EXCLUSIONS = {};
+
+/** MiddlePanel with the view's narration rescan, read against the staged world's entities and no exclusions. */
+// eslint-disable-next-line react-refresh/only-export-components -- test-only module; nothing is hot-reloaded
+const RescanningMiddlePanel = ({ entities, onRescanNarration, ...props }: HarnessMiddlePanelProps & { entities: Entity[] }) => {
+  const rescan = useNarrationRescan({ entities, exclusions: NO_EXCLUSIONS });
+  return <MiddlePanel {...props} onRescanNarration={onRescanNarration ?? rescan} />;
+};
+
 /** Render the narration panel over a staged playthrough. */
 export function renderMiddlePanel(
   overrides: Partial<MiddlePanelProps> = {},
   options: PanelHarnessOptions = {},
-): PanelHarness<MiddlePanelProps> {
+): PanelHarness<HarnessMiddlePanelProps> {
+  const entities = options.world?.entities ?? [];
   return renderPanel(
     middlePanelProps(overrides, options),
     {},
     options,
-    (props) => <MiddlePanel {...props} />,
+    (props) => <RescanningMiddlePanel {...props} entities={entities} />,
   );
 }
 

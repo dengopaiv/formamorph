@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { parseChoices, matchChoicesToAction, choiceRuns } from './choices';
+import { parseChoices, matchChoicesToAction, choiceRuns, keepSameRows, parseStreamingChoices } from './choices';
+
+describe('parseStreamingChoices', () => {
+  it('ends on the same rows as the finished parse, except a one-word last line still being written', () => {
+    const reply = '1. Walk down the hall\n2. Call into the dark';
+    expect(parseStreamingChoices(reply)).toEqual(parseChoices(reply));
+    expect(parseStreamingChoices('Walk down the hall\nWait')).toEqual(['Walk down the hall']);
+    expect(parseStreamingChoices('1. Walk down the hall\n2.')).toEqual(['Walk down the hall']);
+    expect(parseStreamingChoices('1. Walk down the hall\n2. Wait')).toEqual(['Walk down the hall', 'Wait']);
+  });
+});
+
+describe('keepSameRows', () => {
+  it('keeps the previous list when a token leaves the parsed rows unchanged', () => {
+    const prev = parseChoices('1. Open the door\n2. Wait');
+    expect(keepSameRows(prev, parseChoices('1. Open the door\n2. Wait\n'))).toBe(prev);
+  });
+
+  it('takes the new list when a row grows, changes, or is added', () => {
+    const prev = ['Open the door', 'Wait'];
+    for (const next of [['Open the door', 'Wait here'], ['Open the gate', 'Wait'], ['Open the door', 'Wait', 'Run']]) {
+      expect(keepSameRows(prev, next)).toBe(next);
+    }
+  });
+});
 
 describe('parseChoices', () => {
   it('splits lines, trims, and drops empties', () => {

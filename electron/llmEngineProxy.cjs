@@ -145,9 +145,11 @@ function createEngineProxy({ spawn = electronChannel } = {}) {
 
   const start = (options) => call('start', options);
 
-  /** Every GPU the backend can see, unfiltered. Spawns a child if none is running — so call it on a proxy
-   *  of its own, whose child dies with the answer, rather than on the one serving a loaded model. */
+  /** Every GPU `llama-server --list-devices` reports. Spawns a child if none is running. */
   const listDevices = () => call('listDevices');
+
+  /** Set the Context Overflow policy on a running engine. With no child, main passes it to the next start. */
+  const setContextOverflow = (policy) => (channel ? call('setContextOverflow', policy) : Promise.resolve(null));
 
   async function stop() {
     // Nothing to tear down, but keep the in-process engine's status sequence: its stop always reported
@@ -169,6 +171,7 @@ function createEngineProxy({ spawn = electronChannel } = {}) {
     getState,
     onStatus,
     listDevices,
+    setContextOverflow,
     /** Pid of the engine child, for VRAM self-attribution. Null while no child is running. */
     enginePid: () => channel?.pid() ?? null,
     /** Kill the child without waiting on it — for app quit, where an awaited stop may not get to finish. */

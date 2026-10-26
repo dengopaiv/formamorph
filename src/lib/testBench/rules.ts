@@ -14,9 +14,9 @@ import {
   type PlaceholderFinding, type PlaceholderPick, type PlaceholderToken,
 } from '@/lib/placeholders';
 import { labelPlaceholders, worldPlacementLetters, type PlacementLetters } from '@/lib/placementLetters';
-import { travelEnds } from '@/lib/locationGraph';
+import { connectionLegs, travelEnds } from '@/lib/locationGraph';
 import {
-  allPinRows, collectPins, hasDeadValueId, indexPlaceholders, isBlueprintSideSource, pinConflict, pinSourceOwnerId,
+  allPinRows, collectPins, hasDeadValueId, indexPlaceholders, isBlueprintSideSource, pinConflict, pinSourceOwnerId, pinsTargeting,
   valuePinners, type PinEditorWorld, type PinFinding, type PinRow, type PinSourceKind,
 } from '@/lib/placeholderPins';
 import { copyOf, effectiveCopy } from '@/lib/blueprints';
@@ -31,12 +31,19 @@ import { matchKey } from '@/lib/entityMatch';
 import { activeDescriptor } from '@/lib/statContext';
 import {
   describeInThresholdUnits, describeThreshold, descriptorSpans, isThresholdOutOfRange, sortedDescriptors,
-  statStartValue, thresholdValue, uncoveredSpan, valueThreshold,
+  statAuthoredStart, statStartValue, thresholdValue, uncoveredSpan, valueThreshold,
 } from '@/lib/statDescriptorGeometry';
 import { statCodeName } from '@/lib/statCodeNames';
-import { boxCode, filledCodeBoxes, noBoxes, TIMING_LABEL } from '@/lib/statCodeTiming';
+import { filledCodeBoxes, noBoxes, TIMING_LABEL } from '@/lib/statCodeTiming';
+import { filledScripts, scriptLabel } from '@/lib/scripts';
+import { scanStatLookups, scanStatWrites } from '@/lib/statCodeWriteScan';
+import {
+  isStatOn, routeTargets, statCodeOwners, traitCodeBoxes, type CodeOwner, type CodeOwners, type TraitRun,
+} from '@/lib/statCodeTargets';
+import { worldScriptList, type ListedScript } from '@/lib/worldScripts';
 import { estimateTokens } from '@/lib/memoryUtils';
-import { entityImages } from '@/lib/entityImages';
+import { entityImageData, entityImages } from '@/lib/entityImages';
+import { locationImages } from '@/lib/locationImages';
 import {
   dataUrlBytes, dataUrlMime, dataUrlRealMime, imageFormatLabel, isConvertibleImage, isRemoteImage,
   relabelDataUrl, sniffDataUrlMime,
@@ -46,17 +53,23 @@ import { clamp } from '@/lib/utils';
 import { entityTexts } from '@/lib/entityTexts';
 import { overviewTexts } from '@/lib/overviewTexts';
 import {
-  broughtIds, canBePlayer, editorGateInput, linksInTreeOrder, originalOf, PLAYER_BEARER, resolveBearers, type Bearer,
-  type BearerWorld,
-} from '@/lib/bearers';
+  broughtIds, canBePlayer, editorGateInput, linksInTreeOrder, originalOf, resolveOwners, type GlobalTree, type Owner,
+  type OwnerWorld,
+} from '@/lib/owners';
+import { partOf, scopedEntries, scopeKey, type OwnerId } from '@/lib/scope';
 import {
-  WORLD_OWNER, alwaysOnOverMax, gateOf, gateStates, groupPickState, neverUnlockable, settleDefaults, type GateInput,
+  NO_ACTIVE, activeOf, alwaysOnOverMax, gateTrees, gateTreeOf, complementary, deadRows, gateOf, gateStates, groupPickState, neverUnlockable, sameRequirement, settleDefaults,
+  unstableCycles, type GateScopeTree, type GateInput, type GateOwner, type GateState, type GateStat, type GateStatSet, type GateStates, type GateStats, type GateTraitRef,
 } from '@/lib/traitGates';
+import { startingGateStats } from '@/lib/gateStats';
+import { ruleText, rowText } from '@/lib/traitGateLine';
+import { conditionsOf } from '@/lib/requirementRows';
 import { isAlwaysOn } from '@/lib/traitEffects';
-import { canOwnStatTraits } from '@/lib/traitTree';
+import { blueprintItemIds, offeredWorldTraits, statRows, statRowSide, type StatRow } from '@/lib/traitTree';
+import { globalStatsOf, resolvedEntityStats } from '@/lib/statLinks';
 import type {
-  DictionaryEntry, Entity, GameLocation, PersonaRef, Placeholder, PlaceholderPin, PlaceholderValue, Stat, StatDescriptor,
-  Trait, TraitGroup, TraitLink, World,
+  DictionaryEntry, Entity, GalleryImage, GameLocation, PersonaRef, Placeholder, PlaceholderPin, PlaceholderValue, Script, Stat, StatDescriptor,
+  StatRequirement, Trait, TraitGroup, TraitLink, TraitRequirement, TraitRequirementRow, World,
 } from '@/types';
 
 /**
@@ -77,7 +90,7 @@ export const SEVERITIES: readonly Severity[] = ['error', 'warning', 'info'] as c
 
 /** The editor tab that owns a finding's items — where Open navigates to. */
 export type FindingSection =
-  | 'overview' | 'stats' | 'entities' | 'locations' | 'traits' | 'dictionary' | 'placeholders';
+  | 'overview' | 'stats' | 'entities' | 'locations' | 'traits' | 'dictionary' | 'placeholders' | 'scripts' | 'tools' | 'media';
 
 /** One item a finding names, labeled as the editor's own lists label it. */
 export interface FindingItem {
@@ -98,7 +111,7 @@ export interface Finding {
 }
 
 /** What a finding's row needs from whatever raised it, with no way of raising it. Split out because not
- *  everything the Issues list shows can run in the live pass — the stat-code execution check spins a VM. */
+ *  everything the Issues list shows can run in the live pass — the script execution check spins a VM. */
 export interface RuleHead {
   id: string;
   severity: Severity;
@@ -128,9 +141,26 @@ export interface Rule extends RuleHead {
 
 const quote = (text: string) => `“${text}”`;
 
+/** The owner a world script's fallback name reads (Q6). */
+export const WORLD_SCRIPT_OWNER = 'World';
+
+/** A script as a finding names it: by its name, its timing and its home; unnamed, by its home and timing (Q6, Q49).
+ *  A null home is the world. `of` names the entity the home sits on, as ` of “Mira”`. */
+export const scriptRef = (script: Pick<Script, 'name' | 'timing'>, home: string | null, of = ''): string => {
+  const name = script.name?.trim();
+  const timing = TIMING_LABEL[script.timing];
+  if (!name) return `${quote(`${home ?? WORLD_SCRIPT_OWNER} · ${timing}`)}${of}`;
+  return `${quote(name)} (${timing}) on ${home === null ? 'the world' : quote(home)}${of}`;
+};
+
 /** A finding for `rule` — the boilerplate trio copied from the rule itself. */
 export const finding = (rule: RuleHead, message: string, items: FindingItem[]): Finding => ({
   ruleId: rule.id, severity: rule.severity, section: rule.section, message, items,
+});
+
+/** A finding about one script, filed under the section that holds it. */
+export const scriptFinding = (rule: RuleHead, message: string, item: FindingItem): Finding => ({
+  ...finding(rule, message, [item]), section: item.section ?? rule.section,
 });
 
 /** `list` with `fn` applied, or `list` itself when nothing changed — an untouched slice keeping its identity
@@ -339,9 +369,14 @@ const everyTrait = (world: RuleWorld): Trait[] => [
   ...(world.traits ?? []), ...(world.entities ?? []).flatMap((e) => e.traits ?? []),
 ];
 
+/** The world's trait groups, then every group an entity owns. */
+const everyTraitGroup = (world: RuleWorld): TraitGroup[] => [
+  ...(world.traitGroups ?? []), ...(world.entities ?? []).flatMap((e) => e.traitGroups ?? []),
+];
+
 /** The traits whose stat effects can reach the player: the world's, and the ones persona entities own. */
 const statTraits = (world: RuleWorld): Trait[] => [
-  ...(world.traits ?? []), ...(world.entities ?? []).filter(canOwnStatTraits).flatMap((e) => e.traits ?? []),
+  ...(world.traits ?? []), ...(world.entities ?? []).filter(canBePlayer).flatMap((e) => e.traits ?? []),
 ];
 
 /** A non-entity item, chips labeled like the editor's own lists label them. */
@@ -442,9 +477,10 @@ const traitToggleMissingStat: Rule = {
   section: 'traits',
   advanced: true,
   summary: (count) => `${count} trait stat toggles point at stats that don’t exist`,
+  // An entity's own traits name its own stats, which trait-stat-no-target checks.
   check: (world) => {
     const known = new Set((world.stats ?? []).map((s) => s.id));
-    return everyTrait(world)
+    return (world.traits ?? [])
       .filter((trait) => (trait.statToggles ?? []).some((toggle) => !known.has(toggle.statId)))
       .map((trait) => {
         const item = namedItem(trait.id, trait.name, world);
@@ -455,12 +491,21 @@ const traitToggleMissingStat: Rule = {
 
 // ── Placeholder pins, from every source ────────────────────────────────────────────────────────────────────
 
-/** The world as the pin editors read it, so a finding labels a source exactly as its editor does. */
-const pinEditorWorld = (world: RuleWorld): PinEditorWorld => ({
-  traits: world.traits ?? [], traitGroups: world.traitGroups ?? [], entities: world.entities ?? [],
-  locations: world.locations ?? [], stats: world.stats ?? [], placeholders: allPlaceholders(world),
-  placeholderGroups: world.placeholderGroups ?? [], placeholderOwners: placeholderOwners(world), placementLetters: lettersOf(world),
-});
+/** The world as the pin editors read it, so a finding labels a source exactly as its editor does. One per
+ *  world object, so every rule shares the pin index cached on it. */
+const pinEditorByWorld = new WeakMap<RuleWorld, PinEditorWorld>();
+const pinEditorWorld = (world: RuleWorld): PinEditorWorld => {
+  let editor = pinEditorByWorld.get(world);
+  if (!editor) {
+    editor = {
+      traits: world.traits ?? [], traitGroups: world.traitGroups ?? [], entities: world.entities ?? [],
+      locations: world.locations ?? [], stats: world.stats ?? [], placeholders: allPlaceholders(world),
+      placeholderGroups: world.placeholderGroups ?? [], placeholderOwners: placeholderOwners(world), placementLetters: lettersOf(world),
+    };
+    pinEditorByWorld.set(world, editor);
+  }
+  return editor;
+};
 
 /** Every pin in the world, walked once per world object — four rules read the same list. A fresh Add
  *  Placeholder Pin row names no placeholder yet, so it is an edit in progress rather than a pin to check. */
@@ -509,14 +554,14 @@ const placeholderPinBroken: Rule = {
   },
 };
 
-/** A holder's pin list under `field` rewritten by `fn`; the holder itself when no pin changed. */
+/** A record's pin list under `field` rewritten by `fn`; the record itself when no pin changed. */
 const withMappedPinList = <T extends { [P in K]?: PlaceholderPin[] }, K extends 'placeholderPins' | 'pins'>(
-  holder: T, field: K, fn: (pin: PlaceholderPin) => PlaceholderPin,
+  record: T, field: K, fn: (pin: PlaceholderPin) => PlaceholderPin,
 ): T => {
-  const pins = holder[field];
-  if (!pins?.length) return holder;
+  const pins = record[field];
+  if (!pins?.length) return record;
   const next = mapChanged(pins, fn);
-  return next === pins ? holder : { ...holder, [field]: next };
+  return next === pins ? record : { ...record, [field]: next };
 };
 
 /** The world with `fn` applied to every pin on every source, only the records holding a changed pin
@@ -591,11 +636,9 @@ const placeholderPinConflict: Rule = {
   check: (world) => {
     const editor = pinEditorWorld(world);
     const byId = indexPlaceholders(editor.placeholders);
-    const rows = pinRowsOf(world);
-    const targets = [...new Set(rows.map((row) => row.pin.placeholderId))].filter((id) => byId.has(id));
+    const targets = [...new Set(pinRowsOf(world).map((row) => row.pin.placeholderId))].filter((id) => byId.has(id));
     return targets.flatMap((id) => {
-      const contested = rows
-        .filter((row) => row.pin.placeholderId === id)
+      const contested = pinsTargeting(editor, id)
         .map((row) => ({ row, conflict: pinConflict(editor, id, row.source) }))
         .filter((entry) => entry.conflict !== null);
       const texts = new Set(contested.map((entry) => pinText(entry.row.pin, byId)));
@@ -759,6 +802,10 @@ interface ChipOwner {
   texts: Array<string | undefined>;
 }
 
+/** A location by id, as its tree row names it. */
+const locationLabel = (id: string, world: RuleWorld): string =>
+  labelOf(world.locations?.find((l) => l.id === id)?.name, world);
+
 const chipOwners = (world: RuleWorld): ChipOwner[] => [
   {
     item: { id: 'overview', name: world.worldOverview?.name || 'Overview', section: 'overview' },
@@ -772,6 +819,15 @@ const chipOwners = (world: RuleWorld): ChipOwner[] => [
     item: namedItem(l.id, l.name, world, 'locations'),
     texts: [l.name, l.playerDescription, l.aiDescription, l.aiSummary, l.description, l.imageTags],
   })),
+  // Each leg is filed under the location it leaves, whose panel shows that box first.
+  ...(world.connections ?? []).flatMap((c) => connectionLegs(c).map(({ from, to, leg }) => ({
+    item: {
+      id: from,
+      name: `${locationLabel(from, world)} → ${locationLabel(to, world)} Travel Hint`,
+      section: 'locations' as const,
+    },
+    texts: [leg.hint],
+  }))),
   ...allEntries(world).map((entry) => ({
     item: { ...entryItem(entry, world), section: 'dictionary' as const },
     texts: [entry.name, ...(entry.key ?? []), ...(entry.secondaryKeys ?? []), entry.value],
@@ -780,11 +836,12 @@ const chipOwners = (world: RuleWorld): ChipOwner[] => [
     item: namedItem(s.id, s.name, world, 'stats'),
     texts: [s.name, s.description, ...(s.descriptors ?? []).map((d) => d.description)],
   })),
-  ...(world.traits ?? []).map((t) => ({
+  // Play primes an entity's own traits and groups too. A linked trait's text lives on its world original.
+  ...everyTrait(world).map((t) => ({
     item: namedItem(t.id, t.name, world, 'traits'),
     texts: [t.name, t.playerDescription, t.aiDescription],
   })),
-  ...(world.traitGroups ?? []).map((g) => ({
+  ...everyTraitGroup(world).map((g) => ({
     item: namedItem(g.id, g.name, world, 'traits'),
     texts: [g.name, g.playerDescription, g.aiDescription],
   })),
@@ -903,74 +960,227 @@ const placeholderPinnedUnused: Rule = {
   },
 };
 
-// A stat-name lookup in stat code, in either direction: `s.name === "X"` or `"X" === s.name`. Also matches
+// A stat-name lookup in a script, in either direction: `s.name === "X"` or `"X" === s.name`. Also matches
 // `==`/`!=` forms — any comparison against `.name` names a stat.
 const NAME_THEN_LITERAL = /\.name\s*[!=]==?\s*(["'`])((?:\\.|(?!\1).)*)\1/g;
 const LITERAL_THEN_NAME = /(["'`])((?:\\.|(?!\1).)*)\1\s*[!=]==?\s*[\w$]+(?:\??\.[\w$]+)*\??\.name\b/g;
-// The map form: `stats.Vigor` names the stat by identifier, `stats["Vigor"]` (any quote style) by bracket
-// key; a computed bracket key or an array-method call like `stats.find(` matches neither, as intended.
-const MAP_DOT = /\bstats\.([A-Za-z_$][\w$]*)\b(?!\s*\()/g;
-const MAP_BRACKET = /\bstats\[\s*(["'`])((?:\\.|(?!\1).)*)\1\s*\]/g;
+/** Every stat name a `.name` comparison in code names, unescaped. Template literals with `${}` are dynamic and
+ *  skipped — there is no literal name to check. */
+const comparedStatNames = (code: string): string[] => [NAME_THEN_LITERAL, LITERAL_THEN_NAME]
+  .flatMap((re) => [...code.matchAll(re)].map((m) => m[2]))
+  .filter((literal) => literal && !literal.includes('${'))
+  .map((literal) => literal.replace(/\\(.)/g, '$1'));
 
-/** Every stat name a piece of code names, unescaped — by `.name` comparison or by map lookup. Template
- *  literals with `${}` are dynamic and skipped — there is no literal name to check. */
-const statNamesInCode = (code: string): string[] => {
-  const names: string[] = [];
-  for (const re of [NAME_THEN_LITERAL, LITERAL_THEN_NAME, MAP_BRACKET]) {
-    for (const m of code.matchAll(re)) {
-      const literal = m[2];
-      if (!literal || literal.includes('${')) continue;
-      names.push(literal.replace(/\\(.)/g, '$1'));
+/** Every world stat name a piece of code names, by `.name` comparison or by a lookup in `stats`. */
+const statNamesInCode = (code: string): string[] => [
+  ...comparedStatNames(code),
+  ...scanStatLookups(code).flatMap((lookup) => (lookup.root === 'stats' ? [lookup.stat] : [])),
+];
+
+/** The owners a script reaches in this world. */
+const codeOwnersOf = (world: RuleWorld): CodeOwners => statCodeOwners({
+  stats: world.stats, statGroups: world.statGroups, entities: world.entities, placeholders: allPlaceholders(world),
+});
+
+/** One script of the world as a finding names it. */
+export interface RuleScript {
+  listed: ListedScript;
+  /** The script by its name or its owner-and-timing fallback, then the entity it sits on (Q22, Q49). */
+  ref: string;
+  /** The script's display name: its own name, or its home and timing (Q9). */
+  label: string;
+  /** The row that opens the script's home, on its home's tab. */
+  item: FindingItem;
+}
+
+/** Every filled script of the world once, from the list every script reader walks. */
+export const ruleScripts = (world: RuleWorld, owners: CodeOwners = codeOwnersOf(world)): RuleScript[] => {
+  const listWorld = {
+    scripts: world.scripts, stats: world.stats ?? [], statGroups: world.statGroups ?? [], traits: world.traits ?? [],
+    traitGroups: world.traitGroups ?? [], entities: world.entities ?? [], placeholders: allPlaceholders(world),
+  };
+  return worldScriptList(listWorld, filledScripts, owners).map((listed): RuleScript => {
+    const { box, section } = listed;
+    const label = (home: string) => scriptLabel(box, home);
+    if (listed.kind === 'world') {
+      const worldLabel = label(WORLD_SCRIPT_OWNER);
+      return { listed, ref: scriptRef(box, null), label: worldLabel, item: { id: listed.key, name: worldLabel, section } };
     }
-  }
-  for (const m of code.matchAll(MAP_DOT)) names.push(m[1]);
-  return names;
+    const { box: { entity } } = listed;
+    const [id, name] = listed.kind === 'stat' ? [listed.box.stat.id, listed.box.stat.name] : [listed.box.trait.id, listed.box.trait.name];
+    const home = labelOf(name, world);
+    if (!entity) return { listed, ref: scriptRef(box, home), label: label(home), item: namedItem(id, name, world, section) };
+    return {
+      listed, ref: scriptRef(box, home, ` of ${quote(labelOf(entity.name, world))}`), label: label(home),
+      item: { ...asItem(entity, world), section },
+    };
+  });
 };
 
-const statCodeUnknownStat: Rule = {
-  id: 'stat-code-unknown-stat',
+/** What a script's `owner` holds where the rules judge it. */
+type OwnerReach =
+  /** No owner: the sentence says which kind of script has none. */
+  | { none: string }
+  /** One owner's stats; `blueprint` marks a Blueprint stat's group, which an owner can outgrow. */
+  | { stats: ReadonlyMap<string, Stat>; blueprint: boolean }
+  /** A Blueprint trait's owners: each entity whose link runs its scripts (Q12). */
+  | { linkers: readonly CodeOwner[] };
+
+const ownerReachOf = ({ kind, box }: ListedScript): OwnerReach => {
+  if (kind === 'world') return { none: 'a world script has no owner' };
+  if (!box.owner) return { none: kind === 'stat' ? 'a global stat has no owner' : 'a global trait has no owner' };
+  const blueprint = !box.entity;
+  if (kind === 'trait' && blueprint) return { linkers: box.runs.flatMap(({ owner }) => (owner ? [owner] : [])) };
+  return { stats: box.owner.byCodeName, blueprint };
+};
+
+/** Every unknown stat name in a script, each once per box. `blueprintOwner` marks an `owner.stats` miss in a
+ *  Blueprint stat's box, where an owner can hold more than the group. */
+const unknownStatMisses = (world: RuleWorld): { label: string; item: FindingItem; miss: string; blueprintOwner: boolean }[] => {
+  const owners = codeOwnersOf(world);
+  const inWorld = owners.world.byCodeName;
+  return ruleScripts(world, owners).flatMap(({ listed, ref: label, item }) => {
+    const { code } = listed.box;
+    const reach = ownerReachOf(listed);
+    const ownerKnows = (name: string) => ('stats' in reach ? reach.stats.has(name)
+      : 'linkers' in reach && reach.linkers.some((owner) => owner.byCodeName.has(name)));
+    const misses = new Map<string, boolean>();
+    const miss = (text: string, blueprintOwner = false) => misses.set(text, blueprintOwner);
+    for (const name of comparedStatNames(code)) {
+      if (!inWorld.has(name) && !ownerKnows(name)) miss(`looks up a stat named ${quote(name)}, which does not exist`);
+    }
+    for (const { root, entity = '', stat } of scanStatLookups(code)) {
+      const named = quote(stat);
+      if (root === 'stats') {
+        if (!inWorld.has(stat)) miss(`looks up a stat named ${named}, which does not exist`);
+      } else if (root === 'owner') {
+        if ('none' in reach) miss(`looks up ${named} on its owner, but ${reach.none}`);
+        else if ('linkers' in reach) {
+          for (const { entity: linker } of reach.linkers.filter((owner) => !owner.byCodeName.has(stat))) {
+            miss(`looks up a stat named ${named} on its owner, which ${quote(labelOf(linker?.name, world))} does not have`);
+          }
+        } else if (reach.stats.has(stat)) continue;
+        else if (reach.blueprint) miss(`looks up a stat named ${named} on its owner, which its Blueprint group does not have`, true);
+        else miss(`looks up a stat named ${named} on its owner, which does not exist`);
+      } else if (root === 'persona') {
+        if (!owners.playable.some((o) => o.byCodeName.has(stat))) {
+          miss(`looks up a stat named ${named} on the persona, but no entity that can be played has it`);
+        }
+      } else {
+        const target = owners.byName.get(entity);
+        if (!target) miss(`looks up a stat on ${quote(entity)}, but no entity is named ${quote(entity)}`);
+        else if (!target.byCodeName.has(stat)) miss(`looks up a stat named ${named} on ${quote(entity)}, which does not exist`);
+      }
+    }
+    return [...misses].map(([text, blueprintOwner]) => ({ label, item, miss: text, blueprintOwner }));
+  });
+};
+
+const scriptUnknownStat: Rule = {
+  id: 'script-unknown-stat',
   severity: 'error',
   section: 'stats',
   advanced: true,
-  summary: (count) => `${count} stats’ code looks up stat names that don’t exist`,
-  check: (world) => {
-    // Code reaches a stat by its code name, which is the same in every playthrough.
-    const stats = world.stats ?? [];
-    const known = new Set(stats.map((s) => statCodeName(s.name, allPlaceholders(world))));
-    return stats.flatMap((stat) => {
-      const item = namedItem(stat.id, stat.name, world);
-      return filledCodeBoxes(stat).flatMap((box) => [...new Set(statNamesInCode(box.code))]
-        .filter((name) => !known.has(name))
-        .map((name) => finding(
-          statCodeUnknownStat,
-          `${TIMING_LABEL[box.timing]} code on ${quote(item.name)} looks up a stat named ${quote(name)}, which does not exist`,
-          [item],
-        )));
-    });
-  },
+  summary: (count) => `${count} scripts look up stat names that don’t exist`,
+  // Code reaches a stat by its code name, which is the same in every playthrough.
+  check: (world) => unknownStatMisses(world)
+    .filter(({ blueprintOwner }) => !blueprintOwner)
+    .map(({ label, item, miss }) => finding(scriptUnknownStat, `${label} ${miss}`, [item])),
+};
+
+const scriptUnknownBlueprintOwnerStat: Rule = {
+  id: 'script-unknown-blueprint-owner-stat',
+  severity: 'warning',
+  section: 'stats',
+  advanced: true,
+  summary: (count) => `${count} Blueprint stats’ code looks up owner stats their Blueprint group doesn’t have`,
+  check: (world) => unknownStatMisses(world)
+    .filter(({ blueprintOwner }) => blueprintOwner)
+    .map(({ label, item, miss }) => finding(scriptUnknownBlueprintOwnerStat, `${label} ${miss}`, [item])),
 };
 
 // A read of a stat's `delta`, in either lookup form. A bare `delta` is nothing the sandbox injects, so only
 // a member read counts — which also leaves an author's own variable of that name alone.
 const DELTA_READ = /\??\.\s*delta\b|\[\s*(["'`])delta\1\s*\]/;
 
-const statCodeBeforeReadsDelta: Rule = {
-  id: 'stat-code-before-reads-delta',
+const scriptBeforeReadsDelta: Rule = {
+  id: 'script-before-reads-delta',
   severity: 'warning',
   section: 'stats',
   advanced: true,
-  summary: (count) => `${count} stats read delta in their ${TIMING_LABEL.before} box, where every source is zero`,
-  check: (world) => (world.stats ?? [])
-    .filter((stat) => DELTA_READ.test(boxCode(stat, 'before')))
-    .map((stat) => {
-      const item = namedItem(stat.id, stat.name, world);
+  summary: (count) => `${count} scripts read delta in their ${TIMING_LABEL.before} timing, where every source is zero`,
+  check: (world) => ruleScripts(world)
+    .filter(({ listed: { box } }) => box.timing === 'before' && DELTA_READ.test(box.code))
+    .map(({ ref, item }) => finding(
+      scriptBeforeReadsDelta,
+      `${ref} reads delta, but it runs before the AI asks and before regen — every delta reads zero there`,
+      [item],
+    )),
+};
+
+/** One owner's stat field that scripts of one timing write, with each script that writes it once. */
+interface WrittenField {
+  owner: CodeOwner;
+  target: Stat;
+  field: string;
+  /** Keyed by the writer's owner, home and script. The label names the script without its owner. */
+  writers: Map<string, { owner: CodeOwner; label: string }>;
+}
+
+const scriptTwoWriters: Rule = {
+  id: 'script-two-writers',
+  severity: 'warning',
+  section: 'stats',
+  advanced: true,
+  summary: (count) => `${count} stat fields have more than one script of one timing writing them`,
+  // Judged per timing, owner and field across every world, stat and trait script. A Blueprint stat or trait runs
+  // once per owner, so each owner's script is its own writer and each owner's copy its own target.
+  check: (world) => {
+    const owners = codeOwnersOf(world);
+    const fields = new Map<string, WrittenField>();
+    const write = (writerKey: string, from: CodeOwner, label: string, script: Script, run: TraitRun & { self?: Stat }) => {
+      for (const route of scanStatWrites(script.code)) {
+        for (const { owner: targetOwner, stat: target } of routeTargets(owners, run, route)) {
+          if (!isStatOn(target)) continue;
+          const key = JSON.stringify([script.timing, targetOwner.entity?.id ?? null, target.id, route.field]);
+          const held = fields.get(key) ?? { owner: targetOwner, target, field: route.field, writers: new Map() };
+          held.writers.set(writerKey, { owner: from, label });
+          fields.set(key, held);
+        }
+      }
+    };
+    for (const script of filledScripts(world)) {
+      write(JSON.stringify(['world', script.id]), owners.world, scriptRef(script, null), script, { owner: null });
+    }
+    for (const owner of owners.all) {
+      for (const writer of owner.stats.filter(isStatOn)) {
+        for (const script of filledCodeBoxes(writer)) {
+          write(JSON.stringify([owner.entity?.id ?? null, 'stat', writer.id, script.id]), owner,
+            scriptRef(script, labelOf(writer.name, world)), script, { self: writer, owner: owner.entity ? owner : null });
+        }
+      }
+    }
+    for (const box of traitCodeBoxes(owners, { traits: world.traits ?? [], traitGroups: world.traitGroups ?? [] })) {
+      for (const run of box.runs) {
+        write(JSON.stringify([run.owner?.entity?.id ?? null, 'trait', box.trait.id, box.id]), run.owner ?? owners.world,
+          scriptRef(box, labelOf(box.trait.name, world)), box, run);
+      }
+    }
+    return [...fields.values()].filter(({ writers }) => writers.size > 1).map(({ owner, target, field, writers }) => {
+      const howMany = writers.size === 2 ? 'Two' : String(writers.size);
+      const { entity } = owner;
+      const at = entity ? ` on ${quote(labelOf(entity.name, world))}` : '';
+      const item = entity ? { ...asItem(entity, world), section: 'entities' as const } : namedItem(target.id, target.name, world);
+      // A writer from another entity names it; a world script and a same-owner script need no owner.
+      const labels = [...writers.values()].map(({ owner: from, label }) =>
+        (from.entity && from !== owner ? `${label} of ${quote(labelOf(from.entity.name, world))}` : label));
       return finding(
-        statCodeBeforeReadsDelta,
-        `${TIMING_LABEL.before} code on ${quote(item.name)} reads delta, but that box runs before the AI `
-        + 'asks and before regen — every delta reads zero there',
+        scriptTwoWriters,
+        `${howMany} scripts write the ${field} of ${quote(labelOf(target.name, world))}${at}: ${listNames(labels)}`,
         [item],
       );
-    }),
+    });
+  },
 };
 
 // ── Dictionary: entries that can never fire ───────────────────────────────────────────────────────────────
@@ -1111,7 +1321,7 @@ const entityNoCodeName: Rule = {
   severity: 'warning',
   section: 'entities',
   advanced: true,
-  summary: (count) => `${count} entities have no code name, so stat code can’t reach them`,
+  summary: (count) => `${count} entities have no code name, so scripts can’t reach them`,
   check: (world) => {
     if (!(world.stats ?? []).some((stat) => filledCodeBoxes(stat).length)) return [];
     return (world.entities ?? [])
@@ -1119,7 +1329,7 @@ const entityNoCodeName: Rule = {
       .map((entity) => {
         const item = asItem(entity, world);
         const who = (entity.name ?? '').trim() ? `${quote(item.name)} has no code name` : 'An entity has no name';
-        return finding(entityNoCodeName, `${who}, so stat code can’t reach it`, [item]);
+        return finding(entityNoCodeName, `${who}, so scripts can’t reach it`, [item]);
       });
   },
 };
@@ -1151,8 +1361,9 @@ const statDisabledForever: Rule = {
 
 // ── Stat sanity: numbers that can't mean what the author wrote ────────────────────────────────────────────
 
+// The sanity rules judge the number the author typed, not the clamped value play opens at.
 const startsInRange = (stat: Stat): boolean => {
-  const value = statStartValue(stat);
+  const value = statAuthoredStart(stat);
   return value >= stat.min && value <= stat.max;
 };
 
@@ -1168,7 +1379,7 @@ const statStartingOutOfRange: Rule = {
     const item = namedItem(stat.id, stat.name, world);
     return finding(
       statStartingOutOfRange,
-      `${quote(item.name)} starts at ${statStartValue(stat)}, outside its range of ${stat.min} to ${stat.max}`,
+      `${quote(item.name)} starts at ${statAuthoredStart(stat)}, outside its range of ${stat.min} to ${stat.max}`,
       [item],
     );
   }),
@@ -1183,7 +1394,7 @@ const statStartNoDescriptor: Rule = {
   check: (world) => (world.stats ?? [])
     // A start outside the range is the sharper diagnosis and already fires; its band is nobody's question.
     .filter((stat) => (stat.descriptors ?? []).length > 0 && startsInRange(stat)
-      && !activeDescriptor(stat, statStartValue(stat)))
+      && !activeDescriptor(stat, statAuthoredStart(stat)))
     .map((stat) => {
       const item = namedItem(stat.id, stat.name, world);
       const spans = descriptorSpans(stat);
@@ -1192,7 +1403,7 @@ const statStartNoDescriptor: Rule = {
       // is exactly the reading that made this message unreadable.
       return finding(
         statStartNoDescriptor,
-        `${quote(item.name)} starts at ${describeInThresholdUnits(stat, statStartValue(stat))}, above its top band, `
+        `${quote(item.name)} starts at ${describeInThresholdUnits(stat, statAuthoredStart(stat))}, above its top band, `
         + `which stops at ${describeInThresholdUnits(stat, top.to)} — the AI is told no status for it until the value drops`,
         [item],
       );
@@ -1369,8 +1580,8 @@ const codeReadsSelf = (code: string, stat: Stat, world: RuleWorld): boolean => {
   return statNamesInCode(code).some((name) => name === own);
 };
 
-const statCodeOverridesTrait: Rule = {
-  id: 'stat-code-overrides-trait',
+const scriptOverridesTrait: Rule = {
+  id: 'script-overrides-trait',
   severity: 'warning',
   section: 'stats',
   advanced: true,
@@ -1384,7 +1595,7 @@ const statCodeOverridesTrait: Rule = {
     const items = statAndTrait(stat, trait, world);
     const boxes = listNames(guilty.map((box) => TIMING_LABEL[box.timing]));
     return [finding(
-      statCodeOverridesTrait,
+      scriptOverridesTrait,
       `${quote(items[1].name)} ${delta < 0 ? 'lowers' : 'raises'} ${quote(items[0].name)} by ${Math.abs(delta)}, `
       + `but that stat’s ${boxes} code ${guilty.length > 1 ? 'recompute' : 'recomputes'} its value `
       + 'without reading it — the change is gone by the next run',
@@ -1410,7 +1621,7 @@ const statAiLockFrozen: Rule = {
         const item = namedItem(stat.id, stat.name, world);
         return finding(
           statAiLockFrozen,
-          `${quote(item.name)} is locked against the AI in both directions and has no code, regen or trait change to move it — its value never changes during play`,
+          `${quote(item.name)} is locked against the AI in both directions and has no code, regen or trait change to move it — its value never changes during the game`,
           [item],
         );
       });
@@ -1690,9 +1901,9 @@ const locationNoEntities: Rule = {
 
 // ── Trait groups ──────────────────────────────────────────────────────────────────────────────────────────
 
-/** A group as a pick-count finding names it: the group, then "on" its bearer when an entity holds it. */
-const groupSubject = (group: TraitGroup, bearer: Bearer | undefined, world: RuleWorld): string => {
-  const on = bearerName(bearer);
+/** A group as a pick-count finding names it: the group, then "on" its owner when an entity holds it. */
+const groupSubject = (group: TraitGroup, owner: Owner | undefined, world: RuleWorld): string => {
+  const on = entityNameOf(owner);
   return on === null ? quote(labelOf(group.name, world)) : `${quote(labelOf(group.name, world))} on ${quote(labelOf(on, world))}`;
 };
 
@@ -1703,17 +1914,17 @@ const traitGroupDefaultsOverMax: Rule = {
   severity: 'warning',
   section: 'traits',
   summary: (count) => `${count} trait groups mark more traits as default than they allow`,
-  check: (world) => [...bearersOf(world).values()].flatMap((bearer) => bearer.groups.flatMap((group) => {
+  check: (world) => treesOf(world).flatMap(({ owner, tree }) => tree.groups.flatMap((group) => {
     const max = group.maxPicks;
     if (max === undefined) return [];
-    const defaults = bearer.traits.filter((t) => (t.groupId ?? null) === group.id && t.isDefault && !isAlwaysOn(t));
+    const defaults = tree.traits.filter((t) => (t.groupId ?? null) === group.id && t.isDefault && !isAlwaysOn(t));
     if (defaults.length <= max) return [];
-    const groupItem = bearerTraitItem(group, bearer, world);
-    const defaultItems = defaults.map((t) => bearerTraitItem(t, bearer, world));
+    const groupItem = ownerTraitItem(group, owner, world);
+    const defaultItems = defaults.map((t) => ownerTraitItem(t, owner, world));
     const allowed = max === 1 ? 'one active trait' : `${max} active traits`;
     return [finding(
       traitGroupDefaultsOverMax,
-      `${groupSubject(group, bearer, world)} allows ${allowed} but marks ${listNames(defaultItems.map((i) => i.name))} as defaults — only ${max === 1 ? 'one' : max} can actually apply`,
+      `${groupSubject(group, owner, world)} allows ${allowed} but marks ${listNames(defaultItems.map((i) => i.name))} as defaults — only ${max === 1 ? 'one' : max} can actually apply`,
       [groupItem, ...defaultItems],
     )];
   })),
@@ -1723,29 +1934,29 @@ const traitGroupAlwaysOnOverMax: Rule = {
   id: 'trait-group-always-on-over-max',
   severity: 'warning',
   section: 'traits',
-  summary: (count) => `${count} trait groups can have more Always On traits active than they allow`,
+  summary: (count) => `${count} trait groups can have more Automatic traits active than they allow`,
   // Under every persona choice; a group reports the largest set any one of them opens together.
   check: (world) => {
-    const found = new Map<string, { bearer: Bearer | undefined; group: TraitGroup; traits: Trait[] }>();
+    const found = new Map<string, { owner: Owner | undefined; group: TraitGroup; traits: Trait[] }>();
     for (const persona of personaChoices(world)) {
-      const { bearers, gate } = resolveBearers(bearerWorldOf(world), persona);
+      const { owners, gate } = resolveOwners(ownerWorldOf(world), persona);
       for (const over of alwaysOnOverMax(gate)) {
         const k = pairKey(over.ownerId, over.groupId);
         if ((found.get(k)?.traits.length ?? 0) >= over.traitIds.length) continue;
-        const owner = gate.owners.find((o) => o.id === over.ownerId)!;
+        const owner = gateTreeOf(gate, over.ownerId)!;
         found.set(k, {
-          bearer: bearers.find((b) => b.id === over.ownerId),
+          owner: owners.find((b) => b.id === over.ownerId),
           group: owner.groups.find((g) => g.id === over.groupId)!,
           traits: over.traitIds.map((id) => owner.traits.find((t) => t.id === id)!),
         });
       }
     }
-    return [...found.values()].map(({ bearer, group, traits }) => {
-      const items = traits.map((t) => bearerTraitItem(t, bearer, world));
+    return [...found.values()].map(({ owner, group, traits }) => {
+      const items = traits.map((t) => ownerTraitItem(t, owner, world));
       return finding(
         traitGroupAlwaysOnOverMax,
-        `${groupSubject(group, bearer, world)} allows at most ${picksOf(group.maxPicks ?? 0)} but ${listNames(items.map((i) => i.name))} are Always On and can be active together`,
-        [bearerTraitItem(group, bearer, world), ...items],
+        `${groupSubject(group, owner, world)} allows at most ${picksOf(group.maxPicks ?? 0)} but ${listNames(items.map((i) => i.name))} are Automatic and can be active together`,
+        [ownerTraitItem(group, owner, world), ...items],
       );
     });
   },
@@ -1756,20 +1967,20 @@ const traitGroupMinAboveMax: Rule = {
   severity: 'error',
   section: 'traits',
   summary: (count) => `${count} trait groups need more picks than they allow`,
-  check: (world) => [...bearersOf(world).values()].flatMap((bearer) => bearer.groups.flatMap((group) => {
+  check: (world) => treesOf(world).flatMap(({ owner, tree }) => tree.groups.flatMap((group) => {
     const min = group.minPicks ?? 0;
     if (group.maxPicks === undefined || min <= group.maxPicks) return [];
     return [finding(
       traitGroupMinAboveMax,
-      `${groupSubject(group, bearer, world)} needs at least ${picksOf(min)} but allows at most ${group.maxPicks}`,
-      [bearerTraitItem(group, bearer, world)],
+      `${groupSubject(group, owner, world)} needs at least ${picksOf(min)} but allows at most ${group.maxPicks}`,
+      [ownerTraitItem(group, owner, world)],
     )];
   })),
 };
 
 /** A shortfall's rows: the group, then its traits. */
 const shortfallItems = (p: PickShortfall, world: RuleWorld): FindingItem[] =>
-  [bearerTraitItem(p.group, p.bearer, world), ...p.traits.map((t) => bearerTraitItem(t, p.bearer, world))];
+  [ownerTraitItem(p.group, p.owner, world), ...p.traits.map((t) => ownerTraitItem(t, p.owner, world))];
 
 const traitGroupMinUnreachable: Rule = {
   id: 'trait-group-min-unreachable',
@@ -1778,7 +1989,7 @@ const traitGroupMinUnreachable: Rule = {
   summary: (count) => `${count} trait groups need more picks than their traits can unlock`,
   check: (world) => gateReportOf(world).picks.filter((p) => p.kind === 'unreachable').map((p) => finding(
     traitGroupMinUnreachable,
-    `${groupSubject(p.group, p.bearer, world)} needs at least ${picksOf(p.min)} but ${p.count === 0 ? 'none' : `only ${p.count}`} of its traits can ever unlock`,
+    `${groupSubject(p.group, p.owner, world)} needs at least ${picksOf(p.min)} but ${p.count === 0 ? 'none' : `only ${p.count}`} of its traits can ever unlock`,
     shortfallItems(p, world),
   )),
 };
@@ -1790,7 +2001,7 @@ const traitGroupDefaultsBelowMin: Rule = {
   summary: (count) => `${count} trait groups start with fewer picks than they need`,
   check: (world) => gateReportOf(world).picks.filter((p) => p.kind === 'defaults').map((p) => finding(
     traitGroupDefaultsBelowMin,
-    `${groupSubject(p.group, p.bearer, world)} needs at least ${picksOf(p.min)} but a new game starts with ${p.count} — the defaults don’t meet the minimum`,
+    `${groupSubject(p.group, p.owner, world)} needs at least ${picksOf(p.min)} but a new game starts with ${p.count} — the defaults don’t meet the minimum`,
     shortfallItems(p, world),
   )),
 };
@@ -1819,17 +2030,36 @@ const traitGroupTooSmall: Rule = {
 
 // ── Trait gates ───────────────────────────────────────────────────────────────────────────────────────────
 
-/** The slices the bearer resolver reads. */
-export type BearerSource = Partial<Pick<RuleWorld, 'traits' | 'traitGroups' | 'entities'>>;
+/** The slices the owner resolver reads. */
+export type OwnerSource = Partial<Pick<RuleWorld, 'traits' | 'traitGroups' | 'entities'>>;
 
-/** The world as the bearer resolver reads it. A trait whose id is in `open`, world or owned, loses its
- *  requirements. */
-export function bearerWorldOf(world: BearerSource, open: ReadonlySet<string> = new Set()): BearerWorld {
-  const opened = (t: Trait): Trait => (open.has(t.id) ? { ...t, requires: [] } : t);
+const pairKey = (a: OwnerId, b: string) => `${scopeKey(a)}\u0000${b}`;
+
+/** The gates a report opens: world and owned traits by id, and link requirement overrides by
+ *  `pairKey(link id, trait id)`. */
+interface OpenGates {
+  traits: ReadonlySet<string>;
+  links: ReadonlySet<string>;
+}
+
+const NONE_OPEN: OpenGates = { traits: new Set(), links: new Set() };
+
+/** The world as the owner resolver reads it, with every gate in `open` emptied. */
+export function ownerWorldOf(world: OwnerSource, open: OpenGates = NONE_OPEN): OwnerWorld {
+  const opened = (t: Trait): Trait => (open.traits.has(t.id) ? { ...t, requires: [] } : t);
+  const openLink = (link: TraitLink): TraitLink => (link.overrides ? {
+    ...link,
+    overrides: Object.fromEntries(Object.entries(link.overrides).map(([id, o]) =>
+      [id, o.requires && open.links.has(pairKey(link.id, id)) ? { ...o, requires: { ...o.requires, value: [] } } : o])),
+  } : link);
   return {
     traits: (world.traits ?? []).map(opened),
     traitGroups: world.traitGroups ?? [],
-    entities: (world.entities ?? []).map((e) => ({ ...e, name: e.name ?? '', ...(e.traits ? { traits: e.traits.map(opened) } : {}) })),
+    entities: (world.entities ?? []).map((e) => ({
+      ...e, name: e.name ?? '',
+      ...(e.traits ? { traits: e.traits.map(opened) } : {}),
+      ...(e.traitLinks && open.links.size ? { traitLinks: e.traitLinks.map(openLink) } : {}),
+    })),
   };
 }
 
@@ -1839,41 +2069,112 @@ const personaChoices = (world: RuleWorld): PersonaRef[] => [
   ...(world.entities ?? []).filter((e) => e.persona).map((e): PersonaRef => ({ source: 'world', entityId: e.id })),
 ];
 
-/** A bearer as a finding names it: the entity, or null for the player's own root. */
-const bearerName = (bearer: Bearer | undefined): string | null => (bearer?.entity ? bearer.name : null);
+/** The owners a stat Condition on `ownerId`'s trait or image reads: those it names (every entity that can be
+ *  played for `you`) when one holds the stat, else the global stats for a global stat (Q10, Q29). */
+const statReadOwners = (world: RuleWorld, stats: GateStats, ownerId: OwnerId, req: StatRequirement): OwnerId[] => {
+  const named: OwnerId[] = req.owner?.kind === 'entity' ? [req.owner.id]
+    : req.owner?.kind === 'you' ? (world.entities ?? []).filter(canBePlayer).map((e) => e.id) : [ownerId];
+  return named.some((id) => statSetOf(stats, id)?.[req.id]) || !stats.global[req.id] ? named : [null];
+};
 
-const pairKey = (a: string, b: string) => `${a}\u0000${b}`;
+/** The stats `ownerId` holds; none for an owner the set lacks. */
+const statSetOf = (stats: GateStats, ownerId: OwnerId): GateStatSet | undefined => partOf(stats, ownerId);
 
-/** A trait on one bearer, as a gate finding names it and opens it. */
-interface StuckTrait {
-  ownerId: string;
+/** The stats a stat Condition on `ownerId` reads, one per owner that holds it. */
+const statsReadBy = (world: RuleWorld, stats: GateStats, ownerId: OwnerId, req: StatRequirement): GateStat[] =>
+  statReadOwners(world, stats, ownerId, req).flatMap((id) => statSetOf(stats, id)?.[req.id] ?? []);
+
+/** An owner as a finding names it: the entity, or null for global scope. */
+const entityNameOf = (owner: Owner | undefined): string | null => (owner?.entity ? owner.name : null);
+
+/** "“Smite”", or "“Smite” on “Albus”" for a trait an entity owns. Both names arrive quoted. */
+const onOwner = (trait: string, owner: string | null): string => (owner === null ? trait : `${trait} on ${owner}`);
+
+/** A trait on one owner, as a gate finding names it and opens it. */
+interface GateTrait {
+  ownerId: OwnerId;
   traitId: string;
   traitName: string;
-  /** See {@link bearerName}. */
-  bearer: string | null;
+  /** See {@link entityNameOf}. */
+  ownerName: string | null;
   link?: TraitLink;
-  /** Each requirement as its editor chip reads, quoted. */
-  requirements: string[];
+  /** The gate as its rows read, each Condition quoted: "“A” and “B”, or “C”". */
+  requirements: string;
+}
+
+/** One trait's gate as one owner holds it in the editor. */
+interface HeldGate {
+  owner: GateScopeTree;
+  trait: Trait;
+  /** The link that brought the trait; absent for a world or owned trait. */
+  link?: TraitLink;
+  /** Each row's Conditions as their editor chips read, unquoted. */
+  rows: string[][];
+}
+
+/** A Condition whose target this world no longer has. */
+interface DeadCondition {
+  gate: HeldGate;
+  not: boolean;
+  /** Quoted. */
+  condition: string;
+  /** The row it sits in, quoted, when the row holds other Conditions too. */
+  row: string | null;
+  /** A stat Condition: the stat is missing from its owner, not deleted from the world. */
+  stat: boolean;
+}
+
+/** A trait whose gate reads a stat the trait changes. */
+interface OwnStatRead {
+  gate: HeldGate;
+  /** The stat's name, unquoted. */
+  stat: string;
+}
+
+/** A percent Condition on a stat with no span. */
+interface ZeroSpanCondition {
+  gate: HeldGate;
+  /** Quoted. */
+  condition: string;
+  /** The stat's name, unquoted. */
+  stat: string;
+}
+
+/** A default that starts unselected on every owner that holds its gate. */
+interface OffDefault {
+  traitId: string;
+  /** A link override's gate with its owner; absent for the original's gate. */
+  gate?: HeldGate;
+  /** The gate as its rows read, each Condition quoted. */
+  requirements: string;
 }
 
 interface GateReport {
-  /** Trait id → each requirement as its editor chip reads, quoted. */
-  requirementTexts: Map<string, string[]>;
-  /** Trait id → the requirements whose target this world no longer has, quoted. World and owned traits. */
-  unresolved: Map<string, string[]>;
-  /** Never-unlockable sets across every bearer, with a trait behind a deleted target counted as openable. */
-  stuck: StuckTrait[][];
+  /** Every Condition whose target this world no longer has, one per Condition. */
+  unresolved: DeadCondition[];
+  /** Rows that can never hold, with the row quoted. */
+  deadRows: Array<{ gate: HeldGate; row: string }>;
+  /** Never-unlockable sets across every owner, with a trait behind a deleted target counted as openable. */
+  stuck: GateTrait[][];
+  /** Sets whose requirements loop through an odd number of Not Conditions, under any persona choice. */
+  unstable: GateTrait[][];
   /** Defaults that start unselected under every persona choice, outside the never-unlockable sets. */
-  offDefaults: string[];
-  /** Groups whose minimum a bearer can't meet, under every persona choice that holds the bearer. */
+  offDefaults: OffDefault[];
+  /** Groups whose minimum an owner can't meet, under every persona choice that holds the owner. */
   picks: PickShortfall[];
+  /** One per trait and stat: the gate reads a stat the trait's own effects change. */
+  ownStatReads: OwnStatRead[];
+  /** Percent Conditions on a stat whose minimum equals its maximum. */
+  zeroSpans: ZeroSpanCondition[];
+  /** Same Owner Conditions on a global trait whose target only entities hold (Q6, Q14). */
+  crossings: Array<{ gate: HeldGate; condition: string }>;
 }
 
-/** One group on one bearer that can't meet its minimum. */
+/** One group on one owner that can't meet its minimum. */
 interface PickShortfall {
   /** `unreachable`: too few traits can unlock. `defaults`: the settled defaults fall short. */
   kind: 'unreachable' | 'defaults';
-  bearer: Bearer | undefined;
+  owner: Owner | undefined;
   group: TraitGroup;
   min: number;
   /** The unlockable traits (`unreachable`) or the settled defaults (`defaults`) placed directly in the group. */
@@ -1885,7 +2186,7 @@ interface PickShortfall {
 /**
  * The gate findings, worked out once per world object. A trait with a deleted target counts as openable for
  * the other two rules, so each root cause raises one finding: its dependents show once the author re-points it.
- * Each bearer is checked as if picked: a trait is stuck only when it is stuck under every persona choice
+ * Each owner is checked as if picked: a trait is stuck only when it is stuck under every persona choice
  * that holds it.
  */
 const gateReportsByWorld = new WeakMap<RuleWorld, GateReport>();
@@ -1893,89 +2194,209 @@ const gateReportOf = (world: RuleWorld): GateReport => {
   let report = gateReportsByWorld.get(world);
   if (report) return report;
   const traits = world.traits ?? [];
-  const label = (text: string) => quote(labelOf(text, world));
+  const rowsOf = (gate: GateState | undefined): string[][] =>
+    (gate?.rows ?? []).map((row) => row.conditions.map((c) => labelOf(c.text, world)));
+  const quotedRules = (rows: string[][]) => ruleText(rows.map((row) => row.map(quote)));
 
-  const requirementTexts = new Map<string, string[]>();
-  const unresolved = new Map<string, string[]>();
-  for (const [ownerId, states] of gateStates(editorGateInput(bearerWorldOf(world)))) {
-    for (const [id, state] of states) {
-      if (ownerId === WORLD_OWNER) requirementTexts.set(id, state.requirements.map((r) => label(r.text)));
-      const dead = state.requirements.filter((r) => r.unresolved).map((r) => label(r.text));
-      if (dead.length && !unresolved.has(id)) unresolved.set(id, dead);
-    }
+  // Stat Conditions read each stat's authored start, as Enter World does (Q23).
+  const stats = startingGateStats({ stats: world.stats, statGroups: world.statGroups, entities: world.entities ?? [] });
+  const readOwners = (gate: HeldGate, req: StatRequirement): OwnerId[] => statReadOwners(world, stats, gate.owner.id, req);
+  const statsRead = (gate: HeldGate, req: StatRequirement): GateStat[] => statsReadBy(world, stats, gate.owner.id, req);
+
+  const plain = ownerWorldOf(world);
+  const editor = { ...editorGateInput(plain), stats };
+  const editorStates = gateStates(editor);
+  const linksOf = new Map<OwnerId, ReadonlyMap<string, TraitLink>>(resolveOwners(plain, undefined).owners.map((b) => [b.id, b.linkOf]));
+  const held: HeldGate[] = gateTrees(editor).flatMap((owner) => owner.traits.map((trait) => {
+    const link = linksOf.get(owner.id)?.get(trait.id);
+    return { owner, trait, ...(link ? { link } : {}), rows: rowsOf(gateOf(editorStates, owner.id, trait.id)) };
+  }));
+  // A linked copy reports only what its original does not: a Condition or a row its link override adds.
+  const originals = new Map(editor.global.traits.map((t) => [t.id, t]));
+  const inOriginal = (gate: HeldGate, req: TraitRequirement) =>
+    conditionsOf(originals.get(gate.trait.id)?.requires).some((o) => sameRequirement(o, req));
+  // A Blueprint original is never in play, so its same-owner stat Conditions are judged on each linked copy.
+  const blueprinted = blueprintItemIds({ traits: world.traits ?? [], traitGroups: world.traitGroups ?? [] });
+  const linkedIds = new Set(held.flatMap((g) => (g.link ? [g.trait.id] : [])));
+  const perLink = (traitId: string, req: TraitRequirement) => req.kind === 'stat' && !req.owner && blueprinted.has(traitId);
+
+  const requirementTexts = new Map<string, string>();
+  const unresolved: DeadCondition[] = [];
+  const openTraits = new Set<string>();
+  const openLinks = new Set<string>();
+  for (const gate of held) {
+    if (gate.owner.id === null) requirementTexts.set(gate.trait.id, quotedRules(gate.rows));
+    const rows = gate.trait.requires ?? [];
+    gateOf(editorStates, gate.owner.id, gate.trait.id)?.rows.forEach((row, i) => row.conditions.forEach((c, j) => {
+      if (!c.unresolved) return;
+      const req = rows[i].all[j];
+      // A switched-off stat is not missing: a trait can toggle it on, and the stats rules judge it.
+      if (req.kind === 'stat' && statsRead(gate, req).some((s) => s.inert)) return;
+      if (gate.link) {
+        if (gate.link.overrides?.[gate.trait.id]?.requires) openLinks.add(pairKey(gate.link.id, gate.trait.id));
+        if (perLink(gate.trait.id, req)) openTraits.add(gate.trait.id);
+        else if (inOriginal(gate, req)) return;
+      } else if (perLink(gate.trait.id, req) && linkedIds.has(gate.trait.id)) {
+        return;
+      } else {
+        openTraits.add(gate.trait.id);
+      }
+      unresolved.push({
+        gate, not: !!req.not, condition: quote(gate.rows[i][j]), row: row.conditions.length > 1 ? quote(rowText(gate.rows[i])) : null,
+        stat: req.kind === 'stat',
+      });
+    }));
   }
 
-  const openable = bearerWorldOf(world, new Set(unresolved.keys()));
-  const passes = personaChoices(world).map((persona) => {
-    const { bearers, gate } = resolveBearers(openable, persona);
-    const holds = new Map(gate.owners.map((o) => [o.id, new Set(o.traits.map((t) => t.id))]));
-    const sets = neverUnlockable(gate);
-    return { bearers: new Map(bearers.map((b) => [b.id, b])), gate, holds, sets, stuck: new Set(sets.flat().map((r) => pairKey(r.ownerId, r.traitId))) };
+  // A link reports only a Condition its own override adds; the original's gate reports the rest.
+  const ownStatReads: OwnStatRead[] = [];
+  const zeroSpans: ZeroSpanCondition[] = [];
+  for (const gate of held) {
+    const overridden = !!gate.link?.overrides?.[gate.trait.id]?.requires;
+    const effects = [...(gate.trait.statChanges ?? []), ...(gate.trait.statToggles ?? [])];
+    const reported = new Set<string>();
+    (gate.trait.requires ?? []).forEach((row, i) => row.all.forEach((req, j) => {
+      if (req.kind !== 'stat' || (gate.link && (!overridden || inOriginal(gate, req)))) return;
+      const read = statsRead(gate, req);
+      const stat = labelOf(read[0]?.name ?? req.name ?? '', world);
+      // An effect lands on the trait's owner, or on the global stat for a `target: 'global'` row.
+      const readers = readOwners(gate, req);
+      const changes = effects.some((row) => row.statId === req.id && readers.includes(row.target === 'global' ? null : gate.owner.id));
+      if (changes && !reported.has(req.id)) {
+        reported.add(req.id);
+        ownStatReads.push({ gate, stat });
+      }
+      if (req.unit === 'percent' && read.length > 0 && read.every((s) => s.min === s.max)) {
+        zeroSpans.push({ gate, condition: quote(gate.rows[i][j]), stat });
+      }
+    }));
+  }
+  const heldAt = new Map(held.map((g) => [pairKey(g.owner.id, g.trait.id), g]));
+  const neverHolding = deadRows(editor);
+  const deadInWorld = new Set(neverHolding.filter((r) => r.ownerId === null).map((r) => pairKey(r.traitId, String(r.row))));
+  const sameRow = (a: TraitRequirementRow, b: TraitRequirementRow) =>
+    a.all.length === b.all.length && a.all.every((x) => b.all.some((y) => sameRequirement(x, y)));
+  const dead = neverHolding.flatMap((r) => {
+    const gate = heldAt.get(pairKey(r.ownerId, r.traitId))!;
+    const row = (gate.trait.requires ?? [])[r.row];
+    const original = originals.get(r.traitId)?.requires ?? [];
+    if (gate.link && original.some((o, i) => deadInWorld.has(pairKey(r.traitId, String(i))) && sameRow(o, row))) return [];
+    return [{ gate, row: quote(rowText(gate.rows[r.row])) }];
   });
-  const stuckEverywhere = (ownerId: string, traitId: string) =>
+
+  // A pass over each persona choice: the owners it holds and how a gate finding names their traits.
+  const passOver = (source: OwnerWorld, persona: PersonaRef) => {
+    const resolved = resolveOwners(source, persona);
+    const { owners } = resolved;
+    const gate = { ...resolved.gate, stats };
+    const byId = new Map(owners.map((b) => [b.id, b]));
+    let states: GateStates | undefined;
+    const named = (r: GateTraitRef): GateTrait => {
+      const owner = r.ownerId === null ? undefined : byId.get(r.ownerId);
+      const link = owner?.linkOf.get(r.traitId);
+      states ??= gateStates({ ...gate, active: NO_ACTIVE });
+      return {
+        ownerId: r.ownerId,
+        traitId: r.traitId,
+        traitName: gateTreeOf(gate, r.ownerId)?.traits.find((t) => t.id === r.traitId)?.name ?? '',
+        ownerName: entityNameOf(owner),
+        ...(link ? { link } : {}),
+        requirements: quotedRules(rowsOf(gateOf(states, r.ownerId, r.traitId))),
+      };
+    };
+    return { owners: byId, gate, named };
+  };
+
+  const openable = ownerWorldOf(world, { traits: openTraits, links: openLinks });
+  const passes = personaChoices(world).map((persona) => {
+    const pass = passOver(openable, persona);
+    const holds = new Map(gateTrees(pass.gate).map((o) => [o.id, new Set(o.traits.map((t) => t.id))]));
+    const sets = neverUnlockable(pass.gate);
+    return { ...pass, holds, sets, stuck: new Set(sets.flat().map((r) => pairKey(r.ownerId, r.traitId))) };
+  });
+  const stuckEverywhere = (ownerId: OwnerId, traitId: string) =>
     passes.every((p) => !p.holds.get(ownerId)?.has(traitId) || p.stuck.has(pairKey(ownerId, traitId)));
 
   const reported = new Set<string>();
-  const stuck = passes.flatMap((pass) => {
-    let states: ReturnType<typeof gateStates> | undefined;
-    return pass.sets.map((set) => set
-      .filter((r) => !reported.has(pairKey(r.ownerId, r.traitId)) && stuckEverywhere(r.ownerId, r.traitId))
-      .map((r): StuckTrait => {
-        reported.add(pairKey(r.ownerId, r.traitId));
-        const bearer = pass.bearers.get(r.ownerId);
-        const link = bearer?.linkOf.get(r.traitId);
-        states ??= gateStates({ ...pass.gate, active: {} });
-        return {
-          ownerId: r.ownerId,
-          traitId: r.traitId,
-          traitName: bearer?.traits.find((t) => t.id === r.traitId)?.name ?? '',
-          bearer: bearerName(bearer),
-          ...(link ? { link } : {}),
-          requirements: (gateOf(states, r.ownerId, r.traitId)?.requirements ?? []).map((req) => label(req.text)),
-        };
-      }))
-      .filter((set) => set.length > 0);
-  });
+  const stuck = passes.flatMap((pass) => pass.sets.map((set) => set
+    .filter((r) => !reported.has(pairKey(r.ownerId, r.traitId)) && stuckEverywhere(r.ownerId, r.traitId))
+    .map((r) => {
+      reported.add(pairKey(r.ownerId, r.traitId));
+      return pass.named(r);
+    }))
+    .filter((set) => set.length > 0));
 
-  const input = editorGateInput(openable);
+  // A loop that can't settle under one persona choice is a trap under that choice, so any pass reports it. It
+  // reads every row, a row behind a deleted target included. A loop inside a larger one, or an earlier equal
+  // one, stays quiet.
+  const loops = personaChoices(world).flatMap((persona) => {
+    const pass = passOver(plain, persona);
+    return unstableCycles(pass.gate).map((set) => ({ keys: set.map((r) => pairKey(r.ownerId, r.traitId)), traits: set.map(pass.named) }));
+  });
+  const unstable = loops.filter((loop, i) => !loops.some((other, j) => j !== i
+    && (other.keys.length > loop.keys.length || (other.keys.length === loop.keys.length && j < i))
+    && loop.keys.every((k) => other.keys.includes(k)))).map((loop) => loop.traits);
+
+  const input = { ...editorGateInput(openable), stats };
+  // A link that overrides a trait's rows holds a gate of its own, judged apart from the original's.
+  const overrideKey = (link: TraitLink | undefined, traitId: string): string | null =>
+    (link?.overrides?.[traitId]?.requires ? pairKey(link.id, traitId) : null);
   const stuckIds = new Set([
-    ...neverUnlockable(input).flat().filter((r) => r.ownerId === WORLD_OWNER).map((r) => r.traitId),
-    ...stuck.flat().filter((t) => t.ownerId === WORLD_OWNER && !t.link).map((t) => t.traitId),
+    ...neverUnlockable(input).flat().filter((r) => r.ownerId === null).map((r) => r.traitId),
+    ...stuck.flat().filter((t) => t.ownerId === null && !t.link).map((t) => t.traitId),
+    ...stuck.flat().flatMap((t) => overrideKey(t.link, t.traitId) ?? []),
   ]);
-  // Each bearer settles its own defaults, so a default is off only when no bearer keeps it under any persona.
+  // Each owner settles its own defaults, so a default is off only when no owner keeps it under any persona.
   const everOff = new Set<string>();
   const everOn = new Set<string>();
-  const settleInto = (gate: Omit<GateInput, 'active'>) => {
+  const overridden = new Map<string, GateTraitRef>();
+  const settleInto = (gate: Omit<GateInput, 'active'>, linkOf: (ownerId: OwnerId, traitId: string) => TraitLink | undefined) => {
     const settled = settleDefaults(gate);
-    for (const r of settled.turnedOff) everOff.add(r.traitId);
-    for (const ids of Object.values(settled.active)) for (const id of ids) everOn.add(id);
+    const keyOf = (ownerId: OwnerId, traitId: string) => {
+      const key = overrideKey(linkOf(ownerId, traitId), traitId);
+      if (key !== null) overridden.set(key, { ownerId, traitId });
+      return key ?? traitId;
+    };
+    for (const r of settled.turnedOff) everOff.add(keyOf(r.ownerId, r.traitId));
+    for (const [ownerId, ids] of scopedEntries(settled.active)) {
+      // An owner that keeps an overridden trait on also keeps the original quiet.
+      for (const id of ids) everOn.add(id).add(keyOf(ownerId, id));
+    }
     return settled;
   };
-  const settledByPass = passes.map((pass) => settleInto(pass.gate).active);
-  for (const persona of personaChoices(world)) settleInto({ ...input, persona });
-  const offDefaults = traits.filter((t) => !stuckIds.has(t.id) && everOff.has(t.id) && !everOn.has(t.id)).map((t) => t.id);
+  const settledByPass = passes.map((pass) => settleInto(pass.gate, (ownerId, traitId) =>
+    (ownerId === null ? undefined : pass.owners.get(ownerId)?.linkOf.get(traitId))).active);
+  for (const persona of personaChoices(world)) settleInto({ ...input, persona }, (ownerId, traitId) => linksOf.get(ownerId)?.get(traitId));
+  const isOff = (key: string) => !stuckIds.has(key) && everOff.has(key) && !everOn.has(key);
+  const offDefaults: OffDefault[] = [
+    ...traits.filter((t) => isOff(t.id)).map((t) => ({ traitId: t.id, requirements: requirementTexts.get(t.id) ?? '' })),
+    ...[...overridden].filter(([key]) => isOff(key)).flatMap(([, r]) => {
+      const gate = heldAt.get(pairKey(r.ownerId, r.traitId));
+      return gate ? [{ traitId: r.traitId, gate, requirements: quotedRules(gate.rows) }] : [];
+    }),
+  ];
 
-  // A group is short only when it is short under every persona choice that holds its bearer. A group with an
+  // A group is short only when it is short under every persona choice that holds its owner. A group with an
   // unreachable minimum leaves its defaults to that finding, as does a minimum above the maximum.
   const shortfallsByGroup = new Map<string, { runs: number; unreachable: PickShortfall[]; defaults: PickShortfall[] }>();
   passes.forEach((pass, i) => {
-    for (const owner of pass.gate.owners) {
-      const started = settledByPass[i][owner.id] ?? [];
+    for (const owner of gateTrees(pass.gate)) {
+      const started = activeOf(settledByPass[i], owner.id);
       for (const group of owner.groups) {
         const min = group.minPicks ?? 0;
-        const bearer = pass.bearers.get(owner.id);
+        const resolvedOwner = owner.id === null ? undefined : pass.owners.get(owner.id);
         const direct = owner.traits.filter((t) => (t.groupId ?? null) === group.id);
         const entry = shortfallsByGroup.get(pairKey(owner.id, group.id)) ?? { runs: 0, unreachable: [], defaults: [] };
         shortfallsByGroup.set(pairKey(owner.id, group.id), entry);
         entry.runs++;
         const stuckHere = direct.filter((t) => pass.stuck.has(pairKey(owner.id, t.id)));
         if (min > direct.length - stuckHere.length) {
-          entry.unreachable.push({ kind: 'unreachable', bearer, group, min, count: direct.length - stuckHere.length, traits: stuckHere });
+          entry.unreachable.push({ kind: 'unreachable', owner: resolvedOwner, group, min, count: direct.length - stuckHere.length, traits: stuckHere });
         }
         const state = groupPickState(group, owner.traits, started);
         if (state.short) {
           const on = new Set(started);
-          entry.defaults.push({ kind: 'defaults', bearer, group, min, count: state.count, traits: direct.filter((t) => on.has(t.id)) });
+          entry.defaults.push({ kind: 'defaults', owner: resolvedOwner, group, min, count: state.count, traits: direct.filter((t) => on.has(t.id)) });
         }
       }
     }
@@ -1986,7 +2407,20 @@ const gateReportOf = (world: RuleWorld): GateReport => {
     else if (defaults.length === runs && defaults[0].min <= (defaults[0].group.maxPicks ?? Infinity)) picks.push(defaults[0]);
   }
 
-  report = { requirementTexts, unresolved, stuck, offDefaults, picks };
+  // A global trait's Same Owner reads global scope only, so it never pairs with an entity's item (Q6).
+  const global = offeredWorldTraits(traits, world.traitGroups ?? []);
+  const globalIds = new Set([...global.traits, ...global.groups].map((item) => item.id));
+  const entityHolds = (req: TraitRequirement): boolean => (req.kind === 'stat'
+    ? Object.values(stats.owners).some((set) => !!set[req.id])
+    : req.kind !== 'playingAs' && editor.owners.some((o) => (req.kind === 'trait' ? o.traits : o.groups).some((x) => x.id === req.id)));
+  const crossings = held.filter((gate) => gate.owner.id === null && global.traits.some((t) => t.id === gate.trait.id))
+    .flatMap((gate) => (gate.trait.requires ?? []).flatMap((row, i) => row.all.flatMap((req, j) => {
+      if (req.kind === 'playingAs' || req.kind === 'time' || req.owner) return [];
+      const isGlobal = req.kind === 'stat' ? !!stats.global[req.id] : globalIds.has(req.id);
+      return !isGlobal && entityHolds(req) ? [{ gate, condition: quote(gate.rows[i][j]) }] : [];
+    })));
+
+  report = { unresolved, deadRows: dead, stuck, unstable, offDefaults, picks, ownStatReads, zeroSpans, crossings };
   gateReportsByWorld.set(world, report);
   return report;
 };
@@ -2002,45 +2436,136 @@ const linkItem = (link: TraitLink, name: string | undefined, world: RuleWorld): 
 const uniqueItems = (items: FindingItem[]): FindingItem[] =>
   items.filter((item, i) => items.findIndex((other) => other.id === item.id) === i);
 
-/** A never-unlockable set as one line: the bearer's own words when one bearer holds the whole set. */
-function stuckMessage(set: StuckTrait[], world: RuleWorld): string {
+/** A never-unlockable set as one line: the owner's own words when one owner holds the whole set. */
+function stuckMessage(set: GateTrait[], world: RuleWorld): string {
   const name = (text: string) => quote(labelOf(text, world));
   const traits = listNames(set.map((t) => name(t.traitName)));
-  const holders = new Set(set.map((t) => (t.bearer === null ? null : t.ownerId)));
-  const holder = holders.size === 1 ? set[0].bearer : null;
-  if (holder === null) {
-    const named = set.map((t) => (t.bearer === null ? name(t.traitName) : `${name(t.traitName)} on ${name(t.bearer)}`));
-    return `${listNames(named)} can never unlock — no pick or persona can meet ${set.length === 1 ? 'its' : 'their'} requirements`;
+  const ownerIds = new Set(set.map((t) => (t.ownerName === null ? null : t.ownerId)));
+  const ownerLabel = ownerIds.size === 1 ? set[0].ownerName : null;
+  if (ownerLabel === null) {
+    return `${onOwners(set, world)} can never unlock — no pick or persona can meet ${set.length === 1 ? 'its' : 'their'} requirements`;
   }
   const verb = set.every((t) => t.link) ? 'links' : 'has';
   if (set.length === 1) {
-    return `${name(holder)} ${verb} ${traits} but can never meet ${set[0].requirements.join(' or ')}, so it never unlocks`;
+    return `${name(ownerLabel)} ${verb} ${traits} but can never meet ${set[0].requirements}, so it never unlocks`;
   }
-  return `${name(holder)} ${verb} ${traits}, which can never unlock — nothing ${name(holder)} can hold meets their requirements`;
+  return `${name(ownerLabel)} ${verb} ${traits}, which can never unlock — nothing ${name(ownerLabel)} can hold meets their requirements`;
 }
+
+/** Each trait of a gate finding by name, with its owner when an entity owns it. */
+const onOwners = (set: GateTrait[], world: RuleWorld): string => {
+  const name = (text: string) => quote(labelOf(text, world));
+  return listNames(set.map((t) => onOwner(name(t.traitName), t.ownerName === null ? null : name(t.ownerName))));
+};
+
+/** The rows a gate finding opens: a trait a link brings opens the link. */
+const gateItems = (set: GateTrait[], world: RuleWorld): FindingItem[] =>
+  uniqueItems(set.map((t) => (t.link ? linkItem(t.link, t.traitName, world) : namedItem(t.traitId, t.traitName, world))));
 
 const traitRequirementNeverUnlockable: Rule = {
   id: 'trait-requirement-never-unlockable',
   severity: 'error',
   section: 'traits',
   summary: (count) => `${count} sets of traits can never unlock`,
-  check: (world) => gateReportOf(world).stuck.map((set) => finding(
-    traitRequirementNeverUnlockable,
-    stuckMessage(set, world),
-    uniqueItems(set.map((t) => (t.link ? linkItem(t.link, t.traitName, world) : namedItem(t.traitId, t.traitName, world)))),
-  )),
+  check: (world) => gateReportOf(world).stuck.map((set) => finding(traitRequirementNeverUnlockable, stuckMessage(set, world), gateItems(set, world))),
 };
+
+const traitRequirementUnstable: Rule = {
+  id: 'trait-requirement-unstable',
+  severity: 'error',
+  section: 'traits',
+  summary: (count) => `${count} sets of traits can never settle`,
+  check: (world) => gateReportOf(world).unstable.map((set) => {
+    return finding(
+      traitRequirementUnstable,
+      `${onOwners(set, world)} can never settle — their requirements loop through a Not`,
+      gateItems(set, world),
+    );
+  }),
+};
+
+/** The trait a held gate belongs to, as a finding names it, and the row it opens. */
+const heldItem = (gate: HeldGate, world: RuleWorld): FindingItem =>
+  (gate.link ? linkItem(gate.link, gate.trait.name, world) : namedItem(gate.trait.id, gate.trait.name, world));
+
+/** The trait a held gate belongs to, as a finding names it, with the entity that links it. */
+const subjectOf = (gate: HeldGate, item: FindingItem, world: RuleWorld): string =>
+  onOwner(quote(item.name), gate.link ? quote(labelOf(gate.owner.name, world)) : null);
 
 const traitRequirementUnresolved: Rule = {
   id: 'trait-requirement-unresolved',
   severity: 'error',
   section: 'traits',
-  summary: (count) => `${count} traits require something this world no longer has`,
-  check: (world) => [...gateReportOf(world).unresolved].map(([id, dead]) => {
-    const item = traitItem(id, world);
+  summary: (count) => `${count} requirements name something this world no longer has`,
+  check: (world) => gateReportOf(world).unresolved.map(({ gate, not, condition, row, stat }) => {
+    const item = heldItem(gate, world);
+    const subject = subjectOf(gate, item, world);
+    // The world lost a Not Condition's target, not the "not" the chip reads.
+    const gone = stat ? 'which names a stat its owner doesn’t have'
+      : not ? 'which names something this world no longer has' : 'which this world no longer has';
     return finding(
       traitRequirementUnresolved,
-      `${quote(item.name)} requires ${listNames(dead)}, which this world no longer has`,
+      `${subject} requires ${condition}, ${gone}${row ? `, so ${row} never holds` : ''}`,
+      [item],
+    );
+  }),
+};
+
+const traitRequirementRowNeverHolds: Rule = {
+  id: 'trait-requirement-row-never-holds',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} requirement rows can never hold`,
+  check: (world) => gateReportOf(world).deadRows.map(({ gate, row }) => {
+    const item = heldItem(gate, world);
+    const subject = gate.link ? `${quote(labelOf(gate.owner.name, world))} links ${quote(item.name)} with` : `${quote(item.name)} has`;
+    return finding(traitRequirementRowNeverHolds, `${subject} a row that can never hold: ${row}`, [item]);
+  }),
+};
+
+const traitRequirementGlobalSameOwner: Rule = {
+  id: 'trait-requirement-global-same-owner',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} global traits require an entity's item from the same owner`,
+  check: (world) => gateReportOf(world).crossings.map(({ gate, condition }) => {
+    const item = heldItem(gate, world);
+    return finding(
+      traitRequirementGlobalSameOwner,
+      `${quote(item.name)} is a global trait and requires ${condition} from the same owner. Only entities have it, so the requirement never holds. Pick You or an entity as the owner`,
+      [item],
+    );
+  }),
+};
+
+const traitGateReadsOwnStat: Rule = {
+  id: 'trait-gate-reads-own-stat',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} traits require a stat that they change themselves`,
+  // Any stat effect counts: a value, a min or max (percent reads the effective max), or a stat toggle.
+  check: (world) => gateReportOf(world).ownStatReads.map(({ gate, stat }) => {
+    const item = heldItem(gate, world);
+    const subject = subjectOf(gate, item, world);
+    return finding(
+      traitGateReadsOwnStat,
+      `${subject} requires ${quote(stat)} and changes ${quote(stat)} — its own effect can flip the requirement, so gate it on another stat`,
+      [item],
+    );
+  }),
+};
+
+const requirementPercentZeroSpan: Rule = {
+  id: 'requirement-percent-zero-span',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} percent requirements read a stat with no range`,
+  check: (world) => gateReportOf(world).zeroSpans.map(({ gate, condition, stat }) => {
+    const item = heldItem(gate, world);
+    const subject = subjectOf(gate, item, world);
+    return finding(
+      requirementPercentZeroSpan,
+      `${subject} requires ${condition}, but ${quote(stat)} has the same min and max, so it always reads 0% — use a raw number or widen its range`,
       [item],
     );
   }),
@@ -2052,28 +2577,167 @@ const traitDefaultGated: Rule = {
   section: 'traits',
   summary: (count) => `${count} default traits start unselected because their requirements aren’t met`,
   check: (world) => {
-    const { offDefaults, requirementTexts } = gateReportOf(world);
-    return offDefaults.map((id) => {
-      const item = traitItem(id, world);
+    return gateReportOf(world).offDefaults.map(({ traitId, gate, requirements }) => {
+      const item = gate ? heldItem(gate, world) : traitItem(traitId, world);
+      const subject = onOwner(quote(item.name), gate?.link ? quote(labelOf(gate.owner.name, world)) : null);
       return finding(
         traitDefaultGated,
-        `${quote(item.name)} is marked default but starts unselected — no starting default or persona choice meets ${(requirementTexts.get(id) ?? []).join(' or ')}`,
+        `${subject} is marked default but starts unselected — no starting default or persona choice meets ${requirements}`,
         [item],
       );
     });
   },
 };
 
+// ── Image Visibility rules ────────────────────────────────────────────────────────────────────────────────
+
+/** A Condition on one gallery image that names something its owner no longer has. */
+interface DeadImageCondition {
+  entity: Entity;
+  /** 1-based, in the entity's gallery order. */
+  position: number;
+  /** Quoted. */
+  condition: string;
+  /** The row it sits in, quoted, when the row holds other Conditions too. */
+  row: string | null;
+  /** A stat Condition: the stat is missing from its owner, not deleted from the world. */
+  stat: boolean;
+}
+
+/** A percent Condition in an image rule on a stat whose min equals its max. */
+interface ZeroSpanImageCondition {
+  entity: Entity;
+  /** 1-based slot in the gallery. */
+  position: number;
+  /** Quoted. */
+  condition: string;
+  /** The stat's name, unquoted. */
+  stat: string;
+}
+
+interface ImageRuleReport {
+  missing: DeadImageCondition[];
+  /** Entities whose every image carries a rule, with no two images covering complementary Conditions. */
+  hideable: Entity[];
+  zeroSpans: ZeroSpanImageCondition[];
+}
+
+/** The image-rule findings, once per world object. A ruled image reads as a stand-in trait on its entity's owner,
+ *  so a Condition resolves as it does in a trait gate. */
+const imageReportsByWorld = new WeakMap<RuleWorld, ImageRuleReport>();
+const imageReportOf = (world: RuleWorld): ImageRuleReport => {
+  let report = imageReportsByWorld.get(world);
+  if (report) return report;
+  const ruled = (world.entities ?? []).map((entity) => ({ entity, images: entityImages(entity) }))
+    .filter(({ images }) => images.some((img) => img.requires?.length));
+  const stats = startingGateStats({ stats: world.stats, statGroups: world.statGroups, entities: world.entities ?? [] });
+  const imageId = (entity: Entity, i: number) => `image\u0000${entity.id}\u0000${i}`;
+  const asTrait = (entity: Entity, i: number, requires: TraitRequirementRow[]): Trait =>
+    ({ id: imageId(entity, i), name: '', statChanges: [], requires });
+  const input = editorGateInput(ownerWorldOf(world));
+  const ownerOf = (entity: Entity, images: readonly GalleryImage[]): GateOwner => {
+    const existing = input.owners.find((o) => o.id === entity.id);
+    const imageTraits = images.flatMap((img, i) => (img.requires?.length ? [asTrait(entity, i, img.requires)] : []));
+    return { id: entity.id, name: entity.name ?? '', groups: [], ...existing, traits: [...(existing?.traits ?? []), ...imageTraits] };
+  };
+  const swapped = new Map(ruled.map(({ entity, images }) => [entity.id, ownerOf(entity, images)]));
+  const owners = [...input.owners.map((o) => swapped.get(o.id) ?? o), ...[...swapped.values()].filter((o) => !input.owners.some((x) => x.id === o.id))];
+  const states = gateStates({ ...input, owners, stats });
+  const readFrom = (entity: Entity, req: StatRequirement): OwnerId[] => statReadOwners(world, stats, entity.id, req);
+
+  const missing: DeadImageCondition[] = [];
+  const hideable: Entity[] = [];
+  const zeroSpans: ZeroSpanImageCondition[] = [];
+  for (const { entity, images } of ruled) {
+    const stateOf = (i: number) => gateOf(states, entity.id, imageId(entity, i));
+    images.forEach((img, i) => (img.requires ?? []).forEach((row, r) => row.all.forEach((req, c) => {
+      const state = stateOf(i)?.rows[r]?.conditions[c];
+      if (req.kind === 'stat' && req.unit === 'percent' && !state?.unresolved) {
+        const read = readFrom(entity, req).flatMap((id) => statSetOf(stats, id)?.[req.id] ?? []);
+        if (read.length > 0 && read.every((s) => s.min === s.max)) {
+          zeroSpans.push({ entity, position: i + 1, condition: quote(labelOf(state!.text, world)), stat: labelOf(read[0].name, world) });
+        }
+      }
+      if (!state?.unresolved) return;
+      // A switched-off stat is not missing: the stats rules judge it.
+      if (req.kind === 'stat' && readFrom(entity, req).some((id) => statSetOf(stats, id)?.[req.id]?.inert)) return;
+      const texts = stateOf(i)!.rows[r].conditions.map((cond) => labelOf(cond.text, world));
+      missing.push({
+        entity, position: i + 1, condition: quote(texts[c]), row: row.all.length > 1 ? quote(rowText(texts)) : null, stat: req.kind === 'stat',
+      });
+    })));
+    // An empty row always holds, so its image never hides.
+    if (!images.every((img) => img.requires?.length && img.requires.every((row) => row.all.length))) continue;
+    // Two complementary Conditions (X and not X, or `> n` and `<= n` on one reading), each alone in the only
+    // row of its image, always leave one image showing.
+    const single = images.flatMap((img, i) => {
+      const req = img.requires?.length === 1 && img.requires[0].all.length === 1 ? img.requires[0].all[0] : null;
+      return req && !stateOf(i)?.rows[0]?.conditions[0]?.unresolved ? [req] : [];
+    });
+    const covered = single.some((a, i) => single.some((b, j) => j > i && complementary(a, b)));
+    if (!covered) hideable.push(entity);
+  }
+  report = { missing, hideable, zeroSpans };
+  imageReportsByWorld.set(world, report);
+  return report;
+};
+
+const imageRuleMissingTarget: Rule = {
+  id: 'image-rule-missing-target',
+  severity: 'error',
+  section: 'entities',
+  summary: (count) => `${count} image rules name something their owner doesn’t have`,
+  check: (world) => imageReportOf(world).missing.map(({ entity, position, condition, row, stat }) => {
+    const item = asItem(entity, world);
+    const gone = stat ? 'which names a stat its owner doesn’t have' : 'which this world no longer has';
+    return finding(
+      imageRuleMissingTarget,
+      `${quote(item.name)}, image ${position} requires ${condition}, ${gone}${row ? `, so ${row} never holds` : ''}`,
+      [item],
+    );
+  }),
+};
+
+const entityImagesAllHideable: Rule = {
+  id: 'entity-images-all-hideable',
+  severity: 'warning',
+  section: 'entities',
+  summary: (count) => `${count} entities can end up with no image`,
+  check: (world) => imageReportOf(world).hideable.map((entity) => {
+    const item = asItem(entity, world);
+    return finding(
+      entityImagesAllHideable,
+      `${quote(item.name)} can end up with no image — every image has a Visibility rule, and no two images cover a Condition and its opposite`,
+      [item],
+    );
+  }),
+};
+
+const imageRulePercentZeroSpan: Rule = {
+  id: 'image-rule-percent-zero-span',
+  severity: 'warning',
+  section: 'entities',
+  summary: (count) => `${count} image rules read a percent of a stat with no range`,
+  check: (world) => imageReportOf(world).zeroSpans.map(({ entity, position, condition, stat }) => {
+    const item = asItem(entity, world);
+    return finding(
+      imageRulePercentZeroSpan,
+      `${quote(item.name)}, image ${position} requires ${condition}, but ${quote(stat)} has the same min and max, so it always reads 0% — use a raw number or widen its range`,
+      [item],
+    );
+  }),
+};
+
 // ── Trait links ───────────────────────────────────────────────────────────────────────────────────────────
 
-/** Why a link adds nothing to its bearer's tree. */
+/** Why a link adds nothing to its owner's tree. */
 type Redundancy =
   | { reason: 'reached'; by: TraitLink }
   | { reason: 'duplicate' };
 
 /** Why the link at `i` of `links`, in tree order, adds nothing, or null when it adds something. */
 function redundancyOf(
-  lists: Pick<BearerWorld, 'traits' | 'traitGroups'>, links: readonly TraitLink[], i: number,
+  lists: Pick<OwnerWorld, 'traits' | 'traitGroups'>, links: readonly TraitLink[], i: number,
 ): Redundancy | null {
   const link = links[i];
   const by = links.find((other) => other.kind === 'group' && other.originalId !== link.originalId
@@ -2091,20 +2755,20 @@ const traitLinkRedundant: Rule = {
   id: 'trait-link-redundant',
   severity: 'warning',
   section: 'traits',
-  summary: (count) => `${count} links bring a trait or group their bearer already has`,
-  // Any bearer can hold one original twice through a linked group.
+  summary: (count) => `${count} links bring a trait or group their owner already has`,
+  // Any owner can hold one original twice through a linked group.
   check: (world) => {
     const lists = { traits: world.traits ?? [], traitGroups: world.traitGroups ?? [] };
     const originalName = (link: TraitLink) => labelOf(originalOf(lists, link.originalId)?.item.name ?? link.originalName, world);
     return (world.entities ?? []).flatMap((entity) => {
       const links = linksInTreeOrder(entity);
-      const bearer = quote(labelOf(entity.name ?? '', world));
+      const owner = quote(labelOf(entity.name ?? '', world));
       return links.flatMap((link, i) => {
         if (!originalOf(lists, link.originalId)) return [];
         const why = redundancyOf(lists, links, i);
         if (!why) return [];
         const item = linkItem(link, originalName(link), world);
-        return [finding(traitLinkRedundant, `${bearer} links ${quote(item.name)}${redundancyTail(why, originalName)}`, [item])];
+        return [finding(traitLinkRedundant, `${owner} links ${quote(item.name)}${redundancyTail(why, originalName)}`, [item])];
       });
     });
   },
@@ -2112,15 +2776,25 @@ const traitLinkRedundant: Rule = {
 
 // ── Blueprints and copies ─────────────────────────────────────────────────────────────────────────────────
 
-/** Every bearer's tree with no persona picked, walked once per world object. */
-const bearersByWorld = new WeakMap<RuleWorld, Map<string, Bearer>>();
-const bearersOf = (world: RuleWorld): Map<string, Bearer> => {
-  let bearers = bearersByWorld.get(world);
-  if (!bearers) {
-    bearers = new Map(resolveBearers(bearerWorldOf(world), undefined).bearers.map((b) => [b.id, b]));
-    bearersByWorld.set(world, bearers);
+/** Every owner's tree with no persona picked, walked once per world object. */
+const resolvedByWorld = new WeakMap<RuleWorld, { global: GlobalTree; owners: Map<string, Owner> }>();
+const resolvedOf = (world: RuleWorld): { global: GlobalTree; owners: Map<string, Owner> } => {
+  let resolved = resolvedByWorld.get(world);
+  if (!resolved) {
+    const { global, owners } = resolveOwners(ownerWorldOf(world), undefined);
+    resolved = { global, owners: new Map(owners.map((b) => [b.id, b])) };
+    resolvedByWorld.set(world, resolved);
   }
-  return bearers;
+  return resolved;
+};
+
+/** Each entity owner with no persona picked, by id. */
+const ownersOf = (world: RuleWorld): Map<string, Owner> => resolvedOf(world).owners;
+
+/** Every tree a group rule reads: global scope's, with no owner, then each entity owner's. */
+const treesOf = (world: RuleWorld): { owner: Owner | undefined; tree: Pick<Owner, 'traits' | 'groups'> }[] => {
+  const { global, owners } = resolvedOf(world);
+  return [{ owner: undefined, tree: global }, ...[...owners.values()].map((owner) => ({ owner, tree: owner }))];
 };
 
 /** The copies each entity needs, with why, reconciled once per world object; two rules read it. */
@@ -2128,7 +2802,7 @@ const needsByWorld = new WeakMap<RuleWorld, Map<string, Map<string, CopyNeed>>>(
 const needsOf = (world: RuleWorld): Map<string, Map<string, CopyNeed>> => {
   let needs = needsByWorld.get(world);
   if (!needs) {
-    needs = copyNeeds({ ...bearerWorldOf(world), placeholders: world.placeholders ?? [], placeholderGroups: world.placeholderGroups ?? [] });
+    needs = copyNeeds({ ...ownerWorldOf(world), placeholders: world.placeholders ?? [], placeholderGroups: world.placeholderGroups ?? [] });
     needsByWorld.set(world, needs);
   }
   return needs;
@@ -2160,10 +2834,36 @@ const copyItem = ({ owner, copy }: OwnedCopy, world: RuleWorld): FindingItem => 
   return { id: copy.id, name: copyName(asItem(owner, world).name, labelOf(blueprint?.name ?? copy.name, world)), section: 'placeholders' };
 };
 
-/** A trait on a bearer as a finding opens it: the link that brought it, else the trait. */
-const bearerTraitItem = (item: Trait | TraitGroup, bearer: Bearer | undefined, world: RuleWorld): FindingItem => {
-  const link = bearer?.linkOf.get(item.id);
+/** A trait on an owner as a finding opens it: the link that brought it, else the trait. */
+const ownerTraitItem = (item: Trait | TraitGroup, owner: Owner | undefined, world: RuleWorld): FindingItem => {
+  const link = owner?.linkOf.get(item.id);
   return link ? linkItem(link, item.name, world) : namedItem(item.id, item.name, world, 'traits');
+};
+
+const traitStatNoTarget: Rule = {
+  id: 'trait-stat-no-target',
+  severity: 'warning',
+  section: 'traits',
+  summary: (count) => `${count} entity traits change stats that their entity doesn’t own`,
+  // A blank row is an edit in progress. A trait on any entity may also name a global stat.
+  check: (world) => {
+    const statWorld = { stats: world.stats ?? [], statGroups: world.statGroups ?? [] };
+    const globalStats = new Set(globalStatsOf(statWorld.stats, statWorld.statGroups).map((s) => s.id));
+    const owners = ownersOf(world);
+    return (world.entities ?? []).flatMap((entity) => {
+      const owner = owners.get(entity.id);
+      if (!owner) return [];
+      const own = new Set(resolvedEntityStats(statWorld, entity).map((s) => s.id));
+      const namesOwnedStat = (row: StatRow) => !row.statId || statRowSide(row, own, globalStats) !== null;
+      const name = quote(labelOf(entity.name, world));
+      return owner.traits
+        .filter((trait) => statRows(trait).some((row) => !namesOwnedStat(row)))
+        .map((trait) => {
+          const item = ownerTraitItem(trait, owner, world);
+          return finding(traitStatNoTarget, `${quote(item.name)} on ${name} changes a stat that ${name} doesn’t own`, [item]);
+        });
+    });
+  },
 };
 
 /** The value ids a copy removed. */
@@ -2176,19 +2876,19 @@ const copyPinRemovedValue: Rule = {
   section: 'placeholders',
   advanced: true,
   summary: (count) => `${count} pins name a value their copy removed`,
-  // A blueprint pin reads the copy of each entity that bears the trait, or plays the root trait; a pin a
+  // A blueprint pin reads the copy of each entity that owns the trait, or plays the root trait; a pin a
   // Detach rewrote names the copy itself.
   check: (world) => {
     const removing = [...copiesOf(world).values()]
       .map((owned) => ({ ...owned, removed: removedValues(owned.copy) }))
       .filter(({ removed }) => removed.size);
     if (!removing.length) return [];
-    const bearers = bearersOf(world);
-    const player = bearers.get(PLAYER_BEARER);
+    const owners = ownersOf(world);
+    const globalTraits = resolvedOf(world).global.traits;
     const byId = indexPlaceholders(world.placeholders ?? []);
     return removing.flatMap(({ owner, copy, removed }) => {
-      const bearer = bearers.get(owner.id);
-      const traits = [...(bearer?.traits ?? []), ...(canBePlayer(owner) ? player?.traits ?? [] : [])];
+      const resolvedOwner = owners.get(owner.id);
+      const traits = [...(resolvedOwner?.traits ?? []), ...(canBePlayer(owner) ? globalTraits : [])];
       const hits = new Map<string, { valueId: string; label: string; item: FindingItem }>();
       const add = (pin: PlaceholderPin, label: string, item: () => FindingItem) => {
         if (!pin.valueId || !removed.has(pin.valueId)) return;
@@ -2198,7 +2898,7 @@ const copyPinRemovedValue: Rule = {
       };
       for (const t of traits) {
         for (const pin of t.placeholderPins ?? []) {
-          if (pin.placeholderId === copy.blueprintId) add(pin, `Trait: ${labelOf(t.name, world)}`, () => bearerTraitItem(t, bearer, world));
+          if (pin.placeholderId === copy.blueprintId) add(pin, `Trait: ${labelOf(t.name, world)}`, () => ownerTraitItem(t, resolvedOwner, world));
         }
       }
       for (const row of pinRowsOf(world)) if (row.pin.placeholderId === copy.id) add(row.pin, row.label, () => pinSourceItem(row, world));
@@ -2240,7 +2940,7 @@ const blueprintChipFields = (world: RuleWorld): FieldTexts[] => {
   ];
 };
 
-const BLUEPRINT_HOLDERS = 'world traits, blueprint values and copy values';
+const BLUEPRINT_CHIP_PLACES = 'world traits, blueprint values and copy values';
 
 const blueprintRefusedField: Rule = {
   id: 'blueprint-refused-field',
@@ -2259,7 +2959,7 @@ const blueprintRefusedField: Rule = {
       const at = item();
       return [finding(
         blueprintRefusedField,
-        `${quote(at.name)} holds a chip of the blueprint ${name(hit)}, but only ${BLUEPRINT_HOLDERS} take blueprint chips`,
+        `${quote(at.name)} holds a chip of the blueprint ${name(hit)}, but only ${BLUEPRINT_CHIP_PLACES} take blueprint chips`,
         [at],
       )];
     });
@@ -2268,7 +2968,7 @@ const blueprintRefusedField: Rule = {
       .filter((row) => blueprints.has(row.pin.placeholderId) && !isBlueprintSideSource(editor, row.source))
       .map((row) => finding(
         blueprintRefusedField,
-        `${quote(row.label)} pins the blueprint ${name(row.pin.placeholderId)}, but only ${BLUEPRINT_HOLDERS} pin blueprints`,
+        `${quote(row.label)} pins the blueprint ${name(row.pin.placeholderId)}, but only ${BLUEPRINT_CHIP_PLACES} pin blueprints`,
         [pinSourceItem(row, world)],
       ));
     return [...chips, ...pins];
@@ -2300,7 +3000,7 @@ const copyMissing: Rule = {
   severity: 'warning',
   section: 'entities',
   advanced: true,
-  summary: (count) => `${count} bearers need a copy they don’t have`,
+  summary: (count) => `${count} owners need a copy they don’t have`,
   // The reconcile adds every needed copy after each edit, so a hit is a world that skipped it.
   check: (world) => {
     const byId = new Map((world.entities ?? []).map((e) => [e.id, e]));
@@ -2311,13 +3011,13 @@ const copyMissing: Rule = {
         // An own-text need names a copy the entity holds, so it never lands here.
         if (why.kind === 'own') return [];
         const source = why.kind === 'trait'
-          ? bearerTraitItem(why.item, bearersOf(world).get(entityId), world)
+          ? ownerTraitItem(why.item, ownersOf(world).get(entityId), world)
           : placeholderItem(why.placeholderId, world);
-        const bearer = { ...asItem(entity, world), section: 'entities' as const };
+        const ownerItem = { ...asItem(entity, world), section: 'entities' as const };
         return [finding(
           copyMissing,
-          `${quote(bearer.name)} needs a copy of ${quote(placeholderItem(blueprintId, world).name)} for ${quote(source.name)} but has none, so it reads the blueprint`,
-          [bearer, source],
+          `${quote(ownerItem.name)} needs a copy of ${quote(placeholderItem(blueprintId, world).name)} for ${quote(source.name)} but has none, so it reads the blueprint`,
+          [ownerItem, source],
         )];
       });
     });
@@ -2620,10 +3320,10 @@ const placeholderDuplicateSlot: Rule = {
  * and the broken chip it routes through is already the dangling rule's finding.
  */
 const sharedWeightOriginal = (
-  holder: Placeholder, byId: Map<string, Placeholder>, key: string,
+  placeholder: Placeholder, byId: Map<string, Placeholder>, key: string,
 ): Placeholder | null => {
   const [valueId, ...under] = key.split(SHARED_PATH_SEP);
-  const value = (holder.values ?? []).find((v) => v.id === valueId);
+  const value = (placeholder.values ?? []).find((v) => v.id === valueId);
   const lone = value && lonePlaceholderToken(value.text);
   let at = lone ? byId.get(decodePlaceholderToken(lone)?.id ?? '') : undefined;
   for (const id of under) {
@@ -2633,13 +3333,13 @@ const sharedWeightOriginal = (
   return at ?? null;
 };
 
-/** Each of a holder's overrides that weights values its original no longer carries — the twin of
- *  {@link deadWeightKeys} for a shared row, whose weights live on the holder rather than on the pool. */
+/** Each of a placeholder's overrides that weights values its original no longer carries — the twin of
+ *  {@link deadWeightKeys} for a shared row, whose weights live on the placeholder rather than on the pool. */
 const deadSharedWeights = (
-  holder: Placeholder, byId: Map<string, Placeholder>,
+  placeholder: Placeholder, byId: Map<string, Placeholder>,
 ): Array<{ key: string; original: Placeholder; dead: string[] }> =>
-  Object.entries(holder.sharedWeights ?? {}).flatMap(([key, map]) => {
-    const original = sharedWeightOriginal(holder, byId, key);
+  Object.entries(placeholder.sharedWeights ?? {}).flatMap(([key, map]) => {
+    const original = sharedWeightOriginal(placeholder, byId, key);
     if (!original) return [];
     const ids = new Set((original.values ?? []).map((v) => v.id));
     const dead = Object.keys(map).filter((id) => !ids.has(id));
@@ -2857,12 +3557,12 @@ const embeddedImageSlots = (world: RuleWorld): Array<{ item: FindingItem; url: s
   ...(world.worldOverview?.thumbnail
     ? [{ item: worldItem(world), url: world.worldOverview.thumbnail, cap: IMAGE_CAPS.thumbnail }]
     : []),
-  ...(world.entities ?? []).flatMap((e) => entityImages(e).map((url) => ({
+  ...(world.entities ?? []).flatMap((e) => entityImageData(e).map((url) => ({
     item: { ...asItem(e, world), section: 'entities' as const }, url, cap: IMAGE_CAPS.entity,
   }))),
-  ...(world.locations ?? []).flatMap((l) => (l.backgroundImage
-    ? [{ item: namedItem(l.id, l.name, world, 'locations'), url: l.backgroundImage, cap: IMAGE_CAPS.background }]
-    : [])),
+  ...(world.locations ?? []).flatMap((l) => locationImages(l).map((img) => ({
+    item: namedItem(l.id, l.name, world, 'locations'), url: img.data, cap: IMAGE_CAPS.background,
+  }))),
 ];
 
 const worldOversizedImages: Rule = {
@@ -2928,12 +3628,19 @@ const imageMislabeled: Rule = {
       : { ...world, worldOverview: { ...world.worldOverview, thumbnail: nextThumb } };
     out = withSlice(out, 'entities', mapChanged(world.entities ?? [], (entity) => {
       const images = entityImages(entity);
-      const next = mapChanged(images, relabelDataUrl);
+      const next = mapChanged(images, (img) => {
+        const data = relabelDataUrl(img.data);
+        return data === img.data ? img : { ...img, data };
+      });
       return next === images ? entity : { ...entity, images: next };
     }));
     out = withSlice(out, 'locations', mapChanged(world.locations ?? [], (location) => {
-      const next = location.backgroundImage ? relabelDataUrl(location.backgroundImage) : location.backgroundImage;
-      return next === location.backgroundImage ? location : { ...location, backgroundImage: next };
+      const images = locationImages(location);
+      const next = mapChanged(images, (img) => {
+        const data = relabelDataUrl(img.data);
+        return data === img.data ? img : { ...img, data };
+      });
+      return next === images ? location : { ...location, images: next };
     }));
     return out;
   },
@@ -2943,20 +3650,21 @@ const imageMislabeled: Rule = {
 export const RULES: readonly Rule[] = [
   aliasLeadingArticle, entityMatchCollision, aliasSelfDuplicate,
   entityLocationOrphan, linkConnectionBroken, traitToggleMissingStat, placeholderPinBroken,
-  chipUnknownPlaceholder, placeholderUnused, placeholderPinnedUnused, statCodeUnknownStat,
-  statCodeBeforeReadsDelta,
+  chipUnknownPlaceholder, placeholderUnused, placeholderPinnedUnused, scriptUnknownStat, scriptUnknownBlueprintOwnerStat,
+  scriptBeforeReadsDelta, scriptTwoWriters,
   entrySecondaryWithoutPrimary, entryInert, entryRegexInvalid,
   noStartingLocation, legacyStartLocation, entityNowhere, entityNoCodeName, statDisabledForever,
   statStartingOutOfRange, statStartNoDescriptor, statDescriptorDuplicateThreshold, statDescriptorOutOfRange,
   statDescriptorCoverageGap, statPercentageBounds,
-  statTraitDeltaClamped, statCodeOverridesTrait, statAiLockFrozen,
+  statTraitDeltaClamped, scriptOverridesTrait, statAiLockFrozen,
   locationParentOrphan, connectionEndpointOrphan, statUpdateUnknownStat,
   aliasLowercaseNoTwin, entityNameInWildcardPool,
   entityMissingPlayerDescription, entityMissingAiDescription, entityMissingBothDescriptions,
   entityLongDescriptionNoSummary, aiSummaryHidesDescription, locationNoEntities,
   traitGroupDefaultsOverMax, traitGroupAlwaysOnOverMax, traitGroupTooSmall, traitGroupMinAboveMax, traitGroupMinUnreachable,
-  traitGroupDefaultsBelowMin, traitRequirementNeverUnlockable, traitRequirementUnresolved, traitDefaultGated,
-  traitLinkRedundant,
+  traitGroupDefaultsBelowMin, traitRequirementNeverUnlockable, traitRequirementUnstable, traitRequirementUnresolved,
+  traitRequirementRowNeverHolds, traitRequirementGlobalSameOwner, traitGateReadsOwnStat, requirementPercentZeroSpan, traitDefaultGated,
+  imageRuleMissingTarget, entityImagesAllHideable, imageRulePercentZeroSpan, traitLinkRedundant, traitStatNoTarget,
   copyPinRemovedValue, blueprintRefusedField, copyEditedUnused, copyMissing,
   placeholderWeightUnknownValue, wildcardSingleValue,
   placeholderPinUnknownValue, placeholderPinConflict, placeholderPinCycle, placeholderPinSelf,
@@ -2968,29 +3676,29 @@ export const RULES: readonly Rule[] = [
 ];
 
 /**
- * The stat-code execution check's row. It is a head without a `check` because it can't run in the live pass:
- * every stat costs a sandbox VM, and the badge has to stay instant. `lib/testBench/statCodeCheck` raises its
+ * The script execution check's row. It is a head without a `check` because it can't run in the live pass:
+ * every stat costs a sandbox VM, and the badge has to stay instant. `lib/testBench/scriptCheck` raises its
  * findings from the explicit action; they group and sort here like any other row.
  */
-export const STAT_CODE_EXECUTION: RuleHead = {
-  id: 'stat-code-execution',
+export const SCRIPT_EXECUTION: RuleHead = {
+  id: 'script-execution',
   severity: 'error',
   section: 'stats',
   advanced: true,
-  summary: (count) => `${count} stats’ code fails when it actually runs`,
+  summary: (count) => `${count} scripts fail when they actually run`,
 };
 
 /**
- * The stat-code unknown-name row: a run wrote a placeholder or trait the world lacks, so the write was
- * dropped. Raised from the same explicit action as {@link STAT_CODE_EXECUTION}; a warning, because the code
+ * The script unknown-name row: a run wrote a placeholder or trait the world lacks, so the write was
+ * dropped. Raised from the same explicit action as {@link SCRIPT_EXECUTION}; a warning, because the code
  * still runs and the stat still gets its value.
  */
-export const STAT_CODE_UNKNOWN_NAME: RuleHead = {
-  id: 'stat-code-unknown-name',
+export const SCRIPT_UNKNOWN_NAME: RuleHead = {
+  id: 'script-unknown-name',
   severity: 'warning',
   section: 'stats',
   advanced: true,
-  summary: (count) => `${count} stats’ code writes names the world doesn’t have`,
+  summary: (count) => `${count} scripts write names the world doesn’t have`,
 };
 
 /**
@@ -3001,7 +3709,7 @@ export const STAT_CODE_UNKNOWN_NAME: RuleHead = {
 export const WORLD_TOO_LARGE: RuleHead = {
   id: 'world-too-large',
   severity: 'warning',
-  section: 'overview',
+  section: 'media',
   summary: () => 'The world is over the publish limit',
 };
 
@@ -3031,7 +3739,7 @@ export const SOURCE_UNAVAILABLE: RuleHead = {
 
 /** Everything that can put a row in the Issues list — the live rules plus the on-demand checks. */
 const RULE_HEADS: readonly RuleHead[] = [
-  ...RULES, STAT_CODE_EXECUTION, STAT_CODE_UNKNOWN_NAME, WORLD_TOO_LARGE,
+  ...RULES, SCRIPT_EXECUTION, SCRIPT_UNKNOWN_NAME, WORLD_TOO_LARGE,
   SOURCE_NOT_FOUND, SOURCE_UNAVAILABLE,
 ];
 

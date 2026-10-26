@@ -32,9 +32,13 @@ export const ALWAYS_RUN = {
   'src/lib/bundledFingerprint.test.ts': 'scans src/defaultworlds and reads the shipped avatars',
   'src/lib/codeHighlight.test.ts': 'reads src/index.css',
   'src/lib/docs/bundledDocsIndex.test.ts': 'scans src for the Docs Index loader',
+  'src/lib/elementIcons.test.ts': 'scans every src file for direct lucide-react imports',
   'src/lib/formaquestion/helpSettings.test.ts': 'reads helpSession.ts, which it does not import',
   'src/lib/helpTopics.test.ts': 'checks that each help topic page exists in docs/',
+  'src/lib/ownerTermGuard.test.ts': 'scans the docs, every src file and the e2e specs for bearer and holder',
   'src/lib/personaReaders.test.ts': 'scans src/components/game sources',
+  'src/lib/playerInputRename.test.ts': 'scans the docs, every src file, electron, site and the e2e specs for the retired call',
+  'src/lib/sandboxSnapshot.boundary.test.ts': 'scans every src file for an executor import',
   'src/lib/scrollGuard.test.ts': 'scans every src file for native overflow scrollers',
   'src/lib/supporterTokens.test.ts': 'reads src/index.css',
   'src/lib/surface/surfaceReportChecks.test.ts': 'scans every src file for surface reports',
@@ -42,6 +46,7 @@ export const ALWAYS_RUN = {
   'src/lib/viewportSizing.test.ts': 'reads view sources and src/index.css',
   'src/lib/worldSearchLabels.test.ts': 'scans src/managers sources',
   'src/managers/fieldLabels.test.ts': 'scans src/managers sources',
+  'src/test/tokenCorpus.ts': 'scans every src file and bundled world for prompt tokens; selects promptTokenGrammar.test.ts',
 };
 
 /** Tests, and modules that tests import, that read from disk, but only what the module graph already covers. */
@@ -50,14 +55,24 @@ export const GRAPH_COVERED = {
   'electron/modelMove.test.mjs': 'reads only its own temp folder',
   'electron/modelScan.test.mjs': 'reads only its own temp folder',
   'scripts/typecheck.test.mjs': 'reads only its own temp folder',
+  'scripts/slowTestReporter.mjs': 'reads only its timing cache in node_modules/.cache',
   'scripts/versionSiteImages.test.mjs': 'reads only its own temp folder',
+  'scripts/fetchLlamaServer.test.mjs': 'reads its recorded asset list and its own temp folders',
+  'scripts/moveReach.test.mjs':'reads its own temp folder and walks src/lib/uuid.ts, whose closure it never asserts',
   'testing/baseline/harness/planning-parser-probe.test.ts': 'reads files only under PARSER_PROBE=1',
+  'src/test/preRefreshWorlds.ts': 'reads the worlds from one fixed commit, which no change alters',
   'electron/modelDownload.cjs': 'reads only the paths its caller passes',
   'electron/modelMove.cjs': 'reads only the paths its caller passes',
   'electron/modelScan.cjs': 'reads only the paths its caller passes',
-  'scripts/typecheck.mjs': 'checks only the folder its caller passes; runs git only in mainCheckoutRoot, which no test calls',
+  'scripts/fetchLlamaServer.mjs': 'reads only llamaServerPin.json and the folders its caller passes',
+  'electron/llmEngine.cjs': 'writes and reads only its work folder under the root its caller passes',
+  'electron/llamaServer.cjs': 'checks only for the bundled binary, which tests replace',
+  'electron/llmEngine.test.mjs': 'reads only its own temp folder',
+  'electron/llamaServer.test.mjs': 'reads only its own temp folder',
+  'scripts/typecheck.mjs':'checks only the folder its caller passes; runs git only in mainCheckoutRoot, which no test calls',
   'scripts/versionSiteImages.mjs': 'reads only the folder its caller passes',
   'scripts/copySweep.mjs': 'reads files only in its command-line sweep, which no test calls',
+  'scripts/moveReach.mjs': 'reads only the probe file its caller passes; the compiler walks the files the probe names',
   'scripts/testSelection.mjs': 'runs git only in the helpers the gate scripts call',
   'vite.config.js': 'a change to it runs the full suite',
 };
@@ -68,19 +83,33 @@ export const GRAPH_COVERED = {
  * selects its importers.
  */
 export const PATH_TRIGGERS = {
-  'docs/*.md': ['src/lib/docs/bundledDocsIndex.ts', 'src/lib/docs/docsCoverage.test.ts', 'src/lib/docs/bundledDocsIndex.test.ts'],
+  'docs/*.md': ['src/lib/docs/bundledDocsIndex.ts', 'src/lib/docs/docsCoverage.test.ts', 'src/lib/docs/bundledDocsIndex.test.ts', 'src/lib/codeGuideLinks.test.ts'],
   'src/index.css': ['src/lib/landingPulse.test.ts'],
-  'src/defaultworlds/*.json': ['src/services/WorldStorageService.ts'],
-  'src/defaultworlds/emberwatch.json': ['src/lib/emberwatchWorld.test.ts'],
-  'src/defaultworlds/open-chat.json': ['src/lib/openChatWorld.test.ts'],
+  'index.html': ['src/components/themeBootstrap.test.ts'],
+  'src/defaultworlds/*.json': ['src/services/WorldStorageService.ts', 'src/lib/perTurnSettle.parity.test.ts', 'src/lib/bundledPlayerStats.test.ts', 'src/lib/bundledWorlds.test.ts', 'src/views/GameViewer.bundledSaves.test.tsx', 'src/lib/ownerTreeParity.test.ts', 'src/lib/seedRule.bundled.test.ts'],
+  'src/lib/__parity__/*.json': ['src/lib/ownerTreeParity.test.ts'],
+  'src/defaultworlds/drone.json': ['src/lib/droneWorld.test.ts'],
+  'src/defaultworlds/emberwatch.json': ['src/lib/emberwatchWorld.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
+  'src/defaultworlds/slime.json': ['src/lib/slimeWorld.test.ts'],
+  'src/defaultworlds/rampage.json': ['src/lib/rampageWorld.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
+  'src/defaultworlds/open-chat.json': ['src/lib/openChatWorld.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
+  'src/defaultworlds/sugarscape.json': ['src/lib/sugarscapeWorld.test.ts'],
+  'src/defaultworlds/valentines.json': ['src/lib/valentinesWorld.test.ts'],
+  'src/defaultworlds/veilwood.json': ['src/lib/veilwoodWorld.test.ts'],
   'src/lib/formaquestion/mascotAssets/*.webp': ['src/lib/formaquestion/mascotAssets.ts'],
   'testing/parity/turn-pipeline-parity.json': ['src/lib/turnPipeline/parityFixture.test.ts', 'src/lib/turnPipeline/parityTestInputs.ts'],
   'testing/baseline/help-baseline-cases.json': ['testing/baseline/harness/help-baseline-cases.ts'],
   'testing/baseline/help-recall-blind-cases.json': ['testing/baseline/harness/help-recall-cases.ts'],
   // The proxy forks the host as a child process instead of importing it.
   'electron/llmEngineHost.cjs': ['electron/llmEngineProxy.cjs'],
+  // The fake llama-server replays the run recorded at the pinned tag; the stream parser test reads the same files.
+  'electron/fixtures/llama-server/*.json': ['electron/fakeLlamaServer.mjs', 'src/lib/aiRequest/aiStream.llamaServer.test.ts'],
+  'scripts/llamaServerPin.json': ['electron/fakeLlamaServer.mjs'],
+  // The pin load test runs the generator as a child process.
+  'testing/editor-speed/genLargeWorld.mjs': ['src/test/pinWorld.ts'],
   'public/default-avatar.vrm': ['src/lib/avatarLicenseGate.bundledAvatars.test.ts'],
   'build-assets/alternate-avatar.vrm': ['src/lib/avatarLicenseGate.bundledAvatars.test.ts'],
+  'package-lock.json': ['src/components/ui/radixSingleCopy.test.ts'],
 };
 
 const REQUIRE_CALL = /\brequire\(\s*([^)]*?)\s*\)/g;

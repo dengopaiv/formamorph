@@ -8,7 +8,7 @@ import { mascotImageUrl } from '@/lib/formaquestion/mascotAssets';
 import { UNKNOWN_REASONING_CAPABILITY } from '@/lib/reasoningEffort';
 import { sseFrame, sseReply, sseResponse, textSnapshot, textTarget } from '@/test/aiTextFixtures';
 import { helpAi } from '@/test/helpAiFixture';
-import { openHelpSettings, storeMinimalWindow, stubHelpStream } from '@/test/helpFixtures';
+import { openHelpSettings, storeFramedWindow, storeMinimalWindow, stubHelpStream } from '@/test/helpFixtures';
 import type { HelpAi } from './useHelpAi';
 
 const ai = vi.hoisted(() => ({ current: null as unknown as HelpAi }));
@@ -40,7 +40,9 @@ async function openWindow() {
 }
 
 async function ask(field: HTMLElement, question: string) {
-  await userEvent.type(field, question);
+  // The click keeps the default delay, which Radix's pointer-events cleanup needs; the keys skip it.
+  await userEvent.click(field);
+  await userEvent.type(field, question, { delay: null, skipClick: true });
   await userEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled());
 }
@@ -88,6 +90,13 @@ describe('the bubble chrome', () => {
     expect(bubble()).toBeNull();
     expect(strip()).toBeNull();
     expect(screen.queryByRole('note', { name: 'Your Question' })).toBeNull();
+    // The chat room still stands, with its grip on it and the scrim over it, so the chat's size shows before the first answer.
+    const grip = piece('resize')!;
+    const room = grip.parentElement!.style;
+    expect(parseFloat(room.height)).toBeGreaterThan(100);
+    expect(parseFloat(piece('scrim')!.style.top)).toBe(parseFloat(room.top) - 12);
+    // The pill stands at her outer edge: she is on the right, so it sits at her right.
+    expect(helpWindow().querySelector('[data-fq-drag]')!.parentElement).toHaveClass('justify-end');
   });
 
   it('speaks the newest answer from the bubble, with its question under it and Sources and Take Me There in the strip', async () => {
@@ -152,9 +161,14 @@ describe('the bubble chrome', () => {
     // She stands at the bottom right by default, so the bubble is on her left and its tail points right.
     expect(helpWindow()).toHaveAttribute('data-fq-side', 'right');
     expect(piece('tail')).toHaveAttribute('data-fq-tail', 'right');
-    // The tail paints under the bubble, so it never covers the text or the scroll bar.
+    // The tail paints over the bubble's surface, so it hides the border where it joins, and under the text and the scroll bar.
+    const surface = helpWindow().querySelector<HTMLElement>('[data-fq-piece="bubble-surface"]')!;
+    expect(surface.compareDocumentPosition(piece('tail')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(piece('tail')!.compareDocumentPosition(bubble()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(piece('tail')!.parentElement).toBe(bubble()!.parentElement);
+    expect(surface.parentElement).toBe(bubble()!.parentElement);
+    expect(surface.style.top).toBe(bubble()!.style.top);
+    expect(bubble()!.className).not.toContain('bg-popover');
   });
 
   it('moves the window by her body, keeps her place across a remount, and mirrors past the center', async () => {
@@ -172,11 +186,14 @@ describe('the bubble chrome', () => {
     expect(helpWindow()).toHaveAttribute('data-fq-side', 'left');
   });
 
-  it('moves the window by the pill too', async () => {
+  it('leaves the window put from a drag on the pill: she is the handle, so the pill draws no grip icon', async () => {
     await openWindow();
+    const pill = helpWindow().querySelector<HTMLElement>('[data-fq-drag]')!;
+    expect(pill).not.toHaveClass('cursor-move');
+    expect(pill.querySelector('svg.lucide-grip-vertical')).toBeNull();
     const before = left();
-    drag(helpWindow().querySelector<HTMLElement>('[data-fq-drag]')!, -30, 0);
-    expect(left()).toBe(before - 30);
+    drag(pill, -30, 0);
+    expect(left()).toBe(before);
   });
 
   it("sets her scale in the device's Scale store from her own grip, and leaves the chat width alone", async () => {
@@ -239,7 +256,7 @@ describe('the bubble chrome', () => {
     offsetHeight.mockRestore();
   });
 
-  it('stacks one column in head view, with the tail pointing down at the head', async () => {
+  it('stacks one column in head view, with the head above the input and the tail pointing down at it', async () => {
     localStorage.setItem('formamorph.formaquestion.mascotView', 'head');
     const { field } = await openWindow();
     stubHelpStream(sseReply('Open the **Traits** tab.'));
@@ -428,7 +445,8 @@ describe('paging through the conversation', () => {
 });
 
 describe('Mascot Position under Bubble', () => {
-  it('leaves the row and the ⋮ menu entry out under Bubble', async () => {
+  it('leaves the row and the ⋮ menu entry out with the Mascot off, since there is nothing to place', async () => {
+    storeFramedWindow({ chatStyle: 'minimal', mascot: false });
     await openWindow();
     await userEvent.click(within(helpWindow()).getByRole('button', { name: 'More Actions' }));
     expect(await screen.findByRole('group', { name: 'Chat Style' })).toBeInTheDocument();
@@ -437,8 +455,29 @@ describe('Mascot Position under Bubble', () => {
 
     await openHelpSettings();
     const dialog = await screen.findByRole('dialog', { name: 'Formaquestion Settings' });
-    expect(within(dialog).getByRole('radiogroup', { name: 'Chat Style' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('radiogroup', { name: 'Mascot Position' })).toBeNull();
+  });
+
+  it('offers Inside and Outside alone under Bubble, in the ⋮ menu and the dropdown, and reads a stored Below as Outside', async () => {
+    localStorage.setItem('formamorph.formaquestion.mascotPlacement', 'below');
+    await openWindow();
+    await userEvent.click(within(helpWindow()).getByRole('button', { name: 'More Actions' }));
+    const group = await screen.findByRole('group', { name: 'Mascot Position' });
+    expect(within(group).getAllByRole('menuitemradio').map((item) => item.textContent)).toEqual(['Inside', 'Outside']);
+    await userEvent.keyboard('{Escape}');
+
+    await openHelpSettings();
+    const dialog = await screen.findByRole('dialog', { name: 'Formaquestion Settings' });
+    const position = within(dialog).getByRole('combobox', { name: 'Mascot Position' });
+    expect(position).toHaveTextContent('Outside');
+    await userEvent.click(position);
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['Inside', 'Outside']);
+  });
+
+  it('stands the column toward the screen edge under Inside', async () => {
+    localStorage.setItem('formamorph.formaquestion.mascotPlacement', 'inside');
+    await openWindow();
+    expect(helpWindow()).toHaveAttribute('data-fq-side', 'left');
   });
 
   it('shows the row and the ⋮ menu entry under Minimal', async () => {
@@ -450,19 +489,19 @@ describe('Mascot Position under Bubble', () => {
 
     await openHelpSettings();
     const dialog = await screen.findByRole('dialog', { name: 'Formaquestion Settings' });
-    expect(within(dialog).getByRole('radiogroup', { name: 'Mascot Position' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('combobox', { name: 'Mascot Position' })).toBeInTheDocument();
   });
 
-  it('lists four Chat Styles in the ⋮ menu and the General row', async () => {
+  it('lists three Chat Styles in the ⋮ menu and the General row', async () => {
     await openWindow();
     await userEvent.click(within(helpWindow()).getByRole('button', { name: 'More Actions' }));
     const menu = await screen.findByRole('group', { name: 'Chat Style' });
-    expect(within(menu).getAllByRole('menuitemradio').map((item) => item.textContent)).toEqual(['Auto', 'Bubble', 'Minimal', 'Full']);
+    expect(within(menu).getAllByRole('menuitemradio').map((item) => item.textContent)).toEqual(['Auto', 'Minimal', 'Full']);
     await userEvent.keyboard('{Escape}');
 
     await openHelpSettings();
     const dialog = await screen.findByRole('dialog', { name: 'Formaquestion Settings' });
     expect(within(within(dialog).getByRole('radiogroup', { name: 'Chat Style' })).getAllByRole('radio').map((item) => item.textContent))
-      .toEqual(['Auto', 'Bubble', 'Minimal', 'Full']);
+      .toEqual(['Auto', 'Minimal', 'Full']);
   });
 });

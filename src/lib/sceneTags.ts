@@ -3,7 +3,10 @@
 // the action tags the text model writes from this turn's narration. The authored tags go in verbatim — the
 // model only ever contributes action/pose/composition — so a world keeps a consistent look across turns.
 
+import type { Entity } from '@/types';
+import { sameCharacterName } from './entityMatch';
 import { normalizeBooruTags } from './imagePrompt';
+import { joinPromptParts } from './imageGen/promptParts';
 import { escapeRegExp } from './utils';
 
 /** One character in frame: the display name (for the model's user message) and their authored tags. */
@@ -16,6 +19,28 @@ export interface SceneCharacter {
 
 /** Booru models lose track of who is who past two subjects, so a crowd is rendered as its two leads. */
 export const MAX_SCENE_CHARACTERS = 2;
+
+/**
+ * Who the picture holds, in drawing order: the played persona when the turn put the player in it, then the
+ * turn's participants in narration order, capped at what a booru model keeps apart. The persona leads because
+ * the passage is told through them.
+ *
+ * `playerInFrame` is the planner's call. Undefined means no planner judged it (planning off, or a turn saved
+ * before the flag), and the player is in most scenes, so undefined reads as in frame.
+ */
+export function pickSceneCast(input: {
+  participants: string[];
+  /** The cast the participants resolve against, without the persona. */
+  entities: Entity[];
+  persona: Entity | null;
+  playerInFrame: boolean | undefined;
+}): Entity[] {
+  const npcs = input.participants
+    .map((name) => input.entities.find((e) => sameCharacterName(e.name, name)))
+    .filter((e): e is Entity => !!e);
+  const lead = input.persona && input.playerInFrame !== false ? [input.persona] : [];
+  return [...lead, ...npcs].slice(0, MAX_SCENE_CHARACTERS);
+}
 
 /** Split a tag line into trimmed, non-empty tags. */
 export function splitTags(line: string): string[] {
@@ -81,6 +106,17 @@ export function stripPlaces(tag: string, places: string[], knownTags?: ReadonlyS
   return out.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * What one character counts as. Their own tags can only describe one character, so a `2girls` left in an
+ * authored field still reads as one girl.
+ */
+function characterKind(character: SceneCharacter): 'girl' | 'boy' | 'other' {
+  const tags = splitTags(character.tags.toLowerCase());
+  if (tags.some((t) => GIRL_COUNT.test(t))) return 'girl';
+  if (tags.some((t) => BOY_COUNT.test(t))) return 'boy';
+  return 'other';
+}
+
 /** Booru plural for a count: `1girl`, `2girls`. */
 const countTag = (n: number, singular: string, plural: string) => `${n}${n === 1 ? singular : plural}`;
 
@@ -89,19 +125,17 @@ const countTag = (n: number, singular: string, plural: string) => `${n}${n === 1
  * become `2girls`, a girl and a boy stay `1girl, 1boy`. A character whose tags name no count is assumed to
  * be a person of unstated kind (`1other`), since they were put in the scene deliberately.
  *
- * `solo` is never emitted: the player character is in most scenes and has no tags of their own, so claiming
- * a single-subject frame would fight the narration rather than describe it.
+ * `solo` is never emitted: a world with no persona still has the player in most scenes with no tags of their
+ * own, so claiming a single-subject frame would fight the narration rather than describe it.
  */
 export function deriveCountTags(characters: SceneCharacter[]): string[] {
   let girls = 0;
   let boys = 0;
   let others = 0;
   for (const character of characters) {
-    const tags = splitTags(character.tags.toLowerCase());
-    // A character's own tags can only describe one character, so a `2girls` left in an authored field
-    // still counts as one subject here.
-    if (tags.some((t) => GIRL_COUNT.test(t))) girls += 1;
-    else if (tags.some((t) => BOY_COUNT.test(t))) boys += 1;
+    const kind = characterKind(character);
+    if (kind === 'girl') girls += 1;
+    else if (kind === 'boy') boys += 1;
     else others += 1;
   }
   const out: string[] = [];
@@ -114,7 +148,8 @@ export function deriveCountTags(characters: SceneCharacter[]): string[] {
 /**
  * Build the full prompt line for a scene image, in booru weight order: who is in frame, what they look
  * like, what they're doing, then where. Tags are normalized and deduped across all four sources, first
- * occurrence winning — so a tag the location and a character share is not sent twice.
+ * occurrence winning — so a tag the location and a character share is not sent twice. The segmented form
+ * dedupes per part instead.
  *
  * Characters past `MAX_SCENE_CHARACTERS` are dropped; the caller passes them in prominence order.
  */
@@ -127,11 +162,18 @@ export function composeSceneTags(input: {
   places?: string[];
   /** Real tags, so a place name that is also one survives. */
   knownTags?: ReadonlySet<string>;
+  /** Off keeps each tag's text as written (see normalizeBooruTags). */
+  cleanTags?: boolean;
+  /**
+   * NovelAI's multi-character form: `<counts>, <action>, <place> | <kind>, <character tags> | …`, each part
+   * normalized and deduped on its own so two characters can share a tag.
+   */
+  segmented?: boolean;
 }): string {
   const characters = input.characters.slice(0, MAX_SCENE_CHARACTERS);
   const counts = deriveCountTags(characters);
   // Authored tags are never scrubbed for names or places: an author who typed one meant it.
-  const appearance = characters.flatMap((c) => splitTags(c.tags)).filter((t) => !isCountTag(t.toLowerCase()));
+  const ownTags = (c: SceneCharacter) => splitTags(c.tags).filter((t) => !isCountTag(t.toLowerCase()));
   // The model is told who is in frame, so it writes them in by name; take the names back out.
   const castNames = characters.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
   const action = splitTags(input.actionTags)
@@ -142,5 +184,10 @@ export function composeSceneTags(input: {
     (t) => !(characters.length > 0 && NO_HUMANS.test(t.toLowerCase())),
   );
   // normalizeBooruTags does the lowercasing, un-joining and dedupe the whole pipeline relies on.
-  return normalizeBooruTags([...counts, ...appearance, ...action, ...place].join(', '));
+  const normalize = (tags: string[]) => normalizeBooruTags(tags.join(', '), input.cleanTags);
+  if (!input.segmented) {
+    return normalize([...counts, ...characters.flatMap(ownTags), ...action, ...place]);
+  }
+  const parts = characters.map((c) => normalize([characterKind(c), ...ownTags(c)]));
+  return joinPromptParts([normalize([...counts, ...action, ...place]), ...parts]);
 }

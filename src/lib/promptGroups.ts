@@ -38,7 +38,7 @@ export function isAuthoringTab(tab: string): boolean {
 
 export const PROMPT_GROUPS: PromptGroup[] = [
   { label: 'Story', tabs: ['narration', 'thinking', 'director', 'character', 'discover', 'storyboard', 'choices'] },
-  { label: 'Trackers', tabs: ['statupdates', 'location', 'timepassed', 'timeopening'] },
+  { label: 'Trackers', tabs: ['statupdates', 'location', 'entitylocation', 'timepassed', 'timeopening'] },
   { label: 'Memory', tabs: ['summary', 'milestone', 'diary'] },
   { label: 'Images', tabs: ['scenetags'] },
   // Last, and outside the pipeline order the groups above follow: these run in the world editor while the
@@ -50,7 +50,7 @@ export const PROMPT_GROUPS: PromptGroup[] = [
  *  a map keyed by it is total and a lookup needs no fallback. */
 export type PromptTab =
   | 'narration' | 'thinking' | 'director' | 'character' | 'discover' | 'storyboard' | 'choices'
-  | 'statupdates' | 'location' | 'timepassed' | 'timeopening'
+  | 'statupdates' | 'location' | 'entitylocation' | 'timepassed' | 'timeopening'
   | 'summary' | 'milestone' | 'diary'
   | 'scenetags';
 
@@ -65,6 +65,7 @@ export const PROMPT_TAB_REQUESTS: Record<PromptTab, AIRequestType> = {
   choices: 'choices',
   statupdates: 'statUpdates',
   location: 'locationChange',
+  entitylocation: 'entityLocation',
   timepassed: 'timePassed',
   timeopening: 'openingTime',
   summary: 'summary',
@@ -85,6 +86,7 @@ export const PROMPT_LABELS: Record<PromptTab, string> = {
   choices: 'Choices',
   statupdates: 'Stat Updates',
   location: 'Location Change',
+  entitylocation: 'Entity Location',
   summary: 'Summaries',
   milestone: 'Milestone Select',
   timepassed: 'Clock',
@@ -116,6 +118,7 @@ export const PROMPT_DESCRIPTIONS: Record<string, string> = {
   choices: 'Offers your options for the turn, written in your own voice',
   statupdates: 'Reads what happened and records which stats it moved',
   location: 'Decides whether your action takes you somewhere new',
+  entitylocation: 'Decides whether each entity here comes with you or stays',
   summary: 'Condenses an older turn into one line the storyteller can still read later',
   milestone: 'Decides, between turns, which condensed turns stay in long-term memory',
   diary: "Records each present character's private, first-person note on the turn",

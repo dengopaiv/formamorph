@@ -1,6 +1,9 @@
 import '@testing-library/jest-dom/vitest'; // augments Vitest's expect with DOM matchers
 import { afterEach } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
+
+// `findBy*` and `waitFor` give up after this; a starved run must not read as a miss.
+configure({ asyncUtilTimeout: 10_000 });
 
 // jsdom doesn't implement ResizeObserver; provide a no-op so components that observe element size
 // (e.g. MarkdownField's edit/preview height sharing) can render under test.
@@ -9,6 +12,20 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     observe() {}
     unobserve() {}
     disconnect() {}
+  };
+}
+
+// Nor IntersectionObserver, which Motion's in-view hook (the status glyphs) calls on mount. It never reports.
+if (typeof globalThis.IntersectionObserver === 'undefined') {
+  globalThis.IntersectionObserver = class {
+    readonly root = null;
+    readonly rootMargin = '0px';
+    readonly scrollMargin = '0px';
+    readonly thresholds = [0];
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() { return []; }
   };
 }
 
@@ -37,6 +54,18 @@ if (typeof Blob !== 'undefined' && typeof Blob.prototype.arrayBuffer === 'undefi
       reader.onload = () => resolve(reader.result as ArrayBuffer);
       reader.onerror = () => reject(reader.error);
       reader.readAsArrayBuffer(this);
+    });
+  };
+}
+
+// Same gap for `text()`: the worker reads an imported file with it.
+if (typeof Blob !== 'undefined' && typeof Blob.prototype.text === 'undefined') {
+  Blob.prototype.text = function text(this: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(this);
     });
   };
 }
@@ -83,6 +112,19 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.hasPointerCapture
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
+}
+
+// A browser's computed style is live; jsdom's is a snapshot. Radix Presence holds one from mount and reads the
+// exit animation from it on close, so a snapshot shows no exit and every sheet would skip its closing state.
+if (typeof window !== 'undefined') {
+  const snapshot = window.getComputedStyle.bind(window);
+  window.getComputedStyle = (element, pseudo) => new Proxy(snapshot(element, pseudo), {
+    get: (_stale, key) => {
+      const fresh = snapshot(element, pseudo);
+      const value: unknown = Reflect.get(fresh, key);
+      return typeof value === 'function' ? value.bind(fresh) : value;
+    },
+  });
 }
 
 // jsdom has no object-URL store. The upload path makes one to show the file being converted without handing

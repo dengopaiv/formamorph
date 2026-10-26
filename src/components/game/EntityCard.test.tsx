@@ -4,12 +4,12 @@ import { EntityCardBody, EntityDescription } from './EntityCard';
 import type { Entity } from '@/types';
 
 /**
- * The entity card body renders from the entity alone. In Play shows it inside the World Editor, where no
+ * The entity card body renders from the entity alone. In Game shows it inside the World Editor, where no
  * game is running and no game state exists to read.
  */
 
 const IMAGE = 'data:image/webp;base64,AAAA';
-const sedge: Entity = { id: 'e1', name: 'Sedge', playerDescription: 'A heron-thin ferryman.', images: [IMAGE] };
+const sedge: Entity = { id: 'e1', name: 'Sedge', playerDescription: 'A heron-thin ferryman.', images: [{ data: IMAGE }] };
 
 afterEach(cleanup);
 

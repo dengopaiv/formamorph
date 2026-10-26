@@ -1,9 +1,12 @@
 import { adoptBookPlaceholders, adoptEntityPlaceholders } from '@/lib/placeholderHomes';
-import { adoptOwnedTraits, comparableOwnedTraits, traitWorldOf, type TraitWorld } from '@/lib/portableTraits';
+import { comparableOwnedStats } from '@/lib/portableStats';
+import { adoptOwnedTraits, bindOwnedRules, comparableOwnedTraits, traitWorldOf, type TraitWorld } from '@/lib/portableTraits';
 import { bindCarriedBlueprints } from '@/lib/blueprintTravel';
 import { followedLibraryId } from '@/lib/publishLinks';
 import { entityTexts } from '@/lib/entityTexts';
+import { entityImages } from '@/lib/entityImages';
 import { randomUUID } from '@/lib/uuid';
+import { pickToken, type VrmLookup } from '@/lib/vrmPickMatch';
 import type { CommunityLink, ContentLink, Dictionary, Entity, Placeholder, PlaceholderGroup } from '@/types';
 
 /** An entity or a dictionary — the two kinds of content a world copy can follow a source for. */
@@ -39,7 +42,7 @@ export interface LibrarySource<T extends LinkableContent = LinkableContent> {
  * direction, so it is never compared, never overwritten, and never saved to the library item.
  */
 const WORLD_OWNED_FIELDS = [
-  'id', 'link', 'groupId', 'order', 'traitPlacement', 'locations', 'placeholders', 'sharedPlaceholders', 'blueprints',
+  'id', 'link', 'groupId', 'order', 'traitPlacement', 'statPlacement', 'locations', 'placeholders', 'sharedPlaceholders', 'blueprints',
   'authorBrief',
 ] as const;
 
@@ -153,9 +156,16 @@ export function chipTexts(item: LinkableContent): string[] {
 
 /** The authored content of one item, ready to compare. Dictionary entry ids go too: every copy mints its
  *  own, so two identical books never share them. */
-function authoredContent(item: LinkableContent): unknown {
+function authoredContent(raw: LinkableContent, world?: TraitWorld, vrm?: VrmLookup): unknown {
+  // Both sides read the owners the copy's world drops, whichever side stored one (Q19).
+  const item = world && !('entries' in raw) ? bindOwnedRules(raw, world) : raw;
   const shed: Record<string, unknown> = withoutWorldFields(item);
-  if (!('entries' in item) && (item.traits || item.traitLinks)) Object.assign(shed, comparableOwnedTraits(item));
+  // A world file read before migration still holds data strings; the library copy holds images.
+  if (!('entries' in item) && item.images) shed.images = entityImages(item);
+  if (!('entries' in item) && (item.traits || item.traitLinks || item.images)) Object.assign(shed, comparableOwnedTraits(item));
+  if (!('entries' in item) && item.statLinks) Object.assign(shed, comparableOwnedStats(item));
+  // A world copy picks a store id and its library item a library id; the two match when they show the same file.
+  if (!('entries' in item) && vrm) shed.vrmPick = pickToken(item.vrmPick, vrm);
   if (Array.isArray(shed.entries)) {
     shed.entries = (shed.entries as { id?: string }[]).map(({ id: _entryId, ...entry }) => entry);
   }
@@ -169,9 +179,10 @@ export function markEditedFrom<T extends LinkableContent>(before: T, after: T, o
 }
 
 /** Whether the copy still holds exactly what the source holds. Names alone prove nothing, so this reads
- *  the whole authored payload. */
-export function contentMatchesSource(copy: LinkableContent, source: LinkableContent): boolean {
-  return JSON.stringify(authoredContent(copy)) === JSON.stringify(authoredContent(source));
+ *  the whole authored payload. `world` is the copy's: it binds each side's trait requirements, so an owner the
+ *  world drops cannot make the two differ. `vrm` matches an Avatar pick across the world and library forms. */
+export function contentMatchesSource(copy: LinkableContent, source: LinkableContent, world?: TraitWorld, vrm?: VrmLookup): boolean {
+  return JSON.stringify(authoredContent(copy, world, vrm)) === JSON.stringify(authoredContent(source, world, vrm));
 }
 
 /** The world-owned fields an update keeps from the copy. The placeholder lists and the carried blueprints are
@@ -272,7 +283,8 @@ export interface WriteBack {
  * lookup did not answer, or one without content, is not written.
  */
 export function planWriteBack(
-  world: WorldContent, sources: LibrarySource[], shape: (copy: LinkableContent) => LinkableContent,
+  world: WorldContent, sources: LibrarySource[], shape: (copy: LinkableContent) => LinkableContent, traitWorld?: TraitWorld,
+  vrm?: VrmLookup,
 ): WriteBack[] {
   const byId = new Map(sources.map((source) => [source.id, source]));
   return [...world.entities, ...world.dictionaries].flatMap((copy) => {
@@ -282,7 +294,7 @@ export function planWriteBack(
     if (!source?.owned || !source.data) return [];
     // Compared in library form, which names what the copy's owned traits require, as the item stores them.
     const content = shape(copy);
-    if (contentMatchesSource(content, source.data)) return [];
+    if (contentMatchesSource(content, source.data, traitWorld, vrm)) return [];
     return [{ copy, source, content }];
   });
 }
@@ -340,11 +352,13 @@ function syncList<T extends LinkableContent>(
  * `placeholders` is the world's shared list, which the updated content resolves its references against;
  * `toAdd` is what the world gains for references no copy had a connection for. `unlinkedCopies` names each
  * let-go copy as this world holds it, entities first. The world's `traits` and `traitGroups`, when given, bind
- * an updated entity's owned trait requirements; its `placeholderGroups`, when given, bind its copies.
+ * an updated entity's owned trait requirements, and its `stats` and `statGroups` its stat Links; its
+ * `placeholderGroups`, when given, bind its copies.
  */
 export function syncWorldContent(
   world: WorldContent & {
     placeholders: Placeholder[]; placeholderGroups?: PlaceholderGroup[]; traits?: TraitWorld['traits']; traitGroups?: TraitWorld['traitGroups'];
+    stats?: TraitWorld['stats']; statGroups?: TraitWorld['statGroups'];
   },
   sources: LibrarySource[],
 ): WorldContent & { updated: number; unlinked: number; unlinkedCopies: UnlinkedCopy[]; toAdd: Placeholder[] } {

@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { useEditingDraft } from '@/lib/useEditingDraft';
+import { useRenameField } from '@/lib/useCodeRename';
+import { statCodeName } from '@/lib/statCodeNames';
 import { useGameData } from '@/contexts/GameDataContext';
 import { entitiesInTreeOrder } from '@/lib/entityGroupTree';
 import { entityIdsAt, setLocationRoster } from '@/lib/entityPresence';
@@ -13,16 +15,19 @@ import DescriptionCheckButton from "@/components/DescriptionCheckButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { labelPlaceholders } from '@/lib/placementLetters';
 import { SoundUpload } from '../lib/UtilityComponents';
-import { IMAGE_CAPS } from '../lib/imageOptim';
-import ImageTagsField from './ImageTagsField';
+import { LocationImageField } from './LocationImageField';
 import LocationConnections from './LocationConnections';
+import LocationEntitiesHere from './LocationEntitiesHere';
+import LocationKnownHere from './LocationKnownHere';
 import { LocationOpenings } from './OpeningsPanel';
 import { useEditorMode } from '@/lib/editorMode';
 import { HelpButton } from '@/components/HelpButton';
 import { HintInfo } from '@/components/SettingsRows';
+import { Hint } from '@/components/ui/typography';
 import { PlaceholderPinRows } from '@/components/editor/PlaceholderPinRows';
 import { locationPanelTabsFor, locationTabForField, type LocationPanelTab } from '@/views/locationPanelTabs';
-import type { FocusFieldHint, GameLocation, PlaceholderPin } from '@/types';
+import type { Entity, FocusFieldHint, GameLocation, PlaceholderPin } from '@/types';
+import { fieldFrame } from '@/lib/historyField';
 
 /**
  * Right-panel editor for one location: its fields split across Details, Presence, Media, Pins and Openings.
@@ -52,12 +57,27 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
   const { updateLocation, entities, updateEntity, entityGroups, placeholders, placementLetters, placeholderOwners } = world;
   const { draft: editingLocation, setField: handleChange, apply } = useEditingDraft(location, updateLocation);
   const { advanced } = useEditorMode();
+  // `location.move` names a place by its code name, so the rename offer compares the names the way code reads them.
+  const rename = useRenameField({
+    root: 'locations',
+    value: editingLocation.name ?? '',
+    siblings: world.locations,
+    ownId: location.id,
+    codeNameOf: (name) => statCodeName(name, placeholders),
+  });
   const pins = editingLocation?.placeholderPins ?? [];
   const setPins = (next: PlaceholderPin[]) => apply({ placeholderPins: next.length ? next : undefined });
 
   // Membership is entity-owned, so location-first authoring reads the inversion and writes each changed
   // entity's own list — the same edit, expressed from the other side.
   const presentIds = entityIdsAt(location.id, entities);
+  const treeOrder = entitiesInTreeOrder(entityGroups, entities);
+  const label = (name: string) => labelPlaceholders(name, placeholders, { letters: placementLetters, owners: placeholderOwners });
+  const entityLabel = (e: Entity) => label(e.name);
+  const locationLabel = (id: string) => {
+    const found = world.locations.find((l) => l.id === id);
+    return found ? label(found.name) : 'Unknown Location';
+  };
   const handleEntitiesChange = (ids: string[]) => {
     const before = new Map(entities.map((e) => [e.id, e]));
     // Only the entities whose membership actually moved are written through.
@@ -78,22 +98,25 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
   const tabs = locationPanelTabsFor(advanced);
 
   return (
-    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Location Fields" surfaceTabs="worldEditorLocation">
+    <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Location Fields" surfaceTabs="worldEditorLocation" focus={{ kind: 'location', id: location.id, name: location.name }}>
 
       <PanelTabContent value="details">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div data-tour-anchor="location-name" className="min-w-0 flex-1 space-y-2">
+          <div data-tour-anchor="location-name" className="min-w-0 flex-1 space-y-2" {...fieldFrame('name')}>
             <Label>Name</Label>
             <PlaceholderNameField
               value={editingLocation.name || ''}
               onChange={(v) => handleChange('name', v)}
               placeholders={placeholders}
               ariaLabel="Name"
+              onFocus={rename.onFocus}
+              onBlur={rename.onBlur}
+              onSubmit={rename.onSubmit}
             />
           </div>
           {/* Bottom-aligned and as tall as the field, so the checkbox sits on the name's last line when a
               long name wraps. */}
-          <div data-tour-anchor="location-starting" className="flex min-h-10 shrink-0 items-center gap-2">
+          <div data-tour-anchor="location-starting" className="flex min-h-10 shrink-0 items-center gap-2" {...fieldFrame('isStarting')}>
             <Checkbox
               id={`location-starting-${editingLocation.id}`}
               checked={!!editingLocation.isStarting}
@@ -114,6 +137,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
         />
         <PlaceholderField
           label="Player-Facing Description"
+          historyField="playerDescription"
           labelAside={(
             <AiGenerateButton
               mode="playerDesc"
@@ -131,6 +155,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
         />
         <PlaceholderField
           label="AI-Facing Description"
+          historyField="aiDescription"
           labelAside={(
             <>
               <AiGenerateButton
@@ -157,6 +182,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
         {advanced && (
           <PlaceholderField
             label="AI-Facing Summary"
+            historyField="aiSummary"
             labelAside={(
               <AiGenerateButton
                 mode="summary"
@@ -175,33 +201,44 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
       </PanelTabContent>
 
       <PanelTabContent value="presence">
-        <div className="space-y-2">
+        <div className="space-y-2" {...fieldFrame('entities')}>
           <Label>Entities</Label>
           <MultiSelect
             key={editingLocation.id}
-            options={entitiesInTreeOrder(entityGroups, entities).map((e) => ({ label: labelPlaceholders(e.name, placeholders, { letters: placementLetters, owners: placeholderOwners }), value: e.id }))}
+            options={treeOrder.map((e) => ({ label: entityLabel(e), value: e.id }))}
             defaultValue={presentIds}
             onValueChange={handleEntitiesChange}
             placeholder="Select entities"
           />
         </div>
-        <LocationConnections location={editingLocation} />
+        <LocationEntitiesHere
+          entities={treeOrder.filter((e) => presentIds.includes(e.id))}
+          labelOf={entityLabel}
+          onChange={updateEntity}
+        />
+        <LocationKnownHere
+          location={editingLocation}
+          locations={world.locations}
+          entities={treeOrder}
+          labelOf={entityLabel}
+          locationLabel={locationLabel}
+          onChange={updateEntity}
+        />
+        <LocationConnections location={editingLocation}>
+          <div className="flex items-center gap-2" {...fieldFrame('nearbyUsesConnections')}>
+            <Checkbox
+              id={`location-nearby-${editingLocation.id}`}
+              checked={!!editingLocation.nearbyUsesConnections}
+              onCheckedChange={(checked) => apply({ nearbyUsesConnections: checked === true ? true : undefined })}
+            />
+            <Label htmlFor={`location-nearby-${editingLocation.id}`}>Nearby Through Connections</Label>
+          </div>
+          <Hint>Adds entities one Connection away to what the AI receives as nearby</Hint>
+        </LocationConnections>
       </PanelTabContent>
 
       <PanelTabContent value="media">
-        <ImageTagsField
-          label="Background Image"
-          tourAnchor="location-image"
-          images={editingLocation.backgroundImage ? [editingLocation.backgroundImage] : []}
-          onImagesChange={(list) => handleChange('backgroundImage', list[0] ?? '')}
-          imageId={`location-image-${editingLocation.id}`}
-          cap={IMAGE_CAPS.background}
-          description={editingLocation.aiDescription || editingLocation.playerDescription}
-          kind="location"
-          tags={editingLocation.imageTags}
-          onTagsChange={(t) => handleChange('imageTags', t)}
-          placeholders={placeholders}
-        />
+        <LocationImageField location={editingLocation} onChange={handleChange} placeholders={placeholders} tourAnchor="location-image" />
         {advanced && (
           <div className="space-y-2">
             <Label>Ambient Sound</Label>

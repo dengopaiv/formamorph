@@ -1,13 +1,14 @@
 import { useEditingDraft } from '@/lib/useEditingDraft';
-import { useGameData } from '@/contexts/GameDataContext';
-import { Input } from '@/components/ui/input';
+import { useGameDataActions } from '@/contexts/GameDataContext';
 import { Label } from '@/components/ui/label';
 import type { EntityGroup } from '@/types';
 import { ListDetailFirstRow } from '@/components/ui/list-detail';
+import { WorldInput } from '@/components/editor/WorldField';
+import { fieldFrame } from '@/lib/historyField';
 
 /** Right-panel editor for an entity group: just a name — groups are editor-only folders with no AI fields. */
 const EntityGroupManager = ({ group }: { group: EntityGroup }) => {
-  const { updateEntityGroup } = useGameData();
+  const { updateEntityGroup } = useGameDataActions();
   const { draft: editingGroup, setField } = useEditingDraft(group, updateEntityGroup);
 
   if (!editingGroup) return null;
@@ -15,9 +16,9 @@ const EntityGroupManager = ({ group }: { group: EntityGroup }) => {
   return (
     <div className="space-y-4">
       <ListDetailFirstRow>
-        <div className="space-y-2">
+        <div className="space-y-2" {...fieldFrame('name')}>
           <Label>Group Name</Label>
-          <Input value={editingGroup.name || ''} onChange={(e) => setField('name', e.target.value)} />
+          <WorldInput value={editingGroup.name || ''} onChange={(e) => setField('name', e.target.value)} />
         </div>
       </ListDetailFirstRow>
       <p className="text-helper text-muted-foreground">

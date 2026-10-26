@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderMiddlePanel, statFixture, stubChatLayout, type Settings, type TurnFixture } from '@/test/gamePanels';
 import { QUOTE_CLASS } from '@/lib/quoteSegments';
 
@@ -22,7 +22,7 @@ const rightClick = (el: HTMLElement) => fireEvent.contextMenu(el, { button: 2, c
 /** The labels of the menu a right-click on `el` opens, then closes it. */
 async function menuLabels(el: HTMLElement) {
   rightClick(el);
-  const labels = within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
+  const labels = within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.getAttribute('aria-label') ?? item.textContent);
   fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   return labels;
@@ -185,12 +185,22 @@ describe('Pages: the Turn Card', () => {
     expect(view.props.handleRegenerateStats).toHaveBeenCalledWith(3);
   });
 
-  it('shows no action row while the narration streams', async () => {
-    renderMiddlePanel({}, { turns: TURNS, gameplayText: 'The gull', seed: (g) => g.setIsRevealingNarration(true) });
+  it('keeps the action row closed while the narration streams', async () => {
+    renderMiddlePanel({}, { turns: TURNS, gameplayText: 'The gull', seed: (g) => { g.setIsRevealingNarration(true); g.setNarrationSettled(false); } });
     await screen.findByTestId('narration');
-    expect(screen.queryByTestId('bubble-actions')).toBeNull();
+    expect(screen.getByTestId('turn-actions').dataset.open).toBe('false');
+    expect(screen.getByTestId('turn-actions').getAttribute('aria-hidden')).toBe('true');
     expect(rightClick(screen.getByTestId('narration'))).toBe(true);
     expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('opens the action row once the narration settles, while the turn still runs', async () => {
+    const view = renderMiddlePanel({}, { turns: TURNS, gameplayText: 'The gull', seed: (g) => { g.setIsRevealingNarration(true); g.setNarrationSettled(false); } });
+    await screen.findByTestId('narration');
+    act(() => view.gameplay().setNarrationSettled(true));
+    expect(screen.getByTestId('turn-actions').dataset.open).toBe('true');
+    // The narration stays the live reveal; only the row opens.
+    expect(screen.getByTestId('narration')).toBeTruthy();
   });
 
   it('disables the actions that start a request while a turn generates', async () => {

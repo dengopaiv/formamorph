@@ -14,6 +14,7 @@ vi.mock('@/contexts/SettingsContext', () => ({
     activeEndpointUrl: 'http://x', activeApiToken: '', activeModelName: 'm', imageTagPrompt: 'p',
     playerDescPrompt: '', aiDescPrompt: '', aiSummaryPrompt: '',
     descMaxTokens: { playerdesc: 400, aidesc: 400, aisummary: 80, desccheck: 300 },
+    describeEndpointForKind: () => ({ presetName: 'Test Endpoint', model: 'm' }),
   }),
 }));
 

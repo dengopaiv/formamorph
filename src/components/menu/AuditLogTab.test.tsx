@@ -121,6 +121,21 @@ describe('narrowing the log', () => {
     await waitFor(() => expect(lastQuery()).toMatchObject({ search: 'trouble' }));
   });
 
+  it('shows the unfiltered log when the X clears a submitted search, with no second submit', async () => {
+    stubLog([entry()]);
+
+    render(<AuditLogTab active />);
+    await findEntryLine();
+    fireEvent.change(screen.getByLabelText('Search the log'), { target: { value: 'trouble' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ search: 'trouble' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Search' }));
+
+    await waitFor(() => expect(lastQuery()).toMatchObject({ search: '' }));
+    expect(screen.getByLabelText('Search the log')).toHaveValue('');
+  });
+
   it('goes back to the first page when the search changes', async () => {
     // A filter change would otherwise land on whatever page the previous list was showing.
     stubLog([entry()], 60);
@@ -238,6 +253,11 @@ describe('what each entry reads as', () => {
       action: 'feedback_deleted',
       target: { kind: 'suggestion', name: 'Let me rename a save' },
     })).toBe('root-admin deleted the suggestion “Let me rename a save” by trouble');
+
+    expect(line({
+      action: 'feedback_deleted',
+      target: { kind: 'question', name: 'How do I use a local model?' },
+    })).toBe('root-admin deleted the question “How do I use a local model?” by trouble');
   });
 
   it('reads the whole arc of a quarantine', () => {
@@ -269,6 +289,38 @@ describe('what each entry reads as', () => {
       actor: { id: null, username: null, wasAdmin: false },
       target: { kind: 'world', name: 'Sedge Landing' },
     })).toBe('The quarantine ran out on the world “Sedge Landing” by trouble, and it was deleted');
+  });
+
+  it('blames nobody for a suspension that ended on its own', () => {
+    const ended = entry({
+      action: 'suspension_expired',
+      actor: { id: null, username: null, wasAdmin: false },
+    });
+
+    expect(auditActorName(ended)).toBeNull();
+    expect(describeAuditEntry(ended)).toBe('The suspension of trouble ended');
+    expect(AUDIT_ACTION_LABELS.suspension_expired).toBe('Suspension expired');
+    // A lift by the server must not read as a staff reinstatement.
+    expect(AUDIT_ACTION_STYLES.suspension_expired).not.toBe(AUDIT_ACTION_STYLES.user_unsuspended);
+    expect(AUDIT_ACTION_OPTIONS.map((option) => option.value)).toContain('suspension_expired');
+  });
+
+  it('reads a suspension that ended on its own in the list, with no actor badge', async () => {
+    stubLog([entry({ action: 'suspension_expired', actor: { id: null, username: null, wasAdmin: false } })]);
+
+    render(<AuditLogTab active />);
+
+    expect(await screen.findByText('The suspension of trouble ended')).toBeTruthy();
+    expect(screen.getByText('Suspension expired')).toBeTruthy();
+  });
+
+  it('shows the end a suspension was given', async () => {
+    stubLog([entry({ action: 'user_suspended', snippet: 'until 2026-11-01' })]);
+
+    render(<AuditLogTab active />);
+    await findEntryLine();
+
+    expect(screen.getByText('until 2026-11-01')).toBeTruthy();
   });
 
   it('reads a reset of everyone as one event, not one per account', () => {

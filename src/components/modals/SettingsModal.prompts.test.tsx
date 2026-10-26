@@ -2,13 +2,14 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useEffect, useRef } from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { SettingsProvider, useSettings } from '@/contexts/SettingsContext';
 import { ThemeProvider } from '@/components/theme-provider';
 import { SettingsModal } from './SettingsModal';
 import { SURFACE_LABELS, HUB_LABEL } from '@/lib/promptGroups';
 import { CONTEXT_LABELS } from '@/lib/requestAnatomy';
 import { LANDING_PULSE_CLASS } from '@/lib/landingPulse';
+import { ringOn } from '@/test/landing';
 import { DEFAULT_TEXT_ENDPOINT_VALUES, textEndpointPresetCodec } from '@/lib/textEndpointPresets';
 
 const anatomy = vi.hoisted(() => ({ build: vi.fn() }));
@@ -253,17 +254,19 @@ describe('Settings → Prompts fullscreen', () => {
     try {
       openPrompts();
       fireEvent.click(screen.getAllByRole('button', { name: 'View full screen' })[0]);
-      expect(screen.getByRole('dialog', { name: 'Prompts' })).toBeTruthy();
-      expect(screen.getAllByRole('button', { name: 'Exit full screen' }).length).toBeGreaterThan(0);
+      const fullWindow = screen.getByRole('dialog', { name: 'Prompts' });
+      // One way out, the window's corner button; the fields inside drop their own toggle.
+      expect(screen.getAllByRole('button', { name: 'Exit full screen' })).toHaveLength(1);
 
-      fireEvent.click(screen.getAllByRole('button', { name: 'Exit full screen' })[0]);
+      fireEvent.click(within(fullWindow).getByRole('button', { name: 'Exit full screen' }));
       // Closing is the window fading out in place over the restored view, so the instant the exit is
       // pressed the docked panel — its toggle back to "View full screen" — must already be rendered,
       // while the window itself is still mounted for its fade. `hidden: true` because the dialog
       // primitive aria-hides everything outside the still-open window; the panel paints regardless.
       expect(screen.getByRole('dialog', { name: 'Prompts' })).toBeTruthy();
       expect(screen.getAllByRole('button', { name: 'View full screen', hidden: true }).length).toBeGreaterThan(0);
-      expect(screen.queryAllByRole('button', { name: 'Exit full screen', hidden: true })).toHaveLength(0);
+      // The fading window still holds its corner button; nothing outside it says Exit.
+      expect(screen.getAllByRole('button', { name: 'Exit full screen', hidden: true }).every((b) => fullWindow.contains(b))).toBe(true);
 
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Prompts' })).toBeNull());
     } finally {
@@ -305,7 +308,7 @@ describe('Settings → Prompts jumps', () => {
       fireEvent.click(anatomyRun('Now Message'));
       await waitFor(() => expect(scrolled.map((el) => el.textContent)).toContainEqual(expect.stringContaining('Now Message')));
       expect(scrolled.map((el) => el.textContent)).not.toContainEqual(expect.stringContaining('Recap Message'));
-      expect(scrolled.at(-1)!.classList.contains(LANDING_PULSE_CLASS)).toBe(true);
+      expect(ringOn(scrolled.at(-1) as HTMLElement, LANDING_PULSE_CLASS)).toBe(true);
     } finally {
       Element.prototype.scrollIntoView = realScroll;
     }
@@ -351,10 +354,7 @@ describe('Settings → Prompts chip jumps', () => {
     expect(onSystemEditor()).toBe(true);
     expect(onHub()).toBe(false);
     // The reveal retries on a timer until the editor's chips have mounted.
-    await waitFor(
-      () => expect(document.querySelector('[data-chip-token].editor-find-target')).not.toBeNull(),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(document.querySelector('[data-chip-token].editor-find-target')).not.toBeNull());
     expect(scrollTo).toHaveBeenCalled();
   });
 

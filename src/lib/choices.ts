@@ -22,6 +22,19 @@ export function parseChoices(raw: string, max = 6): string[] {
     .slice(0, max);
 }
 
+/** `parseChoices` over a reply still streaming. The line still being written waits until it holds a word past
+ *  any list marker, so a row never changes from `1.` to its text: each parse only grows the one before it. */
+export function parseStreamingChoices(raw: string, max = 6): string[] {
+  const text = raw || '';
+  const cut = text.lastIndexOf('\n');
+  return parseChoices(/\S\s+\S/.test(text.slice(cut + 1)) ? text : text.slice(0, cut + 1), max);
+}
+
+/** `next` when it differs from `prev` row by row, else `prev`, so a state update with the same rows renders nothing. */
+export function keepSameRows(prev: string[], next: string[]): string[] {
+  return prev.length === next.length && prev.every((row, i) => row === next[i]) ? prev : next;
+}
+
 // "Glue" words carry no signal for which choice an action grew from; dropping them lets the shared
 // content words drive the score, so light rewording ("knock on the wall" → "I knock on the wall firmly")
 // still matches.
@@ -103,3 +116,12 @@ export function choiceRuns(text: string): ChoiceRun[] {
   });
   return runs;
 }
+
+/** `text` as words, each with the space after it; leading space rides on the first. */
+export function splitWords(text: string): string[] {
+  return text.match(/\s*\S+\s*/g) ?? (text ? [text] : []);
+}
+
+/** How many words a choice renders as, counted the way its runs split into words. */
+export const choiceWordCount = (choice: string): number =>
+  choiceRuns(choice).reduce((sum, run) => sum + splitWords(run.text).length, 0);
