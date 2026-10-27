@@ -61,7 +61,7 @@ export function AiContextSection({ title, open, onOpenChange, children }: { titl
  * One request of an AI Context viewer: the header with its endpoint chips, then the Raw Input drawn as its
  * Request Anatomy, the Tool Rounds, the Raw Reasoning and the Raw Output, each a collapsible of its own.
  *
- * Shared by the game view and Formaquestion. The caller owns every open state, so a find bar can open the
+ * The caller owns every open state, so a find bar can open the
  * section that hides a hit, and `renderText` is the caller's highlighter; the card draws plain text without it.
  */
 export function AiContextRequestCard({ record, index, folded, isOpen, onOpenChange, renderText, chips }: AiContextRequestCardProps) {

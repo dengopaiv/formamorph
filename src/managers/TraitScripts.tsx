@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Label } from "@/components/ui/label";
 import { Hint } from "@/components/ui/typography";
 import { HelpButton } from "@/components/HelpButton";
 import { LabelRow } from "@/components/editor/BlueprintReset";
-import { registerScriptInsert, reportScriptInsert } from "@/lib/formaquestion/scriptInsert";
-import { newScript, noFocus, scriptRow } from "@/lib/scriptRows";
-import { useLanding } from "@/lib/surface/useLanding";
 import type { CodeUseReveal } from "@/lib/codeUseReveal";
 import type { ScriptBoxWorld } from "@/lib/scriptBoxHome";
 import type { ScriptHomeRef } from "@/lib/worldScripts";
@@ -33,23 +30,6 @@ export function TraitScripts({ trait, home, offWorld, ownerName, onChange, reset
 }) {
   const context = useScriptBoxContext(home, offWorld);
 
-  // The help window's Insert adds a script of its timing to this trait and lands on it. This tab mounts only while shown.
-  const landOnScript = useLanding(scriptRow, { focus: noFocus });
-  const [inserted, setInserted] = useState<string | null>(null);
-  // Read at insert time, so the registration does not change with each keystroke.
-  const latest = useRef({ scripts: trait.scripts, onChange });
-  latest.current = { scripts: trait.scripts, onChange };
-  useEffect(() => registerScriptInsert({
-    homeName: ownerName,
-    insert: (timing, code) => {
-      const script = newScript(timing, code);
-      latest.current.onChange([...latest.current.scripts ?? [], script]);
-      setInserted(script.id);
-      landOnScript(script.id);
-      reportScriptInsert('written');
-    },
-  }), [ownerName, landOnScript]);
-
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -67,7 +47,6 @@ export function TraitScripts({ trait, home, offWorld, ownerName, onChange, reset
         ownerName={ownerName}
         context={context}
         reveal={reveal}
-        focusId={inserted}
       />
     </div>
   );

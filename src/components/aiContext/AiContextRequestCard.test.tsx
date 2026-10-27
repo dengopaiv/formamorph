@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { AiContextRequestCard, type AiContextCardSection, type AiContextTextSlot } from './AiContextRequestCard';
 import type { AiRequestRecord } from '@/lib/aiContext/requestRecord';
 
-/** A record with none of the game-only fields: what a Formaquestion request would carry. */
+/** A record with none of the game-only fields. */
 const record: AiRequestRecord = {
   type: 'answer',
   messages: [

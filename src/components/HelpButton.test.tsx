@@ -1,6 +1,5 @@
 import { render, fireEvent, cleanup, screen } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { registerDocsOpener } from '@/lib/formaquestion/docsOpener';
 import { HELP_TOPICS } from '@/lib/helpTopics';
 import { HelpButton } from './HelpButton';
 
@@ -86,37 +85,15 @@ describe('the Scripts help topic', () => {
 describe('HelpButton Learn more', () => {
   const topicId = 'worldEditor.scriptBox';
   const topic = HELP_TOPICS[topicId];
-  let unregister: (() => void) | null = null;
   beforeEach(() => {
     localStorage.clear();
     cleanup();
     stubMatchMedia();
   });
-  afterEach(() => unregister?.());
 
   const learnMore = () => screen.getByRole('link', { name: 'Learn more →' });
 
-  it('opens the topic docs heading in the reader and closes the pop-out, with no navigation', () => {
-    const open = vi.fn();
-    unregister = registerDocsOpener(open);
-    render(<HelpButton topicId={topicId} />);
-    fireEvent.click(helpButton());
-    const proceeded = fireEvent.click(learnMore());
-    expect(proceeded).toBe(false);
-    expect(open).toHaveBeenCalledWith({ page: topic.wikiPage, anchor: topic.wikiAnchor });
-    expect(screen.queryByRole('link', { name: 'Learn more →' })).toBeNull();
-  });
-
-  it('leaves a modified click to the browser, so Ctrl+click still opens a new tab', () => {
-    const open = vi.fn();
-    unregister = registerDocsOpener(open);
-    render(<HelpButton topicId={topicId} />);
-    fireEvent.click(helpButton());
-    expect(fireEvent.click(learnMore(), { ctrlKey: true })).toBe(true);
-    expect(open).not.toHaveBeenCalled();
-  });
-
-  it('links to the wiki in a new tab when no reader is mounted', () => {
+  it('links to the wiki in a new tab', () => {
     render(<HelpButton topicId={topicId} />);
     fireEvent.click(helpButton());
     expect(fireEvent.click(learnMore())).toBe(true);

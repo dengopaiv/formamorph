@@ -4,15 +4,10 @@
  */
 import type { SurfaceId } from '@/lib/docs/surfaceMap';
 
-const HELP_WINDOW = 'The help window is over the surface the player needs help with, so it does not report itself.';
 const NARRATION_LAYOUT = 'A display setting, not a place the player is in. The game screen and its side tab say where the player is.';
 
 /** Player-facing surfaces that no component reports, each with the reason. */
 export const UNREPORTED_SURFACES: Partial<Record<SurfaceId, string>> = {
-  formaquestion: HELP_WINDOW,
-  'formaquestion.ask': HELP_WINDOW,
-  'formaquestion.search': HELP_WINDOW,
-  'formaquestion.guide': HELP_WINDOW,
   'gameViewerLayout.pages': NARRATION_LAYOUT,
   'gameViewerLayout.chat': NARRATION_LAYOUT,
   likePrompt: 'A card inside the game screen. A report would put it on top as a dialog and hide the game screen tab while the card shows.',

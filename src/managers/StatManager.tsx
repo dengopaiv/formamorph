@@ -1,5 +1,5 @@
 import { randomUUID } from "@/lib/uuid";
-import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
 import { useGameDataOptional } from "@/contexts/GameDataContext";
 import { useStatEditorWorld } from "@/lib/useStatEditorWorld";
 import { useEditingDraft } from "@/lib/useEditingDraft";
@@ -21,7 +21,6 @@ import { statCodeName } from "@/lib/statCodeNames";
 import { useRenameField } from "@/lib/useCodeRename";
 import { ScriptsSection } from "./ScriptsSection";
 import { useScriptBoxContext } from "./useScriptBoxContext";
-import { newScript, noFocus, scriptRow } from "@/lib/scriptRows";
 import { statPanelHome, type ScriptBoxWorld } from "@/lib/scriptBoxHome";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
@@ -31,12 +30,10 @@ import { clamp } from "@/lib/utils";
 import { useEditorMode } from '@/lib/editorMode';
 import { StatDescriptorsSection, type DescriptorFieldValue } from './StatDescriptorsSection';
 import { statPanelTabsFor, statTabForField, type StatPanelTab } from '@/views/statPanelTabs';
-import { registerScriptInsert, reportScriptInsert } from "@/lib/formaquestion/scriptInsert";
 import { labelPlaceholders } from "@/lib/placementLetters";
 import { targetAttribute } from "@/lib/surface/surfaceTargets";
-import { useLanding } from "@/lib/surface/useLanding";
 import { useCodeUseReveal } from "@/lib/codeUseReveal";
-import type { FocusFieldHint, RegenUnit, ScriptTiming, Stat, StatDescriptor, StatLinkFields, StatType, ThresholdUnit } from "@/types";
+import type { FocusFieldHint, RegenUnit, Stat, StatDescriptor, StatLinkFields, StatType, ThresholdUnit } from "@/types";
 import { REGEN_UNIT_LABELS, REGEN_UNITS, regenPer, regenPerHour, regenUnitOf } from "@/lib/regenUnits";
 import { FieldReset, LabelRow } from '@/components/editor/BlueprintReset';
 import { WorldInput } from '@/components/editor/WorldField';
@@ -230,31 +227,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField, store, link }: {
     if (reveal) onTabChange('code');
   }, [reveal, onTabChange]);
 
-  // The help window's Insert adds a script of its timing, then shows it on the Scripts tab. It overwrites nothing.
-  const landOnScript = useLanding(scriptRow, { focus: noFocus });
-  const [inserted, setInserted] = useState<string | null>(null);
-  // Read at insert time, so the registration does not change with each keystroke.
-  const latestStat = useRef(editingStat);
-  latestStat.current = editingStat;
-  const writeInsert = useCallback((timing: ScriptTiming, code: string) => {
-    const script = newScript(timing, code);
-    apply({ scripts: [...latestStat.current.scripts ?? [], script] });
-    onTabChange('code');
-    setInserted(script.id);
-    landOnScript(script.id);
-  }, [apply, onTabChange, landOnScript]);
   const statName = labelPlaceholders(editingStat.name ?? '', placeholders, { letters: placementLetters, owners: placeholderOwners });
-  // Simple mode has no Scripts tab to show the script on.
-  useEffect(() => {
-    if (!advanced) return;
-    return registerScriptInsert({
-      homeName: statName,
-      insert: (timing, code) => {
-        writeInsert(timing, code);
-        reportScriptInsert('written');
-      },
-    });
-  }, [advanced, statName, writeInsert]);
 
   if (!editingStat) return null;
 
@@ -558,7 +531,6 @@ const StatManager = ({ stat, tab, onTabChange, focusField, store, link }: {
         context={codeContext}
         reveal={reveal}
         addTarget={targetAttribute('worldEditorStat.code', 'add-script')}
-        focusId={inserted}
       />
     </div>
   );
@@ -570,7 +542,7 @@ const StatManager = ({ stat, tab, onTabChange, focusField, store, link }: {
   return (
     <>
       {header && <div className="mb-4">{header}</div>}
-      <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Stat Fields" surfaceTabs="worldEditorStat" focus={{ kind: 'stat', id: stat.id, name: stat.name }}>
+      <PanelTabs tabs={tabs} value={tab} onValueChange={onTabChange} stripLabel="Stat Fields" surfaceTabs="worldEditorStat">
         {tabs.map((t) => (
           <PanelTabContent key={t.value} value={t.value}>{panels[t.value]}</PanelTabContent>
         ))}

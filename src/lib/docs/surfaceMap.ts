@@ -56,7 +56,6 @@ const ACCOUNT_DELETION = community('account-deletion');
 const BUGS_AND_SUGGESTIONS = community('bugs-and-suggestions');
 const THE_LIBRARY_TABS: Required<DocTarget> = { page: 'Library', anchor: 'the-library-tabs' };
 const THE_GROUP_DIALOGS: Required<DocTarget> = { page: 'Library', anchor: 'the-group-dialogs' };
-const FORMAQUESTION_SETTINGS: Required<DocTarget> = { page: 'Formaquestion', anchor: 'formaquestion-settings' };
 
 /** The docs heading for each player-facing surface. */
 export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
@@ -212,20 +211,6 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   'worldEditorBench.aiContext': { page: 'Test-Bench', anchor: 'ai-context' },
   'worldEditorBench.opening': { page: 'Test-Bench', anchor: 'opening' },
   ...Object.fromEntries(tabsOf('worldEditorTour').map((id) => [id, { page: 'WorldEditor', anchor: 'the-authoring-tour' }])),
-
-  formaquestion: { page: 'Formaquestion', anchor: 'the-window' },
-  'formaquestion.ask': { page: 'Formaquestion', anchor: 'ask' },
-  'formaquestion.search': { page: 'Formaquestion', anchor: 'search' },
-  'formaquestion.guide': { page: 'Formaquestion', anchor: 'guide' },
-  formaquestionSettings: FORMAQUESTION_SETTINGS,
-  formaquestionCompare: { page: 'Formaquestion', anchor: 'prompts' },
-  formaquestionAiContext: { page: 'Formaquestion', anchor: 'ai-context' },
-  formaquestionWikiConfirm: { page: 'Formaquestion', anchor: 'the-wiki-confirm' },
-  'formaquestionSettings.general': { page: 'Formaquestion', anchor: 'general' },
-  'formaquestionSettings.endpoint': { page: 'Formaquestion', anchor: 'endpoint' },
-  'formaquestionSettings.prompts': { page: 'Formaquestion', anchor: 'prompts' },
-  'formaquestionSettings.tools': { page: 'Formaquestion', anchor: 'tools' },
-  'formaquestionSettings.mascot': { page: 'Formaquestion', anchor: 'mascot' },
 
   avatar: { page: 'Avatars', anchor: 'character-customization' },
   modelDetails: { page: 'Avatars', anchor: 'the-avatar-details-dialog' },

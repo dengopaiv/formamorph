@@ -21,7 +21,6 @@ export const REF_SAFE_COMPOSED_CHILDREN = [
   'TabsTrigger', // src/components/ui/tabs.tsx
   'Checkbox', // src/components/ui/checkbox.tsx
   'RemoteImg', // src/lib/useRemoteImage.tsx
-  'EdgeTabButton', // src/components/formaquestion/EdgeTab.tsx
   'InsertMenuButton', // src/components/prompt/InsertMenuButton.tsx
   'Handle', // @xyflow/react — memo(forwardRef(...))
   // Radix triggers forward their ref, and pass anything else they are handed down through their own

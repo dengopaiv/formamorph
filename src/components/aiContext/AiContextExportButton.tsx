@@ -3,7 +3,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { ActionIcon } from '@/lib/actionIcons';
 import { exportAiContext } from '@/lib/aiContext/exportAiContext';
 
-/** The Export control of an AI Context viewer. Shared by the game view and Formaquestion. */
+/** The Export control of an AI Context viewer. */
 export function AiContextExportButton({ data, name, tip, disabled }: {
   data: unknown;
   /** What the export is of, for the file name. */

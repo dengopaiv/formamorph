@@ -70,8 +70,6 @@ describe('every full-screen surface goes through the shell', () => {
   /** Whole panels lift through the panel shell, which renders the shell above. */
   const panels = [
     'src/components/modals/SettingsModal.tsx',
-    'src/components/formaquestion/FormaquestionPromptsTab.tsx',
-    'src/components/formaquestion/FormaquestionMascotTab.tsx',
   ];
 
   it.each(surfaces)('%s builds no full-screen overlay of its own', (file) => {

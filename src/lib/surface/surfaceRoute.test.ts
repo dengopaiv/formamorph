@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SURFACE_EXCLUSIONS, SURFACE_IDS } from '@/lib/docs/surfaceMap';
-import { opensInHelpWindow, resolveSurface, stepTab, targetRoute } from './surfaceRoute';
+import { resolveSurface, stepTab, targetRoute } from './surfaceRoute';
 import { routeText, SURFACE_TARGETS } from './surfaceTargets';
 
 describe('resolveSurface', () => {
@@ -51,11 +51,6 @@ describe('resolveSurface', () => {
     }
   });
 
-  it('marks the help window surfaces as its own', () => {
-    expect(opensInHelpWindow(resolveSurface('formaquestionSettings.endpoint')!)).toBe(true);
-    expect(opensInHelpWindow(resolveSurface('formaquestionCompare')!)).toBe(true);
-    expect(opensInHelpWindow(resolveSurface('settings.display')!)).toBe(false);
-  });
 });
 
 describe('resolveSurface with a target', () => {
