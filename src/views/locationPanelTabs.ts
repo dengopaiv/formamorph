@@ -31,7 +31,6 @@ const TAB_BY_FIELD: Record<string, LocationPanelTab> = {
   playerDescription: 'details',
   aiDescription: 'details',
   aiSummary: 'details',
-  imageTags: 'media',
 };
 
 /** The tab holding `fieldKey`, or `null` for a key no tab claims. */

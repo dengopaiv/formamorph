@@ -17,7 +17,7 @@ describe('surface labels', () => {
 
   it('reads the label as the tab shows it, not from the id', () => {
     expect(surfaceLabel('settings.display')).toBe('Display');
-    expect(surfaceLabel('settingsEndpoints.tagPrompt')).toBe('Tag Prompt');
+    expect(surfaceLabel('settingsEndpoints.text')).toBe('Text');
     expect(surfaceLabel('designSystemGroupPicker.picker')).toBe('Add To Group');
     expect(surfaceLabel('settingsPrompts.statupdates')).toBe('Stat Updates');
   });

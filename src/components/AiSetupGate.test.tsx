@@ -5,7 +5,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AiSetupGate } from './AiSetupGate';
 import { LOCAL_MODELS, groupModelsByFit, type LocalModelInfo } from '@/lib/localModels';
-import { downloadLocalModel, type LocalDownloadProgress } from '@/lib/imageGen/desktop';
+import { downloadLocalModel, type LocalDownloadProgress } from '@/lib/desktop';
 import { toast } from 'react-toastify';
 import { openLatestDetails, toastTexts } from '@/test/toastText';
 
@@ -37,8 +37,8 @@ vi.mock('@/lib/useVramStats', async (orig) => ({
 }));
 
 // Only the download bridge is stubbed; the module's pure helpers stay real.
-vi.mock('@/lib/imageGen/desktop', async (orig) => {
-  const actual = await orig<typeof import('@/lib/imageGen/desktop')>();
+vi.mock('@/lib/desktop', async (orig) => {
+  const actual = await orig<typeof import('@/lib/desktop')>();
   return {
     ...actual,
     downloadLocalModel: vi.fn(() => new Promise<{ path: string }>((resolve, reject) => {

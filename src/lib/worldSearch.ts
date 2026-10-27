@@ -254,7 +254,6 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', entity.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
     add({ ...where, chipCapable: true }, 'pronouns', 'Pronouns', entity.pronouns, (r, v) => ({ ...r, pronouns: v }));
     add({ ...where, chipCapable: false }, 'type', 'Type', entity.type, (r, v) => ({ ...r, type: v }));
-    add({ ...where, chipCapable: false }, 'imageTags', 'Image Tags', entity.imageTags, (r, v) => ({ ...r, imageTags: v }));
     (entity.relationships ?? []).forEach(({ targetId, label }, i) => {
       add({ ...where, chipCapable: true }, `relationships[${i}].label`, `Relationship to ${relationshipTargetName(targetId)}`, label,
         (r, v) => ({ ...r, relationships: (r.relationships ?? []).map((row, j) => (j === i ? { ...row, label: v } : row)) }));
@@ -279,7 +278,6 @@ export function collectSearchTargets(src: SearchSources): SearchTarget[] {
     add({ ...where, chipCapable: true }, 'playerDescription', 'Player-Facing Description', location.playerDescription, (r, v) => ({ ...r, playerDescription: v }));
     add({ ...where, chipCapable: true }, 'aiDescription', 'AI-Facing Description', location.aiDescription, (r, v) => ({ ...r, aiDescription: v }));
     add({ ...where, chipCapable: true }, 'aiSummary', 'AI-Facing Summary', location.aiSummary, (r, v) => ({ ...r, aiSummary: v }));
-    add({ ...where, chipCapable: false }, 'imageTags', 'Image Tags', location.imageTags, (r, v) => ({ ...r, imageTags: v }));
     (location.openings ?? []).forEach((opening, i) => {
       add({ ...where, chipCapable: true }, openingFieldKey(opening.id), `Opening ${i + 1}`, opening.text,
         (r, v) => ({ ...r, ...setOpeningText(r, opening.id, v) }));

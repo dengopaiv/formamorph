@@ -56,8 +56,6 @@ export function DisplaySettingsSection({ source, mode }: { source: DisplaySettin
     bgmEnabled, setBgmEnabled,
     locationBackground, setLocationBackground,
     backgroundOverlay, setBackgroundOverlay,
-    imageGenDisabled,
-    sceneImageAuto, setSceneImageAuto,
     narrationLayout, setNarrationLayout,
     language, setLanguage,
     paragraphLimit, setParagraphLimit,
@@ -167,17 +165,6 @@ export function DisplaySettingsSection({ source, mode }: { source: DisplaySettin
           </div>
         </Row>
         </SubGroup>
-      )}
-      {/* Whether every turn gets a picture is a scene setting; the server that draws it stays on
-          Endpoints. Hidden with image generation itself, which is the switch it depends on. */}
-      {!imageGenDisabled && (
-        <CheckRow
-          htmlFor="sceneImageAuto"
-          target={targetAttribute('settings.display', 'scene-images')}
-          checked={sceneImageAuto}
-          onChange={setSceneImageAuto}
-          {...rowCopy('sceneImages')}
-        />
       )}
       </Section>
 

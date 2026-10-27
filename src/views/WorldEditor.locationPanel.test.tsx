@@ -49,7 +49,7 @@ const WORLD: World = benchEditorWorld({
 /** Every field label the panel shows, in document order. Three of these are also editor tab names, so the
  *  match is taken from the panel body rather than from the whole editor. */
 const FIELD_LABELS =
-  /^(Name|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Entities|Connections|Background Image|Image Tags|Ambient Sound|Placeholder Pins)$/;
+  /^(Name|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Entities|Connections|Background Image|Ambient Sound|Placeholder Pins)$/;
 
 const panelLabels = () =>
   screen.getAllByText(FIELD_LABELS)
@@ -120,12 +120,11 @@ describe('the World Editor location panel tabs', () => {
     expect(panelLabels()).toEqual(['Entities', 'Connections']);
   });
 
-  it('puts the picture, its tags, the Generate button and the sound on Media', () => {
+  it('puts the picture and the sound on Media', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectLocation('The Veilwood');
     openPanelTab('Media');
-    expect(panelLabels()).toEqual(['Background Image', 'Image Tags', 'Ambient Sound']);
-    expect(screen.getByRole('button', { name: /Generate with AI/ })).toBeInTheDocument();
+    expect(panelLabels()).toEqual(['Background Image', 'Ambient Sound']);
   });
 
   it('puts the pin rows and their help control on Pins', () => {
@@ -136,16 +135,15 @@ describe('the World Editor location panel tabs', () => {
     expect(screen.getByRole('button', { name: 'About Placeholder Pins' })).toBeInTheDocument();
   });
 
-  it('drops the Advanced-only fields in Simple mode, keeping Generate with AI', () => {
+  it('drops the Advanced-only fields in Simple mode', () => {
     renderWorldEditorBench(WORLD, 'simple');
     selectLocation('The Veilwood');
     expect(panelLabels()).toEqual(['Name', 'Player-Facing Description', 'AI-Facing Description']);
     expect(screen.getByRole('checkbox', { name: /Starting Location/ })).toBeInTheDocument();
 
     openPanelTab('Media');
-    // The picture and its Generate button stay; the tags line and the sound slot are Advanced only.
+    // The picture stays; the sound slot is Advanced only.
     expect(panelLabels()).toEqual(['Background Image']);
-    expect(screen.getByRole('button', { name: /Generate with AI/ })).toBeInTheDocument();
   });
 
   it('keeps the chosen tab when the author selects a child location', () => {

@@ -1,5 +1,5 @@
 import type { AIRequestType } from '@/types';
-import { Copy, Dices, Headphones, ImagePlus, ListRestart, Pencil, RefreshCw, Undo2, type LucideIcon } from 'lucide-react';
+import { Copy, Headphones, ListRestart, Pencil, RefreshCw, Undo2, type LucideIcon } from 'lucide-react';
 import { StatIcon } from '@/lib/elementIcons';
 
 /** One action on a Chat bubble. The icon row and the bubble menu both render the same list. */
@@ -27,10 +27,7 @@ export interface BubbleState {
   live: boolean;
   /** A reply is in flight. */
   busy: boolean;
-  hasImage: boolean;
   canRegenStats: boolean;
-  sceneImagesAvailable: boolean;
-  sceneJob: 'tags' | 'image' | null;
   ttsLoaded: boolean;
   ttsGenerating: boolean;
 }
@@ -39,8 +36,6 @@ export interface BubbleState {
 export interface BubbleActionHandlers {
   regenerate: () => void;
   regenerateStats: () => void;
-  sceneImage: () => void;
-  sceneTags: () => void;
   edit: () => void;
   textToSpeech: () => void;
   regenerateAudio: () => void;
@@ -54,21 +49,13 @@ export interface BubbleActionHandlers {
  */
 export function bubbleActions(state: BubbleState, h: BubbleActionHandlers): BubbleAction[] {
   if (state.live) return [];
-  const { busy, sceneJob } = state;
-  const sceneBlocked = busy || sceneJob !== null;
+  const { busy } = state;
   const actions: BubbleAction[] = [];
   if (state.isLatest) {
     actions.push({ key: 'regenerate', request: 'narration', label: 'Re-generate Narration', icon: RefreshCw, section: 'generate', disabled: busy, run: h.regenerate });
     if (state.canRegenStats) {
-      // A running scene render holds the graphics card, and the re-roll keeps the turn its picture belongs to.
-      actions.push({ key: 'stats', request: 'statUpdates', label: 'Re-generate Stats', icon: StatIcon, section: 'generate', disabled: sceneBlocked, menuOnly: true, run: h.regenerateStats });
+      actions.push({ key: 'stats', request: 'statUpdates', label: 'Re-generate Stats', icon: StatIcon, section: 'generate', disabled: busy, menuOnly: true, run: h.regenerateStats });
     }
-  }
-  if (state.sceneImagesAvailable) {
-    if (!state.hasImage) {
-      actions.push({ key: 'image', label: 'Generate Scene Image', icon: ImagePlus, section: 'generate', disabled: sceneBlocked, spinning: sceneJob === 'image', menuOnly: true, run: h.sceneImage });
-    }
-    actions.push({ key: 'tags', request: 'sceneTags', label: 'Write Scene Tags', icon: Dices, section: 'generate', disabled: sceneBlocked, spinning: sceneJob === 'tags', menuOnly: true, run: h.sceneTags });
   }
   actions.push({ key: 'edit', label: 'Edit', icon: Pencil, section: 'content', run: h.edit });
   // The TTS modal reads the latest turn's text, so only the latest bubble offers it.

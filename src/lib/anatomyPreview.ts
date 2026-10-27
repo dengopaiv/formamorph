@@ -1,7 +1,7 @@
 import type { AIRequestType, ChatMessage, Entity } from '@/types';
 import type { ThinkingMode } from '@/contexts/SettingsContext';
 import { buildNarrationPrompt } from './turnPipeline/narrationPrompt';
-import { milestoneSelectPass, narrationPass, sceneTagsPass, TURN_PASSES } from './turnPipeline/turnPasses';
+import { milestoneSelectPass, narrationPass, TURN_PASSES } from './turnPipeline/turnPasses';
 import {
   emptyTurnMaterial,
   type TurnMaterial, type TurnPassId, type TurnPassRecord, type TurnPlanInput, type TurnPrompts,
@@ -140,7 +140,6 @@ const RECALLED_TURN_ID = 't2';
  *  hub and a field preview cannot tell two different stories about one token. */
 const FIXTURE_ACTION = SAMPLE_TURN.action;
 const FIXTURE_NARRATION = SAMPLE_TURN.narration;
-const FIXTURE_SCENE_CAST = SAMPLE_TURN.sceneCast;
 
 /** The authorial direction a bracketed action carries. */
 const FIXTURE_BRACKET = ' [keep the tide going out through this scene]';
@@ -211,7 +210,7 @@ function previewInput(prompts: AnatomyPreviewPrompts, settings: AnatomyPreviewSe
       choicesEnabled: true, statUpdatesEnabled: true, statCount: 3,
       locationChangeEnabled: true, locationAutoApply: settings.locationAutoApply, entityMovement: true,
       aiClock: true, memoryDigests: recap, characterDiaries: true, describeCharacters: true,
-      imageAttachments: false, promptAttachments: {}, language: settings.language,
+      language: settings.language,
       stripLinksAndImages: false,
     },
   };
@@ -238,7 +237,6 @@ function previewMaterial(values: TokenValues, action: string, plannerRecap: stri
     npcCastSize: FIXTURE_INTENTS.length,
     intents: FIXTURE_INTENTS,
     overflow: FIXTURE_OVERFLOW,
-    sceneCast: FIXTURE_SCENE_CAST,
     subject: FIXTURE_SUBJECT,
     milestone: SAMPLE_MOMENTS,
   };
@@ -342,7 +340,6 @@ export function buildAnatomyHub(
       .filter(({ id }) => passById(id).isDue(input))
       .map(({ id, caption }) => draw(passById(id), caption));
   }
-  if (tab === 'scenetags') return [draw(sceneTagsPass)];
   if (tab === 'milestone') return [draw(milestoneSelectPass, CAPTIONS.milestone)];
   const id = HUB_PASS[tab];
   return id ? [draw(passById(id), CAPTIONS[tab])] : [];

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TURN_PASSES, TURN_PASS_CAPS, sceneTagsPass, SCENE_TAGS_EMPTY_CAST, milestoneSelectPass } from './turnPasses';
+import { TURN_PASSES, TURN_PASS_CAPS, milestoneSelectPass } from './turnPasses';
 import { defaultMilestoneSelectUserPrompt } from '@/components/game/GamePrompts';
 import { renderPromptTemplate } from '@/lib/promptTemplate';
 import { layerValues } from '@/lib/promptValues';
@@ -48,7 +48,6 @@ const material = (over: Partial<TurnMaterial> = {}): TurnMaterial => ({
   npcCastSize: 2,
   intents: [{ name: 'Bram', text: 'I wait.' }],
   overflow: ['Odette'],
-  sceneCast: ['Bram'],
   ...over,
 });
 
@@ -769,48 +768,6 @@ describe('every pass request anatomy', () => {
   it('clamps the choices system runs to the trim its language chip leaves behind', () => {
     const request = build('choices', {}, {}, { language: 'English' });
     expect(request.systemPrompt.endsWith(' ')).toBe(false);
-    expect(runsTile(request.systemPrompt, request.anatomy!.system)).toBe(true);
-  });
-});
-
-describe('the scene-tag pass', () => {
-  const tagMaterial = (over: Partial<TurnMaterial> = {}) => material({ narration: 'She turns the pole over once.', ...over });
-  const buildTags = (over: Partial<TurnMaterial> = {}) => sceneTagsPass.buildRequest(input(), tagMaterial(over));
-
-  it('is not dispatched by the turn runner — the scene-image flow drives it', () => {
-    expect(TURN_PASSES.some((p) => p.id === 'sceneTags')).toBe(false);
-  });
-
-  it('builds the request the inline call site did, from the turn context and who is in frame', () => {
-    const request = buildTags({ sceneCast: ['Bram', 'Odette'] });
-    expect(request.systemPrompt).toBe(renderPromptTemplate(TEST_PROMPTS.sceneTags, tagMaterial().ctx));
-    expect(request.messages).toEqual([{
-      role: 'user',
-      content: renderPromptTemplate(TEST_PROMPTS.sceneTagsUser, {
-        '<NARRATION>': 'She turns the pole over once.',
-        '<IN FRAME>': 'Bram, Odette',
-      }),
-    }]);
-    expect(request.maxTokens).toBe(TURN_PASS_CAPS.sceneTags);
-    expect(request.silent).toBe(true);
-    expect(request.attachTurnId).toBe('turn-1');
-  });
-
-  it('says an empty scene outright when the turn put nobody in frame', () => {
-    expect(buildTags({ sceneCast: [] }).messages[0].content).toContain(SCENE_TAGS_EMPTY_CAST);
-  });
-
-  it('names its own runs: the template, the narration, and who is in frame', () => {
-    const request = buildTags({ sceneCast: ['Bram'] });
-    const content = request.messages[0].content;
-    expect(request.anatomy!.messages[0].map((r) => [r.chip ?? r.source, content.slice(r.start, r.end)])).toEqual([
-      ['user-template', 'Draw: '],
-      ['<NARRATION>', 'She turns the pole over once.'],
-      ['user-template', ' | In frame: '],
-      ['<IN FRAME>', 'Bram'],
-    ]);
-    expect(request.anatomy!.messages[0].map((r) => r.contextLabel))
-      .toEqual([undefined, 'narration', undefined, 'scene-cast']);
     expect(runsTile(request.systemPrompt, request.anatomy!.system)).toBe(true);
   });
 });

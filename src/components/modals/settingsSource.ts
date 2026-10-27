@@ -12,7 +12,7 @@ type ThemeValue = ReturnType<typeof useTheme>;
 export type DisplaySettingsSource = Pick<SettingsValue,
   | 'themeColor' | 'setThemeColor' | 'fontFamily' | 'setFontFamily'
   | 'bgmEnabled' | 'setBgmEnabled' | 'locationBackground' | 'setLocationBackground'
-  | 'backgroundOverlay' | 'setBackgroundOverlay' | 'imageGenDisabled' | 'sceneImageAuto' | 'setSceneImageAuto'
+  | 'backgroundOverlay' | 'setBackgroundOverlay'
   | 'narrationLayout' | 'setNarrationLayout' | 'language' | 'setLanguage'
   | 'paragraphLimit' | 'setParagraphLimit' | 'markdownOutput' | 'setMarkdownOutput'
   | 'stripLinksAndImages' | 'setStripLinksAndImages'
@@ -41,7 +41,6 @@ export type OutputSettingsSource = Pick<SettingsValue,
   | 'semanticDiaries' | 'setSemanticDiaries'
   | 'continueChoiceMode' | 'setContinueChoiceMode'
   | 'concurrentTurnRequests' | 'setConcurrentTurnRequests'
-  | 'imageAttachments' | 'setImageAttachments'
 > & { embeddingModel: EmbeddingDownload };
 
 /** What the text-endpoint editor reads and writes: the active preset's fields and the preset list. */

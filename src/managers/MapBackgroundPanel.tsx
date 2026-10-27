@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { ValueSlider } from '@/components/SettingsRows';
 import { Tip } from '@/components/ui/tooltip';
-import type { GalleryImage, Placeholder, WorldOverview } from '@/types';
+import type { GalleryImage, WorldOverview } from '@/types';
 import { MapBackgroundField } from './MapBackgroundField';
 
 /** What the canvas's Map Background card is open for: the gallery, or adjusting the frame. */
@@ -13,10 +13,9 @@ export type MapBackgroundPanelMode = 'set' | 'adjust';
  * The canvas card for the Map Background. Set shows the Media tab's gallery; Adjust shows the Opacity slider
  * and Remove Image while the image takes the canvas's presses.
  */
-export function MapBackgroundPanel({ mode, overview, placeholders, opacity, onImagesChange, onOpacity, onRemove, onClose }: {
+export function MapBackgroundPanel({ mode, overview, opacity, onImagesChange, onOpacity, onRemove, onClose }: {
   mode: MapBackgroundPanelMode;
-  overview: Pick<WorldOverview, 'mapBackground' | 'description' | 'name'>;
-  placeholders: Placeholder[];
+  overview: Pick<WorldOverview, 'mapBackground'>;
   opacity: number;
   onImagesChange: (images: GalleryImage[]) => void;
   onOpacity: (opacity: number) => void;
@@ -42,7 +41,6 @@ export function MapBackgroundPanel({ mode, overview, placeholders, opacity, onIm
           <MapBackgroundField
             overview={overview}
             onImagesChange={onImagesChange}
-            placeholders={placeholders}
             imageId="canvas-map-background"
           />
         )

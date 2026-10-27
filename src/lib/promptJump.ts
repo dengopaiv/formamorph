@@ -66,9 +66,9 @@ export function resolveChipJump(
  *
  * Absent labels are absent for one of two reasons. Most name content nobody authored — the player's own
  * action, the turns already played, their notes, the directive a Thinking mode adds — so a chip for one of
- * those stays inert. `narration` and `scene-cast` do have an author, but every run carrying them comes
- * from a template chip (`<NARRATION>`, `<IN FRAME>`), and a template chip's click already goes to the more
- * specific place: its own placement in the editor that holds it. An owner row for either could never fire.
+ * those stays inert. `narration` does have an author, but every run carrying it comes from a template chip
+ * (`<NARRATION>`), and a template chip's click already goes to the more specific place: its own placement in
+ * the editor that holds it. An owner row for it could never fire.
  */
 export const CONTEXT_OWNER: Partial<Record<ContextLabel, PromptTab>> = {
   'turn-plan': 'thinking',

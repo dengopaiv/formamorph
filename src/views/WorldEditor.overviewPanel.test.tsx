@@ -151,16 +151,6 @@ describe('the World Editor Overview columns', () => {
       await waitFor(() => expect(screen.queryByText(reader)).toBeNull());
     }
   });
-
-  // The button's width comes from the box it shares with the picture, so what this can assert in jsdom is
-  // the sharing. That it renders at the frame's width was read off the running editor, not from here.
-  it('puts the Generate button in the thumbnail frame’s own box', async () => {
-    renderWorldEditorBench(WORLD, 'advanced');
-    const generate = await screen.findByRole('button', { name: /Generate with AI/ });
-    const box = generate.parentElement;
-    expect(box?.querySelector('#image-upload-thumbnail')).not.toBeNull();
-  });
-
 });
 
 describe('the Overview persona rules', () => {

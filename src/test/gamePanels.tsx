@@ -53,10 +53,8 @@ export interface TurnFixture {
   action?: string;
   narration: string;
   choices?: string[];
-  /** Stable turn id — what keys scene images and the memory digest to this turn. */
+  /** Stable turn id — what keys script tells and the memory digest to this turn. */
   turnId?: string;
-  /** The booru tag line this turn's images were drawn from. */
-  sceneTags?: string;
   /** This turn's frozen player notes. */
   notes?: string;
   /** Who took part, as the narration parse recorded them. */
@@ -124,7 +122,6 @@ function turnContent(turn: TurnFixture): string {
     choices: turn.choices ?? [],
     stat_changes: [],
     ...(turn.turnId ? { turnId: turn.turnId } : {}),
-    ...(turn.sceneTags ? { sceneTags: turn.sceneTags } : {}),
     ...(turn.notes ? { notes: turn.notes } : {}),
     ...(turn.entities ? { entities: turn.entities } : {}),
     ...(turn.summary ? { summary: turn.summary } : {}),
@@ -270,15 +267,14 @@ function renderPanel<P extends object>(
   };
 }
 
-/** Default `MiddlePanel` props: every callback a spy, nothing in flight. `totalPages` and `sceneTurnId` come
- *  from the staged turns, and `disabled` mirrors GameViewer's own rule that a scene render holds the input. */
+/** Default `MiddlePanel` props: every callback a spy, nothing in flight. `totalPages` and `viewedTurnId` come
+ *  from the staged turns. */
 export function middlePanelProps(
   overrides: Partial<MiddlePanelProps> = {},
   options: PanelHarnessOptions = {},
 ): HarnessMiddlePanelProps {
   const turns = options.turns ?? [];
   const page = options.page ?? Math.max(1, turns.length);
-  const job = overrides.sceneImageJob ?? null;
   return {
     parseAssistantMessage: (content: string) => {
       try {
@@ -295,18 +291,8 @@ export function middlePanelProps(
     handleRegenerateChoices: vi.fn(),
     handleRegenerateStats: vi.fn(),
     abortGeneration: vi.fn(),
-    disabled: job !== null,
-    sceneImages: [],
-    sceneTags: turns[page - 1]?.sceneTags ?? '',
-    sceneTurnId: turns[page - 1]?.turnId,
-    sceneImageJob: job,
-    sceneImageProgress: null,
-    sceneImagePreview: null,
-    sceneImagesAvailable: true,
-    onSceneImage: vi.fn(),
-    onSceneTags: vi.fn(),
-    onCancelSceneImage: vi.fn(),
-    onDeleteSceneImage: vi.fn(),
+    disabled: false,
+    viewedTurnId: turns[page - 1]?.turnId,
     onTTSClick: vi.fn(),
     onExportStory: vi.fn(),
     onRegenerateTTS: vi.fn(),
@@ -371,7 +357,6 @@ export function renderRightPanel(
     traitCascade: null,
     onDismissTraitCascade: vi.fn(),
     onRegenerateStats: vi.fn(),
-    sceneImageJob: null,
     language: '',
     setLanguage: vi.fn(),
   };

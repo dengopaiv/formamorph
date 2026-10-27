@@ -20,7 +20,6 @@ describe('resolvePromptJump', () => {
     expect(resolvePromptJump('system-template', 'choices')).toEqual({ tab: 'choices', surface: 'system' });
     expect(resolvePromptJump('user-template', 'choices')).toEqual({ tab: 'choices', surface: 'user' });
     expect(resolvePromptJump('system-template', 'statUpdates')).toEqual({ tab: 'statupdates', surface: 'system' });
-    expect(resolvePromptJump('system-template', 'sceneTags')).toEqual({ tab: 'scenetags', surface: 'system' });
     expect(resolvePromptJump('user-template', 'openingTime')).toEqual({ tab: 'timeopening', surface: 'user' });
   });
 
@@ -92,11 +91,9 @@ describe('resolveContextJump', () => {
   });
 
   it('carries no owner for a label that only ever rides a template chip', () => {
-    // Every `narration` and `scene-cast` run comes from a chip (`<NARRATION>`, `<IN FRAME>`), and a chip's
-    // click goes to its own placement — an owner row here could never fire, so there must not be one.
-    for (const label of ['narration', 'scene-cast'] as const) {
-      expect(resolveContextJump(label)).toBeNull();
-    }
+    // Every `narration` run comes from a chip (`<NARRATION>`), and a chip's click goes to its own
+    // placement — an owner row here could never fire, so there must not be one.
+    expect(resolveContextJump('narration')).toBeNull();
   });
 
   it('leads only to prompts the rail lists, and names a label that exists', () => {

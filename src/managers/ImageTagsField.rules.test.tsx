@@ -14,8 +14,6 @@ import type { Entity, GalleryImage, Stat, Trait, TraitRequirementRow } from '@/t
 vi.mock('../lib/UtilityComponents', () => ({
   ImageUpload: ({ value, id }: { value?: string | null; id: string }) => <div data-testid="slot" data-value={value ?? ''} data-slot-id={id} />,
 }));
-vi.mock('../components/GenerateImageButton', () => ({ GenerateImageButton: () => <div>generate</div> }));
-vi.mock('@/components/AiGenerateButton', () => ({ default: () => <div /> }));
 vi.mock('@/lib/useRemoteImage', () => ({ RemoteImg: ({ src }: { src?: string }) => <img src={src} alt="" /> }));
 vi.mock('@/lib/useDownscalePrompt', () => ({ useDownscalePrompt: () => ({ promptImagesBatch: vi.fn(), dialog: null }) }));
 
@@ -54,7 +52,6 @@ function Harness({ initial, inDialog = false, ruleCog, host = WREN_HOST }: {
       imageId="x"
       cap={IMAGE_CAPS.entity}
       kind="character"
-      onTagsChange={vi.fn()}
       ruleHost={host}
       ruleCog={ruleCog}
     />
@@ -170,7 +167,7 @@ describe('Gallery Visibility rules', () => {
     render(
       <TooltipProvider>
         <ImageTagsField label="Background Image" images={[{ data: A }, { data: B }]} onImagesChange={vi.fn()} slots={4}
-          imageId="y" cap={IMAGE_CAPS.entity} kind="location" onTagsChange={vi.fn()} />
+          imageId="y" cap={IMAGE_CAPS.entity} kind="location" />
       </TooltipProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Visibility Rule' })).toBeNull();
@@ -180,7 +177,7 @@ describe('Gallery Visibility rules', () => {
     render(
       <TooltipProvider>
         <ImageTagsField label="Image" images={[{ data: A }, { data: B }]} onImagesChange={vi.fn()} slots={4}
-          imageId="z" cap={IMAGE_CAPS.entity} kind="character" onTagsChange={vi.fn()} ruleHost={WREN_HOST} />
+          imageId="z" cap={IMAGE_CAPS.entity} kind="character" ruleHost={WREN_HOST} />
       </TooltipProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Visibility Rule' })).toBeNull();

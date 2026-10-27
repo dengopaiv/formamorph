@@ -52,9 +52,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe('a surface request on the main menu', () => {
   it('opens Settings on the requested tab and sub-tab', async () => {
     renderMenu();
-    requester.send('settingsEndpoints.image');
+    requester.send('settingsEndpoints.text');
     await waitFor(() => expect(registry.get()).toEqual({
-      screen: 'mainMenu', dialog: 'settings', tabs: ['settings.endpoints', 'settingsEndpoints.image'],
+      screen: 'mainMenu', dialog: 'settings', tabs: ['settings.endpoints', 'settingsEndpoints.text'],
     }));
     expect(requester.pending()).toBeNull();
   });

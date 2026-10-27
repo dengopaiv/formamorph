@@ -62,8 +62,6 @@ export const TURN_PASS_CAPS = {
   diary: 80,
   /** ~2 short paragraphs, trimmed to the last full sentence — headroom against a mid-word cut. */
   discoverEntity: 200,
-  /** One line of tags: enough for a rich action line, not for prose. */
-  sceneTags: 120,
   /** A handful of short options; room for the last one on a verbose model. */
   choices: 256,
   /** Three short number lines. */
@@ -80,9 +78,6 @@ export const statSchemaCap = (statCount: number, ownerCount = 1): number => 32 *
 export const locationChangeCap = (destinations: readonly string[]): number =>
   estimateTokens(Math.max(0, ...destinations.map((name) => name.length))) + 8;
 
-/** What `<IN FRAME>` renders to when the turn put nobody in the picture. */
-export const SCENE_TAGS_EMPTY_CAST = 'nobody - an empty scene';
-
 /**
  * The Request Anatomy sidecar (see lib/requestAnatomy). Every pass below assembles its request from
  * labeled pieces rather than describing it afterward, so the content IS the pieces joined and the runs
@@ -94,7 +89,7 @@ const systemTiled = (template: string, values: TokenValues): TiledRuns =>
   renderPromptTemplateRuns(template, values, { source: 'system-template' });
 
 /** A user-message template and the runs over it. A few of the chips a user message carries hold what an
- *  earlier prompt wrote — the action, the narration, who is in frame — so those name what wrote them. */
+ *  earlier prompt wrote — the action, the narration — so those name what wrote them. */
 const userTiled = (
   template: string,
   values: TokenValues,
@@ -674,35 +669,6 @@ export const discoverEntityPass: TurnPassRecord<string> = {
     );
   },
   parseResponse: (raw, material) => cleanDiscoveredDescription(raw, subjectOf(material).name),
-};
-
-/**
- * What is happening in a scene, for the image model to draw. Its subjects and its location bring their own
- * tags; this pass writes only the action layer over them.
- *
- * A pass record for its request assembly, not for the turn runner: a picture is drawn when the player asks
- * for one, so this one is dispatched by the scene-image flow and is deliberately absent from
- * {@link TURN_PASSES}.
- */
-export const sceneTagsPass: TurnPassRecord<string> = {
-  id: 'sceneTags',
-  type: 'sceneTags',
-  stage: 'postNarration',
-  fanOut: false,
-  isDue: () => true,
-  buildRequest: (input, material) => labeledRequest(
-    { type: 'sceneTags', maxTokens: TURN_PASS_CAPS.sceneTags, ...silentOn(material) },
-    systemTiled(input.prompts.sceneTags, material.ctx),
-    userTiled(
-      input.prompts.sceneTagsUser,
-      {
-        '<NARRATION>': material.narration,
-        '<IN FRAME>': material.sceneCast.length ? material.sceneCast.join(', ') : SCENE_TAGS_EMPTY_CAST,
-      },
-      { '<IN FRAME>': 'scene-cast' },
-    ),
-  ),
-  parseResponse: (raw) => raw,
 };
 
 const milestoneOf = (material: TurnMaterial): { kept: string[]; fresh: string[] } => {

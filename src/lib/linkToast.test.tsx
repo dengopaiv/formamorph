@@ -28,13 +28,13 @@ async function openDetails(): Promise<HTMLElement> {
 describe('toastError', () => {
   it('shows only the message of an error with details, with a View Details link to the rest', async () => {
     render(<ThemedToastContainer />);
-    act(() => toastError(new DetailedError('ComfyUI rejected the workflow: Bad graph', 'Node #4: missing'), 'fallback'));
+    act(() => toastError(new DetailedError('The server rejected the request: Bad input', 'Field #4: missing'), 'fallback'));
 
-    await screen.findByText('ComfyUI rejected the workflow: Bad graph');
-    expect(screen.queryByText('Node #4: missing')).toBeNull();
+    await screen.findByText('The server rejected the request: Bad input');
+    expect(screen.queryByText('Field #4: missing')).toBeNull();
 
     const dialog = await openDetails();
-    expect(dialog.textContent).toContain('Node #4: missing');
+    expect(dialog.textContent).toContain('Field #4: missing');
   });
 
   it('reads details from a string field on any error, not from its class', async () => {
@@ -133,12 +133,12 @@ describe('toastError', () => {
 
   it('keeps the message of an error with its own details when a headline replaces it', async () => {
     render(<ThemedToastContainer />);
-    act(() => toastError(new DetailedError('Bad graph', 'Node #4: missing'), { headline: "Couldn't draw this scene." }));
+    act(() => toastError(new DetailedError('Bad input', 'Field #4: missing'), { headline: "Couldn't load the model." }));
 
-    await screen.findByText("Couldn't draw this scene.");
+    await screen.findByText("Couldn't load the model.");
     const text = (await openDetails()).textContent ?? '';
-    expect(text).toContain('Bad graph');
-    expect(text).toContain('Node #4: missing');
+    expect(text).toContain('Bad input');
+    expect(text).toContain('Field #4: missing');
   });
 
   it('wraps a string failure reason so it still gets the link', async () => {
@@ -167,12 +167,12 @@ describe('toastError', () => {
 
   it('copies the message, the details and the diagnostics block together', async () => {
     render(<ThemedToastContainer />);
-    act(() => toastError(new DetailedError('ComfyUI rejected the workflow: Bad graph', 'Node #4: missing'), 'fallback'));
+    act(() => toastError(new DetailedError('The server rejected the request: Bad input', 'Field #4: missing'), 'fallback'));
     await openDetails();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
     const copied = writeText.mock.calls[0][0];
-    expect(copied).toMatch(/^ComfyUI rejected the workflow: Bad graph\n\nNode #4: missing\n\nVersion: /);
+    expect(copied).toMatch(/^The server rejected the request: Bad input\n\nField #4: missing\n\nVersion: /);
     expect(copied).toContain('Platform: Browser');
     await screen.findByText('Copied');
   });
@@ -186,7 +186,7 @@ describe('#dev?modal=errorDetails', () => {
     window.dispatchEvent(new HashChangeEvent('hashchange'));
     render(<ThemedToastContainer />);
 
-    await screen.findByText(/^ComfyUI rejected the workflow/);
+    await screen.findByText(/^The server rejected the request/);
     const text = (await openDetails()).textContent ?? '';
     expect(text).toContain('CheckpointLoaderSimple');
     expect(text).toContain(`Version: ${APP_VERSION}`);

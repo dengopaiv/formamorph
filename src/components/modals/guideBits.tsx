@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
-// The small typographic pieces the setup guides share (LLM, image provider, ComfyUI workflow), so the three
-// sibling dialogs render inline code and snippets identically.
+// The small typographic pieces a setup guide uses, so inline code and snippets render the same way wherever
+// a guide shows them.
 
 /** An inline literal — a URL, flag, or field value the reader may need to copy. */
 export const Code = ({ children }: { children: ReactNode }) => (

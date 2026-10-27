@@ -4,7 +4,7 @@ import type { AIRequestType } from '@/types';
 const LABEL_ORDER: readonly AIRequestType[] = [
   'narration', 'thinking', 'director', 'character', 'storyboard', 'locationChange', 'entityLocation',
   'choices', 'statUpdates', 'discoverEntity', 'timePassed', 'openingTime',
-  'summary', 'milestoneSelect', 'diary', 'sceneTags',
+  'summary', 'milestoneSelect', 'diary',
 ];
 
 const rank = (type: AIRequestType): number => {

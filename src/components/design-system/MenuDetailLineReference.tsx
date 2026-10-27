@@ -8,14 +8,13 @@ import type { AIRequestType } from '@/types';
 
 const noop = () => {};
 const NO_HANDLERS: BubbleActionHandlers = {
-  regenerate: noop, regenerateStats: noop, sceneImage: noop, sceneTags: noop, edit: noop,
+  regenerate: noop, regenerateStats: noop, edit: noop,
   textToSpeech: noop, regenerateAudio: noop, copy: noop, rewind: noop,
 };
 
 // Sample routing: the Demo AI preset, a short pinned preset, and a long one that truncates.
 const SAMPLE_ROUTES: Partial<Record<AIRequestType, [string, string]>> = {
   narration: ['Default', 'default'],
-  sceneTags: ['Default', 'default'],
   statUpdates: ['Quick Stats', 'gemma-4-e4b'],
   choices: ['Silver Siren local endpoint — 131,072-token creative-writing profile', 'cydonia-24b-v4.3@q4_k_m'],
 };
@@ -29,8 +28,6 @@ const IDLE = {
   live: false,
   busy: false,
   canRegenStats: true,
-  sceneImagesAvailable: true,
-  sceneJob: null,
   ttsLoaded: false,
   ttsGenerating: false,
 } as const;
@@ -43,7 +40,7 @@ const TARGET_CLASS = 'rounded-md border border-border bg-card p-4 text-body text
 
 export function MenuDetailLineReference() {
   const [lastAction, setLastAction] = useState<string | null>(null);
-  const narration = reporting(withEndpoints(bubbleActions({ ...IDLE, isLatest: true, hasImage: true }, NO_HANDLERS), sampleTip), setLastAction);
+  const narration = reporting(withEndpoints(bubbleActions({ ...IDLE, isLatest: true }, NO_HANDLERS), sampleTip), setLastAction);
   const choices = reporting(
     withEndpoints(choicesActions({ canRegenerate: true, hasChoices: true, busy: false, regenerating: false }, noop), sampleTip),
     setLastAction,

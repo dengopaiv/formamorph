@@ -37,12 +37,6 @@ describe('settingsUseAdvancedValues', () => {
     ['reasoning hidden', { showReasoning: false }],
     ['silent requests shown', { showSilentRequests: true }],
     ['a raised output cap', { maxTokens: HIDDEN_SETTING_DEFAULTS.maxTokens * 2 }],
-    ['a custom portrait size', { imagePortraitWidth: 1024 }],
-    ['a custom landscape size', { imageLandscapeHeight: 1024 }],
-    ['an edited ComfyUI workflow', { imageWorkflowCustom: true }],
-    ['an InvokeAI board', { imageInvokeBoard: 'b1' }],
-    ['an InvokeAI encoder', { imageInvokeEncoder: 'qwen3-4b' }],
-    ['an InvokeAI VAE', { imageInvokeVae: 'flux-schnell-vae' }],
     ['a user-made prompt preset', { promptPresetCustom: true }],
   ])('is true for %s', (_label, patch) => {
     expect(settingsUseAdvancedValues({ ...untouched, ...patch })).toBe(true);
@@ -90,8 +84,7 @@ describe('the hidden-field defaults match the live ones', () => {
     'paragraphLimit', 'markdownOutput', 'stripLinksAndImages', 'reasoningEffort', 'limitActiveCharacters', 'activeCharacterLimit',
     'memoryDigests', 'semanticMemory', 'semanticBandCap', 'semanticRehydration', 'timeContext', 'aiClock',
     'fixedTurnHours', 'semanticLore', 'characterDiaries', 'describeCharacters', 'semanticDiaries', 'concurrentTurnRequests',
-    'showReasoning', 'showSilentRequests', 'maxTokens', 'imagePortraitWidth', 'imagePortraitHeight',
-    'imageLandscapeWidth', 'imageLandscapeHeight', 'imageInvokeBoard', 'imageInvokeEncoder', 'imageInvokeVae',
+    'showReasoning', 'showSilentRequests', 'maxTokens',
   ] as (keyof SettingsAdvancedInput)[]))('%s', (key) => {
     expect(freshSettings()[key]).toEqual(HIDDEN_SETTING_DEFAULTS[key]);
   });

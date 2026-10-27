@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { DEV_MODAL_TABS, DEV_MODALS } from './devRoutes';
 import { seedDevRouteFromEnv } from './devRouter';
 import { DEV_FIXTURES, PICKED_OPENING_TEXT, WORLD_OPENING_TEXT, WRITTEN_OPENING_TEXT, loadDevFixture } from './devFixtures';
@@ -227,8 +227,8 @@ describe('dev-router coverage guard', () => {
     // localModel is deliberately excluded (it lives inside Settings, not as a standalone modal). worldEditor
     // is an in-place MainMenu modal (no longer a top-level view).
     expect(DEV_MODALS).toEqual([
-      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'demoAI', 'persona', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt',
-      'customCode', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash',
+      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'demoAI', 'persona', 'errorDetails', 'settingsCompare', 'chipOptions', 'scriptPrompt',
+      'customCode', 'fontTune', 'revealDemo', 'presetImport', 'placeholderPicker', 'rootCrash',
     ]);
   });
 });
@@ -239,16 +239,7 @@ describe('mid-game boot fixtures', () => {
   });
 
   it('every registered fixture loads', async () => {
-    // The dev server serves fixture images; here each fetch answers with a tiny JPEG.
-    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1]);
-    vi.stubGlobal('fetch', async () => ({ ok: true, blob: async () => new Blob([jpeg], { type: 'image/jpeg' }) }));
-    try {
-      for (const name of DEV_FIXTURES) expect(await loadDevFixture(name), name).not.toBeNull();
-      const long = await loadDevFixture('thousandTurns');
-      expect(Object.values(long!.save!.sceneImages!)[0][0]).toMatch(/^data:image\/jpeg;base64,/);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    for (const name of DEV_FIXTURES) expect(await loadDevFixture(name), name).not.toBeNull();
   });
 
   it('the written-opening fixture is a new game whose one opening is a Narration', async () => {

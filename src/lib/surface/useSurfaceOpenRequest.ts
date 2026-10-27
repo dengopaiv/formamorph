@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettings } from '@/contexts/SettingsContext';
-import { endpointTabForRoute, type SettingsTabId } from '@/components/modals/settingsTabs';
+import type { SettingsTabId } from '@/components/modals/settingsTabs';
 import { randomUUID } from '@/lib/uuid';
 import { useTargetLanding } from './useLanding';
 import { resolveSurface, stepTab, targetRoute, type SurfaceSteps, type TabKey } from './surfaceRoute';
@@ -65,7 +65,6 @@ export function landsOnPage(steps: SurfaceSteps): boolean {
 /** Where a set of steps lands in Settings, in the shape the Settings modal's props take. */
 export interface SettingsLanding {
   tab?: SettingsTabId;
-  endpointTab?: string;
   promptTab?: string;
   promptSurface?: string;
 }
@@ -73,7 +72,6 @@ export interface SettingsLanding {
 export function settingsLanding(steps: SurfaceSteps): SettingsLanding {
   return {
     tab: stepTab(steps, 'settings'),
-    endpointTab: endpointTabForRoute(stepTab(steps, 'settingsEndpoints')),
     promptTab: stepTab(steps, 'settingsPrompts') ?? stepTab(steps, 'settingsPromptPreset'),
     promptSurface: stepTab(steps, 'settingsPromptSurfaces'),
   };

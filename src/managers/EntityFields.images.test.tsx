@@ -17,7 +17,6 @@ vi.mock('@/lib/useRemoteImage', async (importOriginal) => ({
   useRemoteImage: (url: string) => ({ src: url || '', status: url?.startsWith('http') ? 'cached' : 'embedded' }),
   RemoteImg: ({ src }: { src?: string }) => <img src={src} alt="" />,
 }));
-vi.mock('../components/GenerateImageButton', () => ({ GenerateImageButton: () => <div /> }));
 vi.mock('@/components/AiGenerateButton', () => ({ default: () => <div /> }));
 
 const A = 'data:image/webp;base64,AAAA';

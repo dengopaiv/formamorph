@@ -1,7 +1,7 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { isCrossOriginEmbed, isLocalEndpoint, openInOwnTab } from "@/lib/localNetworkEmbed";
-import { isDesktop } from "@/lib/imageGen/desktop";
+import { isDesktop } from "@/lib/desktop";
 import { Code } from "./guideBits";
 
 /** Derive a browsable base (`http://host:port`) from the configured chat-completions URL, for the

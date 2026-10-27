@@ -9,7 +9,7 @@ import { mediaParentSpec } from '@/lib/mediaParents';
 import ModelStorageService from '@/services/ModelStorageService';
 import type { Entity, MediaAsset, Placeholder, TraitRequirementRow } from '@/types';
 import { EntityImageWidget } from './EntityFields';
-import { ImageGallery, ImageTags } from './ImageTagsField';
+import { ImageGallery } from './ImageTagsField';
 import { LocationImageField } from './LocationImageField';
 import { MapBackgroundField } from './MapBackgroundField';
 import { useMapBackground } from './useMapBackground';
@@ -107,14 +107,13 @@ export function MediaImagePanel({ parent, images, framed, onFrame, avatar, place
           imageId={`media-entity-image-${entity.id}`}
           frame={{ framed, onFramedChange: onFrame, ruleCog: false }}
         >
-          <ImageGallery tagsSlot={<ImageTags />} />
+          <ImageGallery />
         </EntityImageWidget>
       )}
       {location && (
         <LocationImageField
           location={location}
           onChange={(field, value) => updateLocation({ ...location, [field]: value })}
-          placeholders={placeholders}
           imageId={`media-location-image-${location.id}`}
           frame={{ framed, onFramedChange: onFrame, ruleCog: false }}
         />
@@ -124,7 +123,6 @@ export function MediaImagePanel({ parent, images, framed, onFrame, avatar, place
         <MapBackgroundField
           overview={worldOverview}
           onImagesChange={(list) => void map.setImages(list)}
-          placeholders={placeholders}
           frame={{ framed, onFramedChange: onFrame, ruleCog: false }}
         />
       )}

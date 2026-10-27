@@ -20,7 +20,7 @@ import { useCatalogDownloads } from '@/lib/useCatalogDownloads';
 import { useLocalLlmStatus } from '@/lib/useLocalLlmStatus';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useVramStats, resolveOwnVram } from '@/lib/useVramStats';
-import type { LocalLlmState } from '@/lib/imageGen/desktop';
+import type { LocalLlmState } from '@/lib/desktop';
 import { EngineStatusLine, GpuMemoryBox } from '@/components/LocalModelStatus';
 import {
   listLocalInstalled,
@@ -46,7 +46,7 @@ import {
   type LocalModelLocations,
   type LocalMoveProgress,
   type LocalMoveResult,
-} from '@/lib/imageGen/desktop';
+} from '@/lib/desktop';
 import { Tip } from '@/components/ui/tooltip';
 
 /** Catalog display name keyed by GGUF filename, for labeling installed files we recognize. */

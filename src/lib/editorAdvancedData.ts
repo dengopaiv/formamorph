@@ -37,9 +37,9 @@ const statIsAdvanced = memoByRecord((s: Stat) =>
   !!(s.noIncrease || s.noIncreaseMax || s.noDecrease || s.noDecreaseMax));
 const entityIsAdvanced = memoByRecord((e: Entity) =>
   !!e.persona || hasValue(e.aliases) || hasValue(e.aiSummary) || hasValue(e.type) || hasValue(e.model) ||
-  hasValue(e.imageTags) || openingTexts(e).length > 0);
+  openingTexts(e).length > 0);
 const locationIsAdvanced = memoByRecord((l: GameLocation) =>
-  hasValue(l.aiSummary) || hasValue(l.ambientSound) || hasValue(l.imageTags) || openingTexts(l).length > 0);
+  hasValue(l.aiSummary) || hasValue(l.ambientSound) || openingTexts(l).length > 0);
 const traitIsAdvanced = memoByRecord((t: Trait) => hasValue(t.statToggles) || hasValue(t.placeholderPins));
 
 /**

@@ -2,9 +2,9 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { SettingsSource } from '@/components/modals/settingsSource';
 import { SETTINGS_OPTIONS } from '@/components/modals/settingsCopy';
 import {
-  DEFAULT_CONTINUE_CHOICE, DEFAULT_IMAGE_ATTACHMENTS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_LAYOUT,
+  DEFAULT_CONTINUE_CHOICE, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_LAYOUT,
   DEFAULT_NARRATION_LINE_HEIGHT, DEFAULT_NARRATION_SCALE, DEFAULT_QUOTE_COLOR, DEFAULT_QUOTE_COLOR_DARK,
-  DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_ITALIC, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_THEME_COLOR,
+  DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_ITALIC, DEFAULT_THEME_COLOR,
 } from '@/contexts/settingsDefaults';
 import { HIDDEN_SETTING_DEFAULTS } from '@/lib/settingsAdvancedData';
 import { FLAT_HOURS_PER_TURN } from '@/lib/gameClock';
@@ -21,7 +21,7 @@ import {
 /** The stored values behind the local source: everything a section reads that is not derived. */
 type LocalSettingsValues = Pick<SettingsSource,
   | 'theme' | 'themeColor' | 'fontFamily' | 'fontTunings'
-  | 'bgmEnabled' | 'locationBackground' | 'backgroundOverlay' | 'sceneImageAuto'
+  | 'bgmEnabled' | 'locationBackground' | 'backgroundOverlay'
   | 'narrationLayout' | 'language' | 'paragraphLimit' | 'markdownOutput' | 'stripLinksAndImages'
   | 'narrationFont' | 'narrationScale' | 'narrationLineHeight' | 'quoteColor' | 'quoteItalic'
   | 'showReasoning' | 'showSilentRequests'
@@ -32,7 +32,7 @@ type LocalSettingsValues = Pick<SettingsSource,
   | 'thinkingMode' | 'limitActiveCharacters' | 'activeCharacterLimit' | 'nativeReasoning' | 'toolsEnabled'
   | 'memoryDigests' | 'semanticMemory' | 'semanticBandCap' | 'semanticRehydration'
   | 'timeContext' | 'aiClock' | 'fixedTurnHours' | 'semanticLore' | 'describeCharacters' | 'characterDiaries' | 'semanticDiaries'
-  | 'continueChoiceMode' | 'concurrentTurnRequests' | 'imageAttachments'
+  | 'continueChoiceMode' | 'concurrentTurnRequests'
 > & { quoteColorLight: string | null; quoteColorDark: string | null };
 
 /** First-run values. Guarded against a fresh SettingsProvider in this module's test. */
@@ -44,7 +44,6 @@ export const LOCAL_SETTINGS_DEFAULTS: LocalSettingsValues = {
   bgmEnabled: true,
   locationBackground: true,
   backgroundOverlay: 0,
-  sceneImageAuto: DEFAULT_SCENE_IMAGE_AUTO,
   narrationLayout: DEFAULT_NARRATION_LAYOUT,
   language: 'English',
   paragraphLimit: HIDDEN_SETTING_DEFAULTS.paragraphLimit,
@@ -95,7 +94,6 @@ export const LOCAL_SETTINGS_DEFAULTS: LocalSettingsValues = {
   semanticDiaries: HIDDEN_SETTING_DEFAULTS.semanticDiaries,
   continueChoiceMode: DEFAULT_CONTINUE_CHOICE,
   concurrentTurnRequests: HIDDEN_SETTING_DEFAULTS.concurrentTurnRequests,
-  imageAttachments: DEFAULT_IMAGE_ATTACHMENTS,
 };
 
 const systemTheme = (): 'light' | 'dark' =>
@@ -129,7 +127,6 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
       setBgmEnabled: set('bgmEnabled'),
       setLocationBackground: set('locationBackground'),
       setBackgroundOverlay: set('backgroundOverlay'),
-      setSceneImageAuto: set('sceneImageAuto'),
       setNarrationLayout: set('narrationLayout'),
       setLanguage: set('language'),
       setParagraphLimit: set('paragraphLimit'),
@@ -180,7 +177,6 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
       setSemanticDiaries: set('semanticDiaries'),
       setContinueChoiceMode: set('continueChoiceMode'),
       setConcurrentTurnRequests: set('concurrentTurnRequests'),
-      setImageAttachments: set('imageAttachments'),
       embeddingModel: {
         loading: false,
         progress: null,
@@ -217,6 +213,5 @@ export function useLocalSettingsSource(report: (status: string) => void): Settin
     reasoningCapability: null,
     capabilityModelName: null,
     recheckCapability: async () => {},
-    imageGenDisabled: false,
   };
 }

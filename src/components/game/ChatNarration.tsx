@@ -19,9 +19,6 @@ import { hasNativeScrollAnchoring } from '@/lib/scrollAnchoring';
 import { ReasoningBlock } from './ReasoningBlock';
 import { BubbleMenu } from './BubbleMenu';
 import { TurnCard } from './TurnCard';
-import { ScenePlate } from './ScenePlate';
-import { AttachmentThumbs } from './AttachmentThumbs';
-import { turnAttachments } from '@/lib/actionAttachments';
 import { turnTells } from '@/lib/scriptTells';
 import { ScriptTellLines } from './ScriptPromptLine';
 import type { BubbleAction } from '@/lib/bubbleActions';
@@ -46,7 +43,6 @@ export interface ChatBubbleTurn {
   index: number;
   isLatest: boolean;
   live: boolean;
-  hasImage: boolean;
   text: string;
 }
 
@@ -81,19 +77,17 @@ export const PLAYER_ACTION_BUBBLE = 'ml-auto w-fit max-w-[85%] rounded-2xl round
  * right and the narration as a full-width block. Opens at the latest turn. `latestFooter` renders under the
  * latest turn's narration.
  */
-export function ChatNarration({ parseAssistantMessage, latestFooter, actionsFor, playerActionsFor, onDeleteSceneImage, fadeUnderStrip = false }: {
+export function ChatNarration({ parseAssistantMessage, latestFooter, actionsFor, playerActionsFor, fadeUnderStrip = false }: {
   parseAssistantMessage: (content: string) => string;
   latestFooter?: React.ReactNode;
   /** The actions of one committed narration bubble. */
   actionsFor?: (turn: ChatBubbleTurn) => BubbleAction[];
   /** The actions of one player action bubble. */
   playerActionsFor?: (turn: ChatPlayerTurn) => BubbleAction[];
-  /** Deletes one scene image of the named turn. */
-  onDeleteSceneImage: (turnId: string, index: number) => void;
   /** Fades the turns out above the request status strip, which floats over the bottom. */
   fadeUnderStrip?: boolean;
 }) {
-  const { fullMessageHistory, isRevealingNarration, narrationSettled, isWaitingForAI, sceneImages, actionAttachments, scriptTells, currentPage, totalPages, setUserPage } = useGameplay();
+  const { fullMessageHistory, isRevealingNarration, narrationSettled, isWaitingForAI, scriptTells, currentPage, totalPages, setUserPage } = useGameplay();
   const { revealSpec, revealEasing, showReasoning } = useSettings();
   const gameplayText = useGameplayText();
   const liveReasoning = useLiveReasoning();
@@ -191,10 +185,9 @@ export function ChatNarration({ parseAssistantMessage, latestFooter, actionsFor,
             const reasoning = reasoningLive ? liveReasoning : turn.reasoning;
             const narrationText = liveReveal ? gameplayText : turn.narration ? parseAssistantMessage(turn.narration.content) : '';
             const { turnId } = turn;
-            const images = (!liveReveal && turnId && sceneImages[turnId]) || [];
             // The card holds its actions while live, so its row can open in place once the narration settles.
             const narrationActions = (turn.narration && actionsFor?.({
-              index: item.index, isLatest, live: false, hasImage: images.length > 0, text: narrationText,
+              index: item.index, isLatest, live: false, text: narrationText,
             })) || [];
             const chromeHeld = liveReveal && !narrationSettled;
             // The turn is live from submit, before its narration exists, until the reveal ends.
@@ -223,9 +216,6 @@ export function ChatNarration({ parseAssistantMessage, latestFooter, actionsFor,
                     </div>
                   </BubbleMenu>
                 )}
-                {turn.action !== null && (
-                  <AttachmentThumbs attachments={turnAttachments(actionAttachments, turnId)} className="mb-3 justify-end" />
-                )}
                 {(turn.narration || (showReasoning && reasoning?.text)) && (
                   <TurnCard actions={narrationActions} turnNumber={item.index + 1} live={chromeHeld} style={revealStyle}>
                     {showReasoning && reasoning?.text && (
@@ -244,14 +234,6 @@ export function ChatNarration({ parseAssistantMessage, latestFooter, actionsFor,
                           dialogue
                         />
                       </div>
-                    )}
-                    {turnId && (
-                      <ScenePlate
-                        turnId={turnId}
-                        images={images}
-                        onDelete={(index) => onDeleteSceneImage(turnId, index)}
-                        className="mt-2.5"
-                      />
                     )}
                   </TurnCard>
                 )}

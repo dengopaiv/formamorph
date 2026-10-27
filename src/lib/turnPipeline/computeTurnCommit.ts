@@ -44,8 +44,6 @@ export interface TurnCommitContext {
   /** The live scratchpad, frozen into this turn. */
   notes: string;
   reasoning: { text: string; ms: number };
-  /** The planner's call on whether the player is in the picture. Undefined when no planner ran. */
-  playerInFrame?: boolean;
   /** Story hours elapsed before this turn. */
   gameTime: number;
   /** Story hours a turn costs while Measured Clock is off: the player's Time Per Turn. Defaults to the flat
@@ -187,7 +185,6 @@ export function computeTurnCommit({ result, plan, context }: TurnCommitInput): T
     ...(context.locationId !== undefined ? { locationId: context.locationId } : {}),
     ...(context.notes ? { notes: context.notes } : {}),
     ...(context.reasoning.text ? { reasoning: context.reasoning } : {}),
-    ...(context.playerInFrame !== undefined ? { playerInFrame: context.playerInFrame } : {}),
     ...(summary ? { summary } : {}),
     // A turn without a stored delta reads back as the flat hour, so only a time that differs is stored.
     ...(measuredHours !== null || turnHours !== FLAT_HOURS_PER_TURN ? { timeDelta: turnHours } : {}),

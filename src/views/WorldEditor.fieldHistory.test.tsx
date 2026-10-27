@@ -291,14 +291,14 @@ const reported = (tree: ReactNode) => (
 );
 
 describe('Ctrl+Z under a question the editor asks', () => {
-  it.each(['imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere'])('leaves the world alone under %s, which reports its surface', async (modal) => {
+  it.each(['codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere'])('leaves the world alone under %s, which reports its surface', async (modal) => {
     window.location.hash = `#dev?modal=${modal}`;
     try {
       const { ctx } = renderWorldEditorBench(WORLD, 'advanced', {}, reported);
       openEditorTab(/Stats/);
       await removeStat('Damp');
       // The dev route raises the question over the edit.
-      await screen.findByRole(modal === 'imageReplace' ? 'dialog' : 'alertdialog');
+      await screen.findByRole('alertdialog');
       expect(surfaceRegistry.get().dialog).toBe(modal);
       expect(await chord(document.body, 'z')).toBe(false);
       expect(statNames(ctx)).toEqual(['Warmth', 'Dread']);

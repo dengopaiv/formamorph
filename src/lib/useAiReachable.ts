@@ -3,7 +3,7 @@ import { useSettings } from '@/contexts/SettingsContext';
 import type { AiEndpointTarget } from '@/lib/aiRequest/aiRequestSpec';
 import { useLocalLlmStatus } from '@/lib/useLocalLlmStatus';
 import { probeEndpoint, type EndpointProbe } from '@/lib/textEndpointProbe';
-import { isDesktop, listLocalModels, localLlmStatus } from '@/lib/imageGen/desktop';
+import { isDesktop, listLocalModels, localLlmStatus } from '@/lib/desktop';
 
 /** Which AI the app is pointed at: the desktop's bundled engine, or any user-configured endpoint. */
 export type AiMode = 'local' | 'custom';

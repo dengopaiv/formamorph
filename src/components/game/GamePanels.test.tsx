@@ -12,16 +12,10 @@ import { resetTtsPlayback, setTtsPlayback } from '@/test/stubs/ttsPlayback';
 import { phValues } from '@/test/placeholderValues';
 // The TTS engine needs a Web Audio graph; jsdom has none.
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
-// Stubbed because it is a Lexical editor whose caret jsdom cannot drive, and
-// these cases are about panel state per turn. The field itself: prompt/TagChipField.test.tsx.
-// Same reason, for the Edit Text modal's editor: these cases are about what saving an edit does to the
-// turn, not about the field. Its own behavior: prompt/PromptField.markdown.test.tsx.
+// Stubbed because the Edit Text modal's editor is a Lexical field whose caret jsdom cannot drive, and these
+// cases are about what saving an edit does to the turn, not about the field. Its own behavior:
+// prompt/PromptField.markdown.test.tsx.
 vi.mock('@/components/prompt/PromptField', () => ({
-  default: ({ value, onChange, ariaLabel }: { value: string; onChange: (v: string) => void; ariaLabel?: string }) => (
-    <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />
-  ),
-}));
-vi.mock('@/components/prompt/TagChipField', () => ({
   default: ({ value, onChange, ariaLabel }: { value: string; onChange: (v: string) => void; ariaLabel?: string }) => (
     <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />
   ),
@@ -44,32 +38,7 @@ const partialRegens = () => {
   return { stats: screen.getByRole('menuitem', { name: 'Re-generate Stats' }), choices };
 };
 
-describe('MiddlePanel — partial re-generate against a scene render', () => {
-  it('holds both partial re-generates while a scene image is being drawn', () => {
-    const view = renderMiddlePanel({ sceneImageJob: 'image' }, { turns: TURNS, stats: STATS });
-    const items = partialRegens();
-
-    // One graphics card can't write and draw at once.
-    expect(items.stats).toHaveAttribute('aria-disabled', 'true');
-    expect(items.choices).toBeDisabled();
-
-    fireEvent.click(items.stats);
-    fireEvent.click(items.choices);
-    expect(view.props.handleRegenerateStats).not.toHaveBeenCalled();
-    expect(view.props.handleRegenerateChoices).not.toHaveBeenCalled();
-    // These two keep the turn, so the picture being drawn is still the right one for it — holding them must
-    // not mean killing the render, the way rollback and a full re-generate do.
-    expect(view.props.onCancelSceneImage).not.toHaveBeenCalled();
-    expect(view.props.abortGeneration).not.toHaveBeenCalled();
-  });
-
-  it('holds them while the tag pass runs too', () => {
-    renderMiddlePanel({ sceneImageJob: 'tags' }, { turns: TURNS, stats: STATS });
-    const items = partialRegens();
-    expect(items.stats).toHaveAttribute('aria-disabled', 'true');
-    expect(items.choices).toBeDisabled();
-  });
-
+describe('MiddlePanel — partial re-generate', () => {
   it('offers only the partial re-generates their aux requests are switched on for', () => {
     renderMiddlePanel({}, { turns: TURNS, stats: STATS, settings: (s) => s.setChoicesEnabled(false) });
 
@@ -89,9 +58,8 @@ describe('MiddlePanel — partial re-generate against a scene render', () => {
     expect(screen.queryByRole('menuitem', { name: 'Re-generate Stats' })).toBeNull();
   });
 
-  it('offers them again with nothing in flight', () => {
-    // The other half of the guard: the hold has to be the job's doing, not a permanently dead control.
-    const view = renderMiddlePanel({ sceneImageJob: null }, { turns: TURNS, stats: STATS });
+  it('offers them with nothing in flight', () => {
+    const view = renderMiddlePanel({}, { turns: TURNS, stats: STATS });
     const items = partialRegens();
 
     expect(items.stats).not.toHaveAttribute('aria-disabled', 'true');
@@ -101,45 +69,6 @@ describe('MiddlePanel — partial re-generate against a scene render', () => {
     expect(view.props.handleRegenerateStats).toHaveBeenCalled();
     fireEvent.click(items.choices);
     expect(view.props.handleRegenerateChoices).toHaveBeenCalled();
-  });
-});
-
-/** Page from the live turn to `page`, as GameViewer does: the viewed turn's scene props change with it. */
-const pageBackTo = (
-  view: PanelHarness<ReturnType<typeof renderMiddlePanel>['props']>,
-  page: number,
-  scene: { sceneTurnId: string; sceneTags: string },
-) => {
-  act(() => { view.gameplay().setUserPage(page); });
-  view.setProps({ ...scene, sceneImages: [] });
-};
-
-describe('MiddlePanel — scene panel state per turn', () => {
-  const TWO_TURNS = [
-    { narration: 'Rain on the forest road.', turnId: 't3', sceneTags: '1boy, forest' },
-    { narration: 'The dock creaks.', turnId: 't5', sceneTags: '1girl, dock' },
-  ];
-
-  it('leaves an edited tag draft behind when the player pages to another turn', () => {
-    const view = renderMiddlePanel({}, { turns: TWO_TURNS, stats: STATS });
-
-    // On turn 5, open the tag row and start rewriting the line.
-    fireEvent.click(screen.getByRole('button', { name: /^Tags$/ }));
-    fireEvent.change(screen.getByLabelText('Scene tags'), { target: { value: 'nsfw, wrong turn' } });
-
-    pageBackTo(view, 1, { sceneTurnId: 't3', sceneTags: '1boy, forest' });
-
-    // A fresh turn arrives with its editor closed — the draft, the open row and the image index all went
-    // with turn 5.
-    expect(screen.queryByLabelText('Scene tags')).toBeNull();
-
-    // And the leaked line can't be drawn onto this turn: an untouched tag row re-reads this turn's own
-    // narration (undefined) rather than sending turn 5's edit.
-    fireEvent.click(screen.getByRole('button', { name: /^Tags$/ }));
-    expect((screen.getByLabelText('Scene tags') as HTMLTextAreaElement).value).toBe('1boy, forest');
-    fireEvent.click(screen.getByRole('button', { name: /Draw again/ }));
-    expect(view.props.onSceneImage).toHaveBeenCalledWith(undefined);
-    expect(view.props.onSceneImage).not.toHaveBeenCalledWith('nsfw, wrong turn');
   });
 });
 

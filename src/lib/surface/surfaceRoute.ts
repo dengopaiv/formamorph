@@ -53,7 +53,6 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
   importComponent: { ancestor: 'mainMenu' },
   connectReferences: { ancestor: 'worldEditor' },
   // Asked partway through an edit, so help lands on the editor that asks them.
-  imageReplace: { ancestor: 'worldEditor' },
   codeRename: { ancestor: 'worldEditor' },
   replaceAll: { ancestor: 'worldEditor' },
   savedElsewhere: { ancestor: 'worldEditor' },
@@ -71,7 +70,6 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
 
   // Raised by the app itself, never by the player: a refused build, an error toast.
   errorDetails: { ancestor: null },
-  imageSetup: { ancestor: null },
   designSystem: { ancestor: null },
 
   // Dev-only mounts of one pane on canned props; players reach these panes through their real hosts.
@@ -82,7 +80,6 @@ const LEDGERS: Record<TabKey, LedgerRoute> = {
   mainMenu: { parent: 'mainMenu' },
   gameViewer: { parent: 'gameViewer' },
   gameViewerLayout: { ancestor: 'gameViewer' },
-  gameViewerAttach: { ancestor: 'gameViewer' },
   scriptPrompt: { ancestor: 'gameViewer' },
   designSystemGroupPicker: { ancestor: 'mainMenu' },
 

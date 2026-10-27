@@ -4,7 +4,6 @@ import { ToastContainer, type ToastClassName } from "react-toastify";
 import { useTheme } from "./theme-provider";
 import { ensureShieldedLayer } from "./ui/shielded-layer";
 import { ErrorDetailsHost } from "./ErrorDetailsDialog";
-import { ImageSetupGuideHost } from "./modals/ImageSetupGuide";
 
 // Point react-toastify's colors at our design tokens, so toasts are theme-driven. Set inline on the
 // container (rather than in a stylesheet) so they beat react-toastify's `:root` defaults regardless of CSS
@@ -58,13 +57,7 @@ export function ThemedToastContainer(props: ComponentProps<typeof ToastContainer
         />,
         layer,
       )}
-      {createPortal(
-        <>
-          <ErrorDetailsHost />
-          <ImageSetupGuideHost />
-        </>,
-        document.body,
-      )}
+      {createPortal(<ErrorDetailsHost />, document.body)}
     </>
   );
 }

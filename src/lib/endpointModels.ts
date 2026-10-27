@@ -5,7 +5,7 @@
 
 import { deriveModelsUrls } from '@/lib/contextLength';
 import { probeKnownAbsent, recordProbeStatus } from '@/lib/probeMemo';
-import { isDesktop, listLocalModels } from '@/lib/imageGen/desktop';
+import { isDesktop, listLocalModels } from '@/lib/desktop';
 
 /** One endpoint to ask. `localEngine` reads the desktop engine's installed list instead of the network. */
 export interface ModelListTarget {

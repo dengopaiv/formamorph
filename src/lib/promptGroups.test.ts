@@ -5,7 +5,7 @@ import { sentenceShapeViolation } from '@/test/copyShape';
 
 const everyFeature = {
   choicesEnabled: true, statUpdatesEnabled: true, locationChangeEnabled: true, entityMovement: true,
-  memoryDigests: true, characterDiaries: true, describeCharacters: true, aiClock: true, sceneImages: true, advanced: true,
+  memoryDigests: true, characterDiaries: true, describeCharacters: true, aiClock: true, advanced: true,
 };
 
 /**
@@ -68,12 +68,12 @@ describe('visibleGroups', () => {
   });
 
   it('drops a group left with nothing rather than heading an empty list', () => {
-    const groups = visibleGroups({ ...staged, scenetags: false });
-    expect(groups.map((g) => g.label)).not.toContain('Images');
+    const groups = visibleGroups({ ...staged, summary: false, milestone: false, diary: false });
+    expect(groups.map((g) => g.label)).not.toContain('Memory');
   });
 
   it('keeps every group when everything is on', () => {
-    expect(visibleGroups(staged).map((g) => g.label)).toEqual(['Story', 'Trackers', 'Memory', 'Images', 'Authoring']);
+    expect(visibleGroups(staged).map((g) => g.label)).toEqual(['Story', 'Trackers', 'Memory', 'Authoring']);
   });
 
   it('drops the Authoring group in simple mode', () => {

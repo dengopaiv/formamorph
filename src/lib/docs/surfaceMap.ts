@@ -32,7 +32,7 @@ function excludeAll(ids: readonly SurfaceId[], reason: SurfaceExclusionReason) {
 
 /** Surfaces players never see. They need no docs section. */
 export const SURFACE_EXCLUSIONS: Partial<Record<SurfaceId, SurfaceExclusionReason>> = {
-  ...excludeAll(['designSystem', 'scriptPrompt', ...tabsOf('scriptPrompt'), ...tabsOf('gameViewerAttach'), ...tabsOf('worldEditorHistory')], 'dev'),
+  ...excludeAll(['designSystem', 'scriptPrompt', ...tabsOf('scriptPrompt'), ...tabsOf('worldEditorHistory')], 'dev'),
   ...excludeAll(DEV_PANE_MODALS, 'dev'),
 };
 
@@ -56,7 +56,6 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   importComponent: { page: 'LinkedContent', anchor: 'importing-an-entity-or-dictionary-file' },
   memoryManager: { page: 'Memory', anchor: 'the-memory-manager' },
   persona: { page: 'Personas', anchor: 'change-it-in-game' },
-  imageReplace: { page: 'World-Editor-Entities', anchor: 'images-and-models' },
   codeRename: { page: 'ScriptsGuide', anchor: 'accessing-other-stats' },
   replaceAll: { page: 'WorldEditor', anchor: 'find-and-replace' },
   savedElsewhere: { page: 'WorldEditor', anchor: 'editing-in-two-tabs' },
@@ -70,7 +69,6 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   entity: { page: 'How-to-Play', anchor: 'the-entity-dialog' },
   enterWorld: { page: 'Starting-a-Game', anchor: 'the-enter-world-dialog' },
   errorDetails: { page: 'How-to-Play', anchor: 'error-details' },
-  imageSetup: { page: 'Image-Generation', anchor: 'providers' },
   export: { page: 'How-to-Play', anchor: 'how-to-export-the-story' },
   gameViewer: { page: 'How-to-Play', anchor: 'the-game-screen' },
   intro: { page: 'Starting-a-Game', anchor: 'the-welcome-animation' },
@@ -97,8 +95,6 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   'settings.endpoints': { page: 'Settings', anchor: 'endpoints' },
   'settings.data': { page: 'Settings', anchor: 'data' },
   'settingsEndpoints.text': { page: 'Settings', anchor: 'text' },
-  'settingsEndpoints.image': { page: 'Settings', anchor: 'image' },
-  'settingsEndpoints.tagPrompt': { page: 'Settings', anchor: 'tag-prompt' },
 
   'settings.prompts': { page: 'Prompts', anchor: '-prompts' },
   settingsCompare: { page: 'Prompts', anchor: '-prompts' },

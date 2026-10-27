@@ -13,8 +13,6 @@ import { turnActivity } from '../lib/turnActivity';
 import { setLiveReasoning } from '../lib/reasoningStreamStore';
 import { usePlaceholderSession } from './PlaceholderSessionContext';
 import { parseTurnContent, serializeTurnContent } from '../lib/turnDigest';
-import type { SceneImageMap } from '../lib/sceneImages';
-import { restoreAttachments, type AttachmentMap } from '../lib/actionAttachments';
 import { restoreTells, type TellMap } from '../lib/scriptTells';
 import { matchChoicesToAction, CONTINUE_CHOICE } from '../lib/choices';
 import { pageStatDeltas } from '../lib/statChanges';
@@ -47,7 +45,6 @@ import type {
   EntityStatChanges,
   EntityStatValues,
   EntityPositions,
-  ImageAttachment,
   LogEntry,
   GameLocation,
   Stat,
@@ -229,14 +226,6 @@ function useProvideGameplay() {
   const [memoryEdits, setMemoryEdits] = useState<MemoryEditMap>({});
   const [memoryDeleted, setMemoryDeleted] = useState<string[]>([]);
   const [memoryNotes, setMemoryNotes] = useState<MemoryNote[]>([]);
-  // Scene images by turn id. Held beside the history rather than inside the turns: everything that walks
-  // the message list parses it, and a megabyte of base64 in a turn made the narration reveal crawl for the
-  // rest of the session (see lib/sceneImages). Persisted only when the player opts in on the Save dialog.
-  const [sceneImages, setSceneImages] = useState<SceneImageMap>({});
-  // The images each sent action carried, by turn id, and the ones waiting in the action box. Held beside the
-  // history for the same reason as scene images (see lib/actionAttachments).
-  const [actionAttachments, setActionAttachments] = useState<AttachmentMap>({});
-  const [pendingAttachments, setPendingAttachments] = useState<ImageAttachment[]>([]);
   // What scripts told the player, by turn id, beside the history so no request carries it (Q23).
   const [scriptTells, setScriptTells] = useState<TellMap>({});
   // The opening turn's `turn.action`; null until a playthrough opens, and on a save that lacks it.
@@ -459,12 +448,8 @@ function useProvideGameplay() {
   // Counts successful save loads, so the view settles traits against its world once per load.
   const [saveLoads, setSaveLoads] = useState(0);
 
-  const saveGame = useCallback(async (saveName: string, worldName: string, worldId?: string, saveId?: string, opts?: { isAutosave?: boolean; includeSceneImages?: boolean }) => {
+  const saveGame = useCallback(async (saveName: string, worldName: string, worldId?: string, saveId?: string, opts?: { isAutosave?: boolean }) => {
     const isAutosave = opts?.isAutosave ?? false;
-    // Scene images ride along only when the player asked for them on this save (autosave never carries
-    // them): each is around a megabyte of base64, so a long illustrated session would otherwise write a
-    // save an order of magnitude larger than the story in it.
-    const keepSceneImages = !isAutosave && (opts?.includeSceneImages ?? false);
     try {
       const gameState = saveCurrentGameState();
       gameState.worldName = worldName;
@@ -487,8 +472,6 @@ function useProvideGameplay() {
         ...(Object.keys(memoryEdits).length ? { memoryEdits } : {}),
         ...(memoryDeleted.length ? { memoryDeleted } : {}),
         ...(memoryNotes.length ? { memoryNotes } : {}),
-        ...(keepSceneImages && Object.keys(sceneImages).length ? { sceneImages } : {}),
-        ...(Object.keys(actionAttachments).length ? { actionAttachments } : {}),
         ...(Object.keys(scriptTells).length ? { scriptTells } : {}),
         ...(openingCue !== null ? { openingCue } : {}),
         ...(isAutosave ? { isAutosave: true } : {}),
@@ -509,7 +492,7 @@ function useProvideGameplay() {
       }
       return false;
     }
-  }, [saveCurrentGameState, gameStates, runtimeDictionaries, placeholderRolls, memoryPins, entityVisualPreference, personaRef, milestoneSelection, memoryEdits, memoryDeleted, memoryNotes, sceneImages, actionAttachments, scriptTells, openingCue, addSystemLogEntry]);
+  }, [saveCurrentGameState, gameStates, runtimeDictionaries, placeholderRolls, memoryPins, entityVisualPreference, personaRef, milestoneSelection, memoryEdits, memoryDeleted, memoryNotes, scriptTells, openingCue, addSystemLogEntry]);
 
   // Autosave has failed at least once this session — used to toast only once, re-armed on a later success.
   const autosaveFailedRef = useRef(false);
@@ -603,14 +586,8 @@ function useProvideGameplay() {
           setMemoryEdits(migrated.memoryEdits ?? {});
           setMemoryDeleted(migrated.memoryDeleted ?? []);
           setMemoryNotes(migrated.memoryNotes ?? []);
-          // Absent whenever the save was written without images — the story loads with its tag lines and
-          // no pictures, which is the default.
-          setSceneImages(migrated.sceneImages ?? {});
-          // Absent on a save written with no attachments ⇒ none.
-          setActionAttachments(restoreAttachments(migrated.actionAttachments));
           setScriptTells(restoreTells(migrated.scriptTells));
           setOpeningCue(typeof migrated.openingCue === 'string' ? migrated.openingCue : null);
-          setPendingAttachments([]);
           addSystemLogEntry(`Game loaded from "${saveName}"`);
           setSaveLoads((n) => n + 1);
         }
@@ -658,11 +635,8 @@ function useProvideGameplay() {
           const success = loadGameState(backfilled(migrateLegacySaveState(convertedData)), locations, { worldStats });
           if (success) {
             setPersonaRef(undefined);
-            // A legacy save predates attachments ⇒ none.
-            setActionAttachments({});
             setScriptTells({});
             setOpeningCue(null);
-            setPendingAttachments([]);
             addSystemLogEntry(`Game loaded from "${saveName}"`);
             setSaveLoads((n) => n + 1);
           }
@@ -875,16 +849,10 @@ function useProvideGameplay() {
     libraryDictionaries,
     placeholderRolls,
     setPlaceholderRolls,
-    sceneImages,
-    actionAttachments,
-    setActionAttachments,
     scriptTells,
     setScriptTells,
     openingCue,
     setOpeningCue,
-    pendingAttachments,
-    setPendingAttachments,
-    setSceneImages,
     memoryPins,
     setMemoryPins,
     entityVisualPreference,

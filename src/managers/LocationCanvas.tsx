@@ -1559,7 +1559,6 @@ const CanvasInner = ({
               <MapBackgroundPanel
                 mode={shownMapPanel}
                 overview={worldOverview}
-                placeholders={placeholders}
                 opacity={mapBackground.background?.opacity ?? 1}
                 onImagesChange={(images) => {
                   // A first image goes straight to Adjust, where it can be placed.

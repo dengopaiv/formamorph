@@ -9,7 +9,7 @@ import type { SurfaceId } from '@/lib/docs/surfaceMap';
 export const SURFACE_TARGETS = {
   gameViewer: ['action-box', 'pager'],
   export: ['story-format'],
-  'settings.display': ['narration-layout', 'narration-font', 'quote-color', 'scene-images'],
+  'settings.display': ['narration-layout', 'narration-font', 'quote-color'],
   'settings.output': ['thinking-mode', 'choices', 'settings-mode'],
   'settings.data': ['settings-mode', 'start-authoring-tour'],
   'settingsEndpoints.text': ['text-preset', 'endpoint-url'],
@@ -31,7 +31,6 @@ export const SURFACE_TARGETS = {
   'worldEditorBench.triggers': ['scene-text'],
   'worldEditorBench.opening': ['placeholder-rolls'],
   'settings.tools': ['share-tools'],
-  'settingsEndpoints.image': ['enable-image-generation'],
   'settingsPromptSurfaces.options': ['prompt-endpoint'],
 } as const satisfies Partial<Record<SurfaceId, readonly string[]>>;
 

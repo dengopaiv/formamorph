@@ -16,7 +16,6 @@ describe('entityTabForField', () => {
   it('puts the identity fields on Profile', () => {
     expect(entityTabForField('name')).toBe('profile');
     expect(entityTabForField('type')).toBe('profile');
-    expect(entityTabForField('imageTags')).toBe('profile');
     expect(entityTabForField('pronouns')).toBe('profile');
     expect(entityTabForField('relationships[2].label')).toBe('profile');
   });
@@ -50,14 +49,14 @@ describe('entityTabForField', () => {
 
   it('only ever names a tab the panel actually has', () => {
     const values = new Set<string>(ENTITY_PANEL_TABS.map((t) => t.value));
-    for (const key of ['name', 'aliases[0]', 'pronouns', 'type', 'imageTags', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
+    for (const key of ['name', 'aliases[0]', 'pronouns', 'type', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
       expect(values.has(entityTabForField(key) as string)).toBe(true);
     }
   });
 
   it('names tabs Simple mode still shows, so a hit is never sent to a hidden tab', () => {
     const simple = new Set<string>(entityPanelTabsFor(false).map((t) => t.value));
-    for (const key of ['name', 'aliases[0]', 'pronouns', 'type', 'imageTags', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
+    for (const key of ['name', 'aliases[0]', 'pronouns', 'type', 'authorBrief', 'playerDescription', 'aiDescription', 'aiSummary']) {
       expect(simple.has(entityTabForField(key) as string)).toBe(true);
     }
   });

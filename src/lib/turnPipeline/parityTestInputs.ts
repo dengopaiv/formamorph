@@ -8,7 +8,6 @@ import {
   defaultChoicesPrompt, defaultChoicesUserPrompt,
   defaultDiaryPrompt, defaultDirectorPrompt, defaultDirectorUserPrompt,
   defaultCharacterPrompt, defaultStoryboardPrompt, defaultDiscoverEntityPrompt, defaultDiscoverEntityUserPrompt,
-  defaultSceneTagsPrompt, defaultSceneTagsUserPrompt,
   defaultLocationChangePrompt, defaultLocationChangeUserPrompt, defaultEntityLocationPrompt, defaultEntityLocationUserPrompt,
   defaultNarrationUserPrompt, defaultOocDirectivePrompt,
   defaultOpeningTimePrompt, defaultOpeningTimeUserPrompt, OPENING_SCENE_CUE,
@@ -47,8 +46,6 @@ export const PARITY_SETTINGS: TurnSettings = {
   // The recorded narration never invented a character, so no discovery request was dispatched; the
   // setting's own effect on the plan is covered in planTurn.test.ts.
   describeCharacters: false,
-  imageAttachments: false,
-  promptAttachments: {},
   language: 'English',
   stripLinksAndImages: false,
 };
@@ -83,10 +80,6 @@ export const PARITY_PROMPTS: TurnPrompts = {
   diary: defaultDiaryPrompt,
   discoverEntity: defaultDiscoverEntityPrompt,
   discoverEntityUser: defaultDiscoverEntityUserPrompt,
-  // The recording is of a turn, and the scene-tag pass is dispatched by the scene-image flow instead, so
-  // these carry the shipped defaults for completeness rather than because the capture used them.
-  sceneTags: defaultSceneTagsPrompt,
-  sceneTagsUser: defaultSceneTagsUserPrompt,
 };
 
 // Historical replay uses the exact user templates that produced the recorded messages.

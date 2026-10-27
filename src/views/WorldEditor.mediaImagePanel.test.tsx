@@ -299,17 +299,6 @@ describe('Media tab image panel location rules', () => {
 });
 
 describe('Media tab image panel modes and parents', () => {
-  it.each([
-    ['simple', false],
-    ['advanced', true],
-  ] as const)('in %s mode shows Generate with AI, and Image Tags only in Advanced', (mode, tags) => {
-    open(mode);
-    fireEvent.click(card('Entities', 'stack'));
-
-    expect(inPanel().getByRole('button', { name: /Generate with AI/ })).toBeInTheDocument();
-    expect(inPanel().queryByText('Image Tags') !== null).toBe(tags);
-  });
-
   it("opens a location's image in the same panel, with its actions and rule editor", () => {
     open('advanced');
     fireEvent.click(card('Locations', 'image'));

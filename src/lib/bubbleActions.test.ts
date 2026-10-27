@@ -5,17 +5,14 @@ const idle: BubbleState = {
   isLatest: true,
   live: false,
   busy: false,
-  hasImage: false,
   canRegenStats: true,
-  sceneImagesAvailable: true,
-  sceneJob: null,
   ttsLoaded: true,
   ttsGenerating: false,
 };
 
 function handlers(): BubbleActionHandlers {
   return {
-    regenerate: vi.fn(), regenerateStats: vi.fn(), sceneImage: vi.fn(), sceneTags: vi.fn(), edit: vi.fn(),
+    regenerate: vi.fn(), regenerateStats: vi.fn(), edit: vi.fn(),
     textToSpeech: vi.fn(), copy: vi.fn(), regenerateAudio: vi.fn(), rewind: vi.fn(),
   };
 }
@@ -38,24 +35,11 @@ describe('bubbleActions', () => {
     expect(rowLabels(past)).toEqual(['Edit', 'Copy Text', 'Rewind to Here']);
   });
 
-  it('keeps Generate Scene Image, Write Scene Tags, and Regenerate Audio off the row but in the list', () => {
+  it('keeps Regenerate Audio off the row but in the list', () => {
     for (const state of [idle, { ...idle, isLatest: false }]) {
-      expect(labels(state)).toEqual(expect.arrayContaining(['Generate Scene Image', 'Write Scene Tags', 'Regenerate Audio']));
-      expect(rowLabels(state)).not.toContain('Generate Scene Image');
-      expect(rowLabels(state)).not.toContain('Write Scene Tags');
+      expect(labels(state)).toContain('Regenerate Audio');
       expect(rowLabels(state)).not.toContain('Regenerate Audio');
     }
-  });
-
-  it('drops Generate Scene Image once the turn has an image', () => {
-    expect(labels({ ...idle, hasImage: true })).not.toContain('Generate Scene Image');
-    expect(labels({ ...idle, hasImage: true })).toContain('Write Scene Tags');
-  });
-
-  it('drops the scene actions when image generation is off', () => {
-    const off = labels({ ...idle, sceneImagesAvailable: false });
-    expect(off).not.toContain('Generate Scene Image');
-    expect(off).not.toContain('Write Scene Tags');
   });
 
   it('drops Re-generate Stats when stats cannot be re-rolled', () => {
@@ -82,16 +66,9 @@ describe('bubbleActions', () => {
     for (const isLatest of [true, false]) {
       const actions = bubbleActions({ ...idle, isLatest, busy: true }, handlers());
       const disabled = actions.filter((a) => a.disabled).map((a) => a.key).sort();
-      const expected = isLatest ? ['image', 'regenerate', 'stats', 'tags'] : ['image', 'rewind', 'tags'];
+      const expected = isLatest ? ['regenerate', 'stats'] : ['rewind'];
       expect(disabled).toEqual(expected.sort());
     }
-  });
-
-  it('disables the scene actions and the stat re-roll while a scene job runs, and marks the running one', () => {
-    const tags = bubbleActions({ ...idle, sceneJob: 'tags' }, handlers());
-    expect(tags.filter((a) => a.disabled).map((a) => a.key).sort()).toEqual(['image', 'stats', 'tags']);
-    expect(tags.find((a) => a.key === 'tags')?.spinning).toBe(true);
-    expect(tags.find((a) => a.key === 'image')?.spinning).toBeFalsy();
   });
 
   it('disables Regenerate Audio while audio generates', () => {
@@ -115,7 +92,7 @@ describe('bubbleActions', () => {
   it('runs only its own handler for each action', () => {
     const expected: Record<string, keyof BubbleActionHandlers> = {
       'Re-generate Narration': 'regenerate', 'Re-generate Stats': 'regenerateStats',
-      'Generate Scene Image': 'sceneImage', 'Write Scene Tags': 'sceneTags', Edit: 'edit',
+      Edit: 'edit',
       'Text to Speech': 'textToSpeech', 'Regenerate Audio': 'regenerateAudio', 'Copy Text': 'copy',
       'Rewind to Here': 'rewind',
     };
@@ -193,9 +170,6 @@ describe('withEndpoints', () => {
     expect(named.find((a) => a.key === 'regenerate')?.endpoint).toBe('Sends to GLM 5.3 · glm-5.3');
     expect(named.find((a) => a.key === 'stats')?.endpoint).toBe('Sends to Kimi 3');
     expect(named.find((a) => a.key === 'copy')?.endpoint).toBeUndefined();
-    // Writing tags is a text request; the image itself goes to the image provider, not a text endpoint.
-    expect(named.find((a) => a.key === 'tags')?.endpoint).toBe('Sends to Kimi 3');
-    expect(named.find((a) => a.key === 'image')?.endpoint).toBeUndefined();
     // An empty line names nothing.
     expect(withEndpoints(bubbleActions(idle, handlers()), () => '').every((a) => a.endpoint === undefined)).toBe(true);
   });
@@ -205,9 +179,9 @@ describe('menuSections', () => {
   it('groups the actions by section in menu order and drops empty sections', () => {
     const actions = bubbleActions({ ...idle, isLatest: false }, handlers());
     const sections = menuSections(actions);
-    expect(sections.map((group) => group[0].section)).toEqual(['generate', 'content', 'destructive']);
+    expect(sections.map((group) => group[0].section)).toEqual(['content', 'destructive']);
     expect(sections.flat()).toEqual(actions);
-    expect(menuSections(bubbleActions({ ...idle, sceneImagesAvailable: false }, handlers())).map((g) => g[0].section))
+    expect(menuSections(bubbleActions(idle, handlers())).map((g) => g[0].section))
       .toEqual(['generate', 'content']);
   });
 

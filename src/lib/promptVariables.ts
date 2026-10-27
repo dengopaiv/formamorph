@@ -69,7 +69,7 @@ export interface PromptVariable {
 /** Every prompt editor maps to one of these kinds (mirrors the Settings → Output → Turn Extras toggles).
  *  The last four are authoring-time, not turn-time: they drive the world editor's ✨ buttons rather than
  *  anything in the turn pipeline, so they carry none of the runtime context chips. */
-export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'entitylocation' | 'summary' | 'milestone' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'discover' | 'playerdesc' | 'aidesc' | 'aisummary' | 'desccheck';
+export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'entitylocation' | 'summary' | 'milestone' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'discover' | 'playerdesc' | 'aidesc' | 'aisummary' | 'desccheck';
 
 const SUMMARY_VARIANT: PromptVariant = {
   id: 'summary',
@@ -250,21 +250,20 @@ const CHARACTER: PromptVariable = { token: '<CHARACTER NAME>', label: 'Character
 // game text), distinct from the world/context tokens above.
 const PLAYER_ACTION: PromptVariable = { token: '<PLAYER ACTION>', label: 'Player Action', color: HIGHLIGHT_PALETTE[9] };
 const NARRATION: PromptVariable = { token: '<NARRATION>', label: 'Narration', color: HIGHLIGHT_PALETTE[10] };
-// Image-gen tag prompt only (Settings → Endpoints → Tag Prompt): expands to per-kind guidance. Registered
-// here so the shared prompt parser/chip recognize it; it is never offered in a game prompt's toolbar.
+// The description-bridge prompts only (Settings → Prompts → Authoring): the thing being described, expanded
+// to a noun ("this place"). Registered here so the shared prompt parser/chip recognize it; it is never offered
+// in a game prompt's toolbar.
 export const SUBJECT: PromptVariable = { token: '<SUBJECT>', label: 'Subject', color: HIGHLIGHT_PALETTE[12] };
 
-// The description-bridge prompts only (Settings → Prompts → Authoring): the facets a description of this
-// kind should cover. Its companion <SUBJECT> is the token above, expanded there to a noun ("this place")
-// rather than the tag prompt's image guidance — the same chip doing a different job in a different prompt.
+// The description-bridge prompts only: the facets a description of this kind should cover.
 export const FACETS: PromptVariable = { token: '<FACETS>', label: 'Facets', color: HIGHLIGHT_PALETTE[15] };
 
 // The story's own clock — "Day 3, evening" — as a plain inline value. Renders the uniform placeholder while
 // Time in Memory is off, so an affixed placement simply disappears rather than needing its own switch.
 const TIME: PromptVariable = { token: '<TIME>', label: 'Time', color: HIGHLIGHT_PALETTE[10], affixable: true };
 
-// Scene-image tag pass only: the characters the composer has put in frame, so the action tags describe
-// those people and no others. A value token like <NARRATION> — never a context block.
+// The retired scene-tag prompt's cast chip. No prompt offers it any more; it stays registered so a preset
+// that still carries the scene-tag text keeps parsing it as a chip.
 const IN_FRAME: PromptVariable = { token: '<IN FRAME>', label: 'In Frame', color: HIGHLIGHT_PALETTE[8] };
 
 // Character-note pass only: two headed blocks, each rendering its own header or nothing. The later
@@ -318,7 +317,6 @@ export const PROMPT_KIND_VARIABLES: Record<PromptKind, PromptVariable[]> = {
   storyboard: [...CONTEXT_VARS],
   timepassed: [...CONTEXT_VARS],
   timeopening: [...CONTEXT_VARS],
-  scenetags: [...CONTEXT_VARS],
   discover: [...CONTEXT_VARS],
   // Authoring prompts run in the world editor, where no turn is in flight and the runtime context chips
   // would have nothing to resolve against — so they offer only their own per-kind tokens. The summary pass
@@ -347,9 +345,6 @@ export const PROMPT_KIND_USER_VARIABLES: Partial<Record<PromptKind, PromptVariab
   // The opening pass runs on turn one, where the player's action is "start the game" — only the narration
   // carries any time signal, so the action chip is deliberately not offered.
   timeopening: [NARRATION],
-  // The tag pass reads the prose of this turn and who the composer put in frame. The player's action is
-  // deliberately absent: what was attempted is not what the picture shows.
-  scenetags: [NARRATION, IN_FRAME],
   discover: [CHARACTER, FIRST_PASSAGE, LATER_MATERIAL],
 };
 

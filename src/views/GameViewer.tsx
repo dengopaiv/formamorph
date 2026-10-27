@@ -74,14 +74,13 @@ import { LocationModal } from "../components/modals/LocationModal";
 import { SettingsModal } from "../components/modals/SettingsModal";
 import { asSettingsTab, type SettingsTabId } from "../components/modals/settingsTabs";
 import { useDevRoute } from "../lib/devRouter";
-import { DEV_ATTACH_SAMPLE } from "../lib/devRoutes";
 import { loadDevFixture } from "../lib/devFixtures";
 import { putSaveRecord } from "../components/modals/dbUtils";
 import WorldStorageService from "../services/WorldStorageService";
 import { MenuModal } from "../components/modals/MenuModal";
 import LlmSetupGuide from "../components/modals/LlmSetupGuide";
 import WorldEditor, { type EditorExit } from "./WorldEditor";
-import type { CharacterData, ChatMessage, ChatRole, ImageAttachment, AIRequestType, AITurnResult, GameLocation, MediaAsset, Dictionary, Entity, EntityStatValues, SaveRecord, World, PlayerStat, Trait, PersonaRef, OwnedTraitPicks, OwnedTraitStates } from "@/types";
+import type { CharacterData, ChatMessage, ChatRole, AIRequestType, AITurnResult, GameLocation, MediaAsset, Dictionary, Entity, EntityStatValues, SaveRecord, World, PlayerStat, Trait, PersonaRef, OwnedTraitPicks, OwnedTraitStates } from "@/types";
 import { UnsavedChangesDialog } from "../components/UnsavedChangesDialog";
 import { estimateHistoryChars, estimateTokens } from "../lib/memoryUtils";
 import { narrationOf, storyText, stripReasoningLive, extractReasoning, extractReasoningLive } from "../lib/aiResponse";
@@ -139,7 +138,6 @@ import {
   diaryPass,
   discoverEntityPass,
   milestoneSelectPass,
-  sceneTagsPass,
   summaryPass,
   scriptActionFor,
 } from "../lib/turnPipeline/turnPasses";
@@ -201,15 +199,7 @@ import { resolveEntityTexts, resolveStatGroupTexts, resolveStatNames, resolveSta
 import { AiContextRequestCard, type AiContextCardSection, type AiContextTextSlot } from "@/components/aiContext/AiContextRequestCard";
 import { AiContextExportButton } from "@/components/aiContext/AiContextExportButton";
 import type { AiRequestRecord } from "@/lib/aiContext/requestRecord";
-import { composeSceneTags, pickSceneCast, stripPlaces, splitTags, type SceneCharacter } from "../lib/sceneTags";
-import { loadDanbooruTags } from "../lib/danbooruTags";
-import { addSceneImage, removeSceneImage, pruneSceneImages, setSceneTags as patchSceneTags, sceneDrawTags } from "../lib/sceneImages";
-import { addToPending, setTurnAttachments, latestTurnAttachments, pruneAttachments } from "../lib/actionAttachments";
-import { useImageAttachments } from "../lib/useImageAttachments";
 import { useMountedRef } from "../lib/useMountedRef";
-import { generateImage, buildImageRequest, takesCharacterPrompts } from "../lib/imageGen";
-import { toastImageFailure } from "../lib/imageGen/failureToast";
-import { buildImagePrompt } from "../lib/imagePrompt";
 import { downloadBlob } from "../lib/downloadBlob";
 import { rollbackState, regenerateState, canRegenerate, lastTurnAction, markRegeneratedTurn, markPrunedTurns, snapshotPageIndex, placeSnapshot, sliceHistoryToPage, pageAssistantIndex } from "../lib/turnHistory";
 import { useDeferredSnapshot } from "../lib/useDeferredSnapshot";
@@ -288,8 +278,6 @@ interface PendingTurn {
   action: string;
   /** An Opening Narration's resolved text; the turn plays it as page one. */
   writtenNarration?: string;
-  /** A regenerate's images, read before the rewind lets the prune drop them. */
-  resentAttachments?: ImageAttachment[];
 }
 
 /** What one playthrough remembers about its openings. Session state only, so a save never carries it. */
@@ -367,9 +355,6 @@ const activeUnderTraits = (
 
 // The lore chip, whose blocks play fills per turn instead of from the scene.
 const DICTIONARY_VARIABLE = variableForToken('<DICTIONARY>')!;
-
-// A stable empty array for turns with no scene image, so the panel's prop identity doesn't churn.
-const EMPTY_IMAGES: string[] = [];
 
 // How many of a character's own recent diary entries to feed into its motivation pass (its memory).
 const DIARY_MEMORY_ENTRIES = 5;
@@ -462,15 +447,14 @@ const GameViewer = ({
   // main-menu details popup. Resolved below, after the preset's own prompt is destructured.
   const { applyWorldPrompt } = useWorldPromptOptOut();
 
-  // The whole settings bag is kept as well as the destructured fields: buildImageRequest reads the image
-  // preset off it, so the scene path and the editor's dialog cannot drift apart on request shape.
+  // The whole settings bag is kept as well as the destructured fields, for the few reads that take it whole.
   const settings = useSettings();
 
   // A world may also be pinned to a prompt preset. Held for as long as this view is mounted — covering a
   // new game and a loaded save alike — so every prompt resolves against it without touching the player's
   // global selection. Re-pinning from Settings writes back through `setWorldPreset`.
   const { worldPreset, setWorldPreset } = useWorldPromptPresets();
-  const { beginSessionPreset, endSessionPreset, promptAttachments } = settings;
+  const { beginSessionPreset, endSessionPreset } = settings;
   // A library folder can carry a preset for every world inside it. The world's own pin still wins, and a
   // level naming a deleted preset drops silently to the next — the arrangement is read straight from
   // device-local storage, since it is a library preference the game never writes back to.
@@ -562,20 +546,8 @@ const GameViewer = ({
     summaryUserPrompt,
     milestoneSelectPrompt,
     milestoneSelectUserPrompt,
-    // Scene images: the tag pass's prompts and the toggles. buildImageRequest reads the rest of the
-    // provider config off `settings`; provider and model pick the scene line's form.
-    sceneTagsPrompt,
-    sceneTagsUserPrompt,
     discoverEntityPrompt,
     discoverEntityUserPrompt,
-    sceneImageAuto,
-    imageTagPrompt,
-    imageCleanTags,
-    imageProvider,
-    imageModel,
-    imageGenDisabled,
-    imageLandscapeWidth,
-    imageLandscapeHeight,
     showSilentRequests,
     activeSectionStyle,
     statTextPrompts,
@@ -690,12 +662,6 @@ const GameViewer = ({
     setMemoryNotes,
     contextMemoryIds,
     rehydratedMemoryIds,
-    sceneImages,
-    setSceneImages,
-    actionAttachments,
-    setActionAttachments,
-    pendingAttachments,
-    setPendingAttachments,
     scriptTells,
     setScriptTells,
     openingCue: openingTurnAction,
@@ -1062,13 +1028,11 @@ const GameViewer = ({
   const [ambientSound, setAmbientSound] = useState<MediaAsset | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId | undefined>(undefined);
-  const [settingsEndpointTab, setSettingsEndpointTab] = useState<string | undefined>(undefined);
   // Where a click on a highlighted run in the AI-context viewer sends Settings: the prompt that owns the
   // text, its editor, and — for the stacked narration lines — which field.
   const [settingsPrompt, setSettingsPrompt] = useState<PromptJumpTarget | undefined>(undefined);
-  useSettingsOpenRequest((tab, endpointTab) => {
+  useSettingsOpenRequest((tab) => {
     setSettingsTab(tab);
-    setSettingsEndpointTab(endpointTab);
     setIsSettingsOpen(true);
   });
 
@@ -1153,35 +1117,15 @@ const GameViewer = ({
       await loadGame(id, locations, stats, codeEntities.world, worldOverview.vrmStore);
     })();
   }, [devRoute?.fixture, locations, stats, codeEntities, loadGame, worldOverview.vrmStore]);
-  const imageAttachments = useImageAttachments();
   const mounted = useMountedRef();
-  // DEV dev-router: `attach=sample` stages attached images once the game has a committed turn, through the
-  // real attach path. Tree-shaken in prod.
-  const devAttachLoadedRef = useRef(false);
-  useEffect(() => {
-    if (!import.meta.env.DEV || devRoute?.attach !== DEV_ATTACH_SAMPLE || devAttachLoadedRef.current) return;
-    const lastTurn = fullMessageHistory.findLast((m) => m.role === "assistant");
-    const turnId = lastTurn && parseTurnContent(lastTurn.content)?.turnId;
-    if (!turnId) return;
-    devAttachLoadedRef.current = true;
-    void (async () => {
-      const files = await Promise.all(["1", "2", "3", "4"].map(async (n) =>
-        new File([await (await fetch(`/thumbnails/${n}.jpg`)).blob()], `sample-${n}.jpg`, { type: "image/jpeg" })));
-      const { pending } = await addToPending([], files);
-      if (!mounted.current) return;
-      setPendingAttachments(pending.slice(0, 2));
-      setActionAttachments((prev) => setTurnAttachments(prev, turnId, pending.slice(2)));
-    })();
-  }, [devRoute?.attach, fullMessageHistory, mounted, setPendingAttachments, setActionAttachments]);
-  // Images, tells and script pins belong to turns in the history. Between turns, drop the ones whose turn failed, rolled back or
+  // Tells and script pins belong to turns in the history. Between turns, drop the ones whose turn failed, rolled back or
   // was re-generated. The controller marks a running turn at once: a regenerate starts inside an effect, and
   // its user message can commit before `isWaitingForAI` does.
   useEffect(() => {
     if (isWaitingForAI || abortControllerRef.current) return;
-    setActionAttachments((prev) => pruneAttachments(prev, fullMessageHistory));
     setScriptTells((prev) => pruneTells(prev, fullMessageHistory));
     setMemoryNotes((prev) => pruneScriptPins(prev, fullMessageHistory));
-  }, [isWaitingForAI, fullMessageHistory, setActionAttachments, setScriptTells, setMemoryNotes]);
+  }, [isWaitingForAI, fullMessageHistory, setScriptTells, setMemoryNotes]);
   const [isEditingWorld, setIsEditingWorld] = useState(false);
   const [uiHidden, setUiHidden] = useState(false); // hide all panels/buttons to reveal the background image
   const [showEditorExitPrompt, setShowEditorExitPrompt] = useState(false);
@@ -1313,13 +1257,12 @@ const GameViewer = ({
 
   // Shared rewind sweep: cut the flat history at `page` and prune everything keyed by turn id to the
   // surviving turns — the (player-edited) discovered cast drops only characters whose introducing turn
-  // was discarded (named again by a fresh roll, they are discovered anew), and scene images go with
-  // their turns. Suppressed names stay whole; a deletion has no turn anchor to prune by.
+  // was discarded (named again by a fresh roll, they are discovered anew). Suppressed names stay whole; a
+  // deletion has no turn anchor to prune by.
   const rewindHistoryToPage = (page: number) => {
     const rewound = sliceHistoryToPage(fullMessageHistory, page, messagesPerPage);
     setFullMessageHistory(rewound);
     setDiscoveredEntities((prev) => pruneDiscoveredToHistory(prev, rewound));
-    setSceneImages((prev) => pruneSceneImages(prev, rewound));
     // The live thought belongs to a discarded turn; the now-latest turn shows its own saved one.
     setLiveReasoning({ text: "", ms: 0, active: false });
   };
@@ -1334,9 +1277,6 @@ const GameViewer = ({
     // edits. Narration is rewound by slicing the live flat history to the rolled-back page instead.
     const success = loadGameState(targetState, locations, { keepLiveHistory: true });
     if (!success) return;
-    // A render still in flight targets a turn this rollback discards — stop it, or its finished image
-    // would land back under the dead turn id (and ride into any opted-in save, invisible and unprunable).
-    cancelSceneImage();
     rewindHistoryToPage(page);
     setUserPage(null); // the rolled-back turn is now the latest — resume following it
     // Seed the live notes scratchpad from the rolled-back turn's own notes (per-turn notes live on the
@@ -1408,7 +1348,6 @@ const GameViewer = ({
       case 'settings': {
         const landing = settingsLanding(steps);
         if (landing.tab) setSettingsTab(landing.tab);
-        if (landing.endpointTab) setSettingsEndpointTab(landing.endpointTab);
         // The request replaces an earlier prompt jump, which would otherwise win once the landing clears.
         setSettingsPrompt(undefined);
         setIsSettingsOpen(true);
@@ -1541,9 +1480,6 @@ const GameViewer = ({
     // Restore the prior turn's mechanical state but keep the live narration + notes (see handleRollback),
     // rewinding the flat history to just before the turn being re-rolled. The re-send appends a fresh turn.
     if (!loadGameState(previousState, locations, { keepLiveHistory: true })) return;
-    // Stop a render aimed at the turn being re-rolled: left running, it would finish into a dead turn id
-    // AND overlap the re-roll's language-model request on the one GPU.
-    cancelSceneImage();
     rewindHistoryToPage(page - 1);
     // The notes scratchpad is left alone: regen only targets the latest page, where the live scratchpad is
     // always at least as fresh as the message's frozen notes (a stopped turn freezes none at all —
@@ -1571,16 +1507,14 @@ const GameViewer = ({
       );
       return;
     }
-    pendingTurnRef.current = { action, resentAttachments: latestTurnAttachments(actionAttachments, fullMessageHistory) };
+    pendingTurnRef.current = { action };
     setPendingTurnNonce((n) => n + 1);
   };
 
   // Read the committed latest turn + its originating action, or null when a partial re-generate can't run
   // (busy, not on the latest page, or the turn can't be parsed).
   const partialRegenTarget = (page = currentPage) => {
-    // A running scene render blocks these too: it holds the graphics card, and unlike rollback /
-    // re-generate these keep the turn, so its picture is still the correct one and must not be canceled.
-    if (isWaitingForAI || sceneImageJob !== null || !canRegenerate(page, totalPages)) return null;
+    if (isWaitingForAI || !canRegenerate(page, totalPages)) return null;
     const last = fullMessageHistory[fullMessageHistory.length - 1];
     if (!last || last.role !== "assistant") return null;
     const prev = parseTurnContent(last.content);
@@ -2205,13 +2139,10 @@ const GameViewer = ({
     diary: diaryPrompt,
     discoverEntity: discoverEntityPrompt,
     discoverEntityUser: discoverEntityUserPrompt,
-    sceneTags: sceneTagsPrompt,
-    sceneTagsUser: sceneTagsUserPrompt,
   });
 
-  /** The plan input a pass dispatched outside a turn builds its request from — the scene-tag pass, which
-   *  the scene-image flow drives on a turn already stored, the background passes, the regenerates, and the
-   *  choices and stats re-rolls. */
+  /** The plan input a pass dispatched outside a turn builds its request from — the background passes, the
+   *  regenerates, and the choices and stats re-rolls. */
   const standalonePassInput = (): TurnPlanInput => ({
     action: "",
     isGameStarted: true,
@@ -2293,8 +2224,6 @@ const GameViewer = ({
     memoryDigests,
     characterDiaries,
     describeCharacters,
-    imageAttachments,
-    promptAttachments,
     language,
     stripLinksAndImages: stripMedia,
   });
@@ -2501,30 +2430,6 @@ const GameViewer = ({
     if (commit.isOpeningTurn) {
       setIsGameStarted(true);
     }
-
-    // Scene image (auto): drawn last, once every language-model request for this turn has finished, and
-    // awaited inside the turn on purpose — the input stays blocked until the picture is done, because a
-    // diffusion pass running against the model on one graphics card spills both to system memory.
-    if (sceneImageAuto && !imageGenDisabled) {
-      // Own controller, chained to the turn's signal: the panel's Stop aborts through
-      // `sceneImageAbortRef` while the main turn Stop still reaches the render via the chain.
-      const imageController = new AbortController();
-      const onAbort = () => imageController.abort();
-      if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
-      sceneImageAbortRef.current = imageController;
-      try {
-        await runSceneImageRef.current({
-          turnId: currentTurnIdRef.current,
-          narration: final.turn.narration,
-          participants: turn.participants,
-          locationId: location?.id,
-          playerInFrame: final.turn.playerInFrame,
-          signal: imageController.signal,
-        });
-      } finally {
-        signal.removeEventListener('abort', onAbort);
-      }
-    }
   };
 
   /**
@@ -2535,11 +2440,8 @@ const GameViewer = ({
    */
   const sendGameAction = async (
     action: string,
-    { writtenNarration, attachments, resentAttachments, script }: {
+    { writtenNarration, script }: {
       writtenNarration?: string;
-      attachments?: ImageAttachment[];
-      /** The re-sent turn's images. They are kept even when the turn may not send them. */
-      resentAttachments?: ImageAttachment[];
       /** Plays the turn on canned narration and choices streams, with no other pass. */
       script?: TurnScript;
     } = {},
@@ -2559,7 +2461,6 @@ const GameViewer = ({
       locationCount: locations.length,
       hasCurrentLocation: !!currentLocation,
       writtenNarration,
-      attachments: resentAttachments ?? attachments,
       settings: script ? { ...turnSettings(), thinkingMode: "off" as const, choicesEnabled: true } : turnSettings(),
       prompts: turnPrompts(),
     };
@@ -2612,8 +2513,6 @@ const GameViewer = ({
     let sceneCast: DirectorCastMember[] | null = null;
     // The same cast with the player flagged: the staged plan's grounding block lists everyone, not just NPCs.
     let flaggedCast: DirectorCastMember[] = [];
-    // The planner's call on whether the player is in the picture; undefined until a planner has cast the turn.
-    let playerInFrame: boolean | undefined;
     let turnParticipants: string[] = [];
     // Where tracked entities stood and who followed when the turn began; every join this turn starts here.
     const moveStart = liveFollowerState();
@@ -2658,13 +2557,7 @@ const GameViewer = ({
       followerPeelRef.current = undefined;
       // Stamp a stable id for this turn, written into its assistant JSON (powers the digest apply-guard).
       currentTurnIdRef.current = randomUUID();
-      // The attachments leave the action box with the text, and the turn keeps the ones it may carry.
-      // A regenerate keeps its turn's attachments and leaves the box alone.
-      const turnId = currentTurnIdRef.current;
-      tellTurnRef.current = turnId;
-      const carried = resentAttachments ?? plan.attachments;
-      setActionAttachments((prev) => setTurnAttachments(prev, turnId, carried));
-      if (!resentAttachments) setPendingAttachments([]);
+      tellTurnRef.current = currentTurnIdRef.current;
       // This turn hasn't entered history yet; an abort before the user message is added (the up-front
       // location request) must not be mistaken for "narration came through" (see abortGeneration).
       userTurnAddedRef.current = false;
@@ -2840,7 +2733,6 @@ const GameViewer = ({
       const classifyPlannerCast = (cast: DirectorCastMember[]) => {
         const classified = classifyCast(cast, allEntities, playerNames);
         flaggedCast = classified.flaggedCast;
-        playerInFrame = classified.flaggedCast.some((c) => c.isPlayer);
         directorCandidates = classified.directorCandidates;
         adHocCandidates = classified.adHocCandidates;
         sceneCast = classified.npcCast;
@@ -3152,7 +3044,6 @@ const GameViewer = ({
         // Freeze this turn's player notes and reasoning (both additive save-shape fields).
         notes: playerNotes,
         reasoning: turnReasoningRef.current,
-        playerInFrame,
         gameTime,
         fixedTurnHours,
         calendar,
@@ -3208,7 +3099,7 @@ const GameViewer = ({
     if (pendingTurnNonce === 0) return;
     const pending = pendingTurnRef.current;
     pendingTurnRef.current = null;
-    if (pending !== null) sendGameAction(pending.action, { writtenNarration: pending.writtenNarration, resentAttachments: pending.resentAttachments });
+    if (pending !== null) sendGameAction(pending.action, { writtenNarration: pending.writtenNarration });
     // sendGameAction is deliberately not a dependency — we want this render's (post-restore) closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingTurnNonce]);
@@ -3669,8 +3560,6 @@ const GameViewer = ({
     cancelOpenPrompts(scriptPrompts);
     tellTurnRef.current = null;
     abortControllerRef.current = null;
-    // A scene-image click queued behind this turn dies with it — Stop means stop, not "draw later".
-    pendingSceneImageRef.current = null;
 
     setIsWaitingForAI(false);
     setAiRequestType(null);
@@ -3711,9 +3600,8 @@ const GameViewer = ({
 
   // Abort any in-flight AI request when GameViewer unmounts (e.g. exiting to the menu mid-turn), so the SSE
   // stream stops instead of a local model generating a whole narration into a torn-down provider. The
-  // turn's own `signal.aborted` checks then short-circuit its continuations. A manual scene render runs on
-  // its own controller, so it gets the same treatment — otherwise it keeps the image server busy after exit.
-  useEffect(() => () => { abortControllerRef.current?.abort(); sceneImageAbortRef.current?.abort(); }, []);
+  // turn's own `signal.aborted` checks then short-circuit its continuations.
+  useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
 
   // The Request Transport's context: plain values, read once per request.
   const transportContext = (): TransportContext => ({
@@ -4000,270 +3888,6 @@ const GameViewer = ({
     }
   };
 
-  // --- Scene images ---------------------------------------------------------------------------------
-  // A picture of one turn, assembled from three sources that each own a different part of it: the tag pass
-  // writes what is happening, the present characters' authored image tags describe who is in frame, and the
-  // location's describe where it is (see lib/sceneTags). Nothing here ever runs alongside a language-model
-  // request: a diffusion pass and the model on one graphics card spill each other to system memory, so the
-  // auto path is awaited inside the turn and a manual click waits for the turn to finish.
-  // Which half of the pipeline is running: the tag pass, the render, or nothing. Both hold the turn.
-  const [sceneImageJob, setSceneImageJob] = useState<'tags' | 'image' | null>(null);
-  const [sceneImageProgress, setSceneImageProgress] = useState<number | null>(null);
-  // The provider's live in-progress frame (A1111/ComfyUI/InvokeAI stream one); cleared with every job.
-  const [sceneImagePreview, setSceneImagePreview] = useState<string | null>(null);
-  const sceneImageAbortRef = useRef<AbortController | null>(null);
-  // A manual click made while the turn's requests are still running, replayed once they finish.
-  const pendingSceneImageRef = useRef<{ turnId: string; tags?: string; tagsOnly?: boolean } | null>(null);
-  // Image tags derived on the fly for a subject the author never tagged, keyed by entity/location id.
-  // Session-only by design: the authored world is immutable during play, and a derived tag line is a guess
-  // that shouldn't outlive the session it was made in.
-  const derivedTagsRef = useRef(new Map<string, string>());
-  // The shipped tag vocabulary, loaded once per session: it decides which of the world's own place names
-  // are real tags (a location called Kitchen) and so must survive the scrub below.
-  const knownTagsRef = useRef<ReadonlySet<string> | null>(null);
-  const loadKnownTags = async (): Promise<ReadonlySet<string>> => {
-    if (!knownTagsRef.current) {
-      try {
-        knownTagsRef.current = new Set((await loadDanbooruTags()).map((t) => t.toLowerCase()));
-      } catch {
-        knownTagsRef.current = new Set(); // SFW/offline build ships none — then every place name is stripped
-      }
-    }
-    return knownTagsRef.current;
-  };
-
-  /** Authored image tags for a subject, else a one-off derived line from its description (cached for the
-   *  session). Returns '' when there's nothing to work from, which simply leaves that layer out. */
-  const resolveSubjectTags = async (
-    subject: { id: string; name: string; imageTags?: string; aiDescription?: string; playerDescription?: string; description?: string },
-    kind: "character" | "location",
-    signal: AbortSignal,
-    /** Applied to a DERIVED line only — a description usually says the place's name in its first sentence,
-     *  and a derived line stands in for authored tags, so it would otherwise smuggle the name past the scrub. */
-    scrub?: (line: string) => string,
-    /** Ignore the session cache and derive again. A cached line is a guess, and an explicit re-roll is the
-     *  player asking for a different one — without this, only the action layer could ever change. */
-    fresh = false,
-  ): Promise<string> => {
-    // Authored tags are world text like any other: a chip here is how an author randomizes what the
-    // generator draws, so it resolves against the same frozen rolls the narration uses.
-    const authored = resolvePH(subject.imageTags ?? "").trim();
-    if (authored) return authored;
-    const cached = derivedTagsRef.current.get(subject.id);
-    if (cached !== undefined && !fresh) return cached;
-    const description = (subject.aiDescription || subject.playerDescription || subject.description || "").trim();
-    if (!description) return "";
-    try {
-      // Uses the editor's own description-to-tags helper, minus the name: sent one, the model answers with
-      // it ("dean wolfram"), and a person's name is not a tag any image model knows. Only the description
-      // describes what a character looks like, which is all this layer wants.
-      const tags = await buildImagePrompt(
-        { description, kind },
-        { snapshot: aiSnapshot, tagPrompt: imageTagPrompt, cleanTags: imageCleanTags, signal },
-      );
-      const cleaned = scrub ? scrub(tags) : tags;
-      derivedTagsRef.current.set(subject.id, cleaned);
-      return cleaned;
-    } catch {
-      return ""; // a failed derivation just leaves the subject untagged for this turn
-    }
-  };
-
-  /** The cast in frame: the persona when the player is in the picture, then this turn's participants resolved
-   *  to entities, capped at what a booru model can hold apart (see pickSceneCast). */
-  const resolveSceneCast = async (
-    participants: string[], playerInFrame: boolean | undefined, signal: AbortSignal, scrub?: (line: string) => string, fresh = false,
-  ): Promise<SceneCharacter[]> => {
-    const found = pickSceneCast({ participants, entities: allEntities, persona: persona?.entity ?? null, playerInFrame });
-    const named = resolveEntityTexts(found, resolveEntityText);
-    const cast: SceneCharacter[] = [];
-    for (const entity of named) {
-      cast.push({
-        name: entity.name,
-        aliases: entity.aliases,
-        tags: await resolveSubjectTags(entity, "character", signal, scrub, fresh),
-      });
-    }
-    return cast;
-  };
-
-  /** Run the tag pass for a turn and store the composed line. Returns it, or '' if the run was aborted. */
-  const runSceneTags = async (args: {
-    turnId: string;
-    narration: string;
-    participants: string[];
-    locationId?: string;
-    playerInFrame?: boolean;
-    /** Re-derive the untagged subjects rather than reusing this session's guesses. */
-    fresh?: boolean;
-    signal: AbortSignal;
-  }): Promise<string> => {
-    const { turnId, narration, participants, locationId, playerInFrame, fresh, signal } = args;
-    setSceneImageJob("tags");
-    // Every place the world knows, not just this one: the narration routinely names somewhere the player
-    // is not, and an invented place name is no more useful as a tag for being off-screen.
-    const knownTags = await loadKnownTags();
-    const places = locations.map((l) => l.name);
-    const scrubPlaces = (line: string) =>
-      splitTags(line).map((t) => stripPlaces(t, places, knownTags)).filter(Boolean).join(", ");
-    const cast = await resolveSceneCast(participants, playerInFrame, signal, scrubPlaces, fresh);
-    const location = locations.find((l) => l.id === locationId) ?? currentLocation;
-    const locationTags = location ? await resolveSubjectTags(location, "location", signal, scrubPlaces, fresh) : "";
-    if (signal.aborted) return "";
-    // The tag pass is silent and attached to this turn, so it shows in the AI-context viewer under the
-    // scene it describes (with Show Silent Requests on) rather than under whatever turn is current.
-    const request = sceneTagsPass.buildRequest(standalonePassInput(), {
-      ...emptyTurnMaterial({ action: "", effectiveAction: "", turnId, baseCtx: {}, destinations: [] }),
-      ctx: contextValues(),
-      narration,
-      sceneCast: cast.map((c) => c.name),
-    });
-    const actionTags = await sendAiRequest({ ...request, signal });
-    if (signal.aborted) return "";
-    const line = composeSceneTags({
-      characters: cast, locationTags, actionTags, places, knownTags, cleanTags: imageCleanTags,
-      segmented: takesCharacterPrompts(imageProvider, imageModel),
-    });
-    // Stored whether or not an image follows, so the player can read and edit what would be sent.
-    if (line) setFullMessageHistory((prev) => patchSceneTags(prev, turnId, line) ?? prev);
-    return line;
-  };
-
-  /**
-   * Draw one turn. `tags` skips the tag pass and renders that line verbatim — the path the editable tag
-   * field under an image uses. Tag writes go through the turn-id apply-guard; the image write is guarded
-   * by the run's abort signal, which rollback / re-generate / load fire before discarding the turn.
-   */
-  const runSceneImage = async (args: {
-    turnId: string;
-    narration: string;
-    participants: string[];
-    locationId?: string;
-    playerInFrame?: boolean;
-    tags?: string;
-    /** Re-write the tag line and stop there — no image. The cheap loop for judging the tags themselves.
-     *  Always re-derives: a re-roll that reused the cached guesses could only ever change the action layer,
-     *  which on an untagged world is the minority of the line. Drawing keeps the cache, so a picture stays
-     *  cheap and the place looks the same from turn to turn. */
-    tagsOnly?: boolean;
-    signal: AbortSignal;
-  }): Promise<void> => {
-    const { turnId, signal } = args;
-    setSceneImageProgress(null);
-    setSceneImagePreview(null);
-    try {
-      const line = (args.tags ?? "").trim() || await runSceneTags({ ...args, fresh: args.tagsOnly });
-      if (signal.aborted) return;
-      if (!line) throw new Error("Nothing to draw for this scene.");
-      if (args.tagsOnly) return;
-      if (args.tags) setFullMessageHistory((prev) => patchSceneTags(prev, turnId, line) ?? prev);
-
-      setSceneImageJob("image");
-      // The turn's number as the player counts them, for the file name.
-      const turn = fullMessageHistory
-        .filter((m) => m.role === "assistant")
-        .findIndex((m) => parseTurnContent(m.content)?.turnId === turnId) + 1 || undefined;
-      // A scene is landscape by definition; everything else about the request is the user's image preset,
-      // shared with the editor's Generate dialog.
-      const { provider, params, opts } = buildImageRequest(settings, {
-        prompt: line,
-        width: imageLandscapeWidth,
-        height: imageLandscapeHeight,
-        file: { world: worldOverview.name, subject: turn ? `turn-${turn}-scene` : "scene", turn },
-      });
-      const dataUrl = await generateImage(provider, params, {
-        ...opts,
-        signal,
-        onProgress: (p) => {
-          setSceneImageProgress(p.progress);
-          // The live frame the local providers stream, so the picture is visibly forming.
-          if (p.preview) setSceneImagePreview(p.preview);
-        },
-      });
-      if (signal.aborted) return;
-      setSceneImages((prev) => addSceneImage(prev, turnId, dataUrl));
-    } catch (error) {
-      if ((error as Error).name === "AbortError") return;
-      if (args.tagsOnly) toastError(error, "Couldn't write tags for this scene.");
-      else toastImageFailure(error, "Couldn't draw this scene.");
-      addSystemLogEntry(args.tagsOnly ? "Scene tags failed" : "Scene image failed");
-    } finally {
-      setSceneImageJob(null);
-      setSceneImageProgress(null);
-      setSceneImagePreview(null);
-    }
-  };
-
-  // Hold the latest runner so the queued-click effect and the turn's auto path call a fresh closure.
-  const runSceneImageRef = useRef(runSceneImage);
-  runSceneImageRef.current = runSceneImage;
-
-  /** Run the pipeline against `page` (default: the turn the player is looking at). `tagsOnly` stops after the tag line, which
-   *  is the cheap loop for judging the tags. Queues behind an in-flight turn rather than competing with it. */
-  const startSceneJob = ({ page = currentPage, ...opts }: { tags?: string; tagsOnly?: boolean; page?: number } = {}) => {
-    if (imageGenDisabled || sceneImageJob) return;
-    const index = pageAssistantIndex(page, messagesPerPage);
-    const turn = parseTurnContent(fullMessageHistory[index]?.content ?? "");
-    if (!turn?.turnId) {
-      toast.info("There's no scene here yet.");
-      return;
-    }
-    if (isWaitingForAI) {
-      pendingSceneImageRef.current = { turnId: turn.turnId, ...opts };
-      toast.info(opts?.tagsOnly ? "Writing tags once the turn finishes." : "Drawing this scene once the turn finishes.");
-      return;
-    }
-    const controller = new AbortController();
-    sceneImageAbortRef.current = controller;
-    void runSceneImage({
-      turnId: turn.turnId,
-      narration: turn.narration ?? "",
-      participants: turn.entities ?? [],
-      locationId: turn.locationId,
-      playerInFrame: turn.playerInFrame,
-      ...opts,
-      tags: sceneDrawTags(opts, turn.sceneTags),
-      signal: controller.signal,
-    });
-  };
-  const handleSceneImage = (tags?: string, page?: number) => startSceneJob({ tags, page });
-  const handleSceneTags = (page?: number) => startSceneJob({ tagsOnly: true, page });
-
-  /** Stop the render in flight; the provider interrupts its server where it can. */
-  const cancelSceneImage = () => {
-    pendingSceneImageRef.current = null;
-    sceneImageAbortRef.current?.abort();
-  };
-
-  const handleDeleteSceneImage = (turnId: string, index: number) => {
-    setSceneImages((prev) => removeSceneImage(prev, turnId, index));
-  };
-
-  // Replay a click that landed mid-turn, once the turn's requests are done (the VRAM rule).
-  useEffect(() => {
-    if (isWaitingForAI || sceneImageJob) return;
-    const queued = pendingSceneImageRef.current;
-    if (!queued) return;
-    pendingSceneImageRef.current = null;
-    const turn = fullMessageHistory.find(
-      (m) => m.role === "assistant" && parseTurnContent(m.content)?.turnId === queued.turnId,
-    );
-    const parsed = turn ? parseTurnContent(turn.content) : null;
-    if (!parsed) return; // the turn was rolled back while queued
-    const controller = new AbortController();
-    sceneImageAbortRef.current = controller;
-    void runSceneImageRef.current({
-      turnId: queued.turnId,
-      narration: parsed.narration ?? "",
-      participants: parsed.entities ?? [],
-      locationId: parsed.locationId,
-      playerInFrame: parsed.playerInFrame,
-      tags: sceneDrawTags(queued, parsed.sceneTags),
-      tagsOnly: queued.tagsOnly,
-      signal: controller.signal,
-    });
-  }, [isWaitingForAI, sceneImageJob, fullMessageHistory]);
-
   // Hold the latest sendAiRequest so the background passes always call a fresh closure without
   // re-running its effect every render (sendAiRequest is rebuilt each render by design).
   const sendAiRequestRef = useRef(sendAiRequest);
@@ -4401,7 +4025,7 @@ const GameViewer = ({
       effectiveTurns: parseEffectiveTurns(settledHistory),
       milestoneSelection,
       memoryPins,
-      busy: isWaitingForAI || sceneImageJob !== null,
+      busy: isWaitingForAI,
       concurrent: concurrentTurnRequests,
       memoryDigests,
       describeCharacters,
@@ -4410,7 +4034,7 @@ const GameViewer = ({
       entityNames: allEntities.map((e) => e.name),
       suppressedNames: suppressedCharacterNames,
     });
-  }, [passQueue, settledHistory, parseEffectiveTurns, milestoneSelection, memoryPins, isWaitingForAI, sceneImageJob, concurrentTurnRequests, memoryDigests, describeCharacters, characterDiaries, thinkingMode, allEntities, suppressedCharacterNames]);
+  }, [passQueue, settledHistory, parseEffectiveTurns, milestoneSelection, memoryPins, isWaitingForAI, concurrentTurnRequests, memoryDigests, describeCharacters, characterDiaries, thinkingMode, allEntities, suppressedCharacterNames]);
 
   const fullMessageHistoryRef = useRef(fullMessageHistory);
   fullMessageHistoryRef.current = fullMessageHistory;
@@ -4544,7 +4168,7 @@ const GameViewer = ({
     ));
   }, [setDiscoveredEntities]);
 
-  /** A regeneration waits behind the turn, a scene render and running passes, so it never contends with
+  /** A regeneration waits behind the turn and running passes, so it never contends with
    *  them for a single local GPU. */
   const regenWaiting = useSyncExternalStore(subscribePasses, () => passQueue?.waiting() ?? false);
 
@@ -4609,19 +4233,18 @@ const GameViewer = ({
 
   const handleSendAction = () => {
     const input = playerInput.trim();
-    // A scene render holds the turn as well as the input: the model and the image server share one card.
-    if (!input || isWaitingForAI || sceneImageJob) return;
+    if (!input || isWaitingForAI) return;
     if (input.startsWith("/")) {
       runSlashCommand(input);
       setPlayerInput("");
       return;
     }
-    sendGameAction(input, { attachments: pendingAttachments });
+    sendGameAction(input);
   };
 
   // Enter submits; Shift+Enter inserts a newline (the action box is a multi-line textarea).
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey && !isWaitingForAI && !sceneImageJob) {
+    if (e.key === "Enter" && !e.shiftKey && !isWaitingForAI) {
       e.preventDefault();
       handleSendAction();
     }
@@ -5071,7 +4694,7 @@ const GameViewer = ({
     />
   );
 
-  // The scene images belonging to the page being viewed (one turn per page).
+  // The turn on the page being viewed (one turn per page), whose script tells show under it.
   const viewedTurn = parseTurnContent(fullMessageHistory[pageAssistantIndex(currentPage, messagesPerPage)]?.content ?? "");
 
   const middlePanel = (
@@ -5087,19 +4710,8 @@ const GameViewer = ({
       handleRegenerateChoices={handleRegenerateChoices}
       handleRegenerateStats={handleRegenerateStats}
       abortGeneration={abortGeneration}
-      // A scene render holds the next action too: the image has the graphics card until it's done.
-      disabled={(isWaitingForAI && !choicesReady) || sceneImageJob !== null}
-      sceneImages={(viewedTurn?.turnId && sceneImages[viewedTurn.turnId]) || EMPTY_IMAGES}
-      sceneTags={viewedTurn?.sceneTags ?? ""}
-      sceneTurnId={viewedTurn?.turnId}
-      sceneImageJob={sceneImageJob}
-      sceneImageProgress={sceneImageProgress}
-      sceneImagePreview={sceneImagePreview}
-      sceneImagesAvailable={!imageGenDisabled}
-      onSceneImage={handleSceneImage}
-      onSceneTags={handleSceneTags}
-      onCancelSceneImage={cancelSceneImage}
-      onDeleteSceneImage={handleDeleteSceneImage}
+      disabled={isWaitingForAI && !choicesReady}
+      viewedTurnId={viewedTurn?.turnId}
       onTTSClick={() => setIsTTSModalOpen(true)}
       onExportStory={() => setIsExportModalOpen(true)}
       onRegenerateTTS={handleRegenerateTTS}
@@ -5126,7 +4738,6 @@ const GameViewer = ({
       traitCascade={traitCascade}
       onDismissTraitCascade={() => setTraitCascade(null)}
       onRegenerateStats={handleRegenerateStats}
-      sceneImageJob={sceneImageJob}
       language={language}
       setLanguage={setLanguage}
     />
@@ -5140,13 +4751,10 @@ const GameViewer = ({
   const mapBackdrop = useMapBackdrop(worldOverview);
 
   // Menu save/load handlers, extracted so the desktop (header) and mobile (tab-row) MenuModal instances share them.
-  const handleMenuSave = (name: string, opts?: { overwriteId?: string; includeSceneImages?: boolean }) =>
-    saveGame(name, worldOverview.name, worldId ? String(worldId) : undefined, opts?.overwriteId, {
-      includeSceneImages: opts?.includeSceneImages,
-    });
+  const handleMenuSave = (name: string, opts?: { overwriteId?: string }) =>
+    saveGame(name, worldOverview.name, worldId ? String(worldId) : undefined, opts?.overwriteId);
   const handleMenuLoad = async (id: string, targetWorldId?: string) => {
-    // A render or a background pass from the outgoing session must not finish into the loaded one.
-    cancelSceneImage();
+    // A background pass from the outgoing session must not finish into the loaded one.
     passSessionRef.current += 1;
     passQueue?.abort();
     // The loaded save draws its own opening on first need, with nothing shown yet.
@@ -5980,11 +5588,10 @@ const GameViewer = ({
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        onOpenChange={(v) => { setIsSettingsOpen(v); if (!v) { setSettingsTab(undefined); setSettingsEndpointTab(undefined); setSettingsPrompt(undefined); } }}
+        onOpenChange={(v) => { setIsSettingsOpen(v); if (!v) { setSettingsTab(undefined); setSettingsPrompt(undefined); } }}
         previewValues={promptPreviewValues}
         toolWorld={toolWorld}
         initialTab={settingsTab ?? asSettingsTab(devRoute?.tab)}
-        initialEndpointTab={settingsEndpointTab}
         initialPromptTab={surfaceNav.settings?.promptTab ?? settingsPrompt?.tab ?? devRoute?.subtab}
         initialPromptSurface={surfaceNav.settings?.promptSurface ?? settingsPrompt?.surface ?? devRoute?.surface}
         initialPromptField={settingsPrompt?.field}

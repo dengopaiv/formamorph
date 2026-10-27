@@ -300,11 +300,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // Forces Settings to a specific tab when something deep-links into it (the AI setup gate → Endpoint).
   // Cleared on close so the next deep-link re-triggers the modal's initialTab effect.
   const [settingsTab, setSettingsTab] = useState<SettingsTabId | undefined>(undefined);
-  const [settingsEndpointTab, setSettingsEndpointTab] = useState<string | undefined>(undefined);
   const [showLoadDialog, setShowLoadDialog] = useState(false);
-  useSettingsOpenRequest((tab, endpointTab) => {
+  useSettingsOpenRequest((tab) => {
     setSettingsTab(tab);
-    setSettingsEndpointTab(endpointTab);
     setShowSettings(true);
   });
   // DEV dev-router: open Settings (or the Load menu) when the hash asks. Tree-shaken in prod.
@@ -318,7 +316,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     if (devRoute?.modal === 'settings' || devRoute?.modal === 'settingsCompare' || devRoute?.modal === 'chipOptions') setShowSettings(true);
     if (devRoute?.modal === 'menu') setShowLoadDialog(true);
     if (devRoute?.modal === 'backup') setShowBackup(true);
-    if (['worldEditor', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere'].includes(devRoute?.modal ?? '')) setShowWorldEditor(true);
+    if (['worldEditor', 'replaceSource', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere'].includes(devRoute?.modal ?? '')) setShowWorldEditor(true);
     if (devRoute?.modal === 'aiSetup') setGate({ reason: 'firstRun' });
     // The prompt viewer reads a world's overrides, so it opens on a canned one rather than on whatever the
     // library happens to hold — a world really selected from a card still wins over it.
@@ -955,7 +953,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       case 'settings': {
         const landing = settingsLanding(steps);
         if (landing.tab) setSettingsTab(landing.tab);
-        if (landing.endpointTab) setSettingsEndpointTab(landing.endpointTab);
         setShowSettings(true);
         break;
       }
@@ -1295,9 +1292,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
       <SettingsModal
         isOpen={showSettings}
-        onOpenChange={(v) => { setShowSettings(v); if (!v) { setSettingsTab(undefined); setSettingsEndpointTab(undefined); } }}
+        onOpenChange={(v) => { setShowSettings(v); if (!v) { setSettingsTab(undefined); } }}
         initialTab={settingsTab ?? asSettingsTab(devRoute?.tab)}
-        initialEndpointTab={settingsEndpointTab}
         initialPromptTab={surfaceNav.settings?.promptTab ?? devRoute?.subtab}
         initialPromptSurface={surfaceNav.settings?.promptSurface ?? devRoute?.surface}
         initialTarget={surfaceNav.target}

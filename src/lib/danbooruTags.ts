@@ -1,4 +1,4 @@
-// Lazily loads the shipped Danbooru tag list for Image-Tags autocomplete. The JSON is a popularity-ordered
+// Lazily loads the shipped Danbooru tag list for listing-tag autocomplete. The JSON is a popularity-ordered
 // string[] (array order = ranking); Vite code-splits it into its own chunk, fetched only on first use.
 //
 // The build-time flag VITE_SFW_TAGS swaps to a separate SFW source (empty for now). Because the check is a

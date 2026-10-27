@@ -42,11 +42,6 @@ import { COMMON_LANGUAGES } from "@/lib/languages";
 import { Send, RefreshCw, Languages, Loader2, Headphones, Square, ChevronUp, ChevronDown, X, MoreHorizontal, NotebookPen, Brain, ScrollText, type LucideIcon } from "lucide-react";
 import { AvatarIcon, EntitiesIcon, LocationIcon, StatIcon, TraitIcon } from '@/lib/elementIcons';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
-import { pageTurnId, withoutAttachment, setTurnAttachments, turnAttachments } from '@/lib/actionAttachments';
-import { useAttachmentIntake } from '@/lib/useAttachmentIntake';
-import { useImageAttachments } from '@/lib/useImageAttachments';
-import { AttachmentThumbs } from './AttachmentThumbs';
-import { AttachImagesButton } from '@/components/AttachImagesButton';
 import { ActionIcon } from "@/lib/actionIcons";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CONTINUE_CHOICE } from "@/lib/choices";
@@ -62,8 +57,6 @@ import { hasEntityVisual } from '@/lib/entityVisual';
 import { useEntityGallery } from '@/lib/useEntityGallery';
 import TtsPlaybackBar from './TtsPlaybackBar';
 import { MemoryPanel } from './MemoryPanel';
-import { SceneImagePanel } from './SceneImagePanel';
-import { ScenePlate } from './ScenePlate';
 import { GAME_LEFT_PANEL_TABS } from './leftPanelTabs';
 import { useDevRoute } from '@/lib/devRouter';
 import type { TTSProgress } from './TTSModal';
@@ -457,17 +450,7 @@ export const MiddlePanel = ({
   handleRegenerateStats,
   abortGeneration,
   disabled,
-  sceneImages,
-  sceneTags,
-  sceneTurnId,
-  sceneImageJob,
-  sceneImageProgress,
-  sceneImagePreview,
-  sceneImagesAvailable,
-  onSceneImage,
-  onSceneTags,
-  onCancelSceneImage,
-  onDeleteSceneImage,
+  viewedTurnId,
   onTTSClick,
   onExportStory,
   onRegenerateTTS,
@@ -499,26 +482,8 @@ export const MiddlePanel = ({
   handleRegenerateStats: (page?: number) => void;
   abortGeneration: () => void;
   disabled: boolean;
-  /** The viewed turn's scene images, oldest first. */
-  sceneImages: string[];
-  /** The tag line those images were drawn from. */
-  sceneTags: string;
-  /** The viewed page's committed turn id (undefined while none) — there is something to draw or tag,
-   *  and the scene panel is remounted per turn so its tag draft can't leak across page navigation. */
-  sceneTurnId?: string;
-  /** Which half of the scene pipeline is running, or null. */
-  sceneImageJob: 'tags' | 'image' | null;
-  sceneImageProgress: number | null;
-  /** The provider's live in-progress frame, or null. */
-  sceneImagePreview: string | null;
-  /** False when image generation is switched off app-wide — the affordance disappears with it. */
-  sceneImagesAvailable: boolean;
-  /** Draws the turn on `page`, or the viewed turn. */
-  onSceneImage: (tags?: string, page?: number) => void;
-  /** Re-run the tag pass alone, no image. */
-  onSceneTags: (page?: number) => void;
-  onCancelSceneImage: () => void;
-  onDeleteSceneImage: (turnId: string, index: number) => void;
+  /** The viewed page's committed turn id (undefined while none), which keys its script tells. */
+  viewedTurnId?: string;
   onTTSClick: () => void;
   onExportStory: () => void;
   /** Synthesizes `text`, or the current text. */
@@ -562,23 +527,10 @@ export const MiddlePanel = ({
     fullMessageHistory,
     viewSelectedChoice,
     viewContinueUsed,
-    isGameStarted,
-    actionAttachments,
-    setActionAttachments,
-    pendingAttachments,
-    setPendingAttachments,
     scriptTells,
   } = useGameplay();
   const gameplayText = useGameplayText();
   const { ttsHighlight, choicesEnabled, setChoicesEnabled, continueChoiceMode, statUpdatesEnabled, revealSpec, revealEasing, showReasoning, memoryDigests, setMemoryDigests } = useSettings();
-  const imageAttachments = useImageAttachments();
-
-  // Paste and drop wait for the game to start, like the button.
-  const { attaching, dragOver: attachDragOver, attachFiles, intakeProps } = useAttachmentIntake({
-    enabled: imageAttachments && isGameStarted && !disabled,
-    pending: pendingAttachments,
-    setPending: setPendingAttachments,
-  });
   const chatLayout = useNarrationLayout() === 'chat';
   // The narration fades out above the status strip while it shows.
   const statusShowing = Boolean(progressBar);
@@ -660,7 +612,7 @@ export const MiddlePanel = ({
   // A turn's Edit and Rewind to Here target that turn's own page, never the viewed one.
   // Each request-sending action names where it goes.
   const endpointTip = useEndpointTip();
-  const [editTarget, setEditTarget] = useState<{ kind: 'narration' | 'action'; page: number; text: string; turnId?: string } | null>(null);
+  const [editTarget, setEditTarget] = useState<{ kind: 'narration' | 'action'; page: number; text: string } | null>(null);
   const [rewindPage, setRewindPage] = useState<number | null>(null);
   const actionsFor = (turn: ChatBubbleTurn) => {
     const page = turn.index + 1;
@@ -669,18 +621,13 @@ export const MiddlePanel = ({
         isLatest: turn.isLatest,
         live: turn.live,
         busy: isWaitingForAI,
-        hasImage: turn.hasImage,
         canRegenStats,
-        sceneImagesAvailable,
-        sceneJob: sceneImageJob,
         ttsLoaded,
         ttsGenerating,
       },
       {
         regenerate: () => handleRegenerate(page),
         regenerateStats: () => handleRegenerateStats(page),
-        sceneImage: () => onSceneImage(undefined, page),
-        sceneTags: () => onSceneTags(page),
         edit: () => { setEditTarget({ kind: 'narration', page, text: turn.text }); setIsEditMode(true); },
         textToSpeech: onTTSClick,
         regenerateAudio: () => { void onRegenerateTTS(turn.text); },
@@ -690,7 +637,7 @@ export const MiddlePanel = ({
     ), endpointTip);
   };
   const editAction = (page: number, text: string) => {
-    setEditTarget({ kind: 'action', page, text, turnId: pageTurnId(fullMessageHistory, page) });
+    setEditTarget({ kind: 'action', page, text });
     setIsEditMode(true);
   };
   const playerActionsFor = (turn: ChatPlayerTurn) => playerBubbleActions({ live: turn.live, busy: isWaitingForAI }, {
@@ -718,7 +665,7 @@ export const MiddlePanel = ({
     : currentAssistantMessage ? parseSavedReasoning(currentAssistantMessage.content) : null;
   // The card holds its actions while live, so its row can open in place once the narration settles.
   const pageActions = currentAssistantMessage ? actionsFor({
-    index: currentPage - 1, isLatest: !isViewingPast, live: false, hasImage: sceneImages.length > 0, text: pageNarration,
+    index: currentPage - 1, isLatest: !isViewingPast, live: false, text: pageNarration,
   }) : [];
   const pageChromeHeld = pageLive && !narrationSettled;
   // The turn is live from submit, before its narration exists, until the reveal ends.
@@ -883,7 +830,6 @@ export const MiddlePanel = ({
                 parseAssistantMessage={parseAssistantMessage}
                 actionsFor={actionsFor}
                 playerActionsFor={playerActionsFor}
-                onDeleteSceneImage={onDeleteSceneImage}
                 fadeUnderStrip={statusShowing}
                 latestFooter={
                   <>
@@ -918,16 +864,8 @@ export const MiddlePanel = ({
             )}
             {!commandPreview && (actionLine !== undefined || currentAssistantMessage || (showReasoning && pageReasoning?.text)) && (
               <TurnCard actions={pageActions} turnNumber={currentPage} live={pageChromeHeld} style={revealStyle}>
-                {sceneTurnId && (
-                  <ScenePlate
-                    turnId={sceneTurnId}
-                    images={sceneImages}
-                    onDelete={(index) => onDeleteSceneImage(sceneTurnId, index)}
-                    className="mb-3"
-                  />
-                )}
                 {actionLine !== undefined && (
-                  <ActionLine text={actionLine} actions={actionLineActions} attachments={turnAttachments(actionAttachments, sceneTurnId)} />
+                  <ActionLine text={actionLine} actions={actionLineActions} />
                 )}
                 {showReasoning && pageReasoning?.text && (
                   <ReasoningBlock text={pageReasoning.text} ms={pageReasoning.ms} active={pageReasoningLive && liveReasoning.active} />
@@ -949,23 +887,7 @@ export const MiddlePanel = ({
                 )}
               </TurnCard>
             )}
-            {!commandPreview && <ScriptTellLines tells={turnTells(scriptTells, sceneTurnId)} className="mt-3" />}
-            {!commandPreview && sceneImagesAvailable && (
-              <SceneImagePanel
-                // Keyed by turn: paging to another turn remounts the panel, so the tag draft and open
-                // editor can't carry one turn's state onto another.
-                key={sceneTurnId}
-                hasImage={sceneImages.length > 0}
-                tags={sceneTags}
-                ready={!!sceneTurnId}
-                job={sceneImageJob}
-                progress={sceneImageProgress}
-                preview={sceneImagePreview}
-                onGenerate={onSceneImage}
-                onRegenerateTags={() => onSceneTags()}
-                onCancel={onCancelSceneImage}
-              />
-            )}
+            {!commandPreview && <ScriptTellLines tells={turnTells(scriptTells, viewedTurnId)} className="mt-3" />}
             {!commandPreview && <ScriptPromptLine store={scriptPrompts} className="mt-4" />}
             {!commandPreview && (
               <ChoiceRows
@@ -992,15 +914,11 @@ export const MiddlePanel = ({
             isOpen={isEditMode}
             onOpenChange={(open) => { setIsEditMode(open); if (!open) setEditTarget(null); }}
             text={editTarget?.text ?? currentPageText}
-            // Removal shows with the setting off too: it sends nothing, and it lets the player take an image back.
-            attachments={editTarget?.kind === 'action' ? turnAttachments(actionAttachments, editTarget.turnId) : undefined}
-            onSave={(text, images) => {
+            onSave={(text) => {
               const page = editTarget?.page ?? currentPage;
               if (editTarget?.kind === 'action') {
                 // Rewrites only the turn's user message; the turn's memory digest stays as it is.
                 setFullMessageHistory(prev => rewriteTurnAction(prev, page, text, 2));
-                const { turnId } = editTarget;
-                if (turnId) setActionAttachments((prev) => setTurnAttachments(prev, turnId, images));
                 return;
               }
               // Only the most recent page drives the live gameplay text (used by TTS, etc.).
@@ -1097,19 +1015,8 @@ export const MiddlePanel = ({
               </div>
             )}
           </div>
-          <div className={cn('flex flex-col gap-2', attachDragOver && 'rounded-md ring-2 ring-inset ring-ring')} {...intakeProps}>
-            {imageAttachments && (
-              <AttachmentThumbs
-                attachments={pendingAttachments}
-                onRemove={(id) => setPendingAttachments((prev) => withoutAttachment(prev, id))}
-                className="pt-1.5"
-              />
-            )}
+          <div className="flex flex-col gap-2">
             <div className="flex items-end" {...targetAttribute('gameViewer', 'action-box')}>
-              {/* The opening turn sends the drawn opening, so images wait for the game to start. */}
-              {imageAttachments && isGameStarted && (
-                <AttachImagesButton attaching={attaching} disabled={disabled} onFiles={(files) => void attachFiles(files)} className="mr-2 shrink-0" />
-              )}
               <ActionInput
                 value={playerInput}
                 setValue={setPlayerInput}
@@ -1182,7 +1089,7 @@ const entityItems = (options: StatPanelOption[]) =>
   ));
 
 export const RightPanel = ({
-  onLocationClick, onToggleTrait, onPersonaChange, traitCascade, onDismissTraitCascade, onRegenerateStats, sceneImageJob,
+  onLocationClick, onToggleTrait, onPersonaChange, traitCascade, onDismissTraitCascade, onRegenerateStats,
   language, setLanguage,
 }: {
   onLocationClick: () => void;
@@ -1194,7 +1101,6 @@ export const RightPanel = ({
   traitCascade: TraitCascade | null;
   onDismissTraitCascade: () => void;
   onRegenerateStats: (page: number) => void;
-  sceneImageJob: 'tags' | 'image' | null;
   language: string;
   setLanguage: (value: string) => void;
 }) => {
@@ -1471,7 +1377,7 @@ export const RightPanel = ({
             <StatsActions
               className="absolute bottom-2 right-2"
               past={isViewingPast}
-              busy={totalPages === 0 || isWaitingForAI || isRevealingNarration || sceneImageJob !== null}
+              busy={totalPages === 0 || isWaitingForAI || isRevealingNarration}
               editing={isEditMode}
               onEditingChange={setIsEditMode}
               onRegenerate={statUpdatesEnabled && (globalStats.length > 0 || ownersShowStats) ? () => onRegenerateStats(currentPage) : undefined}

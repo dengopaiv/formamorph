@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
-import { useSettings } from '@/contexts/SettingsContext';
 import { summarizeDescription } from '@/lib/summarize';
 import { useAiSettingsSnapshot } from '@/lib/aiRequest/useAiSettingsSnapshot';
 import { bridgeDescription, type BridgeKind } from '@/lib/bridgeDescription';
-import { buildImagePrompt, type ImageSubjectKind } from '@/lib/imagePrompt';
 import { TOOLBAR_BTN } from '@/components/prompt/toolbarStyles';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { overwriteWarning } from '@/lib/descriptionOverwrite';
@@ -14,26 +12,23 @@ import { authoringServerNote } from '@/lib/authoringRequest';
 import { useEndpointTip, withEndpointLine } from '@/lib/useEndpointTip';
 import type { EditorRequestType } from '@/types';
 
-type GenerateMode = 'summary' | 'tags' | 'playerDesc' | 'aiDesc';
+type GenerateMode = 'summary' | 'playerDesc' | 'aiDesc';
 
 /** The request kind each mode sends as, which names its endpoint. */
 const REQUEST: Record<GenerateMode, EditorRequestType> = {
   summary: 'descriptionSummary',
-  tags: 'imageTags',
   playerDesc: 'descriptionBridge',
   aiDesc: 'descriptionBridge',
 };
 
 const NOUN: Record<GenerateMode, string> = {
   summary: 'summary',
-  tags: 'image tags',
   playerDesc: 'player-facing description',
   aiDesc: 'AI-facing description',
 };
 
 const SOURCE_NOUN: Record<GenerateMode, string> = {
   summary: 'the description',
-  tags: 'the description',
   playerDesc: 'the AI-facing description',
   aiDesc: 'the player-facing description',
 };
@@ -51,22 +46,21 @@ const TARGET_LABEL: Partial<Record<GenerateMode, string>> = {
 
 /**
  * Fills a text field from the connected LLM. `mode` picks the generator — 'summary' condenses the
- * AI-Facing Description, 'tags' writes booru image tags from a description, and 'playerDesc'/'aiDesc'
- * rewrite one description into the other. `source` is the text fed in; the result goes out through
+ * AI-Facing Description, and 'playerDesc'/'aiDesc' rewrite one description into the other. `source` is the text fed in; the result goes out through
  * `onChange`, so undo belongs to whatever field owns the value.
  */
 const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
   mode: GenerateMode;
   source: string | undefined;
   onChange: (v: string) => void;
-  kind?: ImageSubjectKind; // tags/playerDesc/aiDesc: subject kind
+  kind?: BridgeKind; // playerDesc/aiDesc: subject kind
   /** The destination field's current text. Supplied so a generation that would *replace* authored writing
    *  asks first — the two descriptions generate into each other, and a round trip through both silently
    *  swaps what the author wrote for what a model inferred. Absent or empty = nothing to lose, no dialog. */
   target?: string;
 }) => {
   const {
-    imageTagPrompt, imageCleanTags, playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens,
+    playerDescPrompt, aiDescPrompt, aiSummaryPrompt, descMaxTokens,
   } = useSettings();
   const snapshot = useAiSettingsSnapshot();
   const [loading, setLoading] = useState(false);
@@ -87,18 +81,13 @@ const AiGenerateButton = ({ mode, source, onChange, kind, target }: {
     setLoading(true);
     try {
       const opts = { snapshot, signal: controller.signal };
-      const bridgeKind: BridgeKind = kind === 'location' ? 'location' : 'character';
-      const result = mode === 'tags'
-        // The subject's name is deliberately not sent: models answer with it as a tag, and no image model
-        // knows a person's name. An author who wants one in the tags can type it.
-        ? await buildImagePrompt({ description: text, kind: kind ?? 'character' }, { ...opts, tagPrompt: imageTagPrompt, cleanTags: imageCleanTags })
-        : mode === 'summary'
-          ? await summarizeDescription(text, { ...opts, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
-          : await bridgeDescription(text, mode, bridgeKind, {
-            ...opts,
-            template: mode === 'playerDesc' ? playerDescPrompt : aiDescPrompt,
-            maxTokens: mode === 'playerDesc' ? descMaxTokens.playerdesc : descMaxTokens.aidesc,
-          });
+      const result = mode === 'summary'
+        ? await summarizeDescription(text, { ...opts, template: aiSummaryPrompt, maxTokens: descMaxTokens.aisummary })
+        : await bridgeDescription(text, mode, kind ?? 'character', {
+          ...opts,
+          template: mode === 'playerDesc' ? playerDescPrompt : aiDescPrompt,
+          maxTokens: mode === 'playerDesc' ? descMaxTokens.playerdesc : descMaxTokens.aidesc,
+        });
       onChange(result);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;

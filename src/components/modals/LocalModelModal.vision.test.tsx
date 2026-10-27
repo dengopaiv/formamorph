@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { LocalModelModal } from './LocalModelModal';
 import { LOCAL_MODELS, downloadBytes, formatModelSize, projectorFileName } from '@/lib/localModels';
-import type { LocalDownloadOptions, LocalInstalledModel, LocalPartial } from '@/lib/imageGen/desktop';
+import type { LocalDownloadOptions, LocalInstalledModel, LocalPartial } from '@/lib/desktop';
 
 const VISION = LOCAL_MODELS.find((m) => m.projector && m.tier === 'tier8')!;
 const TEXT = LOCAL_MODELS.find((m) => !m.projector && m.tier === 'tier8')!;

@@ -1,4 +1,4 @@
-// Generate the curated Danbooru tag list shipped for Image-Tags autocomplete.
+// Generate the curated Danbooru tag list shipped for listing-tag autocomplete.
 // Pages the public Danbooru API by post count, per category, applies per-category caps, normalizes
 // underscores to spaces, dedupes, sorts by popularity, and writes a compact string[] JSON.
 //

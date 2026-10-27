@@ -11,7 +11,7 @@ vi.mock('react-toastify', () => ({
 // The button reads the image tag prompt and the authoring prompts and caps; nothing else here matters.
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
-    activeEndpointUrl: 'http://x', activeApiToken: '', activeModelName: 'm', imageTagPrompt: 'p',
+    activeEndpointUrl: 'http://x', activeApiToken: '', activeModelName: 'm',
     playerDescPrompt: '', aiDescPrompt: '', aiSummaryPrompt: '',
     descMaxTokens: { playerdesc: 400, aidesc: 400, aisummary: 80, desccheck: 300 },
     describeEndpointForKind: () => ({ presetName: 'Test Endpoint', model: 'm' }),

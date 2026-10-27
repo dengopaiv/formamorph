@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { asMobile, benchEditorWorld, clickFlask, openEditorTab, renderWorldEditorBench, searchWorldField } from '@/test/worldEditorBench';
+import { benchEditorWorld, clickFlask, openEditorTab, renderWorldEditorBench, searchWorldField } from '@/test/worldEditorBench';
 import type { World } from '@/types';
 
 /**
@@ -83,13 +83,6 @@ const openFind = async () => {
   await waitFor(() => expect(document.activeElement).toBe(searchWorldField()));
 };
 
-/** Press Ctrl+H on mobile, where the floating bar opens with its replace row, and wait for its focus. */
-const openReplace = async () => {
-  fireEvent.keyDown(window, { key: 'h', ctrlKey: true });
-  await screen.findByRole('search', { name: 'Find and replace in world' });
-  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Find')));
-};
-
 /** Type a query and wait for the search to land on its first hit, which it does on its own. */
 const findFirst = async (query: string, field = searchWorldField()) => {
   fireEvent.change(field, { target: { value: query } });
@@ -123,19 +116,6 @@ describe('World Editor — a Find hit opens the location tab holding it', () => 
     expect((await ringed()).closest('[data-find-field]')?.getAttribute('data-find-field')).toMatch(/AI-Facing Description/);
   });
 
-  it('leaves Details for Media when the hit is in Image Tags', async () => {
-    setup();
-    await selectLocation();
-    expect(shownPanelTab()).toBe('Details');
-
-    await openFind();
-    await findFirst('oilskin');
-
-    await waitFor(() => expect(shownPanelTab()).toBe('Media'));
-    const field = await ringed();
-    expect((field as HTMLInputElement).value ?? field.textContent).toContain('oilskin');
-  });
-
   it('stays put for a hit it cannot place, rather than snapping back to Details', async () => {
     setup();
     await selectLocation();
@@ -154,34 +134,6 @@ describe('World Editor — a Find hit opens the location tab holding it', () => 
   });
 });
 
-describe('World Editor — Replace reaches a location field on a tab that is not showing', () => {
-  // Mobile's floating bar holds the replace row.
-  let restoreViewport: () => void;
-  beforeEach(() => { restoreViewport = asMobile(); });
-  afterEach(() => restoreViewport());
-
-  it('changes the record for a match the panel never mounted', async () => {
-    const { ctx } = setup();
-    await selectLocation();
-    expect(shownPanelTab()).toBe('Details');
-
-    // 'causeway' is only in the summary, which is on Details, so the panel never leaves it. The tags line on
-    // Media is replaced in the same pass without ever being rendered.
-    await openReplace();
-    await findFirst('lantern', screen.getByLabelText('Find'));
-    await waitFor(() => expect(shownPanelTab()).toBe('Media'));
-    openPanelTab('Details');
-    await waitFor(() => expect(shownPanelTab()).toBe('Details'));
-
-    fireEvent.change(screen.getByRole('textbox', { name: 'Replace with' }), { target: { value: 'beacon' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Replace all' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Replace All' }));
-
-    await waitFor(() => expect(ctx().locations[0].imageTags).toBe('oilskin, beacon'));
-    // The panel stayed on Details, so Media was never mounted for that edit.
-    expect(shownPanelTab()).toBe('Details');
-  });
-});
 
 describe('World Editor — a Bench finding lands on the persisted tab', () => {
   it('leaves the panel on whichever tab the author was last on', async () => {

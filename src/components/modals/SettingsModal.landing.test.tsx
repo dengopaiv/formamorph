@@ -11,7 +11,6 @@ import { settingsLanding } from '@/lib/surface/useSurfaceOpenRequest';
 import { stubReducedMotion } from '@/test/reducedMotion';
 import { endLanding, frames, recordScrolls, ringOn, rowOf } from '@/test/landing';
 import { SettingsModal } from './SettingsModal';
-import { endpointTabForRoute } from './settingsTabs';
 
 /** Take Me There landing in Settings: the row a request names is scrolled to, focused, and pulsed once. */
 
@@ -112,7 +111,6 @@ describe('Settings Take Me There landing', () => {
     const landing = settingsLanding(resolveSurface(surface, target)!);
     render(tree({
       initialTab: landing.tab,
-      initialEndpointTab: landing.endpointTab,
       initialPromptTab: landing.promptTab,
       initialPromptSurface: landing.promptSurface,
       initialTarget: route,
@@ -125,7 +123,7 @@ describe('Settings Take Me There landing', () => {
 
   it.each(SURFACE_TARGETS['settingsEndpoints.text'])('lands settingsEndpoints.text#%s on its row and control', async (target) => {
     const route = routeText('settingsEndpoints.text', target);
-    render(tree({ initialTab: 'endpoints', initialEndpointTab: endpointTabForRoute('text'), initialTarget: route, requestKey: 'a' }));
+    render(tree({ initialTab: 'endpoints', initialTarget: route, requestKey: 'a' }));
     await waitFor(() => expect(scrolled).toContain(rowOf(route)));
     expect(rowOf(route)!.contains(document.activeElement)).toBe(true);
     expect(ringOn(rowOf(route), LANDING_PULSE_CLASS)).toBe(true);

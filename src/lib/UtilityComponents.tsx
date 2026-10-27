@@ -10,7 +10,6 @@ import { useDownscalePrompt } from './useDownscalePrompt';
 import { ImageZoomViewer } from '../components/ImageZoomViewer';
 import { ImageConvertOverlay } from '../components/ImageConvertOverlay';
 import type { ImageCap } from './imageOptim';
-import { readSdPromptFromFile } from './sdMetadata';
 import { imageHost, isRemoteImage } from './imageSource';
 import { isExpiringImageHost } from './imageBytes';
 import { useRemoteImage } from './useRemoteImage';
@@ -63,7 +62,7 @@ const Dropzone = ({ htmlFor, frameClassName, dragOver, overlay, children }: {
   return <Label htmlFor={htmlFor} className="cursor-pointer">{frame}</Label>;
 };
 
-export const ImageUpload = ({ onChange, id, value, cap, previewClassName, objectFit = 'contain', onPromptExtracted, onFiles, onFile }: {
+export const ImageUpload = ({ onChange, id, value, cap, previewClassName, objectFit = 'contain', onFiles, onFile }: {
   onChange: (value: string) => void;
   // Several pictures arriving at once (a multi-file drop). A caller holding more than one slot takes them
   // all; without this the first file is used and the rest are ignored, which is right for a single slot.
@@ -74,9 +73,6 @@ export const ImageUpload = ({ onChange, id, value, cap, previewClassName, object
   // Optional fixed-size preview box (e.g. the 4:3 thumbnail crop). When set, replaces the default dashed box.
   previewClassName?: string;
   objectFit?: 'contain' | 'cover';
-  // Called with the embedded SD positive prompt when an A1111/Forge PNG is uploaded (before optimization
-  // strips the metadata). Lets callers offer to reuse it (e.g. as Image Tags).
-  onPromptExtracted?: (positivePrompt: string) => void;
   // Takes files only, for a slot that stores blobs: a file arrives here as is, the link field hides, and a
   // dropped link is refused. `onChange` still receives the empty string on remove.
   onFile?: (file: File) => void;
@@ -114,8 +110,6 @@ export const ImageUpload = ({ onChange, id, value, cap, previewClassName, object
   /** Store one picked or dropped file into this slot. */
   const takeFile = useCallback(async (file: File) => {
     if (onFile) { setUrlError(null); onFile(file); return; }
-    // Parse the raw file for an embedded SD prompt before the FileReader/optimize path re-encodes it.
-    if (onPromptExtracted) void readSdPromptFromFile(file).then((p) => { if (p) onPromptExtracted(p); });
     const dataUrl = await fileToDataUrl(file);
     if (!cap) { onChange(dataUrl); return; }
     // The overlay shows the file itself, not the data URL about to be encoded — an <img> given a
@@ -129,7 +123,7 @@ export const ImageUpload = ({ onChange, id, value, cap, previewClassName, object
       setEncoding(null);
       URL.revokeObjectURL(thumb);
     }
-  }, [onChange, cap, promptImage, onPromptExtracted, onFile]);
+  }, [onChange, cap, promptImage, onFile]);
 
   const handleImageChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);

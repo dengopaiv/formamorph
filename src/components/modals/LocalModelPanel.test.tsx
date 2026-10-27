@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { LocalModelPanel } from './LocalModelPanel';
 import { LocalEngineManager } from '../LocalEngineManager';
-import type { LocalLlmState } from '@/lib/imageGen/desktop';
+import type { LocalLlmState } from '@/lib/desktop';
 
 // The model manager is its own surface with its own coverage, and mounting it pulls in the whole install
 // /download/move bridge. Nothing here is about it.

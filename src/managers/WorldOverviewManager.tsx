@@ -7,7 +7,6 @@ import { Hint } from "@/components/ui/typography";
 import { ImageUpload, SoundUpload } from '../lib/UtilityComponents';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
 import { IMAGE_CAPS } from '../lib/imageOptim';
-import { GenerateImageButton } from '../components/GenerateImageButton';
 import { useEditorMode } from '@/lib/editorMode';
 import { ALLOWED_PERSONAS, limitsToWorld, worldPersonaRules } from '@/lib/personaPick';
 import { customPersonaEntity } from '@/lib/blueprints';
@@ -129,9 +128,7 @@ const WorldOverviewManager = () => {
       </div>
       <div className="space-y-2" data-tour-anchor="world-thumbnail" {...targetAttribute('worldEditor.overview', 'thumbnail')}>
         <Label htmlFor="image-upload-thumbnail">Thumbnail</Label>
-        {/* The frame and its Generate button share one box, so the button is as wide as the picture it
-            makes rather than centered under it. */}
-        <div className="mx-auto w-full max-w-[400px] space-y-2">
+        <div className="mx-auto w-full max-w-[400px]">
           <ImageUpload
             id="thumbnail"
             value={worldOverview.thumbnail}
@@ -139,12 +136,6 @@ const WorldOverviewManager = () => {
             cap={IMAGE_CAPS.thumbnail}
             objectFit="cover"
             previewClassName="w-full aspect-video relative rounded-md"
-          />
-          <GenerateImageButton
-            subject={{ description: worldOverview.description || worldOverview.systemPrompt || '', kind: 'world' }}
-            cap={IMAGE_CAPS.thumbnail}
-            onChange={(v) => updateWorldOverview({ thumbnail: v })}
-            className="w-full"
           />
         </div>
       </div>

@@ -13,13 +13,6 @@ export interface DiscoveredEntity {
   peeledFrom?: string;
 }
 
-/** One image the player attached to an action, already downscaled and re-encoded. */
-export interface ImageAttachment {
-  id: string;
-  mime: string;
-  dataUrl: string;
-}
-
 /** The bounds one run of a stat's code wrote. Each is absolute; a field the code left alone is absent. */
 export type CodeBounds = { min?: number; max?: number; regen?: number };
 
@@ -351,13 +344,6 @@ export interface SaveObject {
    *  tombstone hides the memory and keeps it out of context everywhere, but the underlying summary
    *  survives, so it is restorable. Absent (or empty) on older saves ⇒ nothing deleted. */
   memoryDeleted?: string[];
-  /** Scene images by turn id (data URLs), written only when the player opts in on the Save dialog — one
-   *  image is over a megabyte. Kept out of the messages on purpose: everything that walks the history
-   *  parses those, and a megabyte in one made the narration reveal crawl (see lib/sceneImages). */
-  sceneImages?: Record<string, string[]>;
-  /** The images the player attached to actions, by turn id. Always written when there are any, so a save
-   *  is self-contained. Absent ⇒ none. Out of the messages for the same reason as `sceneImages`. */
-  actionAttachments?: Record<string, ImageAttachment[]>;
   /** What scripts told the player with `player.tell`, by turn id, in call order, each with its script's
    *  timing. Never sent in a request. Absent ⇒ none. */
   scriptTells?: Record<string, { text: string; timing: ScriptTiming }[]>;

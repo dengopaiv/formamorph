@@ -71,7 +71,6 @@ vi.mock('@/components/prompt/PlaceholderField', () => ({
 
 vi.mock('./ImageTagsField', () => ({
   ImageGallery: () => null,
-  ImageTags: () => null,
   ImageWidget: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 

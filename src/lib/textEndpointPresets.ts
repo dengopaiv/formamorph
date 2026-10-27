@@ -1,6 +1,6 @@
 import { randomUUID } from '@/lib/uuid';
 import type { Codec } from './usePersistentState';
-import { isDesktop, DEFAULT_LOCAL_LLM_ENDPOINT } from '@/lib/imageGen/desktop';
+import { isDesktop, DEFAULT_LOCAL_LLM_ENDPOINT } from '@/lib/desktop';
 import { DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, HOSTED_ENDPOINT } from '../contexts/settingsDefaults';
 import { normalizeEndpointUrl } from './endpointUrl';
 import {

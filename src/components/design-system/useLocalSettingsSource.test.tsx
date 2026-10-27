@@ -26,7 +26,7 @@ describe('the local defaults match a fresh install', () => {
     expect(freshSettings()[key]).toEqual(LOCAL_SETTINGS_DEFAULTS[key]);
   });
 
-  it.each(['reasoningEffort', 'revealSpec', 'reasoningCapability', 'imageGenDisabled'] as const)('derived %s', (key) => {
+  it.each(['reasoningEffort', 'revealSpec', 'reasoningCapability'] as const)('derived %s', (key) => {
     const { result } = renderHook(() => useLocalSettingsSource(noReport));
     expect(result.current[key]).toEqual(freshSettings()[key]);
   });

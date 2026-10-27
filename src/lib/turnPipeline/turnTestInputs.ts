@@ -36,8 +36,6 @@ export const TEST_PROMPTS: TurnPrompts = {
   diary: 'DIARY <WORLD DESCRIPTION>',
   discoverEntity: 'DISCOVER <WORLD DESCRIPTION>',
   discoverEntityUser: 'Note: <CHARACTER NAME>\n\n<FIRST PASSAGE>\n\n<LATER MATERIAL>',
-  sceneTags: 'TAGS <WORLD DESCRIPTION>',
-  sceneTagsUser: 'Draw: <NARRATION> | In frame: <IN FRAME>',
 };
 
 /** Everything on — the shape the parity capture ran in, so switching one thing off isolates it. */
@@ -54,8 +52,6 @@ export const TEST_SETTINGS: TurnSettings = {
   memoryDigests: true,
   characterDiaries: true,
   describeCharacters: true,
-  imageAttachments: false,
-  promptAttachments: {},
   language: 'English',
   stripLinksAndImages: false,
 };

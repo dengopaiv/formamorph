@@ -1,7 +1,7 @@
 import { render, cleanup } from '@testing-library/react';
 import { describe, it, expect, afterEach } from 'vitest';
 import { EngineDeviceLine, EngineStatusLine, GpuMemoryBox } from './LocalModelStatus';
-import type { LocalLlmState } from '@/lib/imageGen/desktop';
+import type { LocalLlmState } from '@/lib/desktop';
 import type { VramStats } from '@/lib/useVramStats';
 
 afterEach(cleanup);

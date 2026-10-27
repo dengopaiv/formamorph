@@ -127,19 +127,6 @@ describe('World Editor — a Find hit opens the tab holding it', () => {
     expect((await ringed()).closest('[data-find-field]')?.getAttribute('data-find-field')).toMatch(/AI-Facing Description/);
   });
 
-  it('leaves Descriptions for Profile when the hit is in Image Tags', async () => {
-    setup();
-    await selectEntity();
-    openPanelTab('Descriptions');
-    await waitFor(() => expect(shownPanelTab()).toBe('Descriptions'));
-
-    await openFind();
-    await findFirst('oilskin');
-
-    await waitFor(() => expect(shownPanelTab()).toBe('Profile'));
-    const field = await ringed();
-    expect((field as HTMLInputElement).value ?? field.textContent).toContain('oilskin');
-  });
 
   it('leaves Descriptions for Profile and rings the chip when the hit is an alias', async () => {
     setup();

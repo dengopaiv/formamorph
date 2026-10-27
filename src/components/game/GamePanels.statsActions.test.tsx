@@ -31,17 +31,6 @@ describe('Stats panel actions', () => {
     expect(screen.getByRole('spinbutton', { name: 'Vigor' })).toBeInTheDocument();
   });
 
-  it.each(['tags', 'image'] as const)('blocks regeneration during a scene %s job and enables it when the job ends', (sceneImageJob) => {
-    const view = renderRightPanel({ sceneImageJob }, options);
-    expect(regenerate()).toBeDisabled();
-    fireEvent.click(regenerate());
-    expect(view.props.onRegenerateStats).not.toHaveBeenCalled();
-    view.setProps({ sceneImageJob: null });
-    expect(regenerate()).toBeEnabled();
-    fireEvent.click(regenerate());
-    expect(view.props.onRegenerateStats).toHaveBeenCalledExactlyOnceWith(2);
-  });
-
   it.each(['setIsWaitingForAI', 'setIsRevealingNarration'] as const)('blocks regeneration during %s and enables it afterward', (setter) => {
     const view = renderRightPanel({}, { ...options, seed: (gameplay) => gameplay[setter](true) });
     expect(regenerate()).toBeDisabled();

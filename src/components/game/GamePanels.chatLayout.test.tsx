@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { renderMiddlePanel, stubChatLayout, turnHistory, type Settings, type TurnFixture } from '@/test/gamePanels';
 import { setGameplayText } from '@/lib/gameplayTextStore';
 
@@ -8,7 +8,7 @@ vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const TURNS: TurnFixture[] = [
   { action: 'START GAME', narration: 'The ferry bumps the dock at Sedge Landing.', turnId: 't1' },
-  { action: 'I step onto the pier.', narration: 'Boards creak. A gull watches you.', turnId: 't2', sceneTags: 'pier, gull' },
+  { action: 'I step onto the pier.', narration: 'Boards creak. A gull watches you.', turnId: 't2' },
   { action: 'I wave at the gull.', narration: 'The gull does not wave back.', turnId: 't3', choices: ['Leave', 'Wait'] },
 ];
 
@@ -26,9 +26,6 @@ describe('Narration Layout: Pages', () => {
     expect(view.container).toMatchSnapshot();
   });
 });
-
-// A real 7×3 PNG, so the box can take its aspect from the header before the image decodes.
-const PNG_7x3 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAcAAAADCAIAAADQoYKSAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVR4nGM4YWSEiRhIEAUAONkYnWEsh+MAAAAASUVORK5CYII=';
 
 const chat = (settings: Settings) => settings.setNarrationLayout('chat');
 const pager = () => screen.queryByRole('navigation', { name: /pagination/i });
@@ -86,61 +83,5 @@ describe('Narration Layout: Chat', () => {
     await waitFor(() => expect(latest.textContent).toContain('The gull flaps away.'));
     expect(latest.textContent).not.toContain('The gull does not wave back.');
     expect(within(turns[1]).getByTestId('narration').textContent).toBe('Boards creak. A gull watches you.');
-  });
-
-  it('shows scene images inline in their turn, in a box sized before they load', async () => {
-    renderMiddlePanel({}, {
-      turns: TURNS,
-      settings: chat,
-      seed: (g) => g.setSceneImages({ t2: [PNG_7x3], t3: ['https://example.com/scene.png'] }),
-    });
-    const turns = await screen.findAllByRole('article');
-    expect(within(turns[0]).queryByRole('img')).toBeNull();
-    const image = await within(turns[1]).findByRole('img');
-    expect(image.getAttribute('src')).toBe(PNG_7x3);
-    expect(image.parentElement?.style.aspectRatio).toBe('7 / 3');
-    // A linked image has no header to read, so it holds a square box.
-    expect(within(turns[2]).getByRole('img').parentElement?.style.aspectRatio).toBe('1 / 1');
-  });
-
-  describe('the Scene Plate', () => {
-    const IMAGES = [PNG_7x3, 'data:image/png;base64,BBBB'];
-    const render = () => renderMiddlePanel({}, {
-      turns: TURNS,
-      settings: chat,
-      seed: (g) => g.setSceneImages({ t2: IMAGES, t3: IMAGES }),
-    });
-    const plateOf = (turn: HTMLElement) => within(turn).queryByRole('button', { name: 'Zoom image' });
-
-    it('shows one plate under the narration, on the newest image', async () => {
-      render();
-      const turns = await screen.findAllByRole('article');
-      expect(plateOf(turns[0])).toBeNull();
-      const plate = plateOf(turns[1])!;
-      expect(within(turns[1]).getAllByRole('img')).toHaveLength(1);
-      expect(plate.querySelector('img')?.getAttribute('src')).toBe(IMAGES[1]);
-      const narration = within(turns[1]).getByTestId('narration');
-      expect(narration.compareDocumentPosition(plate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    });
-
-    it.each([['a past turn', 1], ['the latest turn', 2]])('browses and zooms on %s', async (_, at) => {
-      render();
-      const turn = (await screen.findAllByRole('article'))[at];
-      expect(within(turn).getByText('2/2')).toBeTruthy();
-      fireEvent.click(within(turn).getByRole('button', { name: 'Previous image' }));
-      expect(plateOf(turn)!.querySelector('img')?.getAttribute('src')).toBe(IMAGES[0]);
-      fireEvent.click(plateOf(turn)!);
-      expect(await screen.findByRole('dialog')).toBeTruthy();
-    });
-
-    it('deletes from the turn whose plate was used, on a past turn and on the latest', async () => {
-      const view = render();
-      const turns = await screen.findAllByRole('article');
-      fireEvent.click(within(turns[1]).getByRole('button', { name: 'Previous image' }));
-      fireEvent.click(within(turns[1]).getByRole('button', { name: 'Delete this image' }));
-      expect(view.props.onDeleteSceneImage).toHaveBeenLastCalledWith('t2', 0);
-      fireEvent.click(within(turns[2]).getByRole('button', { name: 'Delete this image' }));
-      expect(view.props.onDeleteSceneImage).toHaveBeenLastCalledWith('t3', 1);
-    });
   });
 });
