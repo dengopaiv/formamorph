@@ -6,6 +6,8 @@ import path from 'path'
 import { readFileSync, realpathSync } from 'fs'
 import { createRequire } from 'module'
 import { releasedMinorChangelog } from './src/lib/docs/changelogSlice'
+import { shipBundledWorlds } from './scripts/shipBundledWorlds.mjs'
+import { stripSeededWorlds } from './scripts/stripSeededWorlds.mjs'
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
 // The ONNX runtime's dist folder, which its package exports do not expose (src/lib/embeddingWorker.ts).
@@ -88,7 +90,7 @@ const cacheTypesCjs = {
 }
 
 export default defineConfig({
-  plugins: [react(), holdUpdates, docsIndexMarkdown, cacheTypesCjs],
+  plugins: [react(), holdUpdates, docsIndexMarkdown, cacheTypesCjs, shipBundledWorlds(__dirname), stripSeededWorlds()],
   cacheDir: devCacheDir,
   base: './',
   // Expose the package.json version to the app (single source of truth for the app/world/save stamp).
@@ -166,6 +168,9 @@ export default defineConfig({
       'package-lock.json',
       'vite.config.js',
       'src/lib/docs/changelogSlice.ts',
+      'scripts/shipBundledWorlds.mjs',
+      'scripts/stripSeededWorlds.mjs',
+      'scripts/stripWorldImages.mjs',
       'tsconfig*.json',
       '.env*',
     ].map((file) => path.resolve(__dirname, file).replace(/\\/g, '/')),

@@ -160,14 +160,29 @@ export type CatalogToolOverride = Pick<Tool, 'offeredTo' | 'callLimit'>;
 /** Catalog Tool overrides keyed by catalog Tool id; a missing id uses the shipped Tool. */
 export type CatalogToolOverrides = Record<string, CatalogToolOverride>;
 
+/** One stat ask a turn saves: the stat's owner, null for a global stat, and the raw value and max asks. */
+export interface TurnStatAsk {
+  ownerId: string | null;
+  id: string;
+  value: number;
+  max: number;
+}
+
 /**
  * Structured payload the game stores per turn (mirrors the JSON the app round-trips).
  * `turnId`/`summary` are additive memory-digest fields — absent on pre-digest saves.
  */
 export interface AITurnResult {
   narration: string;
+  /** The choices the player sees: the AI's, with the After the AI scripts' edits applied. */
   choices: string[];
+  /** The AI's own choices, when an After the AI script changed the list `choices` holds. Absent, `choices` is the
+   *  AI's list. A stats re-roll starts the scripts' edits from it (Q18). */
+  aiChoices?: string[];
   stat_changes: Array<Record<string, number>>;
+  /** The stat tracker's asks this turn, by owner and stat: the ones Re-generate Choices replays (Q28). Absent ⇒ none,
+   *  or a turn saved before the field, which replays `stat_changes`. */
+  statAsks?: TurnStatAsk[];
   /** Stable per-turn id (`randomUUID()`); powers the digest async-apply guard. */
   turnId?: string;
   /** Lazily-generated memory digest (a short condensed retelling) for this turn. */

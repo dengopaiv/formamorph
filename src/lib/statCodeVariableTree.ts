@@ -301,14 +301,20 @@ export interface TimingGlobals {
   narration: boolean;
   player: boolean;
   trait: boolean;
+  /** `turn`'s members with the access the timing gives them. Absent, every one is read-only. */
+  turn?: readonly SurfaceEntry[];
 }
 
 /** The timing globals of a surface, read off the one list the editor and the menu share. */
-export const timingGlobalsOf = (surface: CodeSurface): TimingGlobals => ({
-  narration: surfaceHasGlobal(surface, 'narration'),
-  player: surfaceHasGlobal(surface, 'player'),
-  trait: surfaceHasGlobal(surface, 'trait'),
-});
+export const timingGlobalsOf = (surface: CodeSurface): TimingGlobals => {
+  const turn = surface.members.get('turn');
+  return {
+    narration: surfaceHasGlobal(surface, 'narration'),
+    player: surfaceHasGlobal(surface, 'player'),
+    trait: surfaceHasGlobal(surface, 'trait'),
+    ...(turn && { turn }),
+  };
+};
 
 /** A call on `player` inserts complete, with the caret between the quotes of its question. */
 function playerFields(): VariableNode[] {
@@ -433,6 +439,7 @@ export function buildVariableTree(
   const top: VariableNode[] = [
     ...selfGroup,
     ...(owner ? [{ kind: 'group' as const, label: 'Owner', info: ownerInfo(self), children: ownerChildren(owner) }] : []),
+    ...timingGroups(timing),
     nameList('Stats', statRows, 'No stats in this world', globalInfo('stats')),
     nameList('Traits', traitList, 'No traits in this world', globalInfo('traits')),
     nameList('Entities', entityRows, 'No entities in this world', globalInfo('entities')),
@@ -440,15 +447,20 @@ export function buildVariableTree(
     nameList('Placeholders', placeholderList, 'No placeholders in this world', globalInfo('placeholders')),
     nameList('Dictionaries', dictionaryRows, 'No dictionaries in this world', globalInfo('dictionaries')),
     { kind: 'group', label: 'Clock', info: globalInfo('clock'), children: clockFields(root('clock')) },
-    { kind: 'group', label: 'Turn', info: globalInfo('turn'), children: fields(root('turn'), TURN_MEMBERS) },
+    { kind: 'group', label: 'Turn', info: globalInfo('turn'), children: fields(root('turn'), timing.turn ?? TURN_MEMBERS) },
     nameList('Locations', locationRows, 'No locations in this world', globalInfo('locations')),
     { kind: 'group', label: 'Location', info: globalInfo('location'), children: locationFields() },
     { kind: 'group', label: 'Discover', info: globalInfo('discover'), children: [topCallField('discover', '"Name"')] },
     { kind: 'group', label: 'Memories', info: globalInfo('memories'), children: memoryFields() },
     { kind: 'field', label: 'notes', detail: 'string', info: globalInfo('notes') ?? '', access: 'readOnly', insert: 'notes' },
-    ...timingGroups(timing),
   ];
-  return top.map(verbsLast).map(leafForOneChild);
+  return groupsFieldsVerbs(top.map(verbsLast).map(leafForOneChild));
+}
+
+/** The top level with groups first, then fields, then verbs, each set keeping its order. */
+function groupsFieldsVerbs(nodes: readonly VariableNode[]): VariableNode[] {
+  const rank = (node: VariableNode): number => (node.kind !== 'field' ? 0 : isVerbLeaf(node) ? 2 : 1);
+  return [0, 1, 2].flatMap((at) => nodes.filter((node) => rank(node) === at));
 }
 
 /** Whether a leaf is a verb: its insert ends in a call, or its detail is a function type. */

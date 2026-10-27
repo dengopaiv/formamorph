@@ -23,12 +23,13 @@ export type ScriptNotice = Extract<ScriptPromptRequest, { kind: 'tell' | 'toast'
 export const isNotice = (request: ScriptPromptRequest): request is ScriptNotice =>
   request.kind === 'tell' || request.kind === 'toast';
 
-/** What each kind's answer holds: `ask` answers with option indexes, one or a list with `multiple`. */
+/** What each kind's answer holds: `ask` answers with option indexes, one or a list with `multiple`, and a
+ *  single `ask` with nothing picked answers `null`. */
 export interface ScriptPromptAnswers {
   tell: undefined;
   toast: undefined;
   confirm: boolean;
-  ask: number | number[];
+  ask: number | number[] | null;
   input: string;
 }
 
@@ -115,7 +116,7 @@ export function createScriptPromptStore(mintId: () => string = randomUUID): Scri
     prompt(request) {
       type Answer = ScriptPromptAnswer<typeof request.kind>;
       if (!listeners.size) {
-        if (isNotice(request)) return Promise.resolve(undefined as Answer);
+        if (isNotice(request)) return Promise.resolve(answerAs<typeof request.kind>(undefined));
         return Promise.reject(new PromptCanceled());
       }
       const id = mintId();
@@ -137,6 +138,10 @@ export function createScriptPromptStore(mintId: () => string = randomUUID): Scri
   };
 }
 
+/** A host answers the request union; the generic `prompt` signature wants the answer of the one kind asked. */
+const answerAs = <K extends ScriptPromptKind>(answer: ScriptPromptAnswer | undefined): ScriptPromptAnswer<K> =>
+  answer as ScriptPromptAnswer<K>;
+
 /** Close every open prompt of `store`: each script fails as canceled (Q15). */
 export const cancelOpenPrompts = (store: ScriptPromptStore): void =>
   store.pending().forEach(({ id }) => store.cancel(id));
@@ -156,10 +161,21 @@ export function noticeHost(asks: ScriptPromptHost, handlers: ScriptNoticeHandler
       if (!isNotice(asked)) return asks.prompt(request);
       if (asked.kind === 'tell') handlers.onTell(asked.text);
       else handlers.onToast(asked.text);
-      return Promise.resolve(undefined as ScriptPromptAnswer<typeof request.kind>);
+      return Promise.resolve(answerAs<typeof request.kind>(undefined));
     },
   };
 }
+
+/** A host that shows nothing and answers at once, as a player who picks nothing would (Q20). */
+export const silentPrompts: ScriptPromptHost = {
+  prompt(request) {
+    const asked: ScriptPromptRequest = request;
+    const answer: ScriptPromptAnswer = asked.kind === 'confirm' ? false
+      : asked.kind === 'ask' ? (asked.multiple ? [] : null)
+        : asked.kind === 'input' ? '' : undefined;
+    return Promise.resolve(answerAs<typeof request.kind>(answer));
+  },
+};
 
 /** `host` with every ask, confirm and input stamped with `asker`; a tell or toast passes unchanged. */
 export function askedBy(host: ScriptPromptHost, asker: string): ScriptPromptHost {

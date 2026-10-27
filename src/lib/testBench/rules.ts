@@ -42,13 +42,14 @@ import {
 } from '@/lib/statCodeTargets';
 import { worldScriptList, type ListedScript } from '@/lib/worldScripts';
 import { estimateTokens } from '@/lib/memoryUtils';
-import { entityImageData, entityImages } from '@/lib/entityImages';
+import { entityImages } from '@/lib/entityImages';
 import { locationImages } from '@/lib/locationImages';
 import {
-  dataUrlBytes, dataUrlMime, dataUrlRealMime, imageFormatLabel, isConvertibleImage, isRemoteImage,
+  dataUrlBytes, dataUrlMime, dataUrlRealMime, imageFormatLabel, isConvertibleImage,
   relabelDataUrl, sniffDataUrlMime,
 } from '@/lib/imageBytes';
-import { formatBytes, IMAGE_CAPS, type ImageCap } from '@/lib/imageOptim';
+import { formatBytes, type ImageCap } from '@/lib/imageOptim';
+import { worldImageItems, type MediaItem } from '@/lib/mediaIndex';
 import { clamp } from '@/lib/utils';
 import { entityTexts } from '@/lib/entityTexts';
 import { overviewTexts } from '@/lib/overviewTexts';
@@ -58,7 +59,7 @@ import {
 } from '@/lib/owners';
 import { partOf, scopedEntries, scopeKey, type OwnerId } from '@/lib/scope';
 import {
-  NO_ACTIVE, activeOf, alwaysOnOverMax, gateTrees, gateTreeOf, complementary, deadRows, gateOf, gateStates, groupPickState, neverUnlockable, sameRequirement, settleDefaults,
+  NO_ACTIVE, activeOf, alwaysOnOverMax, gateTrees, gateTreeOf, complementary, deadRows, gateOf, gateStates, globalItems, groupPickState, neverUnlockable, sameRequirement, settleDefaults,
   unstableCycles, type GateScopeTree, type GateInput, type GateOwner, type GateState, type GateStat, type GateStatSet, type GateStates, type GateStats, type GateTraitRef,
 } from '@/lib/traitGates';
 import { startingGateStats } from '@/lib/gateStats';
@@ -2617,13 +2618,16 @@ interface ZeroSpanImageCondition {
 
 interface ImageRuleReport {
   missing: DeadImageCondition[];
-  /** Entities whose every image carries a rule, with no two images covering complementary Conditions. */
+  /** Entities whose every image carries a rule, with no complementary pair and no full set of required picks. */
   hideable: Entity[];
   zeroSpans: ZeroSpanImageCondition[];
 }
 
 /** The image-rule findings, once per world object. A ruled image reads as a stand-in trait on its entity's owner,
  *  so a Condition resolves as it does in a trait gate. */
+/** The most pick combinations the all-hideable check walks before it gives up and reports. */
+const MAX_PICK_COMBINATIONS = 4096;
+
 const imageReportsByWorld = new WeakMap<RuleWorld, ImageRuleReport>();
 const imageReportOf = (world: RuleWorld): ImageRuleReport => {
   let report = imageReportsByWorld.get(world);
@@ -2644,6 +2648,34 @@ const imageReportOf = (world: RuleWorld): ImageRuleReport => {
   const owners = [...input.owners.map((o) => swapped.get(o.id) ?? o), ...[...swapped.values()].filter((o) => !input.owners.some((x) => x.id === o.id))];
   const states = gateStates({ ...input, owners, stats });
   const readFrom = (entity: Entity, req: StatRequirement): OwnerId[] => statReadOwners(world, stats, entity.id, req);
+  const globals = globalItems(input).traits;
+  /** Whether every way to fill the required groups the rows name leaves a row holding. A row counts when each
+   *  Condition is a plain same-owner trait placed directly in a group with a minimum and maximum of one. */
+  const picksCovered = (ownerId: string, images: readonly GalleryImage[]): boolean => {
+    const own = owners.find((o) => o.id === ownerId);
+    const picks = new Map<string, string[]>();
+    const rows: string[][] = [];
+    for (const row of images.flatMap((img) => img.requires ?? [])) {
+      const found = row.all.map((req) => {
+        if (req.kind !== 'trait' || req.not || req.owner) return null;
+        // Same Owner reads the entity's own trait, else a global one (Q10).
+        const tree = own?.traits.some((t) => t.id === req.id) ? own : globals.has(req.id) ? gateTreeOf(input, null) : undefined;
+        const groupId = tree?.traits.find((t) => t.id === req.id)?.groupId;
+        const group = tree?.groups.find((g) => g.id === groupId);
+        return tree && group?.minPicks === 1 && group.maxPicks === 1 ? { tree, group, id: req.id } : null;
+      });
+      // Any other row only adds showings, so the cover must come without it.
+      if (found.some((f) => !f)) continue;
+      for (const f of found) picks.set(`${scopeKey(f!.tree.id)} ${f!.group.id}`, f!.tree.traits.filter((t) => t.groupId === f!.group.id).map((t) => t.id));
+      rows.push(found.map((f) => f!.id));
+    }
+    const groups = [...picks.values()];
+    if (!rows.length || groups.reduce((n, g) => n * g.length, 1) > MAX_PICK_COMBINATIONS) return false;
+    const holds = (chosen: string[], rest: string[][]): boolean => (rest.length === 0
+      ? rows.some((ids) => ids.every((id) => chosen.includes(id)))
+      : rest[0].every((pick) => holds([...chosen, pick], rest.slice(1))));
+    return holds([], groups);
+  };
 
   const missing: DeadImageCondition[] = [];
   const hideable: Entity[] = [];
@@ -2674,7 +2706,7 @@ const imageReportOf = (world: RuleWorld): ImageRuleReport => {
       const req = img.requires?.length === 1 && img.requires[0].all.length === 1 ? img.requires[0].all[0] : null;
       return req && !stateOf(i)?.rows[0]?.conditions[0]?.unresolved ? [req] : [];
     });
-    const covered = single.some((a, i) => single.some((b, j) => j > i && complementary(a, b)));
+    const covered = single.some((a, i) => single.some((b, j) => j > i && complementary(a, b))) || picksCovered(entity.id, images);
     if (!covered) hideable.push(entity);
   }
   report = { missing, hideable, zeroSpans };
@@ -2707,7 +2739,7 @@ const entityImagesAllHideable: Rule = {
     const item = asItem(entity, world);
     return finding(
       entityImagesAllHideable,
-      `${quote(item.name)} can end up with no image — every image has a Visibility rule, and no two images cover a Condition and its opposite`,
+      `${quote(item.name)} can end up with no image — every image has a Visibility rule, and the rules cover neither a Condition and its opposite nor every pick of a required one-pick group`,
       [item],
     );
   }),
@@ -3490,31 +3522,77 @@ const dictionaryKeywordSubstring: Rule = {
   },
 };
 
+/** One write of an entry's `enabled` in code. A null name is computed, so it may be any book or entry. */
+interface EntryEnabledWrite {
+  book: string | null;
+  entry: string | null;
+}
+
+// A `.name` or a plain string key; any other bracket is a computed name.
+const LITERAL_KEY = /^\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*(?:"([^"\\\n]*)"|'([^'\\\n]*)'|`([^`\\$]*)`)\s*\])/;
+const ANY_KEY = /^\s*(?:\.\s*[A-Za-z_$][\w$]*|\[[^\]]*\])/;
+const ENABLED_ASSIGN = /^\s*\.\s*enabled\s*=(?!=)/;
+const BOOK_BEFORE = /\bdictionaries\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*(?:"([^"\\\n]*)"|'([^'\\\n]*)')\s*\])\s*$/;
+
+/** The key a member access starts with, null when computed. */
+const keyAt = (code: string): { name: string | null; length: number } | undefined => {
+  const literal = LITERAL_KEY.exec(code);
+  if (literal) return { name: literal.slice(1).find((group) => group !== undefined) ?? '', length: literal[0].length };
+  const computed = ANY_KEY.exec(code);
+  return computed ? { name: null, length: computed[0].length } : undefined;
+};
+
+/** Every `….entries[…].enabled = …` in the code. A book reached any way but `dictionaries.Name` is unknown. */
+const entryEnabledWrites = (code: string): EntryEnabledWrite[] => [...code.matchAll(/\.\s*entries\b/g)].flatMap((match) => {
+  const after = match.index + match[0].length;
+  const key = keyAt(code.slice(after));
+  if (!key || !ENABLED_ASSIGN.test(code.slice(after + key.length))) return [];
+  const book = BOOK_BEFORE.exec(code.slice(0, match.index));
+  return [{ book: book ? book.slice(1).find((group) => group !== undefined) ?? '' : null, entry: key.name }];
+});
+
+/** Every filled script's code and every Tool script handler's code. */
+const allScriptCode = (world: RuleWorld): string[] => [
+  ...ruleScripts(world).map(({ listed }) => listed.box.code),
+  ...(world.tools ?? []).flatMap((tool) => (tool.handler.kind === 'script' ? [tool.handler.code] : [])),
+];
+
 /** Deliberately not in the matching subset: the tracer already grays a muted book and its entries with the
- *  reason on the row, and the rule would say it a second time in the same place. */
+ *  reason on the row, and the rule would say it a second time in the same place. A disabled entry that any
+ *  script may switch on is authored that way, so it is left alone. */
 const dictionaryDisabled: Rule = {
   id: 'dictionary-disabled',
   severity: 'info',
   section: 'dictionary',
   advanced: true,
   summary: (count) => `${count} dictionary books or entries are disabled`,
-  check: (world) => (world.dictionaries ?? []).flatMap((bookRecord) => {
-    if (bookRecord.enabled === false) {
-      const item = namedItem(bookRecord.id, bookRecord.name, world);
-      // The book is the broader diagnosis, so its entries' own toggles aren't repeated under it.
-      return [finding(
-        dictionaryDisabled,
-        `The book ${quote(item.name)} is disabled — none of its entries can fire`,
-        [item],
-      )];
-    }
-    return (bookRecord.entries ?? [])
-      .filter((entry) => entry.enabled === false)
-      .map((entry) => {
-        const item = entryItem(entry, world);
-        return finding(dictionaryDisabled, `${quote(item.name)} is disabled and can’t fire`, [item]);
-      });
-  }),
+  check: (world) => {
+    const writes = allScriptCode(world).flatMap(entryEnabledWrites);
+    const placeholders = allPlaceholders(world);
+    return (world.dictionaries ?? []).flatMap((bookRecord) => {
+      if (bookRecord.enabled === false) {
+        const item = namedItem(bookRecord.id, bookRecord.name, world);
+        // The book is the broader diagnosis, so its entries' own toggles aren't repeated under it.
+        return [finding(
+          dictionaryDisabled,
+          `The book ${quote(item.name)} is disabled — none of its entries can fire`,
+          [item],
+        )];
+      }
+      const bookName = statCodeName(bookRecord.name, placeholders);
+      const bookWrites = writes.filter((write) => write.book === null || write.book === bookName);
+      return (bookRecord.entries ?? [])
+        .filter((entry) => entry.enabled === false)
+        .filter((entry) => {
+          const entryName = statCodeName(entry.name, placeholders);
+          return !bookWrites.some((write) => write.entry === null || write.entry === entryName);
+        })
+        .map((entry) => {
+          const item = entryItem(entry, world);
+          return finding(dictionaryDisabled, `${quote(item.name)} is disabled and no script switches it on — it can’t fire`, [item]);
+        });
+    });
+  },
 };
 
 // ── The world itself ──────────────────────────────────────────────────────────────────────────────────────
@@ -3550,20 +3628,21 @@ const worldNoReadme: Rule = {
   )],
 };
 
-/** Every embedded image with its display budget — the same slots the Optimize Images action walks. Only the
- *  byte budget is checked: measuring pixels needs a decode the live pass can't afford, so anything this
- *  flags, that action also flags — never the reverse. */
-const embeddedImageSlots = (world: RuleWorld): Array<{ item: FindingItem; url: string; cap: ImageCap }> => [
-  ...(world.worldOverview?.thumbnail
-    ? [{ item: worldItem(world), url: world.worldOverview.thumbnail, cap: IMAGE_CAPS.thumbnail }]
-    : []),
-  ...(world.entities ?? []).flatMap((e) => entityImageData(e).map((url) => ({
-    item: { ...asItem(e, world), section: 'entities' as const }, url, cap: IMAGE_CAPS.entity,
-  }))),
-  ...(world.locations ?? []).flatMap((l) => locationImages(l).map((img) => ({
-    item: namedItem(l.id, l.name, world, 'locations'), url: img.data, cap: IMAGE_CAPS.background,
-  }))),
-];
+/** Every image with its display budget and the Media tab's Over Budget flag — the same slots the Optimize
+ *  Images action walks. Only the byte budget is checked: measuring pixels needs a decode the live pass can't
+ *  afford, so anything this flags, that action also flags — never the reverse. */
+const embeddedImageSlots = (world: RuleWorld): Array<{ item: FindingItem; url: string; cap: ImageCap; overBudget: boolean }> =>
+  worldImageItems(world).map((media) => ({ item: imageOwner(media, world), url: media.value, cap: media.budget, overBudget: media.overBudget }));
+
+/** The row an image's finding opens: its entity or location, the world for the thumbnail, else its Media card. */
+const imageOwner = (media: MediaItem, world: RuleWorld): FindingItem => {
+  const { kind, id, name } = media.parent;
+  const entity = kind === 'entity' ? world.entities?.find((e) => e.id === id) : undefined;
+  if (entity) return { ...asItem(entity, world), section: 'entities' };
+  if (kind === 'location') return namedItem(id, name, world, 'locations');
+  if (kind === 'world') return worldItem(world);
+  return { id: media.id, name, section: 'media' };
+};
 
 const worldOversizedImages: Rule = {
   id: 'world-oversized-images',
@@ -3571,8 +3650,7 @@ const worldOversizedImages: Rule = {
   section: 'overview',
   summary: (count) => `${count} embedded images are over their size budget — Optimize Images can shrink them`,
   check: (world) => embeddedImageSlots(world)
-    // A linked image contributes no bytes to the world, so no budget applies.
-    .filter(({ url, cap }) => !isRemoteImage(url) && dataUrlBytes(url) > cap.maxBytes)
+    .filter(({ overBudget }) => overBudget)
     .map(({ item, url, cap }) => finding(
       worldOversizedImages,
       `${quote(item.name)}’s image is ${formatBytes(dataUrlBytes(url))}, over its ${formatBytes(cap.maxBytes)} budget — Optimize Images can shrink it`,

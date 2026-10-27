@@ -52,7 +52,7 @@ export const GRAPH_COVERED = {
   'scripts/fetchLlamaServer.test.mjs': 'reads its recorded asset list and its own temp folders',
   'scripts/moveReach.test.mjs':'reads its own temp folder and walks src/lib/uuid.ts, whose closure it never asserts',
   'testing/baseline/harness/planning-parser-probe.test.ts': 'reads files only under PARSER_PROBE=1',
-  'src/test/preRefreshWorlds.ts': 'reads the worlds from one fixed commit, which no change alters',
+  'src/test/bundledRevisions.ts': 'reads the worlds from fixed commits, which no change alters',
   'electron/modelDownload.cjs': 'reads only the paths its caller passes',
   'electron/modelMove.cjs': 'reads only the paths its caller passes',
   'electron/modelScan.cjs': 'reads only the paths its caller passes',
@@ -66,6 +66,10 @@ export const GRAPH_COVERED = {
   'scripts/moveReach.mjs': 'reads only the probe file its caller passes; the compiler walks the files the probe names',
   'scripts/testSelection.mjs': 'runs git only in the helpers the gate scripts call',
   'vite.config.js': 'a change to it runs the full suite',
+  'scripts/shipBundledWorlds.mjs': 'reads only the world file its caller names; a change to it runs the full suite',
+  'scripts/stripSeededWorlds.mjs': 'reads only the world file an import names; a change to it runs the full suite',
+  'scripts/stripWorldImages.mjs': 'reads files only in its command-line run, which no test calls; a change to it runs the full suite',
+  'src/lib/shippedWorld.ts': 'reads its own import graph and its cache in node_modules/.cache',
 };
 
 /**
@@ -77,15 +81,15 @@ export const PATH_TRIGGERS = {
   'docs/*.md': ['src/lib/docs/bundledDocsIndex.ts', 'src/lib/docs/docsCoverage.test.ts', 'src/lib/docs/bundledDocsIndex.test.ts', 'src/lib/codeGuideLinks.test.ts'],
   'src/index.css': ['src/lib/landingPulse.test.ts'],
   'index.html': ['src/components/themeBootstrap.test.ts'],
-  'src/defaultworlds/*.json': ['src/services/WorldStorageService.ts', 'src/lib/perTurnSettle.parity.test.ts', 'src/lib/bundledPlayerStats.test.ts', 'src/lib/bundledWorlds.test.ts', 'src/views/GameViewer.bundledSaves.test.tsx', 'src/lib/ownerTreeParity.test.ts', 'src/lib/seedRule.bundled.test.ts'],
+  'src/defaultworlds/*.json': ['src/lib/bundledWorldText.ts', 'src/test/bundledWorldFiles.ts', 'src/lib/perTurnSettle.parity.test.ts', 'src/lib/bundledPlayerStats.test.ts', 'src/lib/bundledWorlds.test.ts', 'src/views/GameViewer.bundledSaves.test.tsx', 'src/lib/ownerTreeParity.test.ts', 'src/lib/seedRule.bundled.test.ts', 'src/lib/shippedWorld.test.ts', 'scripts/shipBundledWorlds.test.ts'],
   'src/lib/__parity__/*.json': ['src/lib/ownerTreeParity.test.ts'],
   'src/defaultworlds/drone.json': ['src/lib/droneWorld.test.ts'],
-  'src/defaultworlds/emberwatch.json': ['src/lib/emberwatchWorld.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
+  'src/defaultworlds/emberwatch.json': ['src/lib/emberwatchWorld.test.ts', 'src/lib/emberwatchWorld.scripts.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
   'src/defaultworlds/slime.json': ['src/lib/slimeWorld.test.ts'],
   'src/defaultworlds/rampage.json': ['src/lib/rampageWorld.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
   'src/defaultworlds/open-chat.json': ['src/lib/openChatWorld.test.ts', 'src/components/game/GamePrompts.globalBlocks.test.ts'],
   'src/defaultworlds/sugarscape.json': ['src/lib/sugarscapeWorld.test.ts'],
-  'src/defaultworlds/valentines.json': ['src/lib/valentinesWorld.test.ts'],
+  'src/defaultworlds/valentines.json': ['src/lib/valentinesWorld.test.ts', 'src/services/WorldStorageService.strippedSeed.test.ts'],
   'src/defaultworlds/veilwood.json': ['src/lib/veilwoodWorld.test.ts'],
   'testing/parity/turn-pipeline-parity.json': ['src/lib/turnPipeline/parityFixture.test.ts', 'src/lib/turnPipeline/parityTestInputs.ts'],
   // The proxy forks the host as a child process instead of importing it.
@@ -140,4 +144,14 @@ export function relatedFiles(changed, requirers) {
   }
   for (const test of Object.keys(ALWAYS_RUN)) out.add(test);
   return [...out].sort();
+}
+
+/** The gate's options after `<base>`, or null when they do not parse; a project run passes when it has no related file. */
+export function gateOptions(args) {
+  const [flag, name, ...extra] = args;
+  if (extra.length) return null;
+  if (flag === undefined) return { list: false, vitest: [] };
+  if (flag === '--list' && name === undefined) return { list: true, vitest: [] };
+  if (flag === '--project' && name && !name.startsWith('-')) return { list: false, vitest: ['--project', name, '--passWithNoTests'] };
+  return null;
 }

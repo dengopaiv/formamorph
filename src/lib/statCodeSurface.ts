@@ -9,7 +9,7 @@
  */
 
 import {
-  DELTA_SOURCES, PLACEHOLDER_WRITABLE_FIELD, SELF_WRITABLE_FIELDS, TRAIT_WRITABLE_FIELD, type DeltaSource,
+  DELTA_SOURCES, DICTIONARY_ENTRY_WRITABLE_FIELDS, DICTIONARY_WRITABLE_FIELD, PLACEHOLDER_WRITABLE_FIELD, SELF_WRITABLE_FIELDS, TRAIT_WRITABLE_FIELD, type DeltaSource,
 } from '@/lib/statCodeExecutor';
 import { nearestName, readOnlyEntries, surfaceKnownNames, withAccess, type CodeSurface, type SurfaceEntry } from '@/lib/codeSurface';
 import { STAT_CODE_GUIDE_LINKS } from '@/lib/codeGuideLinks';
@@ -41,9 +41,14 @@ export const CLOCK_MEMBERS: readonly SurfaceEntry[] = readOnlyEntries([
 
 /** The members of `turn`: the player's action and the turn number. Read-only. */
 export const TURN_MEMBERS: readonly SurfaceEntry[] = readOnlyEntries([
-  { name: 'action', detail: 'string', info: 'The player’s action this turn, OOC brackets included. On the opening turn, the opening the AI gets. Empty on an Opening Narration and between turns.' },
+  { name: 'action', detail: 'string', info: 'The player’s action this turn, OOC brackets included. On the opening turn, it’s the opening the AI gets. It’s empty on an Opening Narration and between turns.' },
   { name: 'number', detail: 'number', info: 'Turn number on the scale of memories[].turn: 1 on the opening turn, 0 before it. Between turns, the last turn that ended.' },
+  { name: 'narration', detail: 'string', info: 'The page the player sees this turn, with During AI Output rewrites applied. It’s empty until After the AI. Between turns, the last turn’s page.' },
+  { name: 'choices', detail: 'string[]', info: 'The choices the player sees this turn, in order. It’s empty until After the AI, and when choices are off. An After the AI script can edit the list. Between turns, the last turn’s choices.' },
 ]);
+
+/** `turn`'s members in an After the AI script, where `choices` takes a write (Q21). */
+export const AFTER_TURN_MEMBERS: readonly SurfaceEntry[] = withAccess(TURN_MEMBERS, ['choices'], 'writable');
 
 /** The members of one entry in `locations`. None takes a write. */
 export const LOCATION_ENTRY_FIELDS: readonly SurfaceEntry[] = readOnlyEntries([
@@ -115,7 +120,7 @@ export const SANDBOX_GLOBALS: readonly SurfaceEntry[] = [
   { name: 'owner', detail: 'object', info: 'The entity that owns this stat, with the fields of an entities entry. A Blueprint stat’s code runs once for each owner. It’s empty in a global stat. Use owner.stats["Two Words"] for a name with a space.' },
   { name: 'stats', detail: 'object', info: 'The global stats by name, in every stat’s code. An entity’s own are on owner.stats. Use stats["Two Words"] for a name with a space.' },
   { name: 'clock', detail: shapeOf(CLOCK_MEMBERS), info: 'The story clock', access: 'readOnly' },
-  { name: 'turn', detail: shapeOf(TURN_MEMBERS), info: 'The player’s action and the turn number. Test Code and the Test Bench read a sample action at turn 2. At Game Start reads the opening at turn 1.', access: 'readOnly' },
+  { name: 'turn', detail: shapeOf(TURN_MEMBERS), info: 'The player’s action, the turn number, and the turn’s page and choices. Test Code and the Test Bench read a sample action at turn 2. In an After the AI script, they also read a sample page and choices. An At Game Start script reads the opening at turn 1.', access: 'readOnly' },
   { name: 'locations', detail: 'object', info: 'Every location in the world by name, with the entities at each. Use locations["Two Words"] for a name with a space.' },
   { name: 'location', detail: shapeOf(LOCATION_MEMBERS), info: 'The location the turn is at, with the fields of a locations entry. Call location.move to move it.', access: 'readOnly' },
   { name: 'discover', detail: '(name, description?) => void', info: 'Adds a new entity to the turn, described by the AI unless you pass a description. A name an entity already has does nothing.' },
@@ -165,11 +170,12 @@ export const STAT_FIELDS: readonly SurfaceEntry[] = withAccess([
   { name: 'value', detail: 'number', info: 'Current value, with this turn’s AI change and regen applied' },
   { name: 'regen', detail: 'number', info: 'Regen per story hour, with traits applied' },
   { name: 'hidden', detail: 'boolean', info: 'True when the stat is hidden from the player. The AI still reads it. Set it to hide or show the stat.' },
+  { name: 'descriptor', detail: 'string', info: 'Text of the band the value falls in, with chips filled in, as the AI reads it. It’s empty when no band applies.' },
   { name: 'previous', detail: 'Stat', info: 'The whole stat at the start of this turn' },
   { name: 'delta', detail: shapeOf(DELTA_MEMBERS), info: 'Every change this turn made to the stat, by source' },
 ], SELF_WRITABLE_FIELDS, 'writable');
 
-export { PLACEHOLDER_WRITABLE_FIELD, SELF_WRITABLE_FIELDS, TRAIT_WRITABLE_FIELD } from '@/lib/statCodeExecutor';
+export { DICTIONARY_ENTRY_WRITABLE_FIELDS, DICTIONARY_WRITABLE_FIELD, PLACEHOLDER_WRITABLE_FIELD, SELF_WRITABLE_FIELDS, TRAIT_WRITABLE_FIELD } from '@/lib/statCodeExecutor';
 
 /** The fields on a stat's `previous`: the whole stat as it stood at the start of this turn. Read-only. */
 export const PREVIOUS_FIELDS: readonly SurfaceEntry[] = readOnlyEntries([
@@ -182,6 +188,7 @@ export const PREVIOUS_FIELDS: readonly SurfaceEntry[] = readOnlyEntries([
   { name: 'value', detail: 'number', info: 'Value at the start of this turn' },
   { name: 'regen', detail: 'number', info: 'Regen per story hour at the start of this turn, with traits applied' },
   { name: 'hidden', detail: 'boolean', info: 'True when the stat is hidden from the player, at the start of this turn' },
+  { name: 'descriptor', detail: 'string', info: 'Text of the band the value fell in at the start of this turn' },
 ]);
 
 /**
@@ -263,21 +270,24 @@ export const ENTITY_FIELDS: readonly SurfaceEntry[] = readOnlyEntries([
   { name: 'diary', detail: '(line) => void', info: 'Adds a line to the entity’s diary for this turn, after the AI’s entry. An entity the game doesn’t have stops the script with an error.' },
 ], OWNER_MAPS);
 
-/** The members of one entry in a dictionary's `entries`. None takes a write. */
-export const DICTIONARY_ENTRY_FIELDS: readonly SurfaceEntry[] = readOnlyEntries([
+/** The members of one entry in a dictionary's `entries`. Only `enabled` and `constant` take a write. */
+export const DICTIONARY_ENTRY_FIELDS: readonly SurfaceEntry[] = withAccess([
   { name: 'id', detail: 'string', info: 'Unique id of the entry' },
   { name: 'name', detail: 'string', info: 'Code name of the entry' },
   { name: 'keys', detail: 'string[]', info: 'Trigger Keywords of the entry, where a match in a message activates it' },
   { name: 'value', detail: 'string', info: 'Value of the entry: the text the AI gets when the entry activates' },
-]);
+  { name: 'enabled', detail: 'boolean', info: 'True when the entry is on and can reach the AI' },
+  { name: 'constant', detail: 'boolean', info: 'True when the AI gets the entry on every turn, with no keyword match' },
+], DICTIONARY_ENTRY_WRITABLE_FIELDS, 'writable');
 
-/** The members of one entry in `dictionaries`. None takes a write. */
-export const DICTIONARY_FIELDS: readonly SurfaceEntry[] = readOnlyEntries([
+/** The members of one entry in `dictionaries`. Only `enabled` takes a write. */
+export const DICTIONARY_FIELDS: readonly SurfaceEntry[] = withAccess([
   { name: 'id', detail: 'string', info: 'Unique id of the dictionary' },
   { name: 'name', detail: 'string', info: 'Code name of the dictionary' },
-  { name: 'entries', detail: 'object', info: 'The dictionary’s entries by name, each with id, name, keys and value. A disabled entry isn’t listed. Use dictionaries.Lore.entries["Two Words"] for a name with a space.' },
+  { name: 'enabled', detail: 'boolean', info: 'True when the dictionary is on, so the AI can get its entries. A dictionary the player turned off reads as an unknown one.' },
+  { name: 'entries', detail: 'object', info: 'The dictionary’s entries by name, each with id, name, keys, value, enabled and constant. It lists disabled entries too. Use dictionaries.Lore.entries["Two Words"] for a name with a space.' },
   { name: 'placeholders', detail: 'object', info: 'The dictionary’s own placeholders by name. Use dictionaries.Lore.placeholders["Two Words"] for a name with a space.' },
-], [...OWNER_MAPS, 'entries']);
+], [DICTIONARY_WRITABLE_FIELD], 'writable', [...OWNER_MAPS, 'entries']);
 
 /** Built-ins the VM already has. Listed so a reference to one isn't flagged, and so completions offer the
  *  handful that stat code actually reaches for rather than everything a JS engine defines. */
@@ -458,13 +468,13 @@ const timingObject = (timing: ScriptTiming) => (timing === 'output'
   : { global: PLAYER_GLOBAL, members: PLAYER_CALL_ENTRIES });
 
 /** A script box's surface: its home's, with the names its timing adds. `narration` is During AI Output's, and
- *  `player` is every other timing's. `trait` is When a Trait Switches's. */
+ *  `player` is every other timing's. `trait` is When a Trait Switches's. After the AI's `turn.choices` takes a write. */
 export const scriptSurface = (surface: CodeSurface, timing: ScriptTiming): CodeSurface => {
   const { global, members } = timingObject(timing);
   return {
     ...surface,
     globals: [...surface.globals, global, ...(timing === 'switch' ? [SWITCHED_TRAIT_GLOBAL] : [])],
-    members: new Map([...surface.members, [global.name, members]]),
+    members: new Map([...surface.members, [global.name, members], ...(timing === 'after' ? [['turn', AFTER_TURN_MEMBERS] as const] : [])]),
   };
 };
 

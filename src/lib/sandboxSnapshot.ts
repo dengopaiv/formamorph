@@ -5,9 +5,9 @@
  */
 import type { Entity, Placeholder, Stat, Trait } from '@/types';
 import {
-  executeStatCode, keyedEntities, type EntityTraitWrites, type KeyedEntities, type NarrationInput, type SandboxEntity, type SandboxPlace,
+  EMPTY_REPLY, executeStatCode, keyedEntities, type EntityTraitWrites, type KeyedEntities, type NarrationInput, type SandboxEntity, type SandboxPlace,
   type SandboxLocationLinks, type SandboxPlaceholderNode, type SandboxPlaces, type SandboxStats, type SandboxTrait, type StatCodeResult, type StatCodeRunOptions, type StatTurnInputs,
-  type SwitchedTrait, type TraitWrite,
+  type SandboxTurn, type SwitchedTrait, type TraitWrite,
 } from './statCodeExecutor';
 import { statCodeName, statCodeNamed } from './statCodeNames';
 import { navigableDestinationEntries } from './locationContext';
@@ -18,6 +18,7 @@ import {
 import { codeEntities, sandboxTraits, worldTraitPlaces, type CodeEntities, type CodeEntity } from './statCodeTraits';
 import { sampleNarration, sampleSwitchedTrait } from './scriptTestSamples';
 import { randomUUID } from './uuid';
+import { withLoreToggles } from './loreToggles';
 import { gateStatsOf, type TraitRuntimeState, type TraitSwitchEvent, type TraitWorld } from './traitRuntime';
 import { activeStatEnabled } from './traitEffects';
 import type { GateStats } from './traitGates';
@@ -76,6 +77,8 @@ export interface ScriptRunUnit {
   prompts?: ScriptPromptHost;
   /** A user Tool's run: the surface without writes. */
   readOnly?: boolean;
+  /** The `turn.choices` the earlier scripts of the batch left, which this run reads in place of the state's (Q14). */
+  choices?: readonly string[];
 }
 
 /** Each scope's stat turn inputs: the global run's and each Owner's, by id. The caller leaves them empty at a
@@ -146,10 +149,15 @@ export function switchedTraitOf({ traitId, ownerId }: TraitSwitchEvent, world: T
   return tree?.find((trait) => trait.id === traitId);
 }
 
-/** `set` listing only the authored books in play; a book turned off reads as an unknown dictionary. */
+/** `set` listing the authored books in play, on, and the ones the world ships off, off; a book the player turned
+ *  off reads as an unknown dictionary (Q33). */
 const withBooksInPlay = (set: StatCodePlaceholderSet): StatCodePlaceholderSet => {
   const { inPlayDictionaryIds: inPlay } = set;
-  return inPlay ? { ...set, dictionaries: set.dictionaries?.filter((book) => inPlay.has(book.id)) } : set;
+  return inPlay ? {
+    ...set,
+    dictionaries: set.dictionaries?.flatMap((book) => (inPlay.has(book.id) ? [{ ...book, enabled: true }]
+      : book.enabled === false ? [book] : [])),
+  } : set;
 };
 
 const AS_AUTHORED: ResolveText = (text) => text;
@@ -280,7 +288,9 @@ function boardOf(state: SandboxState, { readings, pendingPersona, assumedStats =
     stats: scopeStats(globalStats, globalEnabled, readings?.global),
     traits, inPlay, placeholderDefs, ownerStats,
     placeholders: sandbox?.top ?? [],
-    dictionaries: sandboxDictionaries(codeDictionaries(placeholderSet?.dictionaries, placeholderDefs), sandbox?.owners),
+    dictionaries: sandboxDictionaries(
+      codeDictionaries(placeholderSet?.dictionaries && withLoreToggles(placeholderSet.dictionaries, state.loreToggles), placeholderDefs), sandbox?.owners,
+    ),
     ...(state.resolveText ? { resolveEntryValue: (value: string) => resolve(value, null) } : {}),
     ...(state.places ? { places: codePlaces(state.places, placeholderDefs, resolve) } : {}),
   };
@@ -314,6 +324,17 @@ function switchedTraitEntry(board: Board, { event, world }: { event: TraitSwitch
 
 const statOf = (home: UnitHome): Stat | null => ('stat' in home ? home.stat : null);
 
+/** The page and choices read empty at a timing before the turn's reply is done (Q5); later, the choices are the ones
+ *  the batch's earlier scripts left. A read-only run is a user Tool's, which reads the state's turn as it stands. */
+const turnRead = (turn: SandboxTurn, { timing, readOnly, choices }: ScriptRunUnit): SandboxTurn => {
+  if (!readOnly && (timing === 'start' || timing === 'before' || timing === 'output')) return { ...turn, ...EMPTY_REPLY };
+  return choices && !turn.choicesOff ? { ...turn, choices } : turn;
+};
+
+/** Only an After the AI script writes `turn.choices`, and only while the player has choices on (Q11, Q21). */
+const takesChoicesWrite = ({ home, timing, readOnly }: ScriptRunUnit, turn: SandboxTurn | undefined): boolean =>
+  timing === 'after' && home.kind !== 'tool' && !readOnly && !turn?.choicesOff;
+
 const optionsOfSnapshot = new WeakMap<SandboxSnapshot, (unit: ScriptRunUnit) => StatCodeRunOptions>();
 
 /** The snapshot of `state`, which every Script of the turn or check runs through. */
@@ -333,7 +354,8 @@ export function snapshotOf(state: SandboxState, options: SnapshotOptions = {}): 
       : unit.switched === 'sample' ? sampleSwitchedTrait(read.traits, firstTraitId(), selfTrait && { entry: selfTrait, owner: owner?.name ?? '' })
         : switchedTraitEntry(read, unit.switched);
     return {
-      clock: state.clock, ...(read.stats.readings ? { readings: read.stats.readings } : {}), ...(state.turn && { turn: state.turn }),
+      clock: state.clock, ...(read.stats.readings ? { readings: read.stats.readings } : {}), ...(state.turn && { turn: turnRead(state.turn, unit) }),
+      ...(takesChoicesWrite(unit, state.turn) && { choicesWritable: true }),
       enabled: read.stats.enabled,
       placeholders: read.placeholders, traits: read.traits, ...read.inPlay,
       ...(owner && { owner }), dictionaries: read.dictionaries, ...(read.resolveEntryValue && { resolveEntryValue: read.resolveEntryValue }),

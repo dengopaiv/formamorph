@@ -1,6 +1,7 @@
 # Spec: Listing review (client)
 
-Status: ready-for-agent
+Status: done
+Status note: Closed 2026-10-26. Tickets 01–10 done, last landing f63b3e283; ticket 11 (deploy and switch-on) stays with the user. Review: spec text corrected; two small gaps fixed (formamorph 2d44108c0, FormamorphServer 7884f50). Gates green on 2026-10-26.
 Spec session: listing-review — spec
 
 Server side: the FormamorphServer repo, `docs-internal/specs/listing-review/spec.md`. That spec holds the rulings (Q1–Q28), the moderation states and the API contract. This spec follows them.
@@ -83,8 +84,9 @@ The server will hold new listings and updates for review before players can see 
 - **Review tab.**
   - Reports and Review share one **Moderation** tab in the staff panel, split by a segmented control (the user's ruling for ticket 08). The tab count stays at 8 for admins and 5 for mods.
   - The panel's width cap rises from 900px to 1000px. The tab breakpoints and `admin-panel-widths.spec.ts` change to match.
-  - Review shows for anyone who passes `canModerate` on a server that supports review, with two views: **Queue** and **Auto-Approved**.
-  - Each segment's label carries its own count: Reports (n) and Review (n). The Moderation tab label shows their sum.
+  - Review shows for anyone who passes `canModerate` on a server that supports review. **Auto-Approved** is a third segment beside Reports and Review, with no count (the user's ruling for ticket 10).
+  - The admin-only Trusted toggle sits in the user row's caret menu and is hidden on staff rows. The Trusted pill shows on any row with `trustedAt`.
+  - Each segment's label carries its own count: Reports (n) and Review (n). The Moderation tab label has no count, so it fits the 1000px strip in every font (ticket 08 measured a summed count overflowing in OpenDyslexic).
   - The Admin Panel button's badge in the main menu adds the waiting-review count to the open-report count.
   - Rejecting a resubmission leaves out the template's extension sentence when the answer says `quarantineExtended: true`.
 - **Item detail.** A dialog shows the item. For an update, a field table shows live and pending values. Thumbnails show as images. The changelog operations show as a list. **Download** fetches the pending content.
@@ -93,6 +95,12 @@ The server will hold new listings and updates for review before players can see 
   - **Resubmission:** a confirmation → the reject route → the same composer and template.
   - **Update:** a confirmation → the reject route → the composer opens with a new template for a rejected update.
   - If the mod closes the composer, no message goes out.
+- **Ticket 09 rulings.**
+  - The client field keys use the server's names: `required_dependencies` and `compatible_worlds`. `thumbnail` comes from `thumbnail_url` and `content` from `content_changed`.
+  - Dependency and compatibility ids show as listing names, with "Removed listing" on a `404` and Added or Removed tags.
+  - One `PendingUpdateTable` serves the author's Compare and the mod's item dialog.
+  - A held changelog create shows in the success toast and with a Pending tag in the author's Changelog panel.
+  - A `409` with `CONTEST_LOCKED` keeps the row and shows the judging toast. Any other `409` drops the row.
 - **Approval refused during judging.** A `409` during judging shows a toast that the approval waits for contest results.
 - **Admin controls.**
   - The Users tab gets a **Trusted** toggle and a marker, both for admins only.
@@ -130,4 +138,4 @@ The server will hold new listings and updates for review before players can see 
 ## Further Notes
 
 - Ship this client before the operator turns the server's `listing_review` setting on. The setting defaults to off.
-- Changelog: one entry for players and authors, and one in the staff bucket for the Review tab.
+- Changelog: one **Listing Review** group under 👤 User-facing, with one entry per client ticket. The changelog has no staff bucket, so the mod and admin entries sit in the same group.
