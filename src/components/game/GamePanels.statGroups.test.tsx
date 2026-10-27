@@ -3,7 +3,6 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { renderRightPanel, statFixture, type Gameplay } from '@/test/gamePanels';
 import type { EntityStatValues, SceneEntity, StatGroup } from '@/types';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const group = (id: string, name: string, extra: Partial<StatGroup> = {}): StatGroup => ({ id, name, parentId: null, ...extra });

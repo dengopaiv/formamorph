@@ -114,7 +114,7 @@ function normalizeV0(meta: Vrm0MetaRaw): VrmLicense {
     // VRM 0.0 has no credit-notation field; CC_BY implies attribution but saying so would be our inference.
     creditRequired: undefined,
     // VRM 0.0 has no equivalent concept; the keys are still set (to `undefined`) so a license this function
-    // produced reads as current-shape, not as a pre-license-gate record needing a re-read — see `avatarLicenseGate.ts`.
+    // produced reads as current-shape, not as a pre-license-gate record needing a re-read.
     avatarPermission: undefined,
     modification: undefined,
   };

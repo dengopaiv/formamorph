@@ -2,11 +2,9 @@ import { useCallback, useEffect, useState, type ChangeEvent, type MouseEvent, ty
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, CornerDownLeft, ImagePlus, Link as LucideLink, Box as LucideBox, Music, X } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertTriangle, CornerDownLeft, ImagePlus, Link as LucideLink, Music, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
-import ModelViewer from '../views/ModelViewer';
 import AudioPlayer from '../components/game/AudioPlayer';
 import { useDownscalePrompt } from './useDownscalePrompt';
 import { ImageZoomViewer } from '../components/ImageZoomViewer';
@@ -18,7 +16,6 @@ import { isExpiringImageHost } from './imageBytes';
 import { useRemoteImage } from './useRemoteImage';
 import { fileToDataUrl } from './imageDrop';
 import { useImageDropTarget } from './useImageDropTarget';
-import type { MediaAsset } from '@/types';
 
 /** An uploaded media file, base64-encoded as a data URL. */
 interface UploadedMedia {
@@ -37,61 +34,7 @@ function readMediaFile(file: File): Promise<UploadedMedia> {
   });
 }
 
-export type ModelType = 'glb' | 'fbx' | 'obj' | 'unknown';
-
-const typeFromExtension = (fileName: string): ModelType => {
-  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
-  switch (extension) {
-    case 'glb':
-    case 'gltf':
-      return 'glb';
-    case 'fbx':
-      return 'fbx';
-    case 'obj':
-      return 'obj';
-    default:
-      return 'unknown';
-  }
-};
-
-/** Browsers report model MIME types inconsistently — often empty for .fbx/.obj — so this map is a hint, not a source of truth. */
-const MODEL_MIME_TYPES: Record<string, ModelType> = {
-  'model/gltf-binary': 'glb',
-  'model/gltf+json': 'glb',
-  'model/obj': 'obj',
-  'application/x-tgif': 'obj',
-  'application/octet-stream': 'unknown',
-};
-
-/** Last resort: read the file's leading bytes. GLB and binary FBX both carry a magic string; the text formats are matched by their opening tokens. */
-const typeFromMagic = (data: string): ModelType => {
-  const marker = data.indexOf(';base64,');
-  if (marker === -1) return 'unknown';
-  let head: string;
-  try {
-    head = atob(data.slice(marker + 8, marker + 8 + 64));
-  } catch {
-    return 'unknown';
-  }
-  if (head.startsWith('glTF')) return 'glb';
-  if (head.startsWith('Kaydara FBX') || head.includes('FBXHeaderExtension')) return 'fbx';
-  if (/^\s*\{/.test(head)) return 'glb'; // .gltf JSON — GLTFLoader reads both
-  if (/^\s*(#|v\s|vt\s|vn\s|o\s|g\s|mtllib\s)/.test(head)) return 'obj';
-  return 'unknown';
-};
-
-/** Pick the loader for an uploaded model: filename first, then MIME, then the file's own bytes. */
-// eslint-disable-next-line react-refresh/only-export-components
-export const resolveModelType = (model: Partial<MediaAsset>): ModelType => {
-  const byName = model.name ? typeFromExtension(model.name) : 'unknown';
-  if (byName !== 'unknown') return byName;
-  const mime = (model.type || model.data?.slice(5, model.data.indexOf(';')) || '').toLowerCase();
-  const byMime = MODEL_MIME_TYPES[mime];
-  if (byMime && byMime !== 'unknown') return byMime;
-  return model.data ? typeFromMagic(model.data) : 'unknown';
-};
-
-/** The shared dashed "click to upload" frame for the media uploaders (image / sound / 3D model). Pass
+/** The shared dashed "click to upload" frame for the media uploaders (image / sound). Pass
  *  `frameClassName` to give it a fixed size (e.g. the thumbnail crop); without it the box is compact and
  *  auto-sized. The dashed look lives here so every uploader stays in sync. */
 const Dropzone = ({ htmlFor, frameClassName, dragOver, overlay, children }: {
@@ -473,61 +416,3 @@ export const SoundUpload = ({ onChange, id, value }: {
   );
 };
 
-export const ModelUpload = ({ model, onModelChange, uniqueId }: {
-  model?: Partial<MediaAsset> | null;
-  onModelChange: (model: UploadedMedia | undefined) => void;
-  uniqueId: string | number;
-}) => {
-  const [isModelViewerOpen, setIsModelViewerOpen] = useState(false);
-
-  const handleModelChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) readMediaFile(file).then(onModelChange);
-  };
-
-  return (
-    <div className="space-y-2">
-      {model ? (
-        <div className="flex items-center space-x-2">
-          <span className="truncate">{model.name ?? '3D model'}</span>
-          <Dialog open={isModelViewerOpen} onOpenChange={setIsModelViewerOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline">View 3D Model</Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
-              <DialogHeader>
-                <DialogTitle>3D Model Viewer</DialogTitle>
-              <DialogDescription className="sr-only">Interactive 3D model. Drag to rotate, scroll to zoom.</DialogDescription>
-              </DialogHeader>
-              <ModelViewer model={model} modelType={resolveModelType(model)} />
-            </DialogContent>
-          </Dialog>
-          <Tip tip="Remove model">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => onModelChange(undefined)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </Tip>
-        </div>
-      ) : (
-        <div>
-          <Input
-            type="file"
-            accept=".glb,.gltf,.fbx,.obj"
-            onChange={handleModelChange}
-            className="hidden"
-            id={`model-upload-${uniqueId}`}
-          />
-          <Dropzone htmlFor={`model-upload-${uniqueId}`}>
-            <LucideBox className="mr-2" />
-            <span>Add 3D Model</span>
-          </Dropzone>
-        </div>
-      )}
-    </div>
-  );
-};

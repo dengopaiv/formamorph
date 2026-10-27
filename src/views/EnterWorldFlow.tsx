@@ -10,8 +10,6 @@ import { ownerPins, inPlayOwners, playedEntityId } from '@/lib/ownedTraitsInPlay
 import { cascadeOffInput, startingStatsWith } from '@/lib/traitRuntime';
 import { seedWorldEntityStats } from '@/lib/entityStats';
 import { toastError } from '@/lib/linkToast';
-import CharacterCustomization from './CharacterCustomization';
-import { seededCharacterData } from '@/lib/legacyVrm';
 import EnterWorldWorkspace from './EnterWorldWorkspace';
 import { startingLocations } from '@/lib/startingLocation';
 import {
@@ -43,10 +41,10 @@ import { LibraryRecordNotFoundError } from '../services/LibraryStore';
 import type { WorldRecord } from '@/components/WorldDetails';
 import ReadmeModal from '@/components/game/ReadmeModal';
 import {
-  buildEnterFlow, entryVrmPick, navigableSteps, type EnterMode, type EnterStep, type NavigableStep,
+  buildEnterFlow, navigableSteps, type EnterMode, type EnterStep, type NavigableStep,
 } from '@/lib/enterFlow';
 import type {
-  CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, OwnedTraitPicks, PersonaRef, VrmPick,
+  CharacterData, Dictionary, DictionaryMetadata, Entity, EntityMetadata, OwnedTraitPicks, PersonaRef,
 } from '@/types';
 
 export type StartGame = (
@@ -70,11 +68,9 @@ interface EnterWorldFlowProps {
   defaultPersona: string | undefined;
   showReadme: (worldId: string) => boolean;
   setShowReadme: (worldId: string, show: boolean) => void;
-  /** Held by the menu, which gives the whole screen to the Avatar step while the Introduction is closed. */
+  /** Held by the menu. */
   introOpen: boolean;
   setIntroOpen: (open: boolean) => void;
-  avatarOpen: boolean;
-  setAvatarOpen: (open: boolean) => void;
   onStartGame: StartGame;
 }
 
@@ -84,13 +80,12 @@ interface EnterWorldFlowProps {
  */
 const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(function EnterWorldFlow({
   world: selectedWorld, libraryEntities: entities, libraryDictionaries: dictionaries, defaultPersona,
-  showReadme, setShowReadme, introOpen: showIntroReadme, setIntroOpen: setShowIntroReadme,
-  avatarOpen: showCharacterCustomization, setAvatarOpen: setShowCharacterCustomization, onStartGame,
+  showReadme, setShowReadme, introOpen: showIntroReadme, setIntroOpen: setShowIntroReadme, onStartGame,
 }, ref) {
   const isMountedRef = useMountedRef();
   const {
     traits: rawTraits, traitGroups: rawTraitGroups, stats: rawStats, statGroups: rawStatGroups, locations: rawLocations, placeholders,
-    dictionaries: worldBooks, entities: worldEntities, worldPlaceholders, placeholderGroups, worldOverview,
+    dictionaries: worldBooks, entities: worldEntities, worldPlaceholders, placeholderGroups,
   } = useGameData();
   const { beginSession, endSession, rolls } = usePlaceholderSession();
 
@@ -120,15 +115,6 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
     setEntryDraft(revise);
   };
   useEffect(() => () => { entryRequest.current = null; }, []);
-  // Finalized dictionaries for normal entry; null keeps Quick Start and saves on authored defaults.
-  const [selectedDictionaries, setSelectedDictionaries] = useState<Dictionary[] | null>(null);
-  // Independent entity copies finalized for normal entry; null means this path did not configure entities.
-  const [selectedCharacters, setSelectedCharacters] = useState<Entity[] | null>(null);
-  const [selectedPersona, setSelectedPersona] = useState<PersonaPick>({ ref: { source: 'none' } });
-  // The cast's owned picks as the game starts with them, keyed by the added characters' copy ids.
-  const [selectedCastPicks, setSelectedCastPicks] = useState<OwnedTraitPicks>({});
-  // The Avatar the step opens on: User's Default offers the picker, any other pick shows as set.
-  const [selectedVrm, setSelectedVrm] = useState<VrmPick>();
 
   // The raw world's traits, whose names carried requirements were stored under and bind to, and its blueprints.
   const rawTraitWorld = useMemo(
@@ -152,14 +138,6 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
     });
     return () => { cancelled = true; };
   }, [castKey, libraryCastData, isMountedRef]);
-  // Where the persona's Avatar lands. A library persona reads its pick from the loaded record.
-  const entryVrm = (persona: PersonaRef, libraryPersona?: Entity) => entryVrmPick({
-    persona,
-    libraryPersona: libraryPersona ?? (persona.source === 'library' ? libraryCastData.get(persona.entityId) : undefined),
-    entities: worldEntities,
-    overview: worldOverview,
-  });
-  const showsDraftVrm = !!entryVrm(draftPersona);
   const libraryCast = useMemo(
     () => castKey.split('|').flatMap((id) => libraryCastData.get(id) ?? [])
       .map((e) => bindLibraryEntity(e, rawTraitWorld)),
@@ -370,18 +348,8 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
       const dicts = finalizeSelection(draft.dictionaryItems, books);
       // Only a pick the step showed is remembered; a hidden category leaves room for a later default.
       if (hasPersonaChoice(personaOffer)) rememberWorldPersona(selectedWorld!.id, draft.persona);
-      setSelectedCharacters(chars);
-      setSelectedCastPicks(castPicks);
-      setSelectedDictionaries(dicts);
-      setSelectedPersona(persona);
-      const vrm = entryVrm(persona.ref, persona.libraryEntity);
-      setSelectedVrm(vrm);
-      if (vrm) {
-        showEnterStep('avatar');
-      } else {
-        entryStarted.current = true;
-        onStartGame(draft.traitIds, null, true, draft.locationId, dicts, chars, persona, castPicks);
-      }
+      entryStarted.current = true;
+      onStartGame(draft.traitIds, null, true, draft.locationId, dicts, chars, persona, castPicks);
     } catch (error) {
       if (entryRequest.current === request) {
         entryStarted.current = false;
@@ -396,20 +364,16 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
   const advanceEntry = (step: NavigableStep) => {
     const steps = navigableSteps(enterFlowSteps());
     const next = steps[steps.indexOf(step) + 1];
-    if (next && next !== 'avatar') showEnterStep(next);
+    if (next) showEnterStep(next);
     else void enterWorld();
   };
 
   const abandonEnterFlow = () => {
     cancelEntryResolution();
     setEntryDraft(emptyEntryDraft());
-    setSelectedCharacters(null);
-    setSelectedDictionaries(null);
-    setSelectedPersona({ ref: { source: 'none' } });
     setShowIntroReadme(false);
     setEnterAfterIntro(null);
     setShowSetupWorkspace(false);
-    setShowCharacterCustomization(false);
     endSession();
   };
 
@@ -421,22 +385,14 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
     startingLocationCount: startingLocations(locations).length,
     hasLibraryAdditions,
     hasWorldPersonas: worldPersonaOptions.length > 0,
-    showsAvatar: showsDraftVrm,
   }, mode);
   const showEnterStep = (step: NavigableStep) => {
     cancelEntryResolution();
     setShowSetupWorkspace(step === 'workspace');
-    setShowCharacterCustomization(step === 'avatar');
-  };
-  // Back handler for a given step: goes to the previous shown step, or undefined on the first (button fades).
-  const backFrom = (step: NavigableStep): (() => void) | undefined => {
-    const steps = navigableSteps(enterFlowSteps());
-    const idx = steps.indexOf(step);
-    return idx > 0 ? () => showEnterStep(steps[idx - 1]) : undefined;
   };
 
   const openFirstEnterStep = (steps: NavigableStep[], draft: EntryDraft) => {
-    if (steps[0] && steps[0] !== 'avatar') showEnterStep(steps[0]);
+    if (steps[0]) showEnterStep(steps[0]);
     else void enterWorld(draft);
   };
 
@@ -495,9 +451,8 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
             ? [bindLibraryEntity(pick.libraryEntity, rawTraitWorld)]
             : [],
         };
-        const characterData = seededCharacterData(null, !!entryVrm(pick.ref, pick.libraryEntity));
         onStartGame(
-          draft.traitIds, characterData, true, draft.locationId, null, null, pick,
+          draft.traitIds, null, true, draft.locationId, null, null, pick,
           castOwnedTraits(withLibraryDefaults(draft, cast), cast),
         );
       },
@@ -510,28 +465,6 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
   };
 
   useImperativeHandle(ref, () => ({ start, quickStart }));
-
-  if (showCharacterCustomization && !showIntroReadme) {
-    return (
-      <CharacterCustomization
-        vrm={selectedVrm}
-        onCharacterCustomized={(customizedData) => {
-          if (entryStarted.current) return;
-          entryStarted.current = true;
-          setShowCharacterCustomization(false);
-          onStartGame(
-            selectedTraits, customizedData, true, selectedLocationId, selectedDictionaries, selectedCharacters, selectedPersona,
-            selectedCastPicks,
-          );
-        }}
-        onBack={backFrom('avatar')}
-        onAbort={() => {
-          setShowCharacterCustomization(false);
-          abandonEnterFlow();
-        }}
-      />
-    );
-  }
 
   return (
     <>
@@ -601,7 +534,7 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
             : undefined}
           onCancel={abandonEnterFlow}
           onContinue={() => advanceEntry('workspace')}
-          continueLabel={showsDraftVrm ? 'Continue to Avatar' : 'Start Game'}
+          continueLabel="Start Game"
           resolving={resolvingEntry}
         />
       )}

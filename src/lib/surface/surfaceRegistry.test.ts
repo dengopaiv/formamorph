@@ -27,8 +27,8 @@ describe('the Surface', () => {
   it('names the open screen and its tab', () => {
     const registry = createSurfaceRegistry();
     const menu = open(registry, 'mainMenu');
-    openTab(registry, menu, 'mainMenu.models');
-    expect(registry.get()).toEqual({ screen: 'mainMenu', dialog: null, tabs: ['mainMenu.models'] });
+    openTab(registry, menu, 'mainMenu.entities');
+    expect(registry.get()).toEqual({ screen: 'mainMenu', dialog: null, tabs: ['mainMenu.entities'] });
   });
 
   it('names the top dialog and its tabs, outermost first, and hides the tabs under it', () => {

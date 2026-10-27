@@ -8,7 +8,6 @@ import { DEFAULT_DURATION, DEFAULT_STAGGER } from '@/lib/narrationRevealConfig';
 import { choiceWordCount, parseStreamingChoices, splitWords } from '@/lib/choices';
 
 // three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const STAGGER = 50;

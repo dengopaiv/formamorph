@@ -22,13 +22,10 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  `worldEditor` open from MainMenu; `entity`/`export` are in game (GameViewer).
  *  `worldEditor` is an in-place modal on MainMenu (not a top-level view). `intro` replays the first-run
  *  welcome overlay on MainMenu. `localModel` is intentionally absent — it lives inside
- *  Settings→LocalModelPanel, reached via `modal=settings` + its tab, not its own name. `avatar` opens
- *  MainMenu's Character Customization step directly (a MainMenu sub-state, like `worldEditor`).
+ *  Settings→LocalModelPanel, reached via `modal=settings` + its tab, not its own name.
  *  `aiSetup` opens the AI setup gate on MainMenu in its skippable (first-run) form. `entityEditor` and
  *  `dictionaryEditor` are the *library* editors (MainMenu), distinct from the in-game `entity` modal; both
- *  open on a blank draft, so they're reachable without any stored data. `modelDetails` is the exception to
- *  that: a VRM preview has nothing to show without a stored model, so it opens the library's first model and
- *  does nothing on an empty library. `memoryManager` is
+ *  open on a blank draft, so they're reachable without any stored data. `memoryManager` is
  *  in-game (GameViewer) and opens on an empty ledger before any turn has been summarized. `location` is in
  *  game (GameViewer) and opens the Change Location dialog on whichever of its two views was used last, so
  *  pair it with `fixture=…` to have a world worth traveling in; `fixture=entityFollowers` puts met entities
@@ -56,8 +53,7 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  stat code, and the Replace All confirm. In the app each opens only partway through an edit. Every answer
  *  closes it and writes nothing. `savedElsewhere` and `deletedElsewhere` open the World Editor and raise
  *  the question another tab's save or delete of the open world asks. Either answer closes it and writes nothing.
- *  `deleteWorldAvatar` opens the World Editor and raises an Avatar store delete on canned entities, which
- *  writes nothing; add `tab=media` to show the Media tab's Avatars section under it. `demoAI` is in game
+ *  `demoAI` is in game
  *  (GameViewer) and opens the Demo AI dialog whatever the narration endpoint and the seen-key say, so it is
  *  reachable on a build that overrides the default endpoint.
  *  `persona` is in game (GameViewer) and opens the right panel's Change Persona picker. On mobile that panel
@@ -70,7 +66,7 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  Chip Options over it, on a canned Entities chip. `scriptPrompt` is in game (GameViewer) and fires one
  *  canned `player.*` request through the live prompt store once the game has a turn; `tab=…` picks the shape
  *  (`devScriptPromptSamples.ts`). Pair it with `fixture=…`. `DEV_PANE_MODALS` follow. */
-export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
+export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'demoAI', 'persona', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
 export type DevModal = (typeof DEV_MODALS)[number];
 
 /** The `attach=…` value that stages sample attachments on the game view. */
@@ -162,7 +158,7 @@ export const DEV_MODAL_TABS = {
   scriptPrompt: ['confirm', 'ask', 'askLong', 'askMulti', 'input', 'tell', 'toast'],
   // MainMenu's library card-type switcher. Not a modal: reached with `tab=…` and no `modal=…`, i.e.
   // `#dev?view=mainMenu&tab=models`. Listed here so the same drift guard covers it.
-  mainMenu: ['worlds', 'entities', 'dictionaries', 'models'],
+  mainMenu: ['worlds', 'entities', 'dictionaries'],
   // Settings → Prompts opens one prompt with `subtab=…` (`#dev?modal=settings&tab=prompts&subtab=choices`).
   // A prompt whose feature is off is not in the rail, and the panel lands on Narration.
   settingsPrompts: [

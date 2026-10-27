@@ -9,7 +9,6 @@ import type { World } from '@/types';
 
 /** The in-play editor's unsaved-changes prompt: what Exit drops, what its copy says, and that Save still saves. */
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,

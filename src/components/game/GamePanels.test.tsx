@@ -6,15 +6,13 @@ import { CONTINUE_CHOICE } from '@/lib/choices';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { defaultSystemPrompt } from './GamePrompts';
 import openChat from '@/defaultworlds/open-chat.json';
-import { readTurn, renderLeftPanel, renderMiddlePanel, renderRightPanel, statFixture, worldFixture, type Gameplay, type PanelHarness, type TurnFixture } from '@/test/gamePanels';
+import { readTurn, renderLeftPanel, renderMiddlePanel, renderRightPanel, statFixture, type Gameplay, type PanelHarness, type TurnFixture } from '@/test/gamePanels';
 import { resetTtsPlayback, setTtsPlayback } from '@/test/stubs/ttsPlayback';
-import { lastVrmViewerProps, resetVrmViewerStub } from '@/test/stubs/vrmViewer';
 
 import { phValues } from '@/test/placeholderValues';
-// three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
+// The TTS engine needs a Web Audio graph; jsdom has none.
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
-// Stubbed for the same reason as the VRM view: it is a Lexical editor whose caret jsdom cannot drive, and
+// Stubbed because it is a Lexical editor whose caret jsdom cannot drive, and
 // these cases are about panel state per turn. The field itself: prompt/TagChipField.test.tsx.
 // Same reason, for the Edit Text modal's editor: these cases are about what saving an edit does to the
 // turn, not about the field. Its own behavior: prompt/PromptField.markdown.test.tsx.
@@ -31,7 +29,6 @@ vi.mock('@/components/prompt/TagChipField', () => ({
 
 afterEach(() => {
   resetTtsPlayback();
-  resetVrmViewerStub();
 });
 
 const TURNS = [
@@ -162,18 +159,6 @@ describe('MiddlePanel — the audio row', () => {
 });
 
 describe('LeftPanel', () => {
-  it('draws the player model for a world that has one', async () => {
-    renderLeftPanel({}, {
-      world: { worldOverview: { ...worldFixture().worldOverview, legacyVrmFallback: { kind: 'default' } } },
-      seed: (gameplay) => gameplay.setCharacterData({
-        bodyMorphs: { Belly: 0.25 }, currentHairStyle: 'long', hairLength: 0.5, chosenVrm: null,
-      }),
-    });
-
-    expect(await screen.findByTestId('vrm-viewer')).toBeInTheDocument();
-    expect(lastVrmViewerProps()?.bodyMorphValues).toMatchObject({ Belly: 0.25 });
-  });
-
   // Both built-in prompts place the chip with options, which a raw substring check misses.
   it.each([
     ['the built-in narration prompt', defaultSystemPrompt],

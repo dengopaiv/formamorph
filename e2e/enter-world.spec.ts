@@ -259,7 +259,7 @@ test('container thresholds preserve the library draft and inspected pane through
   await expect(search).toHaveValue('Archive');
   await expect(workspace.getByRole('button', { name: 'Inspect Archive Volume 6 from World' })).toBeFocused();
   expect(await listViewport.evaluate((element) => element.scrollTop)).toBeGreaterThanOrEqual(Math.min(heldScroll, 1));
-  await expect(workspace.getByRole('button', { name: /^(Start Game|Continue to Avatar)$/ })).toBeVisible();
+  await expect(workspace.getByRole('button', { name: 'Start Game' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
   await workspace.getByRole('button', { name: /Categories/ }).click();
   await workspace.getByRole('button', { name: /Fifth Long Practice Layer/ }).click();
@@ -330,7 +330,7 @@ for (const width of [360, 390]) {
     const workspace = await openEnterWorld(page);
     const disclosure = workspace.getByRole('button', { name: /^Categories/ });
     const panel = workspace.locator('#setup-category-tree');
-    const finish = workspace.getByRole('button', { name: /^(Start Game|Continue to Avatar)$/ });
+    const finish = workspace.getByRole('button', { name: 'Start Game' });
 
     await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
     await expect(panel).toHaveAttribute('aria-hidden', 'true');

@@ -9,7 +9,6 @@ import type { PlayerStat, Script, World } from '@/types';
 /** `player.*` in play: the inline prompt line holds the turn, and a tell stays with its turn and out of requests. */
 
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 const toastInfo = vi.hoisted(() => vi.fn());
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: toastInfo, warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),

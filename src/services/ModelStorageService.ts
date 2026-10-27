@@ -3,10 +3,9 @@ import { promisifyRequest, transactionDone, writeAfterRead } from '@/lib/idb';
 import { blobHash } from '@/lib/blobHash';
 import { readVrmMeta } from '@/lib/vrmMeta';
 import { optimizeImageDataUrl, IMAGE_CAPS } from '@/lib/imageOptim';
-import { renderVrmThumbnail } from '@/lib/vrmThumbnail';
-import { DEFAULT_AVATAR_ID, DEFAULT_AVATAR_URL, LEGACY_DEFAULT_AVATAR_ID } from '@/lib/defaultAvatar';
+import { DEFAULT_AVATAR_ID, LEGACY_DEFAULT_AVATAR_ID } from '@/lib/defaultAvatar';
 import { LibraryStore, type StoredRecord } from './LibraryStore';
-import type { AvatarThumbnailSource, ModelMetadata, VrmData, VrmLicense } from '@/types';
+import type { ModelMetadata, VrmData } from '@/types';
 
 /** A locally-stored VRM plus its library timestamps. Local-only, like `StoredEntityRecord`. */
 export type StoredModelRecord = StoredRecord<VrmData>;
@@ -23,10 +22,6 @@ interface FlatModelRecord {
   size?: number;
   addedAt?: string;
 }
-
-/** Set once the bundled avatar has been offered; a later delete is the player's business, not a gap to refill.
- *  The key keeps its pre-rename spelling: rewording it would read as never-seeded and refill that delete. */
-const SEEDED_KEY = 'FORMAMORPH_defaultModelSeeded';
 
 const isFlat = (record: unknown): record is FlatModelRecord =>
   !!record && typeof record === 'object' && !('data' in record) && 'blob' in record;
@@ -48,16 +43,6 @@ const fileThumbnailFields = async (embedded: string | undefined): Promise<Pick<V
   const fileThumbnail = (await shrinkThumbnail(embedded)) ?? null;
   return { thumbnail: fileThumbnail ?? undefined, fileThumbnail };
 };
-
-/** The chosen variant, else whichever one exists. */
-const shownThumbnail = (data: VrmData): string | undefined =>
-  data.thumbnailSource === 'generated'
-    ? data.generatedThumbnail ?? data.fileThumbnail ?? undefined
-    : data.fileThumbnail ?? data.generatedThumbnail;
-
-/** A license predates the Permissive License gate's fields if it lacks the `avatarPermission` key entirely — `readVrmMeta` always sets that key now, even to `undefined` for VRM 0.0. */
-const isLicenseStale = (license: VrmLicense | undefined): boolean =>
-  !license || !('avatarPermission' in license);
 
 /** Shared by the store's grid listing and the lookups that read raw records. */
 const toMetadata = (record: StoredModelRecord): ModelMetadata => ({
@@ -100,12 +85,6 @@ class ModelStorageService {
 
   /** Runs once per session; later calls await the same pass rather than rescanning. */
   private migration: Promise<void> | null = null;
-
-  /** The running build's bundled default file hash, read once per session; a failed read clears it. */
-  private bundledDefaultHash: Promise<string | null> | null = null;
-
-  /** The latest pending thumbnail switch per Avatar id. */
-  private readonly thumbnailSwitches = new Map<string, Promise<ModelMetadata | null>>();
 
   /** Open the IndexedDB connection (idempotent). */
   initialize() {
@@ -224,48 +203,6 @@ class ModelStorageService {
   }
 
   /**
-   * Put the bundled model in the library, once ever. Fetches it only when it hasn't been seeded before, so a
-   * normal launch costs a localStorage read rather than an 18MB read.
-   *
-   * Seeding is one-shot rather than a per-launch reconcile: once seeded, the copy is the player's, and
-   * deleting it means it's gone. That's the whole point of it being an ordinary record — unlike the bundled
-   * worlds, which re-seed on content change and so need tombstones to respect a delete.
-   */
-  async seedDefaultModel(url: string): Promise<void> {
-    await this.ensureMigrated();
-    try {
-      if (localStorage.getItem(SEEDED_KEY)) return;
-      // Already present (flag lost, or a prior run seeded then the flag was cleared): mark it and stop, no
-      // needless re-fetch. The flag is only ever set once the record is known to exist — see below.
-      if (await this.getRecord(DEFAULT_AVATAR_ID)) {
-        localStorage.setItem(SEEDED_KEY, '1');
-        return;
-      }
-
-      const blob = await (await fetch(url)).blob();
-      const [hash, { license, thumbnail }] = await Promise.all([blobHash(blob), readVrmMeta(blob)]);
-      await this.store.store({
-        id: DEFAULT_AVATAR_ID,
-        name: license.title?.trim() || 'Default Avatar',
-        data: {
-          type: blob.type || 'model/vrm',
-          blob,
-          size: blob.size,
-          hash,
-          license,
-          ...await fileThumbnailFields(thumbnail),
-        },
-      });
-      // Only mark seeded once the store has actually landed. A transient fetch/store failure leaves the flag
-      // unset so the next launch retries, rather than locking the default out forever. The fetch is a bundled
-      // same-origin file (browser-cached), so re-attempting on failure is cheap.
-      localStorage.setItem(SEEDED_KEY, '1');
-    } catch (error) {
-      console.error('Failed to seed the default model:', error);
-    }
-  }
-
-  /**
    * The stored model with the same bytes as `file`, if the library already holds one. Lets an import offer to
    * replace rather than silently keeping two copies of a multi-MB file.
    */
@@ -301,131 +238,11 @@ class ModelStorageService {
     return (await this.addModel(file)).id;
   }
 
-  /**
-   * Hashes that mark a model as the default Avatar: the seeded library record's, and the running build's
-   * bundled file's. They differ when an older build seeded the library, and either can be missing.
-   */
-  async defaultAvatarHashes(): Promise<string[]> {
-    await this.ensureMigrated();
-    this.bundledDefaultHash ??= fetch(DEFAULT_AVATAR_URL)
-      .then((response) => {
-        if (!response.ok) throw new Error(`Default Avatar fetch failed: ${response.status}`);
-        return response.blob();
-      })
-      .then(blobHash)
-      .catch(() => {
-        this.bundledDefaultHash = null;
-        return null;
-      });
-    const [seeded, bundled] = await Promise.all([this.getRecord(DEFAULT_AVATAR_ID), this.bundledDefaultHash]);
-    return [seeded?.data?.hash, bundled].filter((hash): hash is string => !!hash);
-  }
-
   /** List stored models as grid metadata, newest first. */
   async getModelMetadata(): Promise<ModelMetadata[]> {
     await this.ensureMigrated();
     const models = await this.store.getMetadata();
     return models.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
-  }
-
-  /**
-   * Fill in whatever a record is missing — license, hash, and a thumbnail — and persist the result. Legacy
-   * records predate all three, and a record stored before the Permissive License gate's fields carries a
-   * license that predates *those*; either way, this is the library's backfill, called on first view rather
-   * than the whole library paying for every model up front.
-   *
-   * Returns the shown thumbnail if there is one, honoring the record's thumbnail source. A render that produces
-   * nothing is recorded, so a model that simply can't be drawn isn't re-attempted on every view — unless its
-   * license is stale, which forces one more pass regardless. Never throws: a card renders this, and a bad model
-   * must cost that card its picture, not the whole grid.
-   */
-  async ensureThumbnail(id: string): Promise<string | undefined> {
-    await this.ensureMigrated();
-    const record = await this.getRecord(id);
-    if (!record?.data?.blob) return undefined;
-    const data = record.data;
-    const staleLicense = isLicenseStale(data.license);
-    // A record stored before the file variant existed still has to learn whether its file carries an image.
-    const fileRead = data.fileThumbnail !== undefined;
-    if (fileRead && !staleLicense) {
-      if (data.thumbnail) return data.thumbnail;
-      if (data.thumbnailFailed) return undefined;
-    }
-
-    try {
-      const resolved: VrmData = { ...data };
-      if (!resolved.hash || staleLicense || !fileRead) {
-        const [hash, meta] = await Promise.all([
-          resolved.hash ? Promise.resolve(resolved.hash) : blobHash(data.blob),
-          readVrmMeta(data.blob),
-        ]);
-        resolved.hash = hash;
-        if (staleLicense) resolved.license = meta.license;
-        if (!fileRead) {
-          // A stored thumbnail may be a render even when the file has an image, so only a file without one keeps it.
-          if (meta.thumbnail) {
-            resolved.fileThumbnail = (await shrinkThumbnail(meta.thumbnail)) ?? null;
-          } else {
-            resolved.fileThumbnail = null;
-            resolved.generatedThumbnail ??= data.thumbnail;
-          }
-        }
-      }
-      const needsRender = (resolved.thumbnailSource === 'generated' || !resolved.fileThumbnail)
-        && !resolved.generatedThumbnail;
-      if (needsRender && (!data.thumbnailFailed || staleLicense)) {
-        resolved.generatedThumbnail = await renderVrmThumbnail(data.blob, resolved.license?.metaVersion ?? null);
-      }
-      resolved.thumbnail = shownThumbnail(resolved);
-      // A stale-license retry can land a thumbnail a prior attempt marked unproducible; clear that flag rather
-      // than carrying it forward once there is something to show.
-      resolved.thumbnailFailed = resolved.thumbnail ? undefined : true;
-
-      // Persist only if the record still exists — the render can take a second, and a delete in that window
-      // must not be undone by writing the row back.
-      await this.updateDataIfPresent(id, resolved);
-      return resolved.thumbnail;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** Backfill one Avatar's card through `ensureThumbnail` and return its metadata, or null when it is gone. */
-  async ensureCard(id: string): Promise<ModelMetadata | null> {
-    await this.ensureThumbnail(id);
-    const record = await this.getRecord(id);
-    return record ? toMetadata(record) : null;
-  }
-
-  /**
-   * Show the `source` variant on one Avatar's card and return its fresh metadata, or null once it is deleted.
-   * The first switch to `generated` renders the portrait and throws when that yields nothing, leaving the record
-   * as it was; later switches reuse the cached variants. The `.vrm` blob is never touched.
-   */
-  setThumbnailSource(id: string, source: AvatarThumbnailSource): Promise<ModelMetadata | null> {
-    // Queued per Avatar, so a pick made during a render lands after it.
-    const next = (this.thumbnailSwitches.get(id) ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() => this.applyThumbnailSource(id, source));
-    this.thumbnailSwitches.set(id, next);
-    const settled = () => { if (this.thumbnailSwitches.get(id) === next) this.thumbnailSwitches.delete(id); };
-    next.then(settled, settled);
-    return next;
-  }
-
-  private async applyThumbnailSource(id: string, source: AvatarThumbnailSource): Promise<ModelMetadata | null> {
-    // Resolves the file variant of a record stored before it existed.
-    await this.ensureThumbnail(id);
-    const record = await this.getRecord(id);
-    if (!record?.data?.blob) return null;
-    const data: VrmData = { ...record.data, thumbnailSource: source };
-    if (source === 'generated' && !data.generatedThumbnail) {
-      data.generatedThumbnail = await renderVrmThumbnail(data.blob, data.license?.metaVersion ?? null);
-      if (!data.generatedThumbnail) throw new Error(`The portrait of ${record.name} rendered no image.`);
-    }
-    data.thumbnail = shownThumbnail(data);
-    if (data.thumbnail) data.thumbnailFailed = undefined;
-    return (await this.updateDataIfPresent(id, data)) ? toMetadata({ ...record, data }) : null;
   }
 
   /** Load one model's payload; rejects if missing or malformed. */

@@ -184,7 +184,7 @@ export interface VrmLicense {
   commercialUse?: 'allow' | 'disallow' | 'personalNonProfit' | 'personalProfit' | 'corporation';
   creditRequired?: boolean;
   /** VRM 1.0 only, read from `avatarPermission`. Always present (even as `undefined`) once normalized by
-   *  current code, so a record missing the key entirely predates these fields — see `avatarLicenseGate.ts`. */
+   *  current code, so a record missing the key entirely predates these fields. */
   avatarPermission?: 'onlyAuthor' | 'explicitlyLicensedPerson' | 'everyone';
   /** VRM 1.0 only, read from `modification`. Unset for VRM 0.0, which has no equivalent concept. */
   modification?: 'prohibited' | 'allowModification' | 'allowModificationRedistribution';

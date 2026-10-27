@@ -5,10 +5,6 @@
  * earns depends on the world *and* on how the player is starting it.
  */
 
-import { customPersonaEntity } from './blueprints';
-import { playedVrmAs, playedVrmPick } from './vrmResolver';
-import type { Entity, PersonaRef, VrmPick, WorldOverview } from '@/types';
-
 /** How the player is starting: the full setup flow, the Quick Start bypass, or resuming a save. */
 export type EnterMode = 'newGame' | 'quickStart' | 'saveLoad';
 
@@ -16,7 +12,7 @@ export type EnterMode = 'newGame' | 'quickStart' | 'saveLoad';
  * One screen of the flow. `intro` is the world's Introduction readme — an overlay over whatever setup
  * screen comes next rather than a screen of its own, which is why `navigableSteps` drops it.
  */
-export type EnterStep = 'intro' | 'workspace' | 'avatar';
+export type EnterStep = 'intro' | 'workspace';
 
 /** The steps the player can actually step back to. */
 export type NavigableStep = Exclude<EnterStep, 'intro'>;
@@ -30,33 +26,6 @@ export interface EnterFlowWorld {
   hasLibraryAdditions: boolean;
   /** The world has entities the player can play as. */
   hasWorldPersonas: boolean;
-  /** The draft persona's played side shows an Avatar. */
-  showsAvatar: boolean;
-}
-
-/** What world entry reads to place the draft persona's Avatar. */
-export interface EntryVrmInput {
-  persona: PersonaRef;
-  /** The library persona's record, once loaded. Before that it has no pick. */
-  libraryPersona: Pick<Entity, 'id' | 'vrmPick'> | undefined;
-  entities: readonly Entity[];
-  overview: Pick<WorldOverview, 'vrmStore' | 'legacyVrmFallback'> | undefined;
-}
-
-/**
- * The pick the draft persona's played side lands on: none skips the avatar step, User's Default offers the
- * picker, and a world or library pick shows that Avatar as set.
- */
-export function entryVrmPick({ persona, libraryPersona, entities, overview }: EntryVrmInput): VrmPick | undefined {
-  const entity = persona.source === 'library' ? libraryPersona ?? { id: persona.entityId }
-    : persona.source === 'world' ? entities.find((e) => e.id === persona.entityId)
-    : undefined;
-  return playedVrmPick({
-    store: overview?.vrmStore,
-    played: playedVrmAs(entity && persona.source !== 'none' ? { source: persona.source, entity } : null),
-    customPersona: customPersonaEntity(entities),
-    legacyFallback: overview?.legacyVrmFallback,
-  });
 }
 
 /**
@@ -73,7 +42,6 @@ export function buildEnterFlow(world: EnterFlowWorld, mode: EnterMode): EnterSte
     || world.hasLibraryAdditions
     || world.hasWorldPersonas
   ) steps.push('workspace');
-  if (world.showsAvatar) steps.push('avatar');
   return steps;
 }
 

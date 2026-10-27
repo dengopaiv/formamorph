@@ -15,10 +15,6 @@ vi.mock('react-toastify', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn() },
   ToastContainer: () => null,
 }));
-vi.mock('./VRMViewer', async () => {
-  const { forwardRef } = await import('react');
-  return { default: forwardRef(() => null) };
-});
 
 const world = (): StoredWorldRecord => ({
   id: 'sedge', name: 'Sedge Landing',
@@ -64,7 +60,6 @@ describe('Take Me There landing on the main menu', () => {
     ['mainMenu.worlds', 'import-world'],
     ['mainMenu.entities', 'import-entity'],
     ['mainMenu.dictionaries', 'import-dictionary'],
-    ['mainMenu.models', 'import-avatar'],
   ] as const)('opens the tab of %s and lands on %s', async (surface, target) => {
     await renderMenu();
     requester.send(surface, target);
@@ -77,8 +72,8 @@ describe('Take Me There landing on the main menu', () => {
   it('removes the pulse when the animation ends, and draws a still ring under reduced motion', async () => {
     stubReducedMotion();
     await renderMenu();
-    requester.send('mainMenu.models', 'import-avatar');
-    const button = await landed('mainMenu.models#import-avatar');
+    requester.send('mainMenu.entities', 'import-entity');
+    const button = await landed('mainMenu.entities#import-entity');
     expect(ringOn(button, LANDING_RING_CLASS)).toBe(true);
     expect(ringOn(button, LANDING_PULSE_CLASS)).toBe(false);
   });
@@ -98,14 +93,6 @@ describe('Take Me There landing on the main menu', () => {
     requester.send('menu', 'import-save');
     const button = await landed('menu#import-save');
     expect(button).toHaveTextContent('Import');
-    expect(document.activeElement).toBe(button);
-  });
-
-  it('lands on Finalize Character in Character Customization', async () => {
-    await renderMenu();
-    requester.send('avatar', 'finalize-character');
-    const button = await landed('avatar#finalize-character');
-    expect(button).toHaveTextContent('Finalize Character');
     expect(document.activeElement).toBe(button);
   });
 
@@ -145,9 +132,9 @@ describe('Take Me There landing on the main menu', () => {
 
   it('lands only on the row of the surface it names', async () => {
     await renderMenu();
-    // Both tabs offer an Import button; only the Avatars one is the request's row.
-    requester.send('mainMenu.models', 'import-avatar');
-    await landed('mainMenu.models#import-avatar');
+    // Both tabs offer an Import button; only the Entities one is the request's row.
+    requester.send('mainMenu.entities', 'import-entity');
+    await landed('mainMenu.entities#import-entity');
     expect(document.querySelectorAll(`.${LANDING_PULSE_CLASS}`)).toHaveLength(1);
     expect(rowOf('mainMenu.worlds#import-world')).toBeNull();
   });

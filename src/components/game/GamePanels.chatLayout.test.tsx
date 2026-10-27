@@ -4,7 +4,6 @@ import { renderMiddlePanel, stubChatLayout, turnHistory, type Settings, type Tur
 import { setGameplayText } from '@/lib/gameplayTextStore';
 
 // three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const TURNS: TurnFixture[] = [

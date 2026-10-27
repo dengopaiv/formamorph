@@ -44,15 +44,11 @@ vi.mock('@/contexts/GameDataContext', () => {
   });
   return { useGameData: world, useGameDataOptional: world };
 });
-// Neither the chip field nor the morph picker is under test; both pull in editors this test has no use for.
+// The chip field is not under test; it pulls in an editor this test has no use for.
 vi.mock('@/components/prompt/PlaceholderField', () => ({
   PlaceholderNameField: (props: { value: string; ariaLabel?: string }) => (
     <input readOnly value={props.value} aria-label={props.ariaLabel} data-chip-field="" />
   ),
-}));
-vi.mock('@/lib/useBodyMorphNames', () => ({
-  useBodyMorphSources: () => ({ sources: [], loading: false, load: () => {} }),
-  useOwnerMorphSources: () => ({ sources: [], loading: false, load: () => {} }),
 }));
 
 /** Renders the manager against the live store, re-rendering whenever it writes. The panel's tab belongs to

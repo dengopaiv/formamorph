@@ -13,7 +13,6 @@ export const TILE_STORAGE_KEYS: Record<MainMenuCardTab, string> = {
   worlds: 'FORMAMORPH_worldTiles',
   entities: 'FORMAMORPH_entityTiles',
   dictionaries: 'FORMAMORPH_dictionaryTiles',
-  models: 'FORMAMORPH_modelTiles',
 };
 
 /**
@@ -24,7 +23,6 @@ export const LEGACY_ORDER_KEYS: Record<MainMenuCardTab, string> = {
   worlds: 'FORMAMORPH_worldOrder',
   entities: 'FORMAMORPH_entityOrder',
   dictionaries: 'FORMAMORPH_dictionaryOrder',
-  models: 'FORMAMORPH_modelOrder',
 };
 
 const SIZES: LibraryTileSize[] = ['small', 'medium', 'large'];
@@ -131,7 +129,6 @@ export const SEEN_STORAGE_KEYS: Record<MainMenuCardTab, string> = {
   worlds: 'FORMAMORPH_worldTilesSeen',
   entities: 'FORMAMORPH_entityTilesSeen',
   dictionaries: 'FORMAMORPH_dictionaryTilesSeen',
-  models: 'FORMAMORPH_modelTilesSeen',
 };
 
 /** The ids one tab has shown, or null when the tab has never recorded any. */

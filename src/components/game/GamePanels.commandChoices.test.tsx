@@ -5,7 +5,6 @@ import { renderMiddlePanel, type Settings } from '@/test/gamePanels';
 import { CONTINUE_CHOICE } from '@/lib/choices';
 
 // three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const LIST = ['Open fire', 'Call out "Who\'s there?"'];

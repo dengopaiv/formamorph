@@ -45,7 +45,7 @@ const GROUPED_WORLD: World = benchEditorWorld({
 const openTab = openEditorTab;
 
 const FIELD_LABELS =
-  /^(Name|Aliases|Type|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Locations|Image|Image Tags|3D Model)$/;
+  /^(Name|Aliases|Type|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Locations|Image|Image Tags)$/;
 
 /** Every field label the panel shows, in document order. The editor's own Locations tab shares a label with
  *  the picker, so the match is taken from the panel body rather than the whole editor. */
@@ -93,7 +93,7 @@ describe('the World Editor entity panel tabs', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectEntity('Wren');
     expect(panelLabels()).toEqual([
-      'Image', 'Name', 'Aliases', 'Type', 'Image Tags', 'Locations', '3D Model',
+      'Image', 'Name', 'Aliases', 'Type', 'Image Tags', 'Locations',
     ]);
   });
 

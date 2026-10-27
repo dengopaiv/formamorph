@@ -10,7 +10,6 @@ import { useSentenceHighlight } from '@/lib/useSentenceHighlight';
 import { resolveEntityByName } from '@/lib/entityMatch';
 import { clearTurnDerived, parseTurnContent } from '@/lib/turnDigest';
 import { narrationOf } from '@/lib/aiResponse';
-import { usePlayAvatars } from '@/lib/usePlayAvatars';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { traitOrderIndex, activeStatEnabled, refreshChosenTraits } from '@/lib/traitEffects';
 import { entityStatTraitsInForce, listableGlobalTraits, statTraitsInForce, traitGateInput, type TraitWorld } from '@/lib/traitRuntime';
@@ -59,9 +58,7 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { Tip } from "@/components/ui/tooltip";
 import { Pager } from "@/components/ui/pagination";
 import { EntityVisual } from './EntityVisual';
-import { EntityAvatar } from './EntityAvatar';
-import { useEntityStatMorphs } from '@/lib/useEntityStatMorphs';
-import { useEntityVisualPreference } from '@/lib/useEntityVisualPreference';
+import { hasEntityVisual } from '@/lib/entityVisual';
 import { useEntityGallery } from '@/lib/useEntityGallery';
 import TtsPlaybackBar from './TtsPlaybackBar';
 import { MemoryPanel } from './MemoryPanel';
@@ -101,12 +98,6 @@ import { parseSavedReasoning } from '@/lib/savedReasoning';
 import { scriptPrompts } from '@/lib/scriptPrompts';
 import { turnTells } from '@/lib/scriptTells';
 import { ScriptPromptLine, ScriptTellLines } from './ScriptPromptLine';
-
-/** What the entity view shows: an entity, or the played side when no entity is played. */
-type EntityViewSubject = { kind: 'entity'; entity: Entity } | { kind: 'played' };
-
-/** The played side's visual source, which shows the played side's Avatar and nothing else. */
-const PLAYED_SIDE: Pick<Entity, 'id' | 'name'> = { id: '__you', name: 'You' };
 
 /** One side-panel tab: an icon, and the label where the panel is wide enough to hold it. */
 const PanelTab = ({ value, icon: Icon, label }: { value: string; icon: LucideIcon; label: string }) => (
@@ -175,10 +166,7 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
     setVisibleEntities((prev) => prev.filter((se) => se.name !== name));
     setPendingRemoval(null);
   };
-  const avatars = usePlayAvatars();
-  // The played side with no played entity: the legacy fallback's Avatar, shown through the You row.
-  const youRow = !personaEntity && !!avatars.played;
-  const showable = (entity: Entity | undefined): entity is Entity => !!entity && avatars.shows(entity);
+  const showable = (entity: Entity | undefined): entity is Entity => !!entity && hasEntityVisual(entity);
   // First present entity with something to show (the image shows whether or not the name is revealed yet).
   const firstShowable = firstShowableEntity(visibleEntities, entities, showable);
   const isMobile = useIsMobile();
@@ -191,15 +179,9 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
   // entity. The stat panel's (None) and a pick with nothing to show both leave the view on that fallback.
   const pickedEntity = [...entities, ...(personaEntity ? [personaEntity] : [])].find((e) => e.id === selectedEntityId);
   const entityViewShown = (showable(pickedEntity) ? pickedEntity : undefined) ?? (showable(personaEntity) ? personaEntity : undefined);
-  const entityViewSubject: EntityViewSubject | undefined = entityViewShown ? { kind: 'entity', entity: entityViewShown }
-    : youRow ? { kind: 'played' }
-    : firstShowable && { kind: 'entity', entity: firstShowable };
-  const entityViewEntity = entityViewSubject?.kind === 'entity' ? entityViewSubject.entity : undefined;
-  const entityViewSource = entityViewSubject && (entityViewEntity ?? PLAYED_SIDE);
-  const entityViewPreference = useEntityVisualPreference(entityViewEntity?.id);
+  const entityViewEntity = entityViewShown ?? firstShowable;
+  const entityViewSource = entityViewEntity;
   const entityViewGallery = useEntityGallery(entityViewSource);
-  const entityViewMorphs = useEntityStatMorphs(entityViewSource);
-  const entityViewAvatar = entityViewSubject && (entityViewEntity ? avatars.sourceOf(entityViewEntity) : avatars.played);
 
   // Clicking an entity with something to show selects it, so the view swaps to it. The popup opens on mobile,
   // and in landscape when the view is hidden or already on that entity. A not-yet-revealed entity can show
@@ -249,19 +231,8 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
           key={entityViewSource.id}
           entity={entityViewSource}
           images={entityViewGallery.images}
-          avatar={entityViewAvatar && (
-            <EntityAvatar
-              entity={entityViewSource}
-              source={entityViewAvatar}
-              played={!entityViewEntity || entityViewEntity.id === avatars.playedId}
-              resolving={avatars.resolving}
-            />
-          )}
-          preference={entityViewPreference.preference}
-          onPreferenceChange={entityViewPreference.onPreferenceChange}
           imageIndex={entityViewGallery.imageIndex}
           onImageStep={entityViewGallery.onImageStep}
-          morphValues={entityViewMorphs}
         />
       </div>
     </div>
@@ -315,8 +286,6 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
               {personaEntity && (
                 <EntityListRow label={personaEntity.name} you onClick={() => openEntity(personaEntity, true)} />
               )}
-              {/* No pick falls back to the played side, which is what selecting You means. */}
-              {youRow && <EntityListRow label={PLAYED_SIDE.name} onClick={() => setSelectedEntityId(undefined)} />}
               {visibleEntities.length > 0 ? (
                 visibleEntities.map((se, index) => {
                   const entityItem = resolveEntityByName(se.name, entities);
@@ -341,7 +310,7 @@ export const LeftPanel = ({ entities, onEntityClick, onRegenerateMemory, narrati
                     />
                   );
                 })
-              ) : personaEntity || youRow ? null : (
+              ) : personaEntity ? null : (
                 <p>No entity visible.</p>
               )}
             </div>

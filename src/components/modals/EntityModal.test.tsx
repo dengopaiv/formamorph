@@ -3,21 +3,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { EntityModal, type EntityDescriptionEditing } from './EntityModal';
 import type { Entity } from '@/types';
 
-// The modal's visual/audio children reach for WebGL, VRM and placeholder resolution, none of which this
+// The modal's visual/audio children reach for media and placeholder resolution, none of which this
 // suite is about — it tests the description's edit/regenerate controls only.
 vi.mock('../game/EntityVisual', () => ({
   EntityVisual: () => null,
 }));
 vi.mock('../game/AudioPlayer', () => ({ default: () => null }));
 vi.mock('@/lib/usePlaceholderResolver', () => ({ useEntityTextResolver: () => (_entity: unknown, t: string) => t }));
-vi.mock('@/lib/useEntityVisualPreference', () => ({
-  useEntityVisualPreference: () => ({ preference: 'image', onPreferenceChange: () => {} }),
-}));
 vi.mock('@/lib/useEntityGallery', () => ({ useEntityGallery: () => ({ imageIndex: 0, onImageStep: () => {} }) }));
-vi.mock('@/lib/useEntityStatMorphs', () => ({ useEntityStatMorphs: () => ({}) }));
-vi.mock('@/lib/usePlayAvatars', () => ({
-  usePlayAvatars: () => ({ sourceOf: () => undefined, played: undefined, playedId: undefined, resolving: false }),
-}));
 
 const entity: Entity = { id: 'e1', name: 'Grey Mouse', playerDescription: 'A wiry scavenger.' };
 

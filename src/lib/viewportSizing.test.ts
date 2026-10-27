@@ -23,7 +23,7 @@ describe('keyboard-aware viewport sizing', () => {
   it('frames every top-level view on the measured viewport', () => {
     // A view left on a viewport unit sizes itself to whichever viewport the browser did or did not
     // shrink, which is the thing that kept not matching what was on screen.
-    for (const view of ['GameViewer', 'MainMenu', 'WorldEditor', 'CharacterCustomization']) {
+    for (const view of ['GameViewer', 'MainMenu', 'WorldEditor']) {
       const src = read(`src/views/${view}.tsx`);
       expect(src, `${view} is not framed on the measured viewport`).toContain('app-viewport');
       expect(src, `${view} still sizes itself off a viewport unit`).not.toMatch(/(?<!max-)h-\[(var\(--app-h[^)]*\))?100dvh\]|h-\[100dvh\]/);

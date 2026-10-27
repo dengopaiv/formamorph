@@ -3,7 +3,6 @@ import { screen, within } from '@testing-library/react';
 import { renderRightPanel, statFixture, type Gameplay } from '@/test/gamePanels';
 import type { EntityStatValues, SceneEntity, Stat, StatLink } from '@/types';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 /** One Blueprint stat linked onto two entities, placed in each one's own group, each with its own value. */

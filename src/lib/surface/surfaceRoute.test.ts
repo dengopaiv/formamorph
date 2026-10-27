@@ -25,7 +25,7 @@ describe('resolveSurface', () => {
   });
 
   it('opens a screen tab on its screen with no dialog', () => {
-    expect(resolveSurface('mainMenu.models')).toEqual({ view: 'mainMenu', dialog: null, tabs: ['mainMenu.models'] });
+    expect(resolveSurface('mainMenu.entities')).toEqual({ view: 'mainMenu', dialog: null, tabs: ['mainMenu.entities'] });
   });
 
   it('opens the nearest ancestor of a surface that needs an item', () => {

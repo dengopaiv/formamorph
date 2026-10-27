@@ -23,8 +23,6 @@ vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(() => 'toast'), { info: vi.fn(), success: vi.fn(), error: vi.fn(), update: vi.fn(), dismiss: vi.fn() }),
   ToastContainer: () => null,
 }));
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
-vi.mock('@/views/ModelViewer', () => ({ default: () => <div data-testid="model-viewer" /> }));
 vi.mock('@/lib/imageOptimWorkerClient', () => ({ measureInWorker: vi.fn(), encodeInWorker: vi.fn() }));
 
 beforeEach(() => {

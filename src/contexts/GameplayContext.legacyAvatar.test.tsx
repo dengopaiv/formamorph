@@ -1,12 +1,10 @@
 // Real in-memory storage for saves; must load before anything touches `indexedDB`.
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi } from 'vitest';
-import { render, act, waitFor } from '@testing-library/react';
+import { render, act } from '@testing-library/react';
 import { GameplayProvider, useGameplay } from './GameplayContext';
 import { GameDataProvider, useGameData } from './GameDataContext';
 import { PlaceholderSessionProvider } from './PlaceholderSessionContext';
-import { useResolvedWorld } from '@/lib/useResolvedWorld';
-import { useSeedAvatarOnSaveLoad } from '@/lib/useLibraryAvatars';
 import { LEGACY_VRM_ID, defaultCharacterData } from '@/lib/legacyVrm';
 import { putSaveRecord } from '@/components/modals/dbUtils';
 import { worldFixture } from '@/test/gamePanels';
@@ -20,12 +18,8 @@ interface Live {
   gameData: ReturnType<typeof useGameData>;
 }
 
-/** GameViewer's seeding hook, mounted as GameViewer mounts it. */
 const Expose = ({ expose }: { expose: (l: Live) => void }) => {
-  const gameplay = useGameplay();
-  const { persona } = useResolvedWorld();
-  useSeedAvatarOnSaveLoad(gameplay.saveLoads, !gameplay.personaPending, persona);
-  expose({ gameplay, gameData: useGameData() });
+  expose({ gameplay: useGameplay(), gameData: useGameData() });
   return null;
 };
 
@@ -87,22 +81,5 @@ describe('an old save at game load', () => {
     await oldSave('library', { ...defaultCharacterData, chosenVrm: undefined, playerModelId: 'lib-a' });
     await loadInto(live, oldWorld(true), 'library');
     expect(live().gameplay.characterData?.chosenVrm).toEqual({ pick: { kind: 'library', id: 'lib-a' }, legacy: true });
-  });
-
-  it('seeds default customization when the played side shows an Avatar and the save holds none', async () => {
-    const live = mount();
-    await oldSave('bare', null);
-    await loadInto(live, oldWorld(true), 'bare');
-    await waitFor(() => expect(live().gameplay.characterData).toEqual(defaultCharacterData));
-  });
-
-  it('seeds nothing when the played side shows no Avatar', async () => {
-    const live = mount();
-    await oldSave('bare-off', null);
-    await loadInto(live, oldWorld(false), 'bare-off');
-    // The seed runs on the render that counts the load; one more tick lets any write land.
-    await waitFor(() => expect(live().gameplay.saveLoads).toBe(1));
-    await act(async () => {});
-    expect(live().gameplay.characterData).toBeNull();
   });
 });

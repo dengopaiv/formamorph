@@ -24,16 +24,14 @@ import type { AITurnResult, ChatMessage, Entity, EntityStatChanges, EntityStatVa
  * a test. So the real providers go up, the runtime state is staged into them, and the panel under test runs
  * for real against spy callbacks.
  *
- * Two dependencies can't run in jsdom and are stubbed by the calling test file (`vi.mock` is hoisted per
+ * One dependency can't run in jsdom and is stubbed by the calling test file (`vi.mock` is hoisted per
  * file, so it can't live here):
  *
  * ```ts
- * vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
  * vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
  * ```
  *
- * The VRM stub is only load-bearing for `LeftPanel` with a player model staged; the TTS stub is what lets a
- * test put a panel into its "audio exists" state.
+ * The TTS stub is what lets a test put a panel into its "audio exists" state.
  */
 
 type MiddlePanelProps = ComponentProps<typeof MiddlePanel>;

@@ -4,7 +4,6 @@ import { renderMiddlePanel, statFixture, stubChatLayout, type Settings, type Tur
 import { QUOTE_CLASS } from '@/lib/quoteSegments';
 
 // three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const TURNS: TurnFixture[] = [

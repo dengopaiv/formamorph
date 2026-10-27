@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { renderMiddlePanel, stubChatLayout, turnHistory } from '@/test/gamePanels';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const opening = turnHistory([{ action: 'START GAME', narration: 'The door opens.', turnId: 'opening' }]);

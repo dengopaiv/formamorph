@@ -22,9 +22,7 @@ function DefaultMenuItem({ noun, isDefault, onSet, onClear }: DefaultMenuItemPro
 
 export const DefaultPersonaMenuItem = (props: DefaultMenuItemProps) => <DefaultMenuItem noun="Persona" {...props} />;
 
-export const DefaultAvatarMenuItem = (props: DefaultMenuItemProps) => <DefaultMenuItem noun="Avatar" {...props} />;
-
-/** The grid card's mark for the default persona or Avatar. */
+/** The grid card's mark for the default persona. */
 export function DefaultBadge() {
   return <span className="rounded bg-overlay/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">Default</span>;
 }

@@ -8,11 +8,10 @@ import type { ListSearch } from '@/components/listToolbarHooks';
 import { matchesListSearch } from '@/lib/listSearch';
 import { cn } from '@/lib/utils';
 import {
-  blankSections, canStack, filterSections, groupSections, isAvatarSection, mediaParentKey, mediaSections, sectionSelection, sectionTitle, sortSectionsLargestFirst, withAvatarsSection,
+  blankSections, canStack, filterSections, groupSections, mediaParentKey, mediaSections, sectionSelection, sectionTitle, sortSectionsLargestFirst,
   type MediaFilter, type MediaParent,
 } from '@/lib/mediaIndex';
 import { useMediaViewPrefs } from '@/lib/useMediaViewPrefs';
-import { AvatarStoreControls } from './AvatarStore';
 import { MediaGallery } from './MediaGallery';
 import { MediaHeader, type OptimizeControl } from './MediaHeader';
 import { MediaItemPanel, MediaSummaryPanel } from './MediaPanels';
@@ -49,9 +48,7 @@ export function useWorldMediaEditor({ selectedId, onSelect, search, onGoTo, opti
   // What the gallery lays out, before the search narrows it.
   const shownSections = useMemo(() => {
     const filtered = filterSections(groupSections(blankOnly ? blankSource : allSections, grouping), filter);
-    const sorted = largestFirst ? sortSectionsLargestFirst(filtered) : filtered;
-    // Unfiltered, the Avatars section always shows, so the first Avatar has a way in.
-    return filter === 'all' ? withAvatarsSection(sorted, grouping) : sorted;
+    return largestFirst ? sortSectionsLargestFirst(filtered) : filtered;
   }, [allSections, blankSource, blankOnly, grouping, filter, largestFirst]);
   const term = search.term.trim();
   const sections = useMemo(() => {
@@ -126,7 +123,6 @@ export function useWorldMediaEditor({ selectedId, onSelect, search, onGoTo, opti
           items={section.items}
           placeholders={placeholders}
           onSelect={onSelect}
-          controls={isAvatarSection(section) ? <AvatarStoreControls /> : undefined}
         />
       )
       : allItems.length

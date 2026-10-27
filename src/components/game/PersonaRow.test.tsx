@@ -10,7 +10,6 @@ import { readWorldPersona } from '@/lib/personaPick';
 import { useResolvedWorld } from '@/lib/useResolvedWorld';
 import type { Entity, PersonaRef } from '@/types';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('react-toastify', async (importOriginal) => {

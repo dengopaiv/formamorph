@@ -42,13 +42,11 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
 
   menu: { host: 'mainMenu' },
   intro: { host: 'mainMenu' },
-  avatar: { host: 'mainMenu' },
   backup: { host: 'mainMenu' },
   aiSetup: { host: 'mainMenu' },
   changelog: { ancestor: 'mainMenu' },
   entityEditor: { ancestor: 'mainMenu.entities' },
   dictionaryEditor: { ancestor: 'mainMenu.dictionaries' },
-  modelDetails: { ancestor: 'mainMenu.models' },
   enterWorld: { ancestor: 'mainMenu.worlds' },
   worldPrompts: { ancestor: 'mainMenu.worlds' },
   componentUpdates: { ancestor: 'mainMenu' },
@@ -58,7 +56,6 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
   imageReplace: { ancestor: 'worldEditor' },
   codeRename: { ancestor: 'worldEditor' },
   replaceAll: { ancestor: 'worldEditor' },
-  deleteWorldAvatar: { ancestor: 'worldEditor.overview' },
   savedElsewhere: { ancestor: 'worldEditor' },
   deletedElsewhere: { ancestor: 'worldEditor' },
 

@@ -8,7 +8,6 @@ import type { Trait, TraitGroup } from '@/types';
 import { phValues } from '@/test/placeholderValues';
 // Same reason the panel harness gives: neither dependency runs in jsdom, and neither is what these cases
 // are about. RightPanel pulls them in through the shared module.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const TURNS = [{ action: 'walk the dock', narration: 'The dock creaks.', turnId: 't1', choices: ['Keep walking'] }];

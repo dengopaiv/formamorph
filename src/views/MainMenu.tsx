@@ -9,8 +9,6 @@ import { useDevRoute, registerDevHook } from '../lib/devRouter';
 import { useSurfaceTab } from '@/components/ui/surface';
 import { ELEMENT_ICONS } from '@/lib/elementIcons';
 import { MAIN_MENU_CARD_TABS, type MainMenuCardTab } from './mainMenuTabs';
-import { clearLibraryModelPicks, deleteModelDescription, findModelUsage, type ModelUsage } from '@/lib/libraryVrmDelete';
-import { DEFAULT_AVATAR_URL, clearUserDefaultAvatar, readUserDefaultAvatar, setUserDefaultAvatar } from '@/lib/defaultAvatar';
 import { toast } from 'react-toastify';
 import { toastError } from '@/lib/linkToast';
 import { withImportedWorldTools } from '@/lib/tools/worldTools';
@@ -21,9 +19,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tip } from "@/components/ui/tooltip";
 import {ConfirmDialog} from "@/components/ConfirmDialog";
 import {FilePlus2, DoorOpen, Pencil, AlertTriangle, Code, LayoutGrid, GalleryThumbnails, Columns2, RectangleVertical, Menu, BookOpen, ChevronLast, MoreHorizontal, FolderOpen, Archive, Settings, ScrollText, type LucideIcon } from "lucide-react";
-import { DefaultAvatarMenuItem, DefaultBadge, DefaultPersonaMenuItem } from '@/components/library/LibraryDefault';
-import { AvatarThumbnailMenuItems } from '@/components/library/AvatarThumbnail';
-import { useAvatarThumbnails } from '@/lib/useAvatarThumbnails';
+import { DefaultBadge, DefaultPersonaMenuItem } from '@/components/library/LibraryDefault';
 import { ActionIcon } from '@/lib/actionIcons';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageZoomViewer } from "@/components/ImageZoomViewer";
@@ -68,10 +64,9 @@ import { clearDefaultPersona, readDefaultPersona, setDefaultPersona } from '@/li
 import WorldStorageService from '../services/WorldStorageService';
 import DictionaryStorageService from '../services/DictionaryStorageService';
 import EntityStorageService from '../services/EntityStorageService';
-import ModelStorageService from '../services/ModelStorageService';
 import ConnectReferencesModal from '@/components/modals/ConnectReferencesModal';
 import type { ReferenceChoices, ReferenceRow } from '@/lib/worldReferences';
-import type { World, Stat, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, WorldOverview } from '@/types';
+import type { World, Stat, Dictionary, DictionaryMetadata, Entity, EntityMetadata, WorldOverview } from '@/types';
 import { parseWorldFile } from '@/lib/jsonFileWorkerUtils';
 import { updateBridge } from '@/lib/updates/updateBridge';
 import { useIsMobile } from '@/lib/useIsMobile';
@@ -96,7 +91,6 @@ import { WorldActionButton } from "@/components/WorldActionButton";
 import { GradientButton } from "@/components/GradientButton";
 import DictionaryEditorModal from "@/components/modals/DictionaryEditorModal";
 import EntityEditorModal from "@/components/modals/EntityEditorModal";
-import { ModelDetailsModal } from "@/components/modals/ModelDetailsModal";
 import { ENTITY_EDITOR_SUBTABS, ENTITY_EDITOR_TABS } from "@/views/entityPanelTabs";
 import { DICTIONARY_EDITOR_TABS } from '@/views/dictionaryEditorTabs';
 import { BackupRestoreDialog } from "@/components/menu/BackupRestoreDialog";
@@ -138,7 +132,6 @@ const CARD_TABS: { value: MainMenuCardTab; label: string; Icon: LucideIcon }[] =
   { value: 'worlds', label: 'Worlds', Icon: ELEMENT_ICONS.world },
   { value: 'entities', label: 'Entities', Icon: ELEMENT_ICONS.entities },
   { value: 'dictionaries', label: 'Dictionaries', Icon: ELEMENT_ICONS.dictionary },
-  { value: 'models', label: 'Avatars', Icon: ELEMENT_ICONS.avatar },
 ];
 
 /** The Import button's Take Me There target on each tab. */
@@ -146,7 +139,6 @@ const IMPORT_TARGET: Record<MainMenuCardTab, TargetAttribute> = {
   worlds: targetAttribute('mainMenu.worlds', 'import-world'),
   entities: targetAttribute('mainMenu.entities', 'import-entity'),
   dictionaries: targetAttribute('mainMenu.dictionaries', 'import-dictionary'),
-  models: targetAttribute('mainMenu.models', 'import-avatar'),
 };
 
 
@@ -202,15 +194,6 @@ const WorldNotice = ({ tone, icon: Icon, children, actionLabel, actionIcon: Acti
     </Button>
   </div>
 );
-
-/** An Avatar's authors as one credit line, or empty when it names none. */
-function creditLine(authors: string[] | undefined): string {
-  const names = authors?.filter((name) => name.trim()) ?? [];
-  if (names.length === 0) return '';
-  if (names.length === 1) return `By ${names[0]}.`;
-  if (names.length === 2) return `By ${names[0]} and ${names[1]}.`;
-  return `By ${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}.`;
-}
 
 const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = false }: MainMenuProps) => {
   const isMountedRef = useRef(true);
@@ -273,7 +256,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [worldsLayout, setWorldsLayout] = usePersistentState<'grid' | 'detailed'>(LAYOUT_MODE_KEY, 'grid', layoutCodec);
   const [entitiesLayout, setEntitiesLayout] = usePersistentState<'grid' | 'detailed'>(`${LAYOUT_MODE_KEY}_entities`, 'grid', layoutCodec);
   const [dictionariesLayout, setDictionariesLayout] = usePersistentState<'grid' | 'detailed'>(`${LAYOUT_MODE_KEY}_dictionaries`, 'grid', layoutCodec);
-  const [modelsLayout, setModelsLayout] = usePersistentState<'grid' | 'detailed'>(`${LAYOUT_MODE_KEY}_models`, 'grid', layoutCodec);
   const [entityFilter, setEntityFilter] = usePersistentState<EntityLibraryFilter>(
     ENTITY_LIBRARY_FILTER_KEY, 'all', entityLibraryFilterCodec,
   );
@@ -288,11 +270,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // The toggle drives whichever library is on screen; the other three keep theirs.
   const layoutMode = cardType === 'entities' ? entitiesLayout
     : cardType === 'dictionaries' ? dictionariesLayout
-    : cardType === 'models' ? modelsLayout
     : worldsLayout;
   const setLayoutMode = cardType === 'entities' ? setEntitiesLayout
     : cardType === 'dictionaries' ? setDictionariesLayout
-    : cardType === 'models' ? setModelsLayout
     : setWorldsLayout;
   const toggleWorldModalCollapsed = () => setWorldModalCollapsed((prev) => !prev);
   const [showWorldModal, setShowWorldModal] = useState(false);
@@ -305,11 +285,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [editorStartsTour, setEditorStartsTour] = useState(false);
   const [worldToDelete, setWorldToDelete] = useState<string | null>(null);
   const [warmingOffline, setWarmingOffline] = useState(false);
-  const [showCharacterCustomization, setShowCharacterCustomization] = useState(false);
   const [showIntroReadme, setShowIntroReadme] = useState(false);
   // The global default persona: a library entity id, device-local.
   const [defaultPersona, setDefaultPersonaId] = useState(readDefaultPersona);
-  const [defaultAvatar, setDefaultAvatarId] = useState(readUserDefaultAvatar);
   const entryFlow = useRef<EnterWorldFlowHandle>(null);
   // Unpinned: the code notice reads stat names outside any entry draft.
   const { stats } = useResolvedAuthoredWorld();
@@ -340,8 +318,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     if (devRoute?.modal === 'settings' || devRoute?.modal === 'settingsCompare' || devRoute?.modal === 'chipOptions') setShowSettings(true);
     if (devRoute?.modal === 'menu') setShowLoadDialog(true);
     if (devRoute?.modal === 'backup') setShowBackup(true);
-    if (['worldEditor', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar'].includes(devRoute?.modal ?? '')) setShowWorldEditor(true);
-    if (devRoute?.modal === 'avatar') setShowCharacterCustomization(true);
+    if (['worldEditor', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere'].includes(devRoute?.modal ?? '')) setShowWorldEditor(true);
     if (devRoute?.modal === 'aiSetup') setGate({ reason: 'firstRun' });
     // The prompt viewer reads a world's overrides, so it opens on a canned one rather than on whatever the
     // library happens to hold — a world really selected from a card still wins over it.
@@ -380,11 +357,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         rows: sample.devUpdateRows(),
         copies: sample.devUpdateCopies(),
       }));
-    }
-    // Unlike the editors above, a model preview needs a real model — open the first one, if the library has any.
-    if (devRoute?.modal === 'modelDetails') {
-      setCardType('models');
-      ModelStorageService.getModelMetadata().then(([first]) => first && setPreviewModelId(first.id));
     }
     // With no modal named, `tab` selects the library's card type — set here rather than by clicking the
     // switcher, so landing on a grid doesn't depend on that control's markup.
@@ -443,7 +415,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dictionaryImportRef = useRef<HTMLInputElement | null>(null);
   const entityImportRef = useRef<HTMLInputElement | null>(null);
-  const modelImportRef = useRef<HTMLInputElement | null>(null);
   const [worlds, setWorlds] = useState<WorldRecord[]>([]);
   const [isLoadingWorlds, setIsLoadingWorlds] = useState(true);
   // One blank record per stored world, built from the id read that beats the metadata read to the screen.
@@ -461,13 +432,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [entities, setEntities] = useState<EntityMetadata[]>([]);
   const [isLoadingEntities, setIsLoadingEntities] = useState(true);
   const [entityToDelete, setEntityToDelete] = useState<string | null>(null);
-  // Local VRM library (metadata only) shown on the Models tab.
-  const [models, setModels] = useState<ModelMetadata[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(true);
-  const [modelToDelete, setModelToDelete] = useState<string | null>(null);
-  const [previewModelId, setPreviewModelId] = useState<string | null>(null);
-  // The saves and library entities that use the model queued for deletion; null while the scan runs.
-  const [modelUsage, setModelUsage] = useState<ModelUsage | null>(null);
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
   // A blank character being authored but not yet saved (New Entity → editor, persisted only on Save).
   const [draftEntity, setDraftEntity] = useState<Entity | null>(null);
@@ -598,33 +562,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
   useEffect(() => { refreshDictionaries(); }, [refreshDictionaries]);
 
-  // Load the local model library metadata, seeding the bundled model on the very first run. Seeding is a
-  // no-op after that (a localStorage flag short-circuits it before the model is fetched).
-  const refreshModels = useCallback(async () => {
-    try {
-      await ModelStorageService.initialize();
-      await ModelStorageService.seedDefaultModel(DEFAULT_AVATAR_URL);
-      const metadata = await ModelStorageService.getModelMetadata();
-      setModels(metadata);
-    } catch (error) {
-      console.error('Error loading models:', error);
-    } finally {
-      setIsLoadingModels(false);
-    }
-  }, []);
-
-  useEffect(() => { refreshModels(); }, [refreshModels]);
-
-  // Work out what a pending model deletion would affect, so the prompt can name the saves rather than warn
-  // in the abstract. Runs when the dialog opens; the scan reads every save, so it isn't done up front.
-  useEffect(() => {
-    if (!modelToDelete) { setModelUsage(null); return; }
-    let cancelled = false;
-    findModelUsage(modelToDelete).then((usage) => { if (!cancelled) setModelUsage(usage); });
-    return () => { cancelled = true; };
-  }, [modelToDelete]);
-
-  const setModelThumbnailSource = useAvatarThumbnails(models, setModels, cardType === 'models');
 
   // Load the local character library metadata. Reused on mount and after the editor modal closes.
   const refreshEntities = useCallback(async () => {
@@ -940,32 +877,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     );
   };
 
-  // Import one or more .vrm/.glb files into the model library. A file whose bytes are already stored asks
-  // before adding a second copy — these run to tens of megabytes, so a silent duplicate is expensive.
-  const importModelFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = filesFrom(event);
-    if (!files.length) return;
-
-    let stored = 0;
-    let skipped = 0;
-    for (const file of files) {
-      try {
-        const duplicate = await ModelStorageService.findDuplicate(file);
-        if (duplicate && !window.confirm(`"${duplicate.name}" is already in your library, and this file is identical.\n\nAdd it again anyway?`)) {
-          skipped++;
-          continue;
-        }
-        await ModelStorageService.addModel(file);
-        stored++;
-      } catch (error) {
-        console.error('Error importing model:', file.name, error);
-        skipped++;
-      }
-    }
-    await refreshModels();
-    importSummaryToast(stored, skipped, { one: 'player avatar', many: 'player avatars' });
-  };
-
   // Open the editor on a blank character DRAFT — nothing is stored until the user hits Save in the editor.
   const handleCreateNewEntity = () => {
     setDraftEntity({ id: randomUUID(), name: 'New Character' });
@@ -1056,7 +967,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       // Held as the browser's own tab request, so it outlasts the landing and an age gate's answer.
       case 'menu': setShowLoadDialog(true); break;
       case 'backup': setShowBackup(true); break;
-      case 'avatar': setShowCharacterCustomization(true); break;
       case 'aiSetup': setGate({ reason: 'firstRun' }); break;
       case 'intro': onReplayIntro?.(); break;
     }
@@ -1175,13 +1085,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const worldIds = useMemo(() => shownWorlds.map((world) => world.id as string), [shownWorlds]);
   const entityIds = useMemo(() => entities.map((entity) => entity.id), [entities]);
   const dictionaryIds = useMemo(() => dictionaries.map((dictionary) => dictionary.id), [dictionaries]);
-  const modelIds = useMemo(() => models.map((model) => model.id), [models]);
   const worldTiles = useLibraryTiles('worlds', worldIds, !isLoadingWorlds);
   // Read here, not at the menu, so a run that ends re-renders the tile menus that disable Delete.
   const optimizingWorldIds = useOptimizingWorldIds();
   const entityTiles = useLibraryTiles('entities', entityIds, !isLoadingEntities);
   const dictionaryTiles = useLibraryTiles('dictionaries', dictionaryIds, !isLoadingDictionaries);
-  const modelTiles = useLibraryTiles('models', modelIds, !isLoadingModels);
 
   // Check for Updates on an entity or dictionary tile. No world is open here, so every copy the review
   // touches is read and written in storage.
@@ -1217,15 +1125,13 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // The singular noun for the selected card type — drives the contextual New/Import button labels.
   const cardNoun = cardType === 'worlds' ? 'World'
     : cardType === 'entities' ? 'Entity'
-    : cardType === 'models' ? 'Avatar'
     : 'Dictionary';
 
   // The menu's action buttons, shared between the full landscape row and the portrait hamburger popover.
   // New/Import are contextual to the selected card type.
   const actionButtons = (
     <>
-      {/* Models are import-only: a VRM is authored in modelling software, so there's nothing to create here. */}
-      {cardType !== 'models' && (
+      {(
         <GradientButton
           tone="amber"
           onClick={() => {
@@ -1245,7 +1151,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           if (cardType === 'worlds') fileInputRef.current?.click();
           else if (cardType === 'dictionaries') dictionaryImportRef.current?.click();
           else if (cardType === 'entities') entityImportRef.current?.click();
-          else if (cardType === 'models') modelImportRef.current?.click();
         }}
       >
         <ActionIcon.import className="mr-2 h-4 w-4" /> Import {cardNoun}
@@ -1254,7 +1159,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     </>
   );
 
-  // One place in the tree, so the entry draft survives the Avatar step taking the whole screen.
   const flow = (
     <EnterWorldFlow
       ref={entryFlow}
@@ -1266,8 +1170,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       setShowReadme={setShowReadme}
       introOpen={showIntroReadme}
       setIntroOpen={setShowIntroReadme}
-      avatarOpen={showCharacterCustomization}
-      setAvatarOpen={setShowCharacterCustomization}
       onStartGame={onStartGame}
     />
   );
@@ -1447,83 +1349,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         multiple
         className="hidden"
       />
-      <input
-        type="file"
-        ref={modelImportRef}
-        onChange={importModelFile}
-        accept=".vrm,.glb"
-        multiple
-        className="hidden"
-      />
 
-      {/* Worlds, Entities, Dictionaries, and Models are card grids of sizable, groupable tiles. */}
-      {cardType === 'models' ? (
-        <LibraryTileGrid
-          items={models}
-          idOf={(model) => model.id}
-          nameOf={(model) => model.name}
-          tiles={modelTiles}
-          layout={layoutMode}
-          aspect="portrait"
-          minMediumWidth={ENTITY_MIN_TILE}
-          detailedColumnsClass={DETAILED_SPLIT_GRID_CLASS}
-          thumbnailOf={(model) => model.thumbnail}
-          placeholderOf={(model) => <EntityPlaceholderArt id={model.id} name={model.name} />}
-          emptyState={!isLoadingModels ? (
-            <div className="flex items-center justify-center py-16 px-4 select-none">
-              <p className="max-w-md text-center text-helper text-muted-foreground">
-                No player avatars yet — use <span className="font-semibold">Import Avatar</span> to add a .vrm.
-              </p>
-            </div>
-          ) : undefined}
-          renderCard={(model, { layout, fill, compact }) => {
-            // A plain .glb carries no VRM metadata, so it has no license and its morph targets
-            // aren't guaranteed — say so on the card rather than letting it pass as a full VRM.
-            const glb = model.license?.metaVersion === null ? (
-              <Tip tip="Plain glTF: no license information, and morph targets aren't guaranteed.">
-                <span
-                  tabIndex={0}
-                  className="self-start rounded bg-overlay/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-                >
-                  GLB
-                </span>
-              </Tip>
-            ) : undefined;
-            const isDefault = model.id === defaultAvatar;
-            const badge = isDefault || glb ? <div className="flex gap-1">{isDefault && <DefaultBadge />}{glb}</div> : undefined;
-            const note = isDefault || glb ? <span className="flex items-center gap-1">{isDefault && 'Default Avatar'}{glb}</span> : undefined;
-            return (
-              <SortableWorldCard
-                world={{ id: model.id, name: model.name, description: creditLine(model.license?.authors), thumbnail: model.thumbnail }}
-                layout={layout}
-                aspect="portrait"
-                fill={fill}
-                compact={compact}
-                placeholder={<EntityPlaceholderArt id={model.id} name={model.name} />}
-                omitEmptyDescription
-                omitEmptyTags
-                badge={badge}
-                note={note}
-                onSelect={setPreviewModelId}
-              />
-            );
-          }}
-          itemActions={(id) => {
-            const model = models.find((m) => m.id === id);
-            return model ? (
-              <>
-                <DefaultAvatarMenuItem
-                  isDefault={id === defaultAvatar}
-                  onSet={() => { setUserDefaultAvatar(id); setDefaultAvatarId(id); }}
-                  onClear={() => { clearUserDefaultAvatar(); setDefaultAvatarId(undefined); }}
-                />
-                <AvatarThumbnailMenuItems model={model} onChange={(source) => { void setModelThumbnailSource(id, source); }} />
-              </>
-            ) : null;
-          }}
-          onDelete={setModelToDelete}
-        />
-      ) : cardType === 'entities' ? (
+      {/* Worlds, Entities and Dictionaries are card grids of sizable, groupable tiles. */}
+      {cardType === 'entities' ? (
         <LibraryTileGrid
           items={entities}
           idOf={(entity) => entity.id}
@@ -2084,31 +1912,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         }}
       />
 
-      <ConfirmDialog
-        open={!!modelToDelete}
-        onOpenChange={(open) => !open && setModelToDelete(null)}
-        title="Delete Player Avatar"
-        description={deleteModelDescription(modelUsage)}
-        onConfirm={async () => {
-          try {
-            await ModelStorageService.deleteModel(modelToDelete!);
-            setModels(prev => prev.filter(m => m.id !== modelToDelete));
-            await clearLibraryModelPicks(modelToDelete!)
-              .catch((error: unknown) => toastError(error, 'Could not clear the Avatar from your library entities.'));
-          } catch (error) {
-            // The library refuses to drop its last avatar; tell the player why rather than failing silently.
-            toastError(error, 'Could not delete that player avatar.');
-          } finally {
-            setModelToDelete(null);
-          }
-        }}
-      />
-
-      <ModelDetailsModal
-        model={models.find((m) => m.id === previewModelId) ?? null}
-        onClose={() => setPreviewModelId(null)}
-      />
-
       <EntityEditorModal
         entityId={editingEntityId}
         draft={draftEntity}
@@ -2265,7 +2068,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   return (
     <>
       {flow}
-      {!(showCharacterCustomization && !showIntroReadme) && menu}
+      {menu}
     </>
   );
 };
