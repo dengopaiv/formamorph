@@ -12,7 +12,6 @@ import type { ChatMessage, Entity } from '@/types';
 // The hosted build: the Default preset is the Demo AI, so entering a game raises the gate the tests dismiss.
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 /** Every AI request the view sent, as the promise of its reply. */
 const transports = vi.hoisted((): Promise<unknown>[] => []);
 vi.mock('@/lib/aiRequest/requestTransport', async (importOriginal) => {

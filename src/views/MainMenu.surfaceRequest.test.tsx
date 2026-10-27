@@ -12,10 +12,6 @@ vi.mock('react-toastify', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn() },
   ToastContainer: () => null,
 }));
-vi.mock('./VRMViewer', async () => {
-  const { forwardRef } = await import('react');
-  return { default: forwardRef(() => null) };
-});
 
 const world = (): StoredWorldRecord => ({
   id: 'sedge', name: 'Sedge Landing',
@@ -65,8 +61,8 @@ describe('a surface request on the main menu', () => {
 
   it('selects a library tab', async () => {
     renderMenu();
-    requester.send('mainMenu.models');
-    await waitFor(() => expect(registry.get()).toEqual({ screen: 'mainMenu', dialog: null, tabs: ['mainMenu.models'] }));
+    requester.send('mainMenu.entities');
+    await waitFor(() => expect(registry.get()).toEqual({ screen: 'mainMenu', dialog: null, tabs: ['mainMenu.entities'] }));
   });
 
   it('re-selects the tab of the surface already open and leaves it open', async () => {

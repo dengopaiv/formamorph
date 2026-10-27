@@ -19,11 +19,6 @@ vi.mock('react-toastify', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn() },
   ToastContainer: () => null,
 }));
-// WebGL rendering is outside the entry contract; Avatar's controls and handoff stay real.
-vi.mock('./VRMViewer', async () => {
-  const { forwardRef } = await import('react');
-  return { default: forwardRef(() => null) };
-});
 // The library grid sits behind the entry dialog and takes nothing from the draft, so it counts menu renders.
 const gridRenders = vi.hoisted(() => ({ count: 0 }));
 vi.mock('@/components/library/LibraryTileGrid', async (importOriginal) => {
@@ -36,18 +31,11 @@ vi.mock('@/components/library/LibraryTileGrid', async (importOriginal) => {
   return { ...real, LibraryTileGrid };
 });
 
-/** Click Finalize Character once the library's models load: the button stays disabled until then. */
-async function finalize() {
-  const button = await screen.findByRole('button', { name: 'Finalize Character' });
-  await waitFor(() => expect(button).toBeEnabled());
-  fireEvent.click(button);
-}
-
-const world = (avatar = false): StoredWorldRecord => ({
+const world = (): StoredWorldRecord => ({
   id: 'entry-world', name: 'Entry World',
   data: {
     version: __APP_VERSION__,
-    worldOverview: { name: 'Entry World', description: '', author: '', systemPrompt: '', tags: [], ...(avatar ? { legacyVrmFallback: { kind: 'default' } } : {}) },
+    worldOverview: { name: 'Entry World', description: '', author: '', systemPrompt: '', tags: [] },
     stats: [], entities: [], statUpdates: [],
     traits: [
       { id: 'default', name: 'Default trait', isDefault: true, statChanges: [] },
@@ -274,8 +262,8 @@ describe('the retained entry draft', () => {
     expect(screen.getByRole('checkbox', { name: 'Include Companion' })).toBeChecked();
   });
 
-  it.each([false, true])('keeps Introduction first with no pickers (Avatar: %s)', async avatar => {
-    const w = world(avatar);
+  it('keeps Introduction first with no pickers', async () => {
+    const w = world();
     w.data.traits = [];
     w.data.locations = [{ id: 'harbor', name: 'Harbor', isStarting: true }];
     w.data.dictionaries = [{ id: 'shared', name: 'World book', enabled: true, entries: [] }];
@@ -290,9 +278,7 @@ describe('the retained entry draft', () => {
     const intro = await screen.findByRole('dialog', { name: 'Introduction' });
     expect(within(intro).getByRole('heading', { name: 'Welcome' })).toBeInTheDocument();
     expect(onStartGame).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Finalize Character' })).not.toBeInTheDocument();
     fireEvent.click(within(intro).getByRole('button', { name: 'Close' }));
-    if (avatar) await finalize();
     await waitFor(() => expect(onStartGame).toHaveBeenCalledTimes(1));
     expect(onStartGame.mock.calls[0][4]).toEqual([expect.objectContaining({ id: 'shared', name: 'World book' })]);
   });
@@ -321,7 +307,7 @@ describe('the retained entry draft', () => {
     await waitFor(() => expect(onStartGame).toHaveBeenCalledWith(['default'], null, true, null, null, null, NO_PERSONA, {}));
   });
 
-  it('starts from the workspace when no library or Avatar continuation remains', async () => {
+  it('starts from the workspace when no library continuation remains', async () => {
     const w = world();
     w.data.dictionaries = [];
     await WorldStorageService.storeWorld(w);
@@ -422,8 +408,7 @@ describe('the retained entry draft', () => {
     });
   });
 
-  it('retains dictionary order and explicit none through Avatar', async () => {
-    await WorldStorageService.storeWorld(world(true));
+  it('starts with dictionary order and explicit none as the player left them', async () => {
     const onStartGame = vi.fn();
     const user = userEvent.setup();
     renderMainMenu({ onStartGame });
@@ -439,27 +424,18 @@ describe('the retained entry draft', () => {
     const order = () => within(screen.getByRole('list', { name: 'Dictionary Order' }))
       .getAllByRole('listitem').map((item) => item.textContent);
     expect(order()[0]).toContain('Library book');
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Avatar' }));
-    await screen.findByRole('button', { name: 'Finalize Character' });
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(order()[0]).toContain('Library book');
     expect(screen.getByRole('checkbox', { name: 'Enable Library book from Library' })).toBeChecked();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Enable Library book from Library' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Enable World book from World' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Avatar' }));
-    await screen.findByRole('button', { name: 'Finalize Character' });
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByRole('checkbox', { name: 'Enable Library book from Library' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Enable World book from World' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Enable Disabled book from World' })).not.toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Avatar' }));
-    await finalize();
-    expect(onStartGame).toHaveBeenCalledWith(['default'], expect.any(Object), true, 'hill', [],
-      [expect.objectContaining({ name: 'Companion' })], NO_PERSONA, {});
+    fireEvent.click(screen.getByRole('button', { name: 'Start Game' }));
+    await waitFor(() => expect(onStartGame).toHaveBeenCalledWith(['default'], null, true, 'hill', [],
+      [expect.objectContaining({ name: 'Companion' })], NO_PERSONA, {}));
   });
 
-  it('starts the next visit fresh after an Avatar handoff, and resets it on cancel and re-entry', async () => {
-    await WorldStorageService.storeWorld(world(true));
+  it('starts the next visit fresh after a handoff, and resets it on cancel and re-entry', async () => {
     const onStartGame = vi.fn();
     renderMainMenu({ onStartGame });
     await enter();
@@ -470,9 +446,8 @@ describe('the retained entry draft', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect Library book from Library' }));
     fireEvent.click(screen.getByRole('button', { name: 'Move Library book from Library Up' }));
     fireEvent.click(screen.getByRole('button', { name: 'Move Library book from Library Up' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Avatar' }));
-    await finalize();
-    expect(onStartGame).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Start Game' }));
+    await waitFor(() => expect(onStartGame).toHaveBeenCalledOnce());
     const order = () => within(screen.getByRole('list', { name: 'Dictionary Order' }))
       .getAllByRole('listitem').map((item) => item.textContent);
     // The harness keeps MainMenu mounted after handoff; start another ordinary visit.
@@ -498,7 +473,7 @@ describe('the retained entry draft', () => {
   it('keeps session Rolls and live trait, location, and starting-stat Pins until cancellation', async () => {
     const token = encodePlaceholderToken({ id: 'town', mode: 'world', placementId: 'town-use' });
     const mood = encodePlaceholderToken({ id: 'mood', mode: 'world', placementId: 'mood-use' });
-    const w = world(true);
+    const w = world();
     w.data.placeholders = [
       { id: 'town', name: 'Town', values: ['Sedge', 'Marrow'] },
       { id: 'mood', name: 'Mood', values: ['Calm'] },
@@ -539,10 +514,7 @@ describe('the retained entry draft', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Starting Location' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Hill' }));
     expect(screen.getByText('Here: Hill town')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to Avatar' }));
-    await screen.findByRole('button', { name: 'Finalize Character' });
     vi.mocked(Math.random).mockReturnValue(0.9);
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     fireEvent.click(screen.getByRole('radio', { name: /Random/ }));
     expect(screen.getByText('Here: Sedge')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Other traits/ }));

@@ -14,10 +14,6 @@ vi.mock('react-toastify', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn() },
   ToastContainer: () => null,
 }));
-vi.mock('./VRMViewer', async () => {
-  const { forwardRef } = await import('react');
-  return { default: forwardRef(() => null) };
-});
 
 /** A world with an Introduction and choices to make, so entry shows both the readme and the setup screen. */
 const TOUR_WORLD: StoredWorldRecord = {

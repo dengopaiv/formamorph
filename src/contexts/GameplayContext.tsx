@@ -260,8 +260,6 @@ function useProvideGameplay() {
   const [traitsView, setTraitsView] = useState<TraitsPanelView>({
     query: '', keys: null, open: new Set(), openDisabled: new Set(), expanded: new Set(),
   });
-  // Stat-driven body morph influences, keyed by morph name (built from stats' morphBindings).
-  const [bodyMorphValues, setBodyMorphValues] = useState<Record<string, number>>({});
   const [isFlashing, setIsFlashing] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [choices, setChoices] = useState<Choice[]>([]);
@@ -821,8 +819,6 @@ function useProvideGameplay() {
   const value = {
     characterData,
     setCharacterData,
-    bodyMorphValues,
-    setBodyMorphValues,
     visibleEntities,
     setVisibleEntities,
     discoveredEntities,

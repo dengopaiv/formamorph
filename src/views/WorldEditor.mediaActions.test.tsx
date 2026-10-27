@@ -22,8 +22,6 @@ vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(() => 'toast'), { info: vi.fn(), success: vi.fn(), error: vi.fn(), update: vi.fn(), dismiss: vi.fn() }),
   ToastContainer: () => null,
 }));
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
-vi.mock('@/views/ModelViewer', () => ({ default: () => <div data-testid="model-viewer" /> }));
 // The image codec runs in a worker jsdom has none of.
 vi.mock('@/lib/imageOptimWorkerClient', () => ({ measureInWorker: vi.fn(), encodeInWorker: vi.fn() }));
 
@@ -118,15 +116,6 @@ describe('Media tab Remove', () => {
     await undo();
     expect(bench.historyState().cursor).toBe(steps - 1);
     expect(slot.read(bench.ctx())).toBe(was);
-  });
-
-  it('offers an Avatar Replace, Download and Delete in place of Remove', () => {
-    openMedia();
-    fireEvent.click(card('World › Avatars', 'avatar'));
-    expect(panelButton('Remove')).toBeNull();
-    expect(panelButton('Replace')).not.toBeNull();
-    expect(panelButton('Download')).not.toBeNull();
-    expect(panelButton('Delete')).not.toBeNull();
   });
 });
 

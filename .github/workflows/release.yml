@@ -64,10 +64,6 @@ jobs:
             exit 1
           fi
       - run: npm ci
-      # Releases ship the alternate avatar. The tracked default stays on local dev builds.
-      - name: Swap in the release avatar
-        shell: bash
-        run: cp build-assets/alternate-avatar.vrm public/default-avatar.vrm
       - run: npm run ${{ matrix.script }}
         env:
           FORMAMORPH_BUILD: ${{ matrix.build }}

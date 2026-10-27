@@ -125,7 +125,6 @@ import { onCallRunner } from "../lib/tools/onCallRunner";
 import type { ChipSceneTime } from "../lib/chipValues/chipScene";
 import { useResolvedWorld } from "@/lib/useResolvedWorld";
 import { useLocationBackdrop, useMapBackdrop } from "@/lib/useLocationBackdrop";
-import { useSeedAvatarOnSaveLoad } from "@/lib/useLibraryAvatars";
 import { usePersonaNotice } from "@/lib/usePersonaNotice";
 import { resolveStartingLocation } from "../lib/startingLocation";
 import { variableForToken, tokenVariant } from "../lib/promptVariables";
@@ -214,7 +213,6 @@ import { buildImagePrompt } from "../lib/imagePrompt";
 import { downloadBlob } from "../lib/downloadBlob";
 import { rollbackState, regenerateState, canRegenerate, lastTurnAction, markRegeneratedTurn, markPrunedTurns, snapshotPageIndex, placeSnapshot, sliceHistoryToPage, pageAssistantIndex } from "../lib/turnHistory";
 import { useDeferredSnapshot } from "../lib/useDeferredSnapshot";
-import { statMorphMap } from "../lib/bodyMorphs";
 import {
   inAuthoredOrder, refreshChosenTraits, refreshSavedStats, activeStatEnabled, enabledStats,
 } from "../lib/traitEffects";
@@ -658,14 +656,9 @@ const GameViewer = ({
     setUserPage,
     totalPages,
     isViewingPast,
-    viewTraits,
-    viewDisabledTraitIds,
-    viewOwnedTraits,
-    viewEntityStats,
     viewLocationId,
     gameStates,
     setGameStates,
-    setBodyMorphValues,
     playerNotes,
     setPlayerNotes,
     saveGame,
@@ -718,7 +711,7 @@ const GameViewer = ({
   // an entity/location/stat/trait/dictionary name is a plain string with no chips left in it. The `raw*`
   // values above stay untouched for roll priming, which has to see the chips it is rolling for.
   const {
-    entities, locations, connections, stats, traits, traitGroups, dictionary, globalStats, viewStats,
+    entities, locations, connections, stats, traits, traitGroups, dictionary, globalStats,
     currentLocation, traitOrder, pins, pinsFor, resolvePH, resolveFor, resolveWith, resolveOpening, resolveTraitText,
     resolveTraitFor, resolveEntityText, resolveEntityFor, playerNames, persona, traitEntities, traitLibrary, codeEntities,
     presentEntitiesUnder,
@@ -1974,20 +1967,6 @@ const GameViewer = ({
     [activeStats, playedEntities, statEntities, entityStats, personaRef, entityInForceUnder, ownedTraits],
   );
 
-  // The same derivation for a paged-back turn, so history shows the stats that were live on that turn.
-  const viewActiveStats = useMemo(
-    () => activeUnderTraits(
-      viewStats, refreshChosenTraits(viewTraits, traits), viewDisabledTraitIds, traitOrder,
-      globalRowTraits({ ownedTraits: viewOwnedTraits, entityStats: viewEntityStats }, gatedWorld()),
-    ).activeStats,
-    [viewStats, viewTraits, viewDisabledTraitIds, viewOwnedTraits, viewEntityStats, traitOrder, traits, gatedWorld],
-  );
-
-  useEffect(() => {
-    // Authored stats anchor the morph scale, so a max the AI raised grows the shape key rather than
-    // shrinking every point below it.
-    setBodyMorphValues(statMorphMap(viewActiveStats, stats));
-  }, [viewActiveStats, stats, setBodyMorphValues]);
 
   // Ambient audio follows the viewed location (the paged turn's when browsing history, the live one
   // otherwise). Centralizing it here also fixes the load/rollback gap where `loadGameState` set the
@@ -4665,7 +4644,6 @@ const GameViewer = ({
   );
   const settleHistory = useMemo(() => ({ states: gameStates, commit: setGameStates }), [gameStates, setGameStates]);
   useSettleOnSaveLoad(saveLoads, !personaPending, traitState, gatedWorld, traitName, commitLoadSettle, settleHistory);
-  useSeedAvatarOnSaveLoad(saveLoads, !personaPending, persona);
   // The per-turn settle writes log lines and leaves the banner alone, as a stat-code switch does (Q26).
   const commitTurnSettle = useCallback(
     (result: GatedTraitResult) => {

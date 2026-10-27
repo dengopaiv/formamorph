@@ -59,8 +59,6 @@ describe('the bundled Docs Index', () => {
     ['Library#how-to-import-a-world', 'mainMenu.worlds', 'import-world'],
     ['Library#how-to-import-an-entity', 'mainMenu.entities', 'import-entity'],
     ['Library#how-to-import-a-dictionary', 'mainMenu.dictionaries', 'import-dictionary'],
-    ['Avatars#how-to-import-an-avatar', 'mainMenu.models', 'import-avatar'],
-    ['Avatars#how-to-customize-your-avatar', 'avatar', 'finalize-character'],
     ['Personas#how-to-import-sillytavern-personas', 'mainMenu.entities', 'import-entity'],
     ['Saves-and-Backup#how-to-import-a-save', 'menu', 'import-save'],
     ['Saves-and-Backup#how-to-make-a-backup', 'backup', 'start-backup'],

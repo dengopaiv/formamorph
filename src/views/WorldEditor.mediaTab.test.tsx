@@ -21,9 +21,6 @@ vi.mock('react-toastify', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
   ToastContainer: () => null,
 }));
-// The real viewers need a WebGL context jsdom has none of.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
-vi.mock('@/views/ModelViewer', () => ({ default: () => <div data-testid="model-viewer" /> }));
 vi.mock('@/lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
 
 beforeEach(() => { localStorage.clear(); vi.mocked(downloadBlob).mockClear(); });
@@ -132,24 +129,6 @@ describe('Media tab panels', () => {
     expect(panel()!.querySelector('audio')).toHaveAttribute('src', mediaFixtureWorld().entities[0].sound!.data);
     fireEvent.click(within(panel()!).getByRole('button', { name: 'Download' }));
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'Odd Wick Sound.ogg'));
-  });
-
-  it('lists the entities that pick an Avatar, and shows it in the Avatar viewer', () => {
-    openMedia('advanced');
-    fireEvent.click(card('World › Avatars', 'avatar'));
-
-    const usedBy = within(panel()!).getAllByRole('button').map((b) => b.textContent);
-    expect(usedBy).toEqual(expect.arrayContaining(['Odd Wick', 'Bram']));
-    expect(usedBy).not.toContain('Go to Overview');
-    fireEvent.click(card('World › Avatars', 'avatar', 1));
-    expect(panel()).toHaveTextContent('No entity uses this Avatar');
-  });
-
-  it('opens the 3D Model viewer for a 3D Model', () => {
-    openMedia('advanced');
-    fireEvent.click(card('Entities', 'model'));
-
-    expect(within(panel()!).getByTestId('model-viewer')).toBeInTheDocument();
   });
 
   it('summarizes a section by kind and lists its largest items', () => {

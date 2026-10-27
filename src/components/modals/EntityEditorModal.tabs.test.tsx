@@ -49,7 +49,7 @@ if (typeof window.matchMedia !== 'function') {
 }
 
 const FIELD_LABELS =
-  /^(Name|Aliases|Pronouns|Persona|Type|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Locations|Image|Image Tags|3D Model)$/;
+  /^(Name|Aliases|Pronouns|Persona|Type|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Locations|Image|Image Tags)$/;
 
 /** The searchable fields' keys, as the find bar reports them. */
 const FIELD_KEYS: Record<string, string> = {
@@ -169,7 +169,7 @@ describe('the two entity editors', () => {
     const worldFields = await fieldsByTab(['Traits', 'Stats', 'Openings', 'Placeholders']);
 
     expect(library).toEqual({
-      Profile: ['Image', 'Name', 'Aliases', 'Pronouns', 'Persona', 'Type', 'Image Tags', '3D Model'],
+      Profile: ['Image', 'Name', 'Aliases', 'Pronouns', 'Persona', 'Type', 'Image Tags'],
       Descriptions: ['Player-Facing Description', 'AI-Facing Description', 'AI-Facing Summary'],
     });
     expect({ ...worldFields, Profile: worldFields.Profile.filter((l) => l !== 'Locations') }).toEqual(library);

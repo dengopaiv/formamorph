@@ -11,7 +11,6 @@ import type { GameLocation, PlayerStat, Script, Tool, World } from '@/types';
 /** A clock advance made mid-turn shows in the prompts built after it, and the commit counts it once (Q45, Q52). */
 
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,

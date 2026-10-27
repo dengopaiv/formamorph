@@ -11,7 +11,6 @@ import type { ChatMessage, PlayerStat, SaveRecord, Script, World } from '@/types
 /** The opening cue the save keeps: what it writes, and what a page-one re-roll reads before and after a reload. */
 
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,

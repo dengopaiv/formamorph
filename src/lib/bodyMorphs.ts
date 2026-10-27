@@ -1,5 +1,5 @@
-// Pure helpers behind stat-bound VRM body sliders. A stat's live value maps linearly to a morph
-// influence, scaled against its authored max; several stats compose into one map VRMViewer applies.
+// Pure helpers behind stat-bound body sliders, kept for the save migration that reads them. A stat's live
+// value maps linearly to a morph influence, scaled against its authored max.
 // Kept free of React/three so the (off-by-one- and clamp-prone) math is unit-testable.
 
 import type { Stat } from "@/types";

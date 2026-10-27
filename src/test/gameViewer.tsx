@@ -50,7 +50,7 @@ function ViewGate({ gate, children }: { gate: { hide: () => void }; children: Re
 
 /**
  * Render the real game view under the real app providers, in `App.tsx`'s order, on a loaded world.
- * The calling file mocks what jsdom cannot run: `@/views/VRMViewer` and the toast module.
+ * The calling file mocks what jsdom cannot run: the toast module.
  * The AI probe gets a reachable answer, so no test reaches a real server.
  */
 export function renderGameViewer(

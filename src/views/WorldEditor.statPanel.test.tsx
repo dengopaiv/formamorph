@@ -53,7 +53,7 @@ const WORLD: World = benchEditorWorld({
 const openTab = (name: RegExp) => fireEvent.mouseDown(screen.getByRole('tab', { name }));
 
 const FIELD_LABELS =
-  /^(Name|Type|Description|Min|Max|Base Value|Base Value \(%\)|Regen|Body Sliders|Availability|Prevent AI Changes|Stat Descriptors|Scripts|Warmth · After the AI)$/;
+  /^(Name|Type|Description|Min|Max|Base Value|Base Value \(%\)|Regen|Availability|Prevent AI Changes|Stat Descriptors|Scripts|Warmth · After the AI)$/;
 
 /** Every field label the panel shows, in document order. The panel's own strip carries a Scripts tab and a
  *  Details tab, so the match is taken from the panel body rather than the whole editor. */
@@ -108,7 +108,7 @@ describe('the World Editor stat panel tabs', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectStat('Warmth');
     expect(panelLabels()).toEqual([
-      'Name', 'Type', 'Description', 'Base Value', 'Min', 'Max', 'Regen', 'Body Sliders',
+      'Name', 'Type', 'Description', 'Base Value', 'Min', 'Max', 'Regen',
       'Availability', 'Prevent AI Changes',
     ]);
     expect(panelSwitches()).toEqual([
@@ -154,7 +154,7 @@ describe('the World Editor stat panel tabs', () => {
     selectStat('Warmth');
     expect(panelTabNames()).toEqual([]);
     expect(panelLabels()).toEqual([
-      'Name', 'Type', 'Description', 'Base Value', 'Min', 'Max', 'Regen', 'Body Sliders',
+      'Name', 'Type', 'Description', 'Base Value', 'Min', 'Max', 'Regen',
     ]);
     expect(screen.queryByText('Enabled')).toBeNull();
     expect(screen.queryByText('Hidden')).toBeNull();
@@ -179,7 +179,7 @@ describe('the World Editor stat panel tabs', () => {
     pickEditorMode('Simple');
     expect(panelTabNames()).toEqual([]);
     expect(panelLabels()).toEqual([
-      'Name', 'Type', 'Description', 'Base Value', 'Min', 'Max', 'Regen', 'Body Sliders',
+      'Name', 'Type', 'Description', 'Base Value', 'Min', 'Max', 'Regen',
     ]);
 
     // The switch wears the hidden-data marker, whose own label joins its accessible name.
@@ -193,7 +193,7 @@ describe('the World Editor stat panel tabs', () => {
     selectStat('Resolve');
     expect(panelTabNames()).toEqual(['Details', 'Descriptors', 'Scripts']);
     expect(panelLabels()).toEqual([
-      'Name', 'Type', 'Description', 'Base Value (%)', 'Min', 'Max', 'Regen', 'Body Sliders',
+      'Name', 'Type', 'Description', 'Base Value (%)', 'Min', 'Max', 'Regen',
       'Availability', 'Prevent AI Changes',
     ]);
     const min = rangeInput('Min');

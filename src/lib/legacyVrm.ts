@@ -83,7 +83,3 @@ export const defaultCharacterData: CharacterData = {
   },
   chosenVrm: null,
 };
-
-/** The character data a playthrough holds: its own, else the defaults when the played side shows an Avatar. */
-export const seededCharacterData = (data: CharacterData | null, showsAvatar: boolean): CharacterData | null =>
-  data ?? (showsAvatar ? defaultCharacterData : null);

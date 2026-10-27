@@ -16,7 +16,6 @@ vi.mock('@/lib/aiRequest/requestTransport', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/aiRequest/requestTransport')>();
   return { ...actual, transportRequest: vi.fn(actual.transportRequest) };
 });
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,

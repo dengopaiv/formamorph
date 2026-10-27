@@ -8,15 +8,11 @@ import { defaultSystemPrompt } from './GamePrompts';
 import { renderInGame, statFixture, type TurnFixture } from '@/test/gamePanels';
 import type { Entity, EntityStatValues, GalleryImage, SceneEntity, StatRequirement } from '@/types';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
-// WebGL has no jsdom twin.
-vi.mock('@/views/ModelViewer', () => ({ default: () => <div data-testid="model-viewer" /> }));
 
 const WOUNDED = 'data:image/png;base64,d291bmRlZA';
 const CALM = 'data:image/png;base64,Y2FsbQ';
 const ARMORED = 'data:image/png;base64,YXJtb3JlZA';
-const MODEL = { name: 'ash.glb', type: 'model/gltf-binary', data: 'data:model/gltf-binary;base64,AAAA' };
 
 const health = statFixture('Health', 50);
 const hurt: StatRequirement = { kind: 'stat', id: 'health', operator: '<', value: 20, unit: 'percent' };
@@ -71,29 +67,9 @@ describe('the entity panel in play', () => {
     expect(counterIn(zoom)).toBe('1/2');
   });
 
-  it('shows the model when every image hides', () => {
-    const { container } = showPanel({ ...ash, images: [whenHurt(WOUNDED)], model: MODEL }, undefined, 90);
-    expect(picturesOf(container)).toEqual([]);
-    expect(screen.getByTestId('model-viewer')).toBeTruthy();
-  });
-
-  it('shows the model when every image hides, even when the player set the image as the default', () => {
-    const golem = { ...ash, images: [whenHurt(WOUNDED)], model: MODEL };
-    const { container } = renderInGame(
-      <LeftPanel entities={[golem]} onEntityClick={vi.fn()} narrationPrompt={defaultSystemPrompt} />,
-      {
-        world: { entities: [golem] } as never, turns,
-        seed: (g) => { g.setEntityStats(at(90)); g.setVisibleEntities(scene); g.setEntityVisualPreference({ ash: 'image' }); },
-      },
-    );
-    expect(picturesOf(container)).toEqual([]);
-    expect(screen.getByTestId('model-viewer')).toBeTruthy();
-  });
-
-  it('shows an empty frame when every image hides and there is no model', () => {
+  it('shows an empty frame when every image hides', () => {
     const { container } = showPanel({ ...ash, images: [whenHurt(WOUNDED)] }, undefined, 90);
     expect(picturesOf(container)).toEqual([]);
-    expect(screen.queryByTestId('model-viewer')).toBeNull();
   });
 });
 

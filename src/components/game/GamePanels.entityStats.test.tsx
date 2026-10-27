@@ -9,7 +9,6 @@ import { NO_DELTAS } from '@/lib/useStatDeltas';
 import { regenerateState } from '@/lib/turnHistory';
 import EntityStorageService from '@/services/EntityStorageService';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const PICTURE = 'data:image/png;base64,AAAA';

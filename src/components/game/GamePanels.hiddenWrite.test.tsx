@@ -4,7 +4,6 @@ import { act, screen } from '@testing-library/react';
 import { renderRightPanel, statFixture, type Gameplay } from '@/test/gamePanels';
 import type { GameState } from '@/types';
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 const vigor = statFixture('Vigor', 50);

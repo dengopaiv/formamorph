@@ -167,8 +167,8 @@ describe('saveTabOrganization', () => {
 
   it('writes a library with a folder in it, and reads back what the player arranged', () => {
     const org = addToGroup(grouped(), 'c', 'g1');
-    saveTabOrganization('models', org);
+    saveTabOrganization('entities', org);
 
-    expect(loadTabOrganization('models')).toEqual(org);
+    expect(loadTabOrganization('entities')).toEqual(org);
   });
 });

@@ -9,10 +9,6 @@ vi.mock('react-toastify', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), warning: vi.fn() },
   ToastContainer: () => null,
 }));
-vi.mock('./VRMViewer', async () => {
-  const { forwardRef } = await import('react');
-  return { default: forwardRef(() => null) };
-});
 vi.mock('@/lib/jsonFileWorkerUtils', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   ...(await (await import('@/test/inlineJsonWorker')).inlineJsonWorker()),

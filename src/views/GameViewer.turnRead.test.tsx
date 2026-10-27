@@ -11,7 +11,6 @@ import type { ChatMessage, PlayerStat, Script, ScriptTiming, Trait, World } from
 /** What `turn` reads on a mounted game: the live turn, both re-rolls, and switches in and between turns. */
 
 vi.hoisted(() => { vi.stubEnv('VITE_DEFAULT_ENDPOINT', ''); });
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,

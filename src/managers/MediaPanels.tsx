@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,13 +7,8 @@ import { Label } from '@/components/ui/label';
 import { Hint, Meta } from '@/components/ui/typography';
 import PlaceholderText from '@/components/prompt/PlaceholderText';
 import AudioPlayer from '@/components/game/AudioPlayer';
-import ModelViewer from '@/views/ModelViewer';
-import VRMViewer from '@/views/VRMViewer';
-import { resolveModelType } from '@/lib/UtilityComponents';
 import { RemoteImg } from '@/lib/useRemoteImage';
-import { useHeldModelBlob } from '@/lib/useHeldModelBlob';
 import { cn } from '@/lib/utils';
-import { trackWork } from '@/lib/pendingWork';
 import {
   MEDIA_KIND_LABELS, formatMediaBytes, kindBreakdown, largestItems, namedBySlot, totalBytes,
   type MediaItem, type MediaParent,
@@ -22,7 +17,6 @@ import type { MediaAsset, Placeholder } from '@/types';
 import { MediaName, MediaSize, MediaThumb } from './MediaGallery';
 import { MediaActionRow } from './MediaActionRow';
 import { actsInItemPanel, useMediaItemActions } from './useMediaItemActions';
-import { AvatarNameField, useAvatarDelete, useAvatarStore } from './AvatarStore';
 
 /** How many items a summary lists as the largest. */
 const LARGEST_COUNT = 5;
@@ -52,72 +46,17 @@ export function MediaFacts({ item, className, children }: { item: MediaItem; cla
   );
 }
 
-/** An Avatar in the viewer. The bytes are held only while the panel shows it. */
-function AvatarPreview({ value }: { value: string }) {
-  const load = useMemo(() => async () => ({ blob: await (await fetch(value)).blob() }), [value]);
-  const { url, failed } = useHeldModelBlob(load);
-  if (failed) return <Hint className="m-auto">This Avatar couldn&apos;t be loaded</Hint>;
-  return url ? <VRMViewer key={url} modelUrl={url} /> : <Hint className="m-auto">Loading Avatar…</Hint>;
-}
-
 function Preview({ item }: { item: MediaItem }) {
   switch (item.kind) {
     case 'image':
       return <RemoteImg src={item.value} alt="" className="mx-auto max-h-[50vh] max-w-full rounded object-contain" />;
     case 'sound':
       return <AudioPlayer src={item.value} className="w-full" />;
-    case 'model': {
-      const model = { data: item.value, name: item.fileName };
-      return <div className="h-72 w-full"><ModelViewer model={model} modelType={resolveModelType(model)} className="h-full w-full" /></div>;
-    }
+    // A 3D model and an Avatar are listed as files with no preview.
+    case 'model':
     case 'avatar':
-      return <div className="flex h-72 w-full"><AvatarPreview value={item.value} /></div>;
+      return null;
   }
-}
-
-/** An Avatar's panel: an editable name, the viewer, Replace, Download and Delete, and the entities that use it. */
-function AvatarPanel({ item, placeholders, onGoTo }: {
-  item: MediaItem;
-  placeholders: readonly Placeholder[];
-  onGoTo: (parent: MediaParent) => void;
-}) {
-  const id = item.key.slice('avatar:'.length);
-  const { rename, replace } = useAvatarStore();
-  const { ask, confirm } = useAvatarDelete();
-  return (
-    <div className="space-y-4" data-media-panel={item.id}>
-      <div>
-        <AvatarNameField id={id} name={item.slot} onRename={(name) => void rename(id, name)} />
-        <MediaFacts item={item} className="mt-1">
-          <span>{MEDIA_KIND_LABELS[item.kind].one}</span>
-          <span aria-hidden>·</span>
-        </MediaFacts>
-      </div>
-      <div className="flex justify-center rounded-md bg-muted/40 p-2"><Preview item={item} /></div>
-      <MediaActionRow
-        item={item}
-        placeholders={placeholders}
-        onReplace={(media) => void trackWork(replace(id, media))}
-        onRemove={() => ask(id)}
-        removeLabel="Delete"
-      />
-      <div className="space-y-1.5">
-        <Label>Used By</Label>
-        {item.users?.length
-          ? (
-            <div className="flex flex-wrap gap-1.5">
-              {item.users.map((user) => (
-                <Button key={user.id} variant="secondary" size="sm" onClick={() => onGoTo(user)}>
-                  <PlaceholderText text={user.name} placeholders={placeholders} />
-                </Button>
-              ))}
-            </div>
-          )
-          : <Hint>No entity uses this Avatar</Hint>}
-      </div>
-      {confirm}
-    </div>
-  );
 }
 
 /** One item: a large preview by kind, its size and budget, its actions, and Go to the place that holds it. */
@@ -128,7 +67,6 @@ export function MediaItemPanel({ item, placeholders, onGoTo }: {
 }) {
   const titled = !namedBySlot(item);
   const { replace, remove } = useMediaItemActions();
-  if (item.kind === 'avatar') return <AvatarPanel key={item.id} item={item} placeholders={placeholders} onGoTo={onGoTo} />;
   return (
     <div className="space-y-4" data-media-panel={item.id}>
       <div>
@@ -150,7 +88,9 @@ export function MediaItemPanel({ item, placeholders, onGoTo }: {
             </MediaFacts>
           )}
       </div>
-      {!item.blank && <div className="flex justify-center rounded-md bg-muted/40 p-2"><Preview item={item} /></div>}
+      {!item.blank && (item.kind === 'image' || item.kind === 'sound') && (
+        <div className="flex justify-center rounded-md bg-muted/40 p-2"><Preview item={item} /></div>
+      )}
       <div className="flex flex-wrap gap-2">
         <MediaActionRow
           className="contents"
@@ -170,7 +110,7 @@ export function MediaSummaryPanel({ title, items, placeholders, onSelect, contro
   items: MediaItem[];
   placeholders: readonly Placeholder[];
   onSelect: (id: string) => void;
-  /** What the section adds below its totals: the Avatars section's Upload and Copy controls. */
+  /** What the section adds below its totals. */
   controls?: ReactNode;
 }) {
   return (

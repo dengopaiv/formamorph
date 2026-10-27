@@ -3,7 +3,6 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { renderMiddlePanel, stubChatLayout, type Settings, type TurnFixture } from '@/test/gamePanels';
 
 // three.js needs a WebGL context and the TTS engine a Web Audio graph; jsdom has neither.
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('@/lib/useTtsPlayback', () => import('@/test/stubs/ttsPlayback'));
 
 // A menu row that opens a Dialog hangs jsdom; the edit and its save run in e2e/chat-edit-action.spec.ts.

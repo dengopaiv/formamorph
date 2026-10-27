@@ -5,7 +5,6 @@ import type { World } from '@/types';
 
 /** A new game on a world whose file has no id: the dev fixtures and hand-authored world files. */
 
-vi.mock('@/views/VRMViewer', () => import('@/test/stubs/vrmViewer'));
 vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), dismiss: vi.fn(), isActive: vi.fn() }),
   ToastContainer: () => null,

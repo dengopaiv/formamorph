@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CharacterData, Entity, WorldOverview } from '@/types';
 import { migrateWorld } from './version';
-import { LEGACY_VRM_ID, defaultCharacterData, remapChosenVrm, seededCharacterData, withoutSpentFallback } from './legacyVrm';
-import { playVrmContext, resolvePlayedVrm } from './vrmResolver';
+import { LEGACY_VRM_ID, defaultCharacterData, remapChosenVrm, withoutSpentFallback } from './legacyVrm';
 import { DEFAULT_AVATAR_ID } from './defaultAvatar';
 
 const oldFile = { data: 'data:model/vrm;base64,Z2xURgIA', type: 'model/vrm', name: 'Wren.vrm' };
@@ -84,27 +83,6 @@ describe('the legacy Avatar migration', () => {
   });
 });
 
-describe('an old world in play', () => {
-  const world = migrateWorld(oldWorld({ use3DModel: true, customPlayerVRM: oldFile }, [wren]));
-  const played = (persona: Parameters<typeof playVrmContext>[0]['persona']) => resolvePlayedVrm(playVrmContext({
-    persona, entities: world.entities, overview: world.worldOverview, characterData: defaultCharacterData,
-    libraryIds: new Set(['lib-a']), deviceDefault: undefined,
-  }));
-  const shown = { kind: 'world', id: LEGACY_VRM_ID };
-
-  it('shows the old Avatar under None', () => {
-    expect(played(null)).toEqual(shown);
-  });
-
-  it('shows the old Avatar under a library persona with no pick', () => {
-    expect(played({ source: 'library', entity: { id: 'lib-persona', name: 'Rook' } as Entity })).toEqual(shown);
-  });
-
-  it('shows the old Avatar under a world persona whose pick is none', () => {
-    expect(played({ source: 'world', entity: wren })).toEqual(shown);
-  });
-});
-
 describe('dropping a spent fallback', () => {
   const overview = { name: 'W', legacyVrmFallback: { kind: 'default' } } as WorldOverview;
 
@@ -143,15 +121,6 @@ describe('remapping a save at game load', () => {
     expect(remapChosenVrm(old('default'), store)?.chosenVrm?.pick).toEqual({ kind: 'library', id: DEFAULT_AVATAR_ID });
   });
 
-  it("keeps Q24's legacy library pick even where the played side picks something else", () => {
-    const chosenVrm = remapChosenVrm(old('lib-a'), store)?.chosenVrm ?? undefined;
-    const source = resolvePlayedVrm({
-      store, libraryIds: new Set(['lib-a']), deviceDefault: undefined, played: { source: 'none' },
-      customPersona: { id: 'you', vrmPick: { kind: 'world', id: LEGACY_VRM_ID } }, chosen: chosenVrm,
-    });
-    expect(source).toEqual({ kind: 'library', id: 'lib-a' });
-  });
-
   it('leaves a save made after the change alone, null choice included', () => {
     const fresh = { ...defaultCharacterData, chosenVrm: null };
     expect(remapChosenVrm(fresh, store)).toBe(fresh);
@@ -166,17 +135,5 @@ describe('remapping a save at game load', () => {
 
   it('passes a save with no character data through as none', () => {
     expect(remapChosenVrm(null, store)).toBeNull();
-  });
-});
-
-describe('seeding customization', () => {
-  it('seeds the defaults when the played side shows an Avatar and the save holds none', () => {
-    expect(seededCharacterData(null, true)).toEqual(defaultCharacterData);
-  });
-
-  it('seeds nothing when the played side shows no Avatar, and keeps data the save holds', () => {
-    expect(seededCharacterData(null, false)).toBeNull();
-    const own = { ...defaultCharacterData, hairColor: '#123456' };
-    expect(seededCharacterData(own, true)).toBe(own);
   });
 });

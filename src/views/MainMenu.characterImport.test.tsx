@@ -12,10 +12,6 @@ vi.mock('react-toastify', () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), warning: vi.fn(), update: vi.fn(), dismiss: vi.fn() }),
   ToastContainer: () => null,
 }));
-vi.mock('./VRMViewer', async () => {
-  const { forwardRef } = await import('react');
-  return { default: forwardRef(() => null) };
-});
 // Every picture measures small, so the import stores them as they came.
 vi.mock('@/lib/imageOptimWorkerClient', () => ({
   measureInWorker: vi.fn(async () => ({ w: 4, h: 4, bytes: 24 })),
