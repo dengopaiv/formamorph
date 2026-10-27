@@ -82,7 +82,6 @@ import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle }
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ListDetail } from "@/components/ui/list-detail";
 import { useIsMobile } from "@/lib/useIsMobile";
-import { useBackStop } from "@/hooks/useBackStop";
 import { useLeavePrompt } from "@/hooks/useLeavePrompt";
 import { toast } from 'react-toastify';
 import { toastError } from '@/lib/linkToast';
@@ -545,7 +544,7 @@ const WorldEditorInner = ({
   const railAutoCollapsed = listCardSize.width > 0 && listCardSize.width < RAIL_ROOM_PX;
   const [showExitPrompt, setShowExitPrompt] = useState(false);
   // Leaving asks about unsaved edits first. The dialog around the editor refuses Escape so nothing bypasses
-  // that prompt; the Android back button reaches this step instead.
+  // that prompt.
   // What follows once the edits are settled: closing the editor, or a tour on a new world.
   const afterLeave = useRef<() => void>(onClose);
   useLeavePrompt(isWorldDirty);
@@ -748,7 +747,6 @@ const WorldEditorInner = ({
     leaveRef.current = leaveWorld;
     return () => { leaveRef.current = null; };
   }, [leaveRef, leaveWorld]);
-  useBackStop(requestClose, editorRootRef);
   // Every render, so the host's prompt runs the latest closures.
   useEffect(() => {
     if (!exitRef) return;

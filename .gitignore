@@ -10,10 +10,6 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-# The Cloudflare Pages upload root the deploy assembles locally.
-out
-# The site entry's build. The deploy lays it over the tracked hosting dir; nothing here is committed.
-site-dist
 coverage
 release
 docs-api
@@ -63,7 +59,7 @@ playwright-report/
 .playwright/
 _shots/
 
-# Android signing material never enters the repo; the keystore lives outside it (see scripts/android-signing-wizard.sh).
+# Signing material never enters the repo.
 *.p12
 *.jks
 *.keystore

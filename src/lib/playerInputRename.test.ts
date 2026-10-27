@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const RETIRED = 'ask' + 'Text';
-const ROOTS = ['src', 'docs', 'electron', 'site', 'e2e'];
+const ROOTS = ['src', 'docs', 'electron', 'e2e'];
 // The rewrite names the old call by design; the changelog records the rename.
 const ALLOWED = new Set(['src/lib/scriptTextMigration.ts', 'src/lib/scriptTextMigration.test.ts', 'docs/Changelog.md']);
 

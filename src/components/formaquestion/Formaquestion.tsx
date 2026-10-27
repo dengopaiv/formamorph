@@ -5,7 +5,6 @@ import { createPortal } from 'react-dom';
 import { getFeedbackState, subscribeFeedback } from '@/lib/feedbackOpener';
 import { getSignInState, subscribeSignIn } from '@/lib/signInStore';
 import { coverShieldedLayer, ensureShieldedLayer } from '@/components/ui/shielded-layer';
-import { useBackStop } from '@/hooks/useBackStop';
 import { useDevRoute } from '@/lib/devRouter';
 import type { DocsIndex } from '@/lib/docs/docsIndex';
 import { loadDocsIndex } from '@/lib/docs/loadDocsIndex';
@@ -301,8 +300,6 @@ export function Formaquestion({ suspended = false, loadIndex = loadDocsIndex }: 
     });
   }, [suspended, open, openWindow, minimal, sheet]);
 
-  // The Android back action closes the window before any dialog under it.
-  useBackStop(open && !suspended && !covered ? closeWindow : undefined, windowRef);
 
   // The window stays mounted while its close animation runs. `present` drops when the animation ends.
   const [present, setPresent] = useState(false);

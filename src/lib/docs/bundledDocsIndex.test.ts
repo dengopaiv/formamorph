@@ -26,7 +26,7 @@ describe('the bundled Docs Index', () => {
   });
 
   it('starts at Home and follows the sidebar', () => {
-    expect(contents.slice(0, 3).map((page) => page.page)).toEqual(['Home', 'Connect-Your-Own-AI', 'Install-on-Android']);
+    expect(contents.slice(0, 3).map((page) => page.page)).toEqual(['Home', 'Connect-Your-Own-AI', 'Library']);
     expect(contents.at(-1)?.page).toBe('Changelog');
   });
 
@@ -68,10 +68,6 @@ describe('the bundled Docs Index', () => {
     ['Saves-and-Backup#how-to-make-a-backup', 'backup', 'start-backup'],
     ['Saves-and-Backup#how-to-restore-a-backup', 'backup', 'start-restore'],
     ['Saves-and-Backup#how-to-update-the-desktop-app', 'mainMenu', 'app-version'],
-    ['Install-on-Android#how-to-update-the-app', 'mainMenu', 'app-version'],
-    // The Release channel select sits in the update dialog the version row opens.
-    ['Install-on-Android#how-to-get-beta-builds', 'mainMenu', 'app-version'],
-    ['Install-on-Android#how-to-use-a-model-on-your-pc', 'settingsEndpoints.text', 'endpoint-url'],
     // The Preset list is the gate row: the engine preset hides the fields the last step names.
     ['Connect-Your-Own-AI#how-to-connect-lm-studio', 'settingsEndpoints.text', 'text-preset'],
     ['Connect-Your-Own-AI#how-to-connect-ollama', 'settingsEndpoints.text', 'text-preset'],

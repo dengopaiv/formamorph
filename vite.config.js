@@ -10,22 +10,12 @@ import { releasedMinorChangelog } from './src/lib/docs/changelogSlice'
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
 // The ONNX runtime's dist folder, which its package exports do not expose (src/lib/embeddingWorker.ts).
 const ortDist = path.dirname(createRequire(import.meta.url).resolve('onnxruntime-web'))
-const syncAppOrigin = process.env.E2E_SYNC_APP_ORIGIN
 // Worktrees link node_modules to the main checkout, so each checkout and port gets its own dep cache.
 const portArg = process.argv.findIndex((arg) => arg === '--port' || arg.startsWith('--port='))
 const cachePort = portArg < 0 ? '5173' : process.argv[portArg].split('=')[1] ?? process.argv[portArg + 1]
 const devCacheDir = path.resolve(__dirname, 'node_modules/.vite', `${path.basename(__dirname)}-${cachePort}`)
 // A worktree's linked node_modules resolves outside its root, where Vite refuses files such as the QuickJS wasm.
 const servedRoots = [searchForWorkspaceRoot(process.cwd()), realpathSync(path.resolve(__dirname, 'node_modules'))]
-
-const directSyncAppModules = {
-  name: 'direct-sync-app-modules',
-  enforce: 'post',
-  transformIndexHtml(html) {
-    if (!syncAppOrigin) return html
-    return html.replace(/src="(\/play\/(?:@vite\/client|src\/main\.tsx))"/g, `src="${syncAppOrigin}$1"`)
-  },
-}
 
 // VITE_FM_HOLD_UPDATES=1: queue every HMR update and full reload per page until that page sends
 // fm:apply-held (the banner in src/lib/dev/heldUpdatesBanner.ts).
@@ -98,16 +88,15 @@ const cacheTypesCjs = {
 }
 
 export default defineConfig({
-  plugins: [react(), directSyncAppModules, holdUpdates, docsIndexMarkdown, cacheTypesCjs],
-  cacheDir: process.env.E2E_SYNC_APP ? path.resolve(__dirname, 'node_modules/.vite-sync-app') : devCacheDir,
+  plugins: [react(), holdUpdates, docsIndexMarkdown, cacheTypesCjs],
+  cacheDir: devCacheDir,
   base: './',
   // Expose the package.json version to the app (single source of truth for the app/world/save stamp).
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     // Build-type class, set per target by the release workflow (FORMAMORPH_BUILD): 'portable' | 'installed'
-    // | 'web' | 'android'. Empty (a local build) is treated as 'dev'. Mostly a label — the desktop userData
-    // redirect keys off the runtime PORTABLE_EXECUTABLE_DIR/APPIMAGE vars, not this — but 'android' also
-    // decides the platform the client header reports, because the desktop bridge is absent in the WebView.
+    // | 'web'. Empty (a local build) is treated as 'dev'. Only a label — the desktop userData redirect keys
+    // off the runtime PORTABLE_EXECUTABLE_DIR/APPIMAGE vars, not this.
     __BUILD_TARGET__: JSON.stringify(process.env.FORMAMORPH_BUILD ?? ''),
   },
   resolve: {
@@ -167,8 +156,8 @@ export default defineConfig({
         }),
   },
   test: {
-    // e2e/ belongs to Playwright; .scratch/ contains untracked working copies and experiments; marketing/ packages run their own checks.
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '.scratch/**', '.claude/worktrees/**', 'marketing/**'],
+    // e2e/ belongs to Playwright; .scratch/ contains untracked working copies and experiments.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '.scratch/**', '.claude/worktrees/**'],
     setupFiles: ['./src/test/setup.ts'],
     // A change to one of these makes `--changed` and `related` run the full suite. They replace vitest's `**/`
     // defaults, which can't match inside a ticket worktree: picomatch's `**` skips the `.claude` folder.

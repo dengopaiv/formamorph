@@ -10,7 +10,7 @@ Formaquestion is the help window. You can ask it a question, search this guide a
 <!-- route: formaquestion -->
 
 1. Select the **Help** tab on the edge of the screen, or press F1.
-2. To close the window, select **Close** at its top right. On Android, you can also use the back action.
+2. To close the window, select **Close** at its top right.
 
 The window stays open when you go to a different screen or open a dialog. You can use the dialog and the window together. Escape closes the dialog and leaves the window open.
 
@@ -777,7 +777,6 @@ On a screen narrower than 768 pixels, Formaquestion fills the screen. It has the
 - **Open Guide** in the title bar shows the Guide full screen. See [Guide](#guide).
 - With the mascot on, the sheet shows the mascot's head at the left of the pill, over a dimmed backdrop. A source name opens its section on the wiki in your browser, not in a reader. See [Mascot](#mascot).
 - **Formaquestion Settings** and **AI Context** fill the screen, so the sheet hides while one is open. When you close it, the sheet shows again as you left it, and an answer that was coming in continues.
-- On Android, the back action closes the sheet first, before a dialog under it.
 
 ## The Help Tab
 <!-- keywords: side handle, edge button, sideways text, opener, reduced motion, floating label, click vs drag, rotated -->

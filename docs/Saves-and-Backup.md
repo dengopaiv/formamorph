@@ -37,7 +37,7 @@ A save from a world that is not on this device does not load from the main menu.
 2. Select the world's folder.
 3. On the save's row, select the **Export save** button.
 
-You get a `.json` file with the save's name. On Android, choose a folder in the **Save As** sheet. See [Save Exports to a Folder](Install-on-Android#-save-exports-to-a-folder).
+You get a `.json` file with the save's name.
 
 ## How to Import a Save
 <!-- keywords: upload, open file, transfer, move, bring in, another device, json, load from disk, received, sync, phone to pc, add playthrough, from friend, multiple at once -->
@@ -82,7 +82,7 @@ Restore adds to what you have. It never erases an item that is not in the backup
 3. Select the **Download** button. A progress bar shows under the version number.
 4. Select **Update & Restart**.
 
-On a Mac, **Download** opens the new `.dmg` file in your browser. Open the file and copy the new app over the old one. For Android, see [How to Update the App](Install-on-Android#how-to-update-the-app).
+On a Mac, **Download** opens the new `.dmg` file in your browser. Open the file and copy the new app over the old one.
 
 ---
 
@@ -200,7 +200,6 @@ Formamorph stores your data in the app's browser storage on your device. Nothing
 | 🪟 Windows desktop | The `userdata` folder beside `Formamorph.exe`. AI models are in the `models` folder beside it, unless you choose a different folder. An update never changes either folder. |
 | 🐧 Linux AppImage | The `userdata` folder beside the AppImage file |
 | 🍎 macOS | The app's default data folder for your user account |
-| 📱 Android | The app's own storage. When you remove the app from the device, Android erases this data. |
 
 The web version asks the browser to keep its storage. A browser can still clear it, and a hosted copy of the app on a new address starts empty. Make a backup if your data matters to you.
 
@@ -211,7 +210,7 @@ On Windows and Linux, copy the whole folder to move your data to a new place.
 
 ### The Update Dialog
 
-The desktop and Android apps check for updates on start, then every few hours. Select the version number at the bottom left of the main menu to open the dialog.
+The desktop app checks for updates on start, then every few hours. Select the version number at the bottom left of the main menu to open the dialog.
 
 | Part | What it does |
 |---|---|
@@ -232,10 +231,10 @@ Your saves, worlds and settings stay the same through an update.
 
 | Button | What it does |
 |---|---|
-| **Update** | On the web, reloads the page. On desktop and Android, starts the download of the newest version. |
+| **Update** | On the web, reloads the page. On desktop, starts the download of the newest version. |
 | **Not Now** | Closes the dialog. The feature stays off until you update. |
 
-After the download, select **Update & Restart** on desktop or **Install** on Android, under the version number on the main menu. See [How to Update the Desktop App](#how-to-update-the-desktop-app).
+After the download, select **Update & Restart** under the version number on the main menu. See [How to Update the Desktop App](#how-to-update-the-desktop-app).
 
 ### What's New
 
@@ -246,4 +245,3 @@ On the web, the version number at the bottom left of the main menu opens **What'
 - [🎮 How to Play](How-to-Play): the game menu and the **Logs** tab
 - [⚙️ Settings](Settings): the **Autosave** setting and the **Data** tab
 - [📚 Library](Library): import and export worlds, entities, dictionaries and avatars
-- [📱 Install on Android](Install-on-Android): updates and exports on Android

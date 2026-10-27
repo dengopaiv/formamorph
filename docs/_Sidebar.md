@@ -4,7 +4,6 @@
 
 **Playing**
 - [🔌 Connect Your Own AI](Connect-Your-Own-AI)
-- [📱 Install on Android](Install-on-Android)
 - [📚 Library](Library)
 - [🧍 Avatars](Avatars)
 - [🚪 Starting a Game](Starting-a-Game)

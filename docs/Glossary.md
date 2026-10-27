@@ -23,7 +23,7 @@ The words Formamorph uses, and what each one means. Each term links the page tha
 | [Rewind](How-to-Play#how-to-rewind-to-an-earlier-turn) | Goes back to an earlier turn and removes every later turn. You can't undo it. |
 | [Notes](How-to-Play#notes) | Your standing facts for the AI. It reads them with every action. |
 | [AI Context Inspector](How-to-Play#the-ai-context-inspector) | Shows the exact text the game sent to the AI each turn, and what came back |
-| [Demo AI](Connect-Your-Own-AI) | The small free model that the browser and Android apps start on |
+| [Demo AI](Connect-Your-Own-AI) | The small free model that the browser build starts on |
 | [Built-In Engine](Connect-Your-Own-AI#the-desktop-engine) | The AI engine inside the desktop app. It runs a model on your own PC. |
 | [Endpoint](Settings#endpoints) | The address of the AI server that writes your story. An endpoint preset saves one. |
 | [Thinking Mode](Settings#reasoning) | How the AI plans a turn before it writes it: **Native**, **Inline**, **Planning** or **Staged** |

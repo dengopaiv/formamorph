@@ -75,7 +75,6 @@ import { cardLayoutFor, thumbAspectFor } from "@/lib/thumbAspect";
 import { SearchField } from "@/components/ui/search-field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useIsMobile } from "@/lib/useIsMobile";
-import { useBackStop } from "@/hooks/useBackStop";
 import { SurfaceLayer } from "@/components/ui/surface";
 import { APP_COMMUNITY_CAPABILITIES, type CommunityBrowserCapabilities } from '@/lib/communityBrowserCapabilities';
 import WorldStorageService, { AnonymousLikeRefused } from '../services/WorldStorageService';
@@ -144,8 +143,6 @@ const BrowserShell = ({ presentation, open, onOpenChange, children }: {
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) => {
-  // The page presentations are not Radix layers, so the Android back button cannot see them and closes them here.
-  useBackStop(presentation !== 'dialog' && open ? () => onOpenChange(false) : undefined);
   if (presentation === 'page') {
     if (!open) return null;
     return (

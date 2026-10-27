@@ -22,9 +22,6 @@ export function summarizeUserAgent(userAgent: string): string {
 
   const os =
     /Windows/i.test(ua) ? 'Windows'
-    : /Android/i.test(ua) ? 'Android'
-    // iOS before macOS: an iPad's user agent says "Macintosh" too.
-    : /iPhone|iPad|iPod/i.test(ua) ? 'iOS'
     : /Mac OS X|Macintosh/i.test(ua) ? 'macOS'
     : /Linux/i.test(ua) ? 'Linux'
     : null;

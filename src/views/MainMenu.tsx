@@ -393,8 +393,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // DEV dev-router: open Settings (or the Load menu) when the hash asks. Tree-shaken in prod.
   const devRoute = useDevRoute();
   const isMobile = useIsMobile();
-  // Whether this build can install an update. The Android app is always "mobile", so its version line has
-  // to stay in the footer rather than collapsing into the ⋯ menu — an update offer nobody opens is no offer.
+  // Whether this build can install an update: its version line stays in the footer rather than collapsing
+  // into the ⋯ menu, because an update offer nobody opens is no offer.
   const canUpdate = updateBridge() !== null;
   // The age attestation every community surface waits on (see AgeGateContext).
   const { attested, gateOpen, requireAttestation } = useAgeGate();

@@ -93,11 +93,10 @@ const DIALOGS: Record<DevModal, DialogRoute> = {
   likePrompt: { ancestor: 'gameViewer' },
   scriptPrompt: { ancestor: 'gameViewer' },
 
-  // Raised by the app itself, never by the player: a refused build, an error toast, the Android back button.
+  // Raised by the app itself, never by the player: a refused build, an error toast.
   updateRequired: { ancestor: null },
   errorDetails: { ancestor: null },
   imageSetup: { ancestor: null },
-  exitApp: { ancestor: null },
   designSystem: { ancestor: null },
 
   // Dev-only mounts of one pane on canned props; players reach these panes through their real hosts.

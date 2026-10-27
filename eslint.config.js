@@ -35,12 +35,9 @@ const formamorph = {
 }
 
 export default tseslint.config(
-  // 'out' is the Cloudflare Pages upload root the deploy assembles: a copy of dist beside the site.
   // '.scratch' is throwaway work, including vendored third-party source to test against.
-  // 'android' is the native project; `cap sync` copies the built bundle into it.
   // `.claude/worktrees` holds other sessions' checkouts; each lints itself.
-  // 'marketing' holds standalone packages with their own dependencies and scripts.
-  { ignores: ['dist', 'site-dist', 'out', 'coverage', 'release', 'electron', 'docs-api', '.scratch', 'testing/open-speed/.build', 'testing/editor-speed/.build', 'android', '.claude/worktrees', 'marketing'] },
+  { ignores: ['dist', 'coverage', 'release', 'electron', 'docs-api', '.scratch', 'testing/open-speed/.build', 'testing/editor-speed/.build', '.claude/worktrees'] },
   {
     files: ['*.config.js'],
     languageOptions: {
@@ -101,8 +98,7 @@ export default tseslint.config(
     rules: { 'formamorph/composed-forwardref': 'error' },
   },
   {
-    // The account site is a second UI surface, so a browser tooltip can't come back there either.
-    files: ['src/**/*.tsx', 'site/**/*.tsx'],
+    files: ['src/**/*.tsx'],
     plugins: { formamorph },
     rules: { 'formamorph/no-native-title': 'error' },
   },

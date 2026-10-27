@@ -5,14 +5,8 @@ import { createRef } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const rig = vi.hoisted(() => {
+vi.hoisted(() => {
   vi.stubEnv('VITE_DEFAULT_ENDPOINT', '');
-  return { nativeApp: false };
-});
-
-vi.mock('@capacitor/core', async (orig) => {
-  const actual = await orig<typeof import('@capacitor/core')>();
-  return { ...actual, Capacitor: { ...actual.Capacitor, isNativePlatform: () => rig.nativeApp } };
 });
 
 import { SettingsProvider, useSettings } from '@/contexts/SettingsContext';
@@ -24,15 +18,10 @@ import { DEMO_AI_SEEN_KEY } from './demoAISeen';
 
 const UA = {
   windowsChrome: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  androidChrome: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
-  iPhoneSafari: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1',
-  // iPadOS Safari asks for the desktop site by default, so it sends a Mac user agent.
-  iPadSafari: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
 };
 
-const setDevice = (userAgent: string, maxTouchPoints = 0) => {
+const setDevice = (userAgent: string) => {
   Object.defineProperty(navigator, 'userAgent', { value: userAgent, configurable: true });
-  Object.defineProperty(navigator, 'maxTouchPoints', { value: maxTouchPoints, configurable: true });
 };
 const setDesktopApp = (on: boolean) => {
   const w = window as unknown as { formamorphDesktop?: unknown };
@@ -91,7 +80,6 @@ const route = (pins: Partial<Record<'narration' | 'choices', string>>) => {
 
 beforeEach(() => {
   localStorage.clear();
-  rig.nativeApp = false;
   setDesktopApp(false);
   setDevice(UA.windowsChrome);
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline (test)'))));
@@ -266,22 +254,6 @@ describe('DemoAINotice desktop pitch', () => {
     expect(pitchShown()).toBe(true);
   });
 
-  it.each([
-    ['Android', UA.androidChrome, 5],
-    ['iPhone', UA.iPhoneSafari, 5],
-    ['iPad', UA.iPadSafari, 5],
-  ])('hides on an %s user agent', (_, userAgent, touch) => {
-    setDevice(userAgent, touch);
-    mountNotice();
-    expect(pitchShown()).toBe(false);
-  });
-
-  it('hides in the native app', () => {
-    rig.nativeApp = true;
-    mountNotice();
-    expect(pitchShown()).toBe(false);
-  });
-
   it('hides in the desktop app', () => {
     setDesktopApp(true);
     const view = mountNotice(false);
@@ -358,10 +330,6 @@ describe('DemoAINotice badge', () => {
   });
 
   it.each([
-    ['an Android user agent', () => setDevice(UA.androidChrome, 5)],
-    ['an iPhone user agent', () => setDevice(UA.iPhoneSafari, 5)],
-    ['an iPad user agent', () => setDevice(UA.iPadSafari, 5)],
-    ['the native app', () => { rig.nativeApp = true; }],
     ['the desktop app', () => setDesktopApp(true)],
   ])('drops the desktop sentence in %s', async (_, arrange) => {
     arrange();

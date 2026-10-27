@@ -1,7 +1,7 @@
 # 🔌 Connect Your Own AI
 <!-- keywords: switch model, better writing quality, smarter narrator, llm backend, change provider, improve story quality, dumb replies, replace the demo -->
 
-In the browser and on Android, Formamorph starts on the **Demo AI**. It is a small free model, and it is there so you can try the app with no setup. The desktop app starts on its **Built-In Engine** instead.
+In the browser, Formamorph starts on the **Demo AI**. It is a small free model, and it is there so you can try the app with no setup. The desktop app starts on its **Built-In Engine** instead.
 
 The AI writes everything you read. A stronger model gives you sharper narration, a better memory of your story, and entities that act the same from turn to turn. Nothing else changes the experience as much.
 
@@ -75,7 +75,7 @@ With **Auto-Load** on, the default, the model loads when its download finishes. 
 2. On the other device, open Settings → **Endpoints** → **Text**.
 3. Type your PC's network address into **Endpoint URL**, such as `http://192.168.…:1234`.
 
-In the browser, Chrome may block a public page from reaching your own network. The [Android app](Install-on-Android#-a-model-on-your-own-network) has no such block.
+In the browser, Chrome may block a public page from reaching your own network. The desktop app has no such block.
 
 ---
 
@@ -127,7 +127,7 @@ The desktop app has the AI engine built in, so there is nothing extra to install
 
 The **Local model** dialog has three views: **Installed**, **Recommended** and **Options**. **Recommended** groups models as **≤4 GB**, **≤8 GB**, **≤16 GB** and **No Limit**.
 
-The desktop app also connects to a local server or a hosted service. The steps are the same as above. The browser and Android builds have no **Built-In Engine**.
+The desktop app also connects to a local server or a hosted service. The steps are the same as above. The browser build has no **Built-In Engine**.
 
 ### Vision Models and Images
 <!-- keywords: vision model cannot see images, local model ignores images, mmproj, projector file, vision badge, images dropped -->
