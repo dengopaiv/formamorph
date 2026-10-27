@@ -4,14 +4,11 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ModelStorageService from '@/services/ModelStorageService';
 import EntityStorageService from '@/services/EntityStorageService';
-import WorldStorageService from '@/services/WorldStorageService';
 import { promisifyRequest } from '@/lib/idb';
 import { blobToDataUrl } from '@/lib/imageSource';
 import { makeVrm1 } from '@/test/glbFixture';
 import { buildEntityCardData, importCharacterFile } from './entityFile';
 import { embedEntityCard } from './entityCard';
-import { entityPublishPayload, worldPublishPayload } from './publishPayload';
-import { PUBLISH_LIMITS } from './publishLimits';
 import { saveDownloadToLibrary } from './librarySources';
 import { withCarriedVrm } from './entityVrmCarry';
 import type { Entity, MediaAsset, World } from '@/types';
@@ -22,8 +19,8 @@ vi.mock('@/lib/jsonFileWorkerUtils', async (importOriginal) => ({
 }));
 
 /**
- * An entity's Avatar travelling in a character card or entity listing: embedded on export, adopted into the
- * Avatar library by hash on import, and counted by the publish size check. Runs against the real library store.
+ * An entity's Avatar travelling in a character card or entity listing: embedded on export, and adopted into
+ * the Avatar library by hash on import. Runs against the real library store.
  */
 
 const vrmFile = (title: string) => new File([makeVrm1({ title })], `${title}.vrm`, { type: 'model/vrm' });
@@ -245,40 +242,5 @@ describe('entity listing download', () => {
     const stored = await EntityStorageService.getEntityData(installed.libraryId);
     expect(stored.vrmPick).toEqual({ kind: 'library', id: ids[0] });
     expect(stored).not.toHaveProperty('vrm');
-  });
-});
-
-describe('publish size', () => {
-  const sendNothing = () => vi.stubGlobal('fetch', vi.fn());
-
-  it('counts the embedded Avatar against the entity limit and refuses before sending', async () => {
-    // 20 MB of file is under the 25 MB limit on disk, and over it once embedded as base64.
-    const big = new File([new Uint8Array(20 * 1024 * 1024)], 'Big.vrm', { type: 'model/vrm' });
-    const record = await addModel(vrmFile('Big'));
-    added.set(record.id, big);
-    const payload = entityPublishPayload(await withCarriedVrm({ id: 'e1', name: 'Wren', vrmPick: { kind: 'library', id: record.id } }));
-    sendNothing();
-
-    await expect(WorldStorageService.publishItem(payload)).rejects.toThrow(/^Entity is 26\.7 MB, over the 25 MB publish limit\.$/);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("counts the world's Avatar store against the world limit and refuses before sending", async () => {
-    // Only the overview is measured, so the rest of the world is left out.
-    const world = { worldOverview: { name: 'Fen', vrmStore: { w1: { name: 'Big', file: { data: 'A'.repeat(2048), type: 'model/vrm' } } } } } as unknown as World;
-    // The world limit lowered for this case, so the store that exceeds it stays small; the store is what is measured.
-    const limit = PUBLISH_LIMITS.world;
-    PUBLISH_LIMITS.world = 2048;
-    sendNothing();
-    try {
-      await expect(WorldStorageService.publishItem(worldPublishPayload(world))).rejects.toThrow(/^World is .+ over the .+ publish limit\.$/);
-      PUBLISH_LIMITS.world = 4096;
-      vi.mocked(fetch).mockRejectedValue(new Error('sent'));
-      await expect(WorldStorageService.publishItem(worldPublishPayload({ ...world, worldOverview: { ...world.worldOverview, vrmStore: {} } })))
-        .rejects.toThrow(/logged in/);
-    } finally {
-      PUBLISH_LIMITS.world = limit;
-    }
-    expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,6 @@ import { screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { renderMainMenu } from '@/test/mainMenu';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import { readUserDefaultAvatar, setUserDefaultAvatar } from '@/lib/defaultAvatar';
 import type { ModelMetadata } from '@/types';
 
@@ -33,7 +32,6 @@ vi.mock('@/services/ModelStorageService', () => ({
 beforeEach(() => {
   localStorage.clear();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })));

@@ -28,8 +28,6 @@ interface EditorModalShellProps {
   onSave: () => Promise<boolean>;
   onClose: () => void;
   onExport: () => void;
-  /** When provided (signed in), renders a Publish button wired to this handler. */
-  onPublish?: () => void;
   /** The loaded editor body (already tab-switched and, for dictionaries, store-wrapped by the caller). */
   children: ReactNode;
 }
@@ -37,12 +35,12 @@ interface EditorModalShellProps {
 /**
  * Shared chrome for the library entity/dictionary editors: the dialog surface, a title + two-tab header,
  * the Export / Publish / Save footer, and the unsaved-changes-on-close handshake. The concrete editor
- * supplies the tab labels, the loaded body, and the save/download/publish handlers; everything data-model
+ * supplies the tab labels, the loaded body, and the save/download handlers; everything data-model
  * specific stays in the caller.
  */
 const EditorModalShell = ({
   open, surface, surfaceTabs, title, contentClassName, loading, tabs, tab, onTabChange,
-  hasUnsavedChanges, onSave, onClose, onExport, onPublish, children,
+  hasUnsavedChanges, onSave, onClose, onExport, children,
 }: EditorModalShellProps) => {
   const [showUnsaved, setShowUnsaved] = useState(false);
   const attemptClose = () => { if (hasUnsavedChanges) setShowUnsaved(true); else onClose(); };
@@ -88,12 +86,6 @@ const EditorModalShell = ({
                     <ActionIcon.export className="h-4 w-4 mr-2" /> Export
                   </Button>
                   <div className="flex gap-2">
-                    {onPublish && (
-                      // Publishes what's on screen, saved or not — the same thing Save would write.
-                      <Button variant="outline" size="sm" onClick={onPublish}>
-                        <ActionIcon.publish className="h-4 w-4 mr-2" /> Publish
-                      </Button>
-                    )}
                     <Button size="sm" onClick={onSave} disabled={!hasUnsavedChanges}>
                       <Save className="h-4 w-4 mr-2" /> Save
                     </Button>

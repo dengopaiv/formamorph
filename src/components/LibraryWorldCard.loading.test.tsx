@@ -26,7 +26,7 @@ const view = (world: WorldRecord, layout: 'grid' | 'detailed' = 'grid', onSelect
   render(
     <DndContext>
       <SortableContext items={[world.id]}>
-        <LibraryWorldCard world={world} contests={[]} layout={layout} onSelect={onSelect} />
+        <LibraryWorldCard world={world} layout={layout} onSelect={onSelect} />
       </SortableContext>
     </DndContext>,
   );

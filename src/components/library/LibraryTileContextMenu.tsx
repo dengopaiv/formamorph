@@ -14,7 +14,6 @@ import type { LibraryTileSize } from '@/lib/libraryOrganization';
 import type { LibraryTiles } from '@/lib/useLibraryTiles';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LibraryGroupPicker } from './LibraryGroupPicker';
-import { ActionIcon } from '@/lib/actionIcons';
 
 const SIZE_LABELS: { size: LibraryTileSize; label: string }[] = [
   { size: 'small', label: 'Small' },
@@ -41,7 +40,6 @@ export function LibraryTileContextMenu({
   arrange = true,
   onOpenGroup,
   onCheckUpdates,
-  onPublish,
   onDelete,
   canDelete,
   itemActions,
@@ -58,7 +56,6 @@ export function LibraryTileContextMenu({
   onOpenGroup: (groupId: string) => void;
   /** Checks this item for source updates, on the tabs whose tiles worlds can follow */
   onCheckUpdates?: (id: string) => void;
-  onPublish?: (id: string) => void;
   onDelete?: (id: string) => void;
   /** False while the item can't be deleted yet, which shows Delete disabled. */
   canDelete?: (id: string) => boolean;
@@ -157,19 +154,14 @@ export function LibraryTileContextMenu({
           </>
         )}
 
-        {/* The item's own actions, below everything about arranging it. Publish is offered on the tabs
-            whose tiles can be published; Delete stays here because the card has no delete control. */}
-        {!group && (onCheckUpdates || onPublish || onDelete || itemActions) && (
+        {/* The item's own actions, below everything about arranging it. Delete stays here because the card
+            has no delete control. */}
+        {!group && (onCheckUpdates || onDelete || itemActions) && (
           <>
             {arrange && <ContextMenuSeparator />}
             {onCheckUpdates && (
               <ContextMenuItem onSelect={() => onCheckUpdates(id)}>
                 <RefreshCw className="h-4 w-4 shrink-0" /> Check for Updates
-              </ContextMenuItem>
-            )}
-            {onPublish && (
-              <ContextMenuItem onSelect={() => onPublish(id)}>
-                <ActionIcon.publish className="h-4 w-4 shrink-0" /> Publish
               </ContextMenuItem>
             )}
             {itemActions?.(id)}

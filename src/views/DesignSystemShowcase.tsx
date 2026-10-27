@@ -3,8 +3,6 @@ import { PromptNavigationReference } from '@/components/design-system/PromptNavi
 import { OwnerFlyoutReference } from '@/components/design-system/OwnerFlyoutReference';
 import { BreadcrumbPickerReference } from '@/components/design-system/BreadcrumbPickerReference';
 import { TravelHintPairReference } from '@/components/design-system/TravelHintPairReference';
-import { FeedbackFilterRowReference } from '@/components/design-system/FeedbackFilterRowReference';
-import { SupporterFlairReference } from '@/components/design-system/SupporterFlairReference';
 import { PresetHeaderReference } from '@/components/design-system/PresetHeaderReference';
 import { LandingPulseReference } from '@/components/design-system/LandingPulseReference';
 import { PanelCrashCardReference } from '@/components/design-system/PanelCrashCardReference';
@@ -39,7 +37,6 @@ import { reasoningRuledOut } from '@/lib/reasoningEffort';
 import { SETTINGS_MODE_DESCRIPTIONS, SETTINGS_HIDDEN_NOTICE, type SettingsMode } from '@/lib/settingsMode';
 import PromptField from '@/components/prompt/PromptField';
 import { plainVocabulary } from '@/lib/chipVocabulary';
-import { CommunityCardReference } from '@/components/design-system/CommunityCardReference';
 import { FindBarReference } from '@/components/design-system/FindBarReference';
 import { SearchFieldReference } from '@/components/design-system/SearchFieldReference';
 import { CodeTemplatesReference } from '@/components/design-system/CodeTemplatesReference';
@@ -288,12 +285,6 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     Component: PromptChipsReference,
   },
   {
-    id: 'community-cards',
-    label: 'Community Cards',
-    description: 'Image-led creation listings',
-    Component: CommunityCardReference,
-  },
-  {
     id: 'find-bar',
     label: 'Find',
     description: 'Compact editor search and replacement',
@@ -406,18 +397,6 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     label: 'Travel Hints',
     description: 'Two Travel Hint boxes joined by a link toggle',
     Component: TravelHintPairReference,
-  },
-  {
-    id: 'filter-row',
-    label: 'Filter Row',
-    description: 'Search, the main filters, and a Filters popover',
-    Component: FeedbackFilterRowReference,
-  },
-  {
-    id: 'supporter-flair',
-    label: 'Supporter Flair',
-    description: 'Tier colors, badges, names, and Profile Image rings',
-    Component: SupporterFlairReference,
   },
   {
     id: 'preset-header',

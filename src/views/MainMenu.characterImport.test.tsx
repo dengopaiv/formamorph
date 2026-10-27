@@ -2,7 +2,6 @@ import { screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { renderMainMenu } from '@/test/mainMenu';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import { buildEntityCardData } from '@/lib/entityFile';
 import { embedEntityCard } from '@/lib/entityCard';
 import { bytesToDataUrl } from '@/lib/imageOptim';
@@ -45,7 +44,6 @@ function fakeWebp(): Uint8Array {
 beforeEach(() => {
   localStorage.clear();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })));
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });

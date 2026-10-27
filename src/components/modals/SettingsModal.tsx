@@ -33,14 +33,11 @@ import type { SettingsSource } from './settingsSource';
 import { useEmbeddingDownload } from './useEmbeddingDownload';
 import { ModeSelect } from '@/components/ui/mode-select';
 import { ExportPresetDialog, ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
-import { usePresetPublish } from '@/components/modals/usePresetPublish';
 import { type SharedPreset } from '@/lib/promptPresetShare';
 import { APP_VERSION } from '@/lib/version';
 import { computePromptTabAvailability } from '@/lib/promptTabAvailability';
 import { PresetOverviewPanel } from './PresetOverviewPanel';
 import { useEndpointModelSuggestions } from './useEndpointModelSuggestions';
-import { usePromptCatalogSuggestions } from './usePromptCatalogSuggestions';
-import { mergeModelSuggestions } from '@/lib/promptCatalogSuggestions';
 import { visibleGroups, SURFACE_LABELS, HUB_LABEL, HUB_ROUTE, OVERVIEW_LABEL, OVERVIEW_ROUTE, PROMPT_DESCRIPTIONS, PROMPT_LABELS, PROMPT_TAB_REQUESTS, isPromptTab, type PromptSurface } from '@/lib/promptGroups';
 import type { MessageField, PromptJumpTarget } from '@/lib/promptJump';
 import { revealEditorChip, cancelEditorReveals } from '@/lib/editorFieldFocus';
@@ -568,16 +565,11 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   };
   // `addPreset` clones the active values and selects the result, so a copy needs no dialog.
   const duplicatePreset = () => addPreset(`${activePresetName} (copy)`);
-  const presetPublish = usePresetPublish(() => {
-    setOverviewOpen(true);
-    setFocusModels((n) => n + 1);
-  });
   const presetActions = presetHeaderActions(activePresetIsBuiltIn, {
     duplicate: duplicatePreset,
     rename: () => setPresetDialog({ mode: 'rename' }),
     import: () => setImportOpen(true),
     export: () => setExportShared(exportActivePreset(APP_VERSION)),
-    ...(presetPublish.canPublish ? { publish: presetPublish.start } : {}),
     reset: {
       run: () => resetPreset(activePresetId),
       description: `Reset every prompt in the "${activePresetName}" preset to its default value? This can't be undone.`,
@@ -705,14 +697,7 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
   const [overviewOpen, setOverviewOpen] = useState(initialPromptTab === OVERVIEW_ROUTE);
   useEffect(() => { if (initialPromptTab) setOverviewOpen(initialPromptTab === OVERVIEW_ROUTE); }, [initialPromptTab, requestKey]);
   const showingOverview = overviewOpen && presetOverview !== null;
-  // Bumped to put focus on the Overview's Models field, the way out of the empty-Models publish block.
-  const [focusModels, setFocusModels] = useState(0);
   const endpointModels = useEndpointModelSuggestions();
-  const catalogSuggestions = usePromptCatalogSuggestions(showingOverview);
-  const modelSuggestions = useMemo(
-    () => mergeModelSuggestions(catalogSuggestions.modelCounts, endpointModels.suggestions),
-    [catalogSuggestions.modelCounts, endpointModels.suggestions],
-  );
   // The mobile selector's value for the Overview entry; prompt and surface entries use their own prefixes.
   const overviewOption = `preset:${OVERVIEW_ROUTE}`;
   // Each prompt's default in the preset's section style, the text the whole-preset Reset writes too.
@@ -1609,10 +1594,8 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
                   <PresetOverviewPanel
                     overview={presetOverview}
                     onChange={setPresetOverview}
-                    tagSuggestions={catalogSuggestions.tags}
-                    modelSuggestions={modelSuggestions}
+                    modelSuggestions={endpointModels.suggestions}
                     onModelsOpen={endpointModels.load}
-                    focusModels={focusModels}
                   />
                 </ScrollArea>
               ) : (
@@ -2011,7 +1994,6 @@ export const SettingsModal = ({ isOpen, onOpenChange, previewValues, toolWorld, 
               onOpenChange={(o) => { if (!o) setExportShared(null); }}
               shared={exportShared}
             />
-            {presetPublish.dialogs}
             <ImportPresetDialog
               open={importOpen}
               onOpenChange={setImportOpen}

@@ -1,4 +1,4 @@
-import { followedLibraryId } from './publishLinks';
+import { followedLibraryId } from '@/lib/linkedContent';
 import type { Entity, EntityMetadata } from '@/types';
 
 const nameKey = (name: string) => name.trim().toLowerCase();

@@ -91,17 +91,6 @@ describe('Publish', () => {
     </LibraryTileContextMenu>,
   );
 
-  it('publishes the tile it was opened on', async () => {
-    const user = userEvent.setup();
-    const onPublish = vi.fn();
-    showItem({ onPublish, onDelete: vi.fn() });
-
-    fireEvent.contextMenu(screen.getByRole('button', { name: 'Sedge tile' }));
-    await user.click(screen.getByRole('menuitem', { name: 'Publish' }));
-
-    expect(onPublish).toHaveBeenCalledWith('model-1');
-  });
-
   it('shows Delete disabled while the item cannot be deleted, and deletes nothing', async () => {
     const user = userEvent.setup();
     const onDelete = vi.fn();
@@ -134,7 +123,6 @@ describe('Publish', () => {
         renderedIds={[group.id]}
         baseCols={4}
         onOpenGroup={vi.fn()}
-        onPublish={vi.fn()}
         onDelete={vi.fn()}
       >
         <button>Favorites tile</button>

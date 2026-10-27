@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tip } from "@/components/ui/tooltip";
-import { Menu, Save, FolderOpen, SquarePen, ScrollText, Settings, MessageSquarePlus, DoorOpen } from "lucide-react";
+import { Menu, Save, FolderOpen, SquarePen, ScrollText, Settings, DoorOpen } from "lucide-react";
 import { ConfirmDialog } from '../ConfirmDialog';
 import { getAllSaveRecords } from './dbUtils';
 import { useDevRoute } from '../../lib/devRouter';
@@ -17,10 +17,8 @@ import { formatBytes } from '@/lib/imageOptim';
 import { EXIT_TO_MENU_PROMPT } from '@/lib/leavePrompts';
 import type { WorldOverview, SaveRecord } from "@/types";
 
-export const MenuModal = ({ onSettingsClick, onReportBug, onSave, onLoad, worldOverview, worldId, onExitToMenu, onEditWorld, onShowAiContext }: {
+export const MenuModal = ({ onSettingsClick, onSave, onLoad, worldOverview, worldId, onExitToMenu, onEditWorld, onShowAiContext }: {
   onSettingsClick: () => void;
-  /** Opens the feedback form. Omitted when the community server is off or nobody is signed in. */
-  onReportBug?: () => void;
   onSave: (saveName: string, opts?: { overwriteId?: string; includeSceneImages?: boolean }) => Promise<unknown> | void;
   /** `worldId` set ⇒ the save belongs to a different (installed) world; the loader switches to it first. */
   onLoad: (saveId: string, worldId?: string) => Promise<unknown> | void;
@@ -127,12 +125,6 @@ export const MenuModal = ({ onSettingsClick, onReportBug, onSave, onLoad, worldO
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setMenuOpen(false); onSettingsClick(); }}>
               <Settings className="mr-2 h-4 w-4" /> Settings
             </Button>
-            {/* Opened from here so a bug can be reported where it happened, rather than backing out first. */}
-            {onReportBug && (
-              <Button variant="ghost" className="w-full justify-start" onClick={() => { setMenuOpen(false); onReportBug(); }}>
-                <MessageSquarePlus className="mr-2 h-4 w-4" /> Send Feedback
-              </Button>
-            )}
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setMenuOpen(false); setShowExitConfirm(true); }}>
               <DoorOpen className="mr-2 h-4 w-4" /> Exit to Main Menu
             </Button>

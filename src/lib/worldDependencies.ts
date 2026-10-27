@@ -1,6 +1,6 @@
 import { kindOf as catalogKindOf } from '@/lib/catalogKinds';
 import type { ReviewState } from '@/lib/compatibleWorlds';
-import type { LinkedWorldContent } from '@/lib/publishLinks';
+import type { LinkedWorldContent } from '@/lib/linkedContent';
 import type { LibraryKind } from '@/lib/librarySources';
 import type { WorldRecord } from '@/components/WorldDetails';
 import type { ContentLink, Dictionary, Entity } from '@/types';

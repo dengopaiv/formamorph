@@ -2,7 +2,6 @@ import { screen, fireEvent, waitFor, cleanup, within } from '@testing-library/re
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { renderMainMenu } from '@/test/mainMenu';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import type { Entity, ModelMetadata } from '@/types';
 
 /** Deleting an Avatar from the library names the library entities and saves that use it, and clears their picks. */
@@ -58,7 +57,6 @@ const seed = (id: string, name: string, data: Partial<Entity>) =>
 beforeEach(() => {
   localStorage.clear();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })));

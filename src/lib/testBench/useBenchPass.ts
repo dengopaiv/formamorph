@@ -37,7 +37,7 @@ function createBenchRunner(): BenchRunner {
           reply.findings.forEach((finding, i) => rememberFindingKeys(finding, reply.keys![i]));
           last = { findings: reply.findings, keys: reply.keys };
         }
-        return { ...last, bytes: reply.bytes };
+        return last;
       } catch (error) {
         console.error('Test Bench worker failed; checking on the main thread:', error);
         failed = true;
@@ -52,18 +52,16 @@ function createBenchRunner(): BenchRunner {
 export interface BenchCheck {
   /** The rule findings, null until the first pass lands. */
   findings: Finding[] | null;
-  /** The world's publish size in bytes, null until the first pass lands. */
-  bytes: number | null;
 }
 
 /**
- * The rule findings and publish size for `world`, worked out off the main thread. The first pass starts at
+ * The rule findings for `world`, worked out off the main thread. The first pass starts at
  * mount; later ones wait until the world has been still for `delayMs`, and the last answer stays in place
  * while one is pending. Pass a value whose identity changes only when the world data does — the editor's
  * memoized payload — because that identity is what schedules the pass.
  */
 export function useBenchPass(world: RuleWorld, delayMs = PASS_DEBOUNCE_MS): BenchCheck {
-  const [result, setResult] = useState<BenchCheck>({ findings: null, bytes: null });
+  const [result, setResult] = useState<BenchCheck>({ findings: null });
   const mounted = useMountedRef();
   const runner = useRef<BenchRunner | null>(null);
   // Only the newest pass may land; a slow one for an older world must not overwrite it.
@@ -81,7 +79,7 @@ export function useBenchPass(world: RuleWorld, delayMs = PASS_DEBOUNCE_MS): Benc
       ran.current = true;
       const ticket = ++newest.current;
       runner.current?.run(world).then(
-        ({ findings, bytes }) => { if (mounted.current && ticket === newest.current) setResult({ findings, bytes }); },
+        ({ findings }) => { if (mounted.current && ticket === newest.current) setResult({ findings }); },
         // A pass that breaks reaches the editor's error boundary, as a rule throwing in render would.
         (error: unknown) => { if (mounted.current) setResult(() => { throw error; }); },
       );

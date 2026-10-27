@@ -45,15 +45,6 @@ describe('EditorModalShell', () => {
     expect(screen.getByText('Save').closest('button')!.disabled).toBe(false);
   });
 
-  it('shows Publish only when onPublish is provided, and wires it', () => {
-    const onPublish = vi.fn();
-    const { rerender } = render(<EditorModalShell {...baseProps}><div /></EditorModalShell>);
-    expect(screen.queryByText('Publish')).toBeNull();
-    rerender(<EditorModalShell {...baseProps} onPublish={onPublish}><div /></EditorModalShell>);
-    fireEvent.click(screen.getByText('Publish'));
-    expect(onPublish).toHaveBeenCalledTimes(1);
-  });
-
   it('save-and-exit closes only when the save succeeds', async () => {
     // Failing save: Escape opens the unsaved prompt; its Save must NOT close.
     const onClose = vi.fn();

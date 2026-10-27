@@ -11,7 +11,6 @@ import EntityStorageService from '@/services/EntityStorageService';
 import WorldStorageService from '@/services/WorldStorageService';
 import type { ContentLink, Entity, World } from '@/types';
 
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 vi.mock('react-toastify', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));

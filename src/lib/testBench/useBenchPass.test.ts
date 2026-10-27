@@ -3,9 +3,6 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Component, type ReactNode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import type { Entity, WorldOverview } from '@/types';
-import { measurePublishBytes } from '@/lib/publishLimits';
-import { worldPublishPayload } from '@/lib/publishPayload';
-import { APP_VERSION } from '@/lib/version';
 import { createBenchReplier } from './benchPass';
 import { createWorldMirror, type WorldPatch } from './worldMirror';
 import { PASS_DEBOUNCE_MS, useBenchPass } from './useBenchPass';
@@ -83,23 +80,11 @@ describe('useBenchPass', () => {
     vi.useFakeTimers();
     withWorker();
     const { result } = renderHook(() => useBenchPass(broken));
-    expect(result.current).toEqual({ findings: null, bytes: null });
+    expect(result.current).toEqual({ findings: null });
 
     await act(async () => { vi.advanceTimersByTime(0); });
     await settle();
     expect(result.current.findings).toHaveLength(1);
-    expect(result.current.bytes).not.toBeNull();
-  });
-
-  it('measures the content a publish sends: the stored copy, version stamped, tags included', async () => {
-    withWorker();
-    const { result } = renderHook(() => useBenchPass(clean));
-    await vi.waitFor(() => expect(result.current.bytes).not.toBeNull(), { timeout: 10_000 });
-
-    // A world with no tags publishes `"tags":[]` in its overview, and the stored copy carries `version`. The
-    // server counts both, so the editor's bare world is the wrong thing to measure.
-    expect(result.current.bytes).toBe(measurePublishBytes(worldPublishPayload({ version: APP_VERSION, ...clean }).contentData));
-    expect(result.current.bytes).not.toBe(measurePublishBytes(worldPublishPayload(clean).contentData));
   });
 
   it('holds the previous answer until the edits stop, then makes one pass for the burst', async () => {
@@ -153,7 +138,7 @@ describe('useBenchPass', () => {
     rerender({ w: { ...broken, worldOverview: { ...broken.worldOverview, description: 'A fen, grown.' } } });
     await act(async () => { vi.advanceTimersByTime(PASS_DEBOUNCE_MS); });
     await settle();
-    expect(result.current.bytes).toBeGreaterThan(before.bytes!);
+    expect(FakeWorker.all[0].patches).toHaveLength(2);
     expect(result.current.findings).toBe(before.findings);
 
     rerender({ w: world([{ id: 'e1', name: 'Maren', aliases: ['the stranger'] }]) });
@@ -208,7 +193,7 @@ describe('useBenchPass', () => {
   it('stops the worker when the editor closes', async () => {
     withWorker();
     const { result, unmount } = renderHook(() => useBenchPass(clean));
-    await vi.waitFor(() => expect(result.current.bytes).not.toBeNull(), { timeout: 10_000 });
+    await vi.waitFor(() => expect(result.current.findings).not.toBeNull(), { timeout: 10_000 });
     unmount();
     expect(FakeWorker.all.every((w) => w.terminated)).toBe(true);
   });

@@ -118,38 +118,6 @@ describe('SettingsContext: Tool switches in export, import and copy', () => {
     expect(stored('other')?.enabledTools).toEqual({ t1: true });
   });
 
-  it('merges a community download’s Tools by name and reports an added Script Tool', () => {
-    seed('mine');
-    const { result } = renderHook(() => useSettings(), { wrapper });
-    const dice: Tool = { ...TOOL, id: 'far-away', name: 'roll_dice', handler: { kind: 'script', code: 'return 4;' } };
-    let report = { scriptToolAdded: false };
-    act(() => { report = result.current.storeDownloadedPreset('dl-1', { ...gift, tools: [TOOL, dice] }, { sourceId: 'listing-1' }, 'Listed'); });
-    expect(report).toEqual({ scriptToolAdded: true });
-    const [, added] = storedTools();
-    expect(storedTools()).toEqual([TOOL, { ...dice, id: added.id }]);
-    expect(stored('dl-1')?.enabledTools).toEqual({ get_entity: true, t1: true, [added.id]: true });
-    act(() => { report = result.current.storeDownloadedPreset('dl-1', { ...gift, tools: [TOOL, dice] }, { sourceId: 'listing-1' }, 'Listed'); });
-    expect(report).toEqual({ scriptToolAdded: false });
-    expect(storedTools()).toHaveLength(2);
-  });
-
-  it('adds a name once when two downloads carrying it land before a re-render', () => {
-    seed('mine');
-    const { result } = renderHook(() => useSettings(), { wrapper });
-    const dice: Tool = { ...TOOL, id: 'far-away', name: 'roll_dice', handler: { kind: 'script', code: 'return 4;' } };
-    const reports: { scriptToolAdded: boolean }[] = [];
-    act(() => {
-      const { storeDownloadedPreset } = result.current;
-      reports.push(storeDownloadedPreset('dl-1', { ...gift, tools: [dice] }, { sourceId: 'listing-1' }, 'One'));
-      reports.push(storeDownloadedPreset('dl-2', { ...gift, tools: [dice] }, { sourceId: 'listing-2' }, 'Two'));
-    });
-    const [, added] = storedTools();
-    expect(storedTools()).toHaveLength(2);
-    expect(stored('dl-1')?.enabledTools).toEqual({ get_entity: true, [added.id]: true });
-    expect(stored('dl-2')?.enabledTools).toEqual({ get_entity: true, [added.id]: true });
-    expect(reports).toEqual([{ scriptToolAdded: true }, { scriptToolAdded: false }]);
-  });
-
   it('exports Experimental with get_entity on and Default with no switches', () => {
     seed('experimental');
     const { result } = renderHook(() => useSettings(), { wrapper });

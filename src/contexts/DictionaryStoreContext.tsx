@@ -1,7 +1,6 @@
 import { randomUUID } from "@/lib/uuid";
 import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react';
-import { markEdited } from '@/lib/linkedContent';
-import { followedLibraryId } from '@/lib/publishLinks';
+import { followedLibraryId, markEdited } from '@/lib/linkedContent';
 import type { Dictionary, DictionaryEntry } from '@/types';
 
 /** A fresh, empty "Default" book — the ≥1-book invariant's seed. */

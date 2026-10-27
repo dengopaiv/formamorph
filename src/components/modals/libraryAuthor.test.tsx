@@ -13,13 +13,12 @@ describe('library author editing', () => {
   it.each(['entity', 'dictionary'] as const)('loads and saves %s credit without writing it into world content', async (kind) => {
     const id = `author-${kind}`;
     const libraryDetails = { author: 'River Quill' };
-    const onPublish = vi.fn();
     if (kind === 'entity') {
       await EntityStorageService.storeEntity({ id, name: 'Guide', data: { id, name: 'Guide' }, libraryDetails });
-      render(<SettingsProvider><EntityEditorModal entityId={id} onClose={vi.fn()} onPublish={onPublish} /></SettingsProvider>);
+      render(<SettingsProvider><EntityEditorModal entityId={id} onClose={vi.fn()} /></SettingsProvider>);
     } else {
       await DictionaryStorageService.storeDictionary({ id, name: 'Lore', data: { id, name: 'Lore', entries: [], enabled: false }, libraryDetails });
-      render(<SettingsProvider><DictionaryEditorModal dictionaryId={id} initialTab="overview" onClose={vi.fn()} onPublish={onPublish} /></SettingsProvider>);
+      render(<SettingsProvider><DictionaryEditorModal dictionaryId={id} initialTab="overview" onClose={vi.fn()} /></SettingsProvider>);
     }
     const field = await screen.findByRole('textbox', { name: 'Author' });
     expect(field).toHaveValue('River Quill');

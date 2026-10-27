@@ -5,7 +5,6 @@ import { DEFAULT_WORLDS, isDefaultWorldId } from "@/lib/defaultWorlds";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useGameData } from '../contexts/GameDataContext';
 import { useResolvedAuthoredWorld } from '@/lib/useResolvedWorld';
-import { useUserProfile } from '../contexts/userProfileStore';
 import { useDevRoute, registerDevHook } from '../lib/devRouter';
 import { useSurfaceTab } from '@/components/ui/surface';
 import { ELEMENT_ICONS } from '@/lib/elementIcons';
@@ -19,15 +18,16 @@ import { ThemedToastContainer } from '@/components/ThemedToastContainer';
 import 'react-toastify/dist/ReactToastify.css';
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Tip, Tooltip, TooltipTrigger, TooltipPortal, TooltipPositioner, TooltipPopup } from "@/components/ui/tooltip";
+import { Tip } from "@/components/ui/tooltip";
 import {ConfirmDialog} from "@/components/ConfirmDialog";
-import {FilePlus2, DoorOpen, Pencil, AlertTriangle, Code, User, Shield, Globe, LayoutGrid, GalleryThumbnails, Columns2, RectangleVertical, Menu, BookOpen, ChevronLast, MoreHorizontal, MessageSquarePlus, FolderOpen, Archive, Settings, ScrollText, type LucideIcon } from "lucide-react";
+import {FilePlus2, DoorOpen, Pencil, AlertTriangle, Code, LayoutGrid, GalleryThumbnails, Columns2, RectangleVertical, Menu, BookOpen, ChevronLast, MoreHorizontal, FolderOpen, Archive, Settings, ScrollText, type LucideIcon } from "lucide-react";
 import { DefaultAvatarMenuItem, DefaultBadge, DefaultPersonaMenuItem } from '@/components/library/LibraryDefault';
 import { AvatarThumbnailMenuItems } from '@/components/library/AvatarThumbnail';
 import { useAvatarThumbnails } from '@/lib/useAvatarThumbnails';
 import { ActionIcon } from '@/lib/actionIcons';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImageZoomViewer } from "@/components/ImageZoomViewer";
+import PatreonIcon from "@/components/PatreonIcon";
 import { cn } from "@/lib/utils";
 import { THUMB_FRAME, thumbFit } from "@/lib/thumbAspect";
 import { usePersistentState, boolCodec } from "@/lib/usePersistentState";
@@ -60,8 +60,6 @@ import { isWorldOptimizing, useOptimizingWorldIds } from '@/lib/worldOptimizePro
 import { onWorldSavedHere } from '@/lib/worldChangeSignal';
 import { useComponentUpdates } from '@/lib/useComponentUpdates';
 import { UpdateAvailableDialog } from '@/components/modals/UpdateAvailableDialog';
-import { WorldUpdateReviewDialog } from '@/components/modals/WorldUpdateReviewDialog';
-import type { WorldUpdateReview } from '@/lib/useDownloadCoordinator';
 import type { LiveWorld } from '@/lib/componentUpdateRun';
 import type { UpdateRow } from '@/lib/componentUpdates';
 import type { LibrarySource, LinkableContent } from '@/lib/linkedContent';
@@ -71,10 +69,9 @@ import WorldStorageService from '../services/WorldStorageService';
 import DictionaryStorageService from '../services/DictionaryStorageService';
 import EntityStorageService from '../services/EntityStorageService';
 import ModelStorageService from '../services/ModelStorageService';
-import AuthService from '../services/AuthService';
 import ConnectReferencesModal from '@/components/modals/ConnectReferencesModal';
 import type { ReferenceChoices, ReferenceRow } from '@/lib/worldReferences';
-import type { World, Stat, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, ServerEvent, WorldOverview } from '@/types';
+import type { World, Stat, Dictionary, DictionaryMetadata, Entity, EntityMetadata, ModelMetadata, WorldOverview } from '@/types';
 import { parseWorldFile } from '@/lib/jsonFileWorkerUtils';
 import { updateBridge } from '@/lib/updates/updateBridge';
 import { useIsMobile } from '@/lib/useIsMobile';
@@ -83,7 +80,6 @@ import { WebVersionChangelog } from '@/components/menu/WebVersionChangelog';
 import { parseDictionaryImport } from '@/lib/dictionaryFile';
 import { readLibraryDetails } from '@/lib/contentAuthor';
 import { importCharacterFile } from '@/lib/entityFile';
-import { withCarriedVrm } from '@/lib/entityVrmCarry';
 import { importedDefaultPersona, isJsonFile, isStPersonaBackupFile, readStPersonaFiles, stPersonaReport } from '@/lib/stPersonaImport';
 import { useDownscalePrompt } from '@/lib/useDownscalePrompt';
 import { useWorldExport } from '@/lib/useWorldExport';
@@ -93,60 +89,17 @@ import { withOptimizeProgress } from '@/lib/optimizeProgress';
 import { remoteWorldImages } from '@/lib/embedRemoteImages';
 import { warmCachedImages } from '@/lib/remoteImageCache';
 import { filesFrom, importSummaryToast } from '@/lib/importFiles';
-import CommunityBrowserHost from './CommunityBrowserHost';
 import { WorldDetailsColumn, DateTimeText, type WorldRecord } from "@/components/WorldDetails";
 import SortableWorldCard from "@/components/SortableWorldCard";
-import { PlaceBadges } from "@/components/PlaceBadges";
 import { LibraryWorldCard } from "@/components/LibraryWorldCard";
 import { WorldActionButton } from "@/components/WorldActionButton";
 import { GradientButton } from "@/components/GradientButton";
 import DictionaryEditorModal from "@/components/modals/DictionaryEditorModal";
 import EntityEditorModal from "@/components/modals/EntityEditorModal";
 import { ModelDetailsModal } from "@/components/modals/ModelDetailsModal";
-import { AdminPanelDialog } from "@/components/menu/AdminPanelDialog";
-import { type ProfileTab } from "@/components/menu/profileTabs";
 import { ENTITY_EDITOR_SUBTABS, ENTITY_EDITOR_TABS } from "@/views/entityPanelTabs";
 import { DICTIONARY_EDITOR_TABS } from '@/views/dictionaryEditorTabs';
-import { TutorialPopover } from "@/components/TutorialPopover";
-import { useTutorial } from "@/lib/tutorials";
-import { UserAvatar } from "@/components/UserAvatar";
-import { UserName } from "@/components/UserName";
-import { badgeKind, UNREAD_MARK_STYLES } from "@/lib/unreadSeverity";
-import UserService from "@/services/UserService";
-import ReportService from "@/services/ReportService";
-import { type MyFeedbackTabKey } from "@/components/menu/myFeedbackTabs";
-import { type AdminPanelTab } from "@/components/menu/adminPanelTabs";
-import { type PoliciesTab as PoliciesSubTab } from "@/components/menu/policiesTabs";
-import { type FeedbackTab as FeedbackSubTab } from "@/components/menu/feedbackTabs";
-import MessageService from "@/services/MessageService";
-import { useActiveEvents } from "@/lib/useActiveEvents";
-import { asBrowseTab, type BrowseTab } from "@/lib/browseTabs";
-import { isContestEvent } from "@/lib/serverEvents";
-import { placementsBy, judgingContestsOf } from "@/lib/contests";
-import { useContests } from "@/lib/useContests";
-import { EventBanner, EventBannerChips } from "@/components/events/EventBanner";
-import { useEventBanners } from "@/components/events/useEventBanners";
-import { EventAckModal } from "@/components/events/EventAckModal";
-import FeedbackService from "@/services/FeedbackService";
-import { FeedbackHubDialog } from "@/components/menu/FeedbackHubDialog";
-import { AuthModals } from "@/components/menu/AuthModals";
-import { onSignInSucceeded, requestSignIn } from "@/lib/signInStore";
-import { PublishModal } from "@/components/menu/PublishModal";
-import { creditLine, entityPublishPayload, dictionaryPublishPayload, type PublishPayload } from "@/lib/publishPayload";
-import { linkedSourceCopies, sourceBlockReason } from "@/lib/sourceChecks";
-import { readSourceCheck } from "@/lib/sourceCheckStore";
-import { buildAvatarPublish } from "@/lib/avatarPublish";
-import { buildWorldPublish, type WorldPublishTarget } from "@/lib/worldPublish";
 import { BackupRestoreDialog } from "@/components/menu/BackupRestoreDialog";
-import { COMMUNITY_ENABLED } from "@/lib/featureFlags";
-import { useAgeGate } from "@/contexts/AgeGateContext";
-import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
-import { isAgeAttested } from "@/lib/ageGate";
-import {
-  consumeCommunityListingHandoff,
-  readCommunityListingHandoff,
-} from '@/lib/communityListingHandoff';
-import { isStaff } from "@/lib/roles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BundledContentChoice } from "@/components/BundledContentChoice";
 import { hasComponentLinks, readComponentFileLinks, type ComponentFileLinks } from "@/lib/componentFileLinks";
@@ -162,8 +115,6 @@ import { allPlaceholders, placeholderOwners } from "@/lib/placeholderHomes";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useWorldPromptPresets, GLOBAL_PRESET_VALUE } from "@/lib/worldPromptPreset";
-import { promptLibraryTarget } from "@/lib/promptDownload";
-import PatreonIcon from "@/components/PatreonIcon";
 import GithubIcon from "@/components/GithubIcon";
 import { describePlaceholders } from '@/lib/placeholders';
 
@@ -252,6 +203,15 @@ const WorldNotice = ({ tone, icon: Icon, children, actionLabel, actionIcon: Acti
   </div>
 );
 
+/** An Avatar's authors as one credit line, or empty when it names none. */
+function creditLine(authors: string[] | undefined): string {
+  const names = authors?.filter((name) => name.trim()) ?? [];
+  if (names.length === 0) return '';
+  if (names.length === 1) return `By ${names[0]}.`;
+  if (names.length === 2) return `By ${names[0]} and ${names[1]}.`;
+  return `By ${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}.`;
+}
+
 const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = false }: MainMenuProps) => {
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -264,19 +224,15 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const { showReadme, setShowReadme } = useReadmeVisibility();
   const { applyWorldPrompt, setApplyWorldPrompt } = useWorldPromptOptOut();
   const { worldPreset, setWorldPreset } = useWorldPromptPresets();
-  // The preset list, and the store prompt listings download into; the pin is applied by GameViewer.
-  const { builtinPresets, promptPresets, userPromptPresets, storeDownloadedPreset, activePresetId, selectPreset } = useSettings();
-  const promptTarget = useMemo(
-    () => promptLibraryTarget({ presets: userPromptPresets, store: storeDownloadedPreset }),
-    [userPromptPresets, storeDownloadedPreset],
-  );
+  // The preset list; the pin is applied by GameViewer.
+  const { builtinPresets, promptPresets } = useSettings();
   /** A preset id as the player knows it, or undefined when nothing names that id any more. */
   const presetName = useCallback(
     (id: string | undefined) =>
       [...builtinPresets, ...promptPresets].find((preset) => preset.id === id)?.name,
     [builtinPresets, promptPresets],
   );
-  const { promptWorld, promptWorldsBatch, promptImagesBatch, promptEntity, dialog: downscaleDialog } = useDownscalePrompt();
+  const { promptWorld, promptWorldsBatch, promptImagesBatch, dialog: downscaleDialog } = useDownscalePrompt();
   const { exportWorld, dialog: worldExportDialog } = useWorldExport(promptWorld);
   const [selectedWorld, setSelectedWorld] = useState<WorldRecord | null>(null);
   // DEV only: a canned override the prompt viewer falls back to, so its dev route is reachable on a
@@ -288,8 +244,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // DEV only: canned rows for the Connect World References step, which in the app only opens mid-add inside
   // the World Editor. Never set in prod.
   const [devReferences, setDevReferences] = useState<ReferenceRow[] | null>(null);
-  // DEV only: a canned world update review. Never set in prod.
-  const [devWorldUpdate, setDevWorldUpdate] = useState<WorldUpdateReview | null>(null);
   // DEV only: a canned component update review. Never set in prod.
   const [devUpdates, setDevUpdates] = useState<{
     source: LibrarySource; sourceData: LinkableContent; rows: UpdateRow[];
@@ -349,17 +303,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   const [editorOnNewWorld, setEditorOnNewWorld] = useState(false);
   // The Authoring Tour starts on that new world as soon as the editor opens.
   const [editorStartsTour, setEditorStartsTour] = useState(false);
-  // A required source the world's last check found removed. Read from that recorded answer alone: a check
-  // runs only when the author asks for one in the World Editor, so opening this menu makes no request and
-  // an installed world stays playable offline. Editing and loading a save are never gated — repair lives in
-  // the editor, and a game already under way keeps the content it started with.
-  // Re-read on the editor closing as well as on the world changing: a check run in there writes the record
-  // without touching the world, so keying on the world alone would hold a stale answer.
-  const sourceBlock = useMemo(() => {
-    if (!selectedWorld || showWorldEditor) return null;
-    const record = readSourceCheck(selectedWorld.id);
-    return sourceBlockReason(linkedSourceCopies(selectedWorld.data, record.required), record.results);
-  }, [selectedWorld, showWorldEditor]);
   const [worldToDelete, setWorldToDelete] = useState<string | null>(null);
   const [warmingOffline, setWarmingOffline] = useState(false);
   const [showCharacterCustomization, setShowCharacterCustomization] = useState(false);
@@ -392,38 +335,11 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // Whether this build can install an update: its version line stays in the footer rather than collapsing
   // into the ⋯ menu, because an update offer nobody opens is no offer.
   const canUpdate = updateBridge() !== null;
-  // The age attestation every community surface waits on (see AgeGateContext).
-  const { attested, gateOpen, requireAttestation } = useAgeGate();
-
-  /**
-   * Open Community Creations, asking for the age attestation first.
-   *
-   * Every way in comes through here — the menu button, a contest poster's View Entries, a notification
-   * jumping to a listing, the dev router — so there is no side door past the gate. Declining simply
-   * leaves it shut, and the next attempt asks again.
-   */
-  const openCommunityBrowser = useCallback((tab?: BrowseTab) => {
-    requireAttestation({
-      onAccept: () => {
-        setCommunityTab(tab);
-        setShowCommunityBrowser(true);
-      },
-    });
-  }, [requireAttestation]);
-
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     if (devRoute?.modal === 'settings' || devRoute?.modal === 'settingsCompare' || devRoute?.modal === 'chipOptions') setShowSettings(true);
     if (devRoute?.modal === 'menu') setShowLoadDialog(true);
     if (devRoute?.modal === 'backup') setShowBackup(true);
-    if (devRoute?.modal === 'community') openCommunityBrowser();
-    // The likers list hangs off a listing's details, so this route opens the catalog and lands there.
-    if (devRoute?.modal === 'likers') openCommunityBrowser();
-    // The add-on review hangs off a published world, so this route opens the catalog and lands there too.
-    if (devRoute?.modal === 'manageAddons') openCommunityBrowser();
-    if (devRoute?.modal === 'profile') setShowProfileDialog(true);
-    if (devRoute?.modal === 'feedbackHub') setShowFeedback(true);
-    if (devRoute?.modal === 'adminPanel') setShowAdminPanel(true);
     if (['worldEditor', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar'].includes(devRoute?.modal ?? '')) setShowWorldEditor(true);
     if (devRoute?.modal === 'avatar') setShowCharacterCustomization(true);
     if (devRoute?.modal === 'aiSetup') setGate({ reason: 'firstRun' });
@@ -446,11 +362,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       } else setDraftEntity({ id: randomUUID(), name: 'New Character' });
     }
     if (devRoute?.modal === 'dictionaryEditor') setDraftDictionary({ id: randomUUID(), name: 'New Dictionary', enabled: true, entries: [] });
-    // The publish dialog names itself from a payload, so it opens on a canned world rather than on
-    // whatever the library happens to hold — it is reachable on an empty profile that way.
-    if (devRoute?.modal === 'publish') {
-      void import('@/lib/devPublishSample').then(({ devPublishPayload }) => openPublish(devPublishPayload(devRoute.tab)));
-    }
     // The connection step only opens partway through an add in the World Editor, so its dev route builds the
     // rows rather than the library item and the world that would raise them.
     if (devRoute?.modal === 'connectReferences') {
@@ -470,11 +381,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         copies: sample.devUpdateCopies(),
       }));
     }
-    // The world update review only opens partway through updating an installed copy, so its dev route
-    // builds the rows instead.
-    if (devRoute?.modal === 'worldUpdate') {
-      void import('@/lib/devWorldUpdateSample').then((sample) => setDevWorldUpdate(sample.devWorldUpdateReview()));
-    }
     // Unlike the editors above, a model preview needs a real model — open the first one, if the library has any.
     if (devRoute?.modal === 'modelDetails') {
       setCardType('models');
@@ -485,7 +391,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     if (!devRoute?.modal && devRoute?.tab && (MAIN_MENU_CARD_TABS as readonly string[]).includes(devRoute.tab)) {
       setCardType(devRoute.tab as typeof cardType);
     }
-  }, [devRoute?.modal, devRoute?.tab, devRoute?.fixture, openCommunityBrowser]);
+  }, [devRoute?.modal, devRoute?.tab, devRoute?.fixture]);
 
   // DEV: the Authoring Tour always runs on a world of its own, so its route opens a new blank one.
   useEffect(() => {
@@ -566,207 +472,17 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // A blank character being authored but not yet saved (New Entity → editor, persisted only on Save).
   const [draftEntity, setDraftEntity] = useState<Entity | null>(null);
 
-  // Shared auth identity (header, publish gating, community browser). The profile forms live in AuthModals.
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [currentUser, setCurrentUser] = useState<WorldRecord | null>(null);
-  const [showProfileDialog, setShowProfileDialog] = useState(false);
-  // Bumped when another tab signs in, so the identity below is re-read rather than left as this tab
-  // found it. Signing in on formamorph.ai writes the same storage keys this build reads.
-  const [adoptedSessionNonce, setAdoptedSessionNonce] = useState(0);
-
-  // The two footer circles explain themselves, and only ever one of them is on screen: the profile circle
-  // offers an account while signed out, the feedback circle appears once there is one.
-  const heldMenuTutorials = [
-    ...(!COMMUNITY_ENABLED || isAuthenticated ? ['main-menu-sign-in'] : []),
-    ...(!COMMUNITY_ENABLED || !isAuthenticated ? ['main-menu-feedback'] : []),
-  ];
-  const { active: menuTutorial, nav: menuTutorialNav, dismiss: dismissMenuTutorial } = useTutorial('mainMenu', {
-    active: !introActive,
-    held: heldMenuTutorials,
-  });
-
-  // Publish modal open state; the publish form/handlers live in the PublishModal component.
-  const [showPublishModal, setShowPublishModal] = useState(false);
-  // What the publish modal is publishing. Deliberately not cleared on close: the modal names itself from
-  // the payload's kind, so dropping it would flash the title back to "World" during the fade-out.
-  const [publishPayload, setPublishPayload] = useState<PublishPayload | null>(null);
-  // Which local record the open payload came from. A world uses it to link itself to the listing it
-  // becomes; a character or a dictionary uses it to name the library item its Compatible Worlds are
-  // derived from. An Avatar has neither and passes none.
-  const [publishLocalId, setPublishLocalId] = useState<string | undefined>(undefined);
-  const openPublish = (payload: PublishPayload, localId?: string) => {
-    setPublishPayload(payload);
-    setPublishLocalId(localId);
-    setShowPublishModal(true);
-  };
-
-  /**
-   * Publish a character, offering to shrink an oversized portrait first.
-   *
-   * Without this the upload reaches the server and is rejected with "Thumbnail exceeds maximum size of
-   * 5MB" — a dead end in a dialog that never mentions thumbnails, and no way to act on it. The download
-   * side already offers this choice; the publish side is where the big image actually comes from.
-   */
-  const publishEntity = async (entity: Entity, libraryDetails?: { author?: string }) => {
-    openPublish(entityPublishPayload(await withCarriedVrm(await promptEntity(entity)), libraryDetails), entity.id);
-  };
-
-  /**
-   * Publish an Avatar, once its own file has been read and found to grant every right the catalog needs.
-   *
-   * A file that does not is refused here rather than by the server: the dialog would otherwise open on a
-   * payload that could only be rejected, and the reason would arrive after the upload instead of before it.
-   */
-  const publishModel = async (model: { id: string; name: string }) => {
-    const attempt = await buildAvatarPublish(model);
-    if (!attempt.allowed) {
-      toast.error(attempt.message);
-      return;
-    }
-    openPublish(attempt.payload);
-  };
-
-  /** Publish the selected world, unless it is a bundled world the player never edited. */
-  const publishWorld = (world: WorldRecord) => {
-    // A selected world always holds its migrated data (handleWorldSelection); WorldRecord is loose.
-    const attempt = buildWorldPublish(world as WorldPublishTarget);
-    if (!attempt.allowed) {
-      toast.error(attempt.message);
-      return;
-    }
-    openPublish(attempt.payload, world.id);
-  };
   const [showBackup, setShowBackup] = useState(false);
 
-  // A listing the reader asked for from somewhere else — a notification feed row. Held here because the
-  // jump crosses two dialogs: the profile closes, the browser opens, and the browser opens the details.
-  const [pendingListing, setPendingListing] = useState<{ id: string; kind: string } | null>(null);
-
-  // Community Creations browser open state (the browser itself lives in <CommunityCreationsBrowser>).
-  const [showCommunityBrowser, setShowCommunityBrowser] = useState(false);
-
-  // Shared pan/zoom image viewer, opened by the local world modal and the community details modal.
+  // Shared pan/zoom image viewer, opened by the world modal.
   const [imageViewerOpen, setImageViewerOpen] = useState(false);
   // Source for the shared pan/zoom viewer, set by whichever modal's thumbnail was clicked.
   const [viewerImage, setViewerImage] = useState<{ src: string; alt: string }>({ src: '', alt: '' });
-  const handleListingOpened = useCallback(() => setPendingListing(null), []);
-  // Stable identities: each of these is handed to a tab that fetches, and an inline arrow would give a
-  // new one on every render. The tabs guard themselves too, but a caller should not be the hazard.
-  const handleNotificationsRead = useCallback(() => setFollowCountNonce((n) => n + 1), []);
-  const handleBugsChange = useCallback(() => setBugCountNonce((n) => n + 1), []);
-  const handleOpenListing = useCallback((listing: { id: string; kind: string }) => {
-    requireAttestation({
-      onAccept: () => {
-        setShowProfileDialog(false);
-        setPendingListing(listing);
-        // A no-op when the request came from a profile opened inside the browser: it is already open, and
-        // the listing it was handed is what it reacts to either way.
-        setShowCommunityBrowser(true);
-      },
-    });
-  }, [requireAttestation]);
-
-  // Lend the same jump to the profile dialog, which lives at the app root and cannot reach any of this.
-  const { setListingOpener } = useUserProfile();
-  useEffect(() => {
-    setListingOpener(handleOpenListing);
-
-    return () => setListingOpener(null);
-  }, [setListingOpener, handleOpenListing]);
-
-  // The same lending for Feedback: a suspended account is told to ask there, and the deletion flow that
-  // tells it stands above this screen. Withdrawn on unmount, so the step offers no button it cannot honor.
-  const { setFeedbackOpener } = useAccountDeletion();
-  useEffect(() => {
-    setFeedbackOpener(() => setShowFeedback(true));
-
-    return () => setFeedbackOpener(null);
-  }, [setFeedbackOpener]);
-
   const openImageViewer = (src: string | undefined, alt: string | undefined) => {
     if (!src) return;
     setViewerImage({ src, alt: alt || 'World image' });
     setImageViewerOpen(true);
   };
-
-  // Admin "Manage Users" dialog: open state here; its list/paging/fetch live in the dialog component.
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
-  // Targets with an open report on them, for the badge on the Admin Panel button. Staff only, and zero
-  // against a server without the feature — the button simply wears no badge there.
-  const [openReports, setOpenReports] = useState(0);
-  // Bumped after a resolution, so the badge follows the queue rather than the session.
-  const [reportCountNonce, setReportCountNonce] = useState(0);
-  const [unreadMessages, setUnreadMessages] = useState(0);
-  // The loudest unread message, which is what colors the badge. Null when the inbox holds nothing new.
-  const [messageSeverity, setMessageSeverity] = useState<string | null>(null);
-  // Feedback threads — bugs and suggestions both — with a reply the user hasn't seen. Badged on the
-  // Feedback button rather than the profile circle: that is where the threads are now, and a count is
-  // easiest to act on sitting on the thing it is about.
-  const [unreadBugs, setUnreadBugs] = useState(0);
-  const feedbackLabel = unreadBugs > 0 ? `Feedback (${unreadBugs} unread)` : 'Feedback';
-  // Bumped to re-read the bug count after a thread is opened or replied to.
-  const [bugCountNonce, setBugCountNonce] = useState(0);
-  const [showFeedback, setShowFeedback] = useState(false);
-  // New work from the accounts this reader follows. Re-read on demand like the feedback half, since
-  // opening the feed is what clears it.
-  const [unreadFollows, setUnreadFollows] = useState(0);
-  const [followCountNonce, setFollowCountNonce] = useState(0);
-  // What the profile circle counts: the two channels that live behind it. Feedback replies are not in
-  // it — they are behind their own button, wearing their own count.
-  const unreadWaiting = unreadMessages + unreadFollows;
-  // ...and it takes the color of the loudest thing in it, so a suspension notice does not arrive looking
-  // like a bug reply. Only channels with something waiting are offered; the rest are simply absent.
-  const unreadKind = badgeKind({
-    messages: unreadMessages,
-    messageSeverity,
-    follows: unreadFollows,
-  });
-  // One announcement per session: the count is refetched whenever auth changes, and re-toasting the
-  // same backlog on every refresh would be noise.
-  const announcedUnreadRef = useRef(false);
-
-  // Check authentication status on component mount (skipped when community features are disabled — the
-  // hosted build never contacts the auth server).
-  //
-  // It also waits on the age attestation, which is what makes a held token harmless until the player has
-  // answered: nothing here runs, so the badge reads below it stay off, and a decline — which signs the
-  // token out — is never overtaken by a session this adopted first.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED || !attested) return;
-    const checkAuth = async () => {
-      const isLoggedIn = AuthService.isAuthenticated();
-      setIsAuthenticated(isLoggedIn);
-
-      if (isLoggedIn) {
-        const user = AuthService.getCurrentUser();
-        setCurrentUser(user);
-
-        // Refresh user profile
-        try {
-          const refreshedUser = await AuthService.fetchUserProfile();
-
-          if (refreshedUser) {
-            // Ensure we have a username
-            if (!refreshedUser.username && user && user.username) {
-              refreshedUser.username = user.username;
-            }
-
-            setCurrentUser(refreshedUser);
-          } else {
-            // Token expired or invalid
-            setIsAuthenticated(false);
-            setCurrentUser(null);
-          }
-        } catch (error) {
-          console.error('Error refreshing user profile:', error);
-
-          // If we failed to refresh but have a user with username, keep using it (no action needed).
-        }
-      }
-    };
-
-    checkAuth();
-  }, [attested, adoptedSessionNonce]);
 
   // Reload the world grid from storage. Reused on mount and after the World Editor modal closes so the
   // grid reflects renames/edits/deletes without remounting MainMenu (mirrors refreshDictionaries/Entities).
@@ -925,31 +641,14 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
   useEffect(() => { refreshEntities(); }, [refreshEntities]);
 
-  // A download lands in the browser's copy of the library, not this one, so the grids re-read on the way
-  // out — the same handoff the World Editor modal has. Nothing here updates mid-browse, and nothing needs
-  // to: the grids are behind a full-screen surface until this fires.
-  const handleCommunityBrowserOpenChange = useCallback((next: boolean) => {
-    setShowCommunityBrowser(next);
-    if (next) return;
-    setCommunityTab(undefined);
-    void refreshWorlds();
-    void refreshEntities();
-    void refreshDictionaries();
-  }, [refreshWorlds, refreshEntities, refreshDictionaries]);
-
   // Importing a component file: the worlds it says it suits, and the update review a file whose source is
   // already in the library opens instead.
-  const findAssociatedWorld = useCallback((listingId: string) => {
-    setPendingListing({ id: listingId, kind: 'world' });
-    setShowCommunityBrowser(true);
-  }, []);
   const componentImported = useCallback((kind: 'entity' | 'dictionary') => {
     void (kind === 'dictionary' ? refreshDictionaries() : refreshEntities());
   }, [refreshDictionaries, refreshEntities]);
   const {
     reviewFile: reviewComponentFile, storeFile: storeComponentFile, dialogs: componentImportDialogs,
   } = useComponentFileImport({
-    onFindWorld: findAssociatedWorld,
     onImported: componentImported,
   });
 
@@ -1277,16 +976,8 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     setDraftDictionary({ id: randomUUID(), name: 'New Dictionary', enabled: true, entries: [] });
   };
 
-  /** The signed-in account, for the author line that tells two same-named library items apart. */
-  const signedInId = String(currentUser?.id ?? '') || undefined;
-
   // Enter World, the tour's Play and the dev route all start here, so they share these checks.
   const startEntry = () => {
-    // The world modal carries the block's message and its repair.
-    if (sourceBlock) {
-      setShowWorldModal(true);
-      return;
-    }
     setShowWorldModal(false);
     entryFlow.current?.start();
   };
@@ -1363,18 +1054,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         else setCardType('worlds');
         break;
       // Held as the browser's own tab request, so it outlasts the landing and an age gate's answer.
-      case 'community': {
-        const tab = stepTab(steps, 'community');
-        if (!showCommunityBrowser) openCommunityBrowser(tab);
-        else if (tab) setCommunityTab(tab);
-        break;
-      }
-      case 'profile':
-        if (isAuthenticated) setShowProfileDialog(true);
-        else requestSignIn();
-        break;
-      case 'auth': if (!isAuthenticated) requestSignIn(); break;
-      case 'feedbackHub': setShowFeedback(true); break;
       case 'menu': setShowLoadDialog(true); break;
       case 'backup': setShowBackup(true); break;
       case 'avatar': setShowCharacterCustomization(true); break;
@@ -1488,172 +1167,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
     }
   };
 
-  // Re-read the admin-message badge. The first count of a session also raises a toast, so a message
-  // sent while the player was away is noticed without opening the profile dialog.
-  //
-  // Counted rather than fire-and-forget: the auth effect and the events poll both call this, so two
-  // reads can be in flight at once, and a signing-out-and-back-in-as-someone-else round trip would
-  // otherwise let the previous account's count land last.
-  const unreadReadId = useRef(0);
-  const refreshUnreadCount = useCallback(() => {
-    // Read straight from the flag rather than from the context: the events poll holds this callback, and a
-    // new identity every time the attestation changed would restart the poll.
-    if (!COMMUNITY_ENABLED || !isAgeAttested() || !AuthService.isAuthenticated()) return;
-    const read = (unreadReadId.current += 1);
-
-    MessageService.fetchUnreadCount()
-      .then(({ unread, topSeverity }) => {
-        if (read !== unreadReadId.current) return;
-        setUnreadMessages(unread);
-        setMessageSeverity(topSeverity);
-
-        if (unread > 0 && !announcedUnreadRef.current) {
-          announcedUnreadRef.current = true;
-          toast.info(unread === 1 ? 'You have a new message' : `You have ${unread} unread messages`);
-        }
-      })
-      // The badge is not worth a toast of its own when the community server is unreachable.
-      .catch((error) => console.error('Failed to load unread message count:', error));
-  }, []);
-
-  // Whenever the session changes: on mount for an already-signed-in user, and again right after a login.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED || !isAuthenticated) {
-      setUnreadMessages(0);
-      setMessageSeverity(null);
-      announcedUnreadRef.current = false;
-      // Retires any read still in flight from the session that just ended.
-      unreadReadId.current += 1;
-      return;
-    }
-
-    refreshUnreadCount();
-  }, [isAuthenticated, refreshUnreadCount]);
-
-  // Running community events, polled. The poll nudges the badge along with itself: the server pushes
-  // nothing, so this is the only thing that notices a broadcast sent mid-session.
-  const activeEvents = useActiveEvents({ onPoll: refreshUnreadCount });
-
-  // The contests feed, read once at launch. The events poll carries only what is running, so a contest
-  // that closed while nobody was looking is invisible to it — and the poster saying judging has begun
-  // would only ever reach whoever happened to be online at the deadline.
-  const { contests } = useContests(COMMUNITY_ENABLED);
-
-  // What the acknowledge poster may show: what is running, plus contests waiting on results. An announce or
-  // a cancellation drops one out of the second list, so no stale "judging has begun" survives the news.
-  const announceable = useMemo(
-    () => [...activeEvents, ...judgingContestsOf(contests)],
-    [activeEvents, contests],
-  );
-
-  // Which Community Creations tab to open on. Set when an event banner sends the player to its content;
-  // cleared as the browser closes, so the next plain visit lands on the catalog again.
-  const [communityTab, setCommunityTab] = useState<BrowseTab | undefined>(undefined);
-  // Read once: after an accepted deep link has opened, ordinary browser visits must not replay it.
-  const [externalListing, setExternalListing] = useState(() => readCommunityListingHandoff(window.location.search));
-
-  useEffect(() => {
-    if (!externalListing) return;
-
-    requireAttestation({
-      onAccept: () => {
-        setCommunityTab(externalListing.kind);
-        setPendingListing(externalListing);
-        setShowCommunityBrowser(true);
-        setExternalListing(null);
-        consumeCommunityListingHandoff();
-      },
-      // The address remains shareable after a decline, while this visit returns to the ordinary menu.
-      onDecline: () => setExternalListing(null),
-    });
-  }, [externalListing, requireAttestation]);
-
-  /** Take the player to where an event's content lives — the contest tab, for a contest. */
-  const openEvent = useCallback((event: ServerEvent) => {
-    openCommunityBrowser(isContestEvent(event) ? 'contest' : undefined);
-  }, [openCommunityBrowser]);
-
-  const banners = useEventBanners(activeEvents);
-
-  // The staff half of the badge story. Its own channel because it counts work rather than news: it is
-  // the same number for every staff member, and it clears when somebody — anybody — resolves a group.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED || !isAuthenticated || !isStaff(currentUser)) {
-      setOpenReports(0);
-      return;
-    }
-
-    let current = true;
-
-    ReportService.fetchOpenCount()
-      .then((open) => { if (current) setOpenReports(open); })
-      .catch((error) => console.error('Failed to load the open report count:', error));
-
-    return () => { current = false; };
-  }, [isAuthenticated, currentUser, reportCountNonce]);
-
-  // The feedback half of the badge. Separate from messages because reading a thread changes it, so it is
-  // re-read on demand rather than only when auth changes.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED || !isAuthenticated) {
-      setUnreadBugs(0);
-      return;
-    }
-
-    let current = true;
-
-    FeedbackService.fetchUnreadCount()
-      .then((unread) => { if (current) setUnreadBugs(unread); })
-      .catch((error) => console.error('Failed to load unread feedback count:', error));
-
-    return () => { current = false; };
-  }, [isAuthenticated, bugCountNonce]);
-
-  // The follow half of the badge. Same shape as the feedback one: reading the feed changes it.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED || !isAuthenticated) {
-      setUnreadFollows(0);
-      return;
-    }
-
-    let current = true;
-
-    UserService.fetchNotificationCount()
-      .then((unread) => { if (current) setUnreadFollows(unread); })
-      .catch((error) => console.error('Failed to load unread notification count:', error));
-
-    return () => { current = false; };
-  }, [isAuthenticated, followCountNonce]);
-
-  // Signing out is raised from more than this screen's button — the privacy prompt ends the session
-  // too, and so does a 401 answering any request — so the identity follows the service rather than only
-  // the one handler that used to clear it.
-  useEffect(() => AuthService.onSessionEnded(() => {
-    setIsAuthenticated(false);
-    setCurrentUser(null);
-    setShowProfileDialog(false);
-    setUnreadMessages(0);
-  }), []);
-
-  // The sign-in dialog is shared by every view, so a sign-in raised from Error Details lands here too.
-  useEffect(() => onSignInSucceeded(() => {
-    setIsAuthenticated(true);
-    setCurrentUser(AuthService.getCurrentUser());
-  }), []);
-
-  // Signing in is raised from more than this screen's dialog too: /login on the site writes the same
-  // session, and this tab has to show it without a reload. The check above does the adopting — it is
-  // already the one path that waits on the age attestation and refreshes the profile.
-  useEffect(() => AuthService.onSessionAdopted(() => {
-    setAdoptedSessionNonce((nonce) => nonce + 1);
-  }), []);
-
-  // Handle logout
-  const handleLogout = () => {
-    AuthService.logout();
-    toast.success('Logged out successfully');
-  };
-
   // Every library grid's tile arrangement — folders, sizes, and the order the two sit in. Device-local,
   // one record per tab, seeded from the flat card order the library kept before tiles.
   // The blanks stand in only until the metadata lands; `isLoadingWorlds` is what says which list is real,
@@ -1711,15 +1224,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
   // New/Import are contextual to the selected card type.
   const actionButtons = (
     <>
-      {COMMUNITY_ENABLED && (
-        <GradientButton
-          tone="indigo"
-          onClick={() => openCommunityBrowser()}
-        >
-          <Globe className="mr-2 h-4 w-4" /> Community Creations
-        </GradientButton>
-      )}
-
       {/* Models are import-only: a VRM is authored in modelling software, so there's nothing to create here. */}
       {cardType !== 'models' && (
         <GradientButton
@@ -1747,22 +1251,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         <ActionIcon.import className="mr-2 h-4 w-4" /> Import {cardNoun}
       </GradientButton>
 
-      {isAuthenticated && isStaff(currentUser) && (
-        <GradientButton
-          tone="purple"
-          onClick={() => setShowAdminPanel(true)}
-        >
-          <Shield className="mr-2 h-4 w-4" /> Admin Panel
-          {/* Reports are the one thing in this panel that waits on somebody. The count rides the button
-              rather than the profile circle: that badge is what is waiting for *you*, and a report queue
-              is waiting for whichever of the team gets to it. */}
-          {openReports > 0 && (
-            <span className="ml-2 rounded-full bg-destructive px-1.5 text-meta font-semibold text-destructive-foreground">
-              {openReports > 9 ? '9+' : openReports}
-            </span>
-          )}
-        </GradientButton>
-      )}
     </>
   );
 
@@ -1773,7 +1261,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       world={selectedWorld}
       libraryEntities={entities}
       libraryDictionaries={dictionaries}
-      signedInId={signedInId}
       defaultPersona={defaultPersona}
       showReadme={showReadme}
       setShowReadme={setShowReadme}
@@ -1790,10 +1277,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
       {updateDialog}
       {worldExportDialog}
       <ThemedToastContainer />
-
-      {/* Running-event banner. In-flow and shrink-0 like the mobile nav and footer, so it compresses the
-          scroll frame rather than covering anything; the root's top padding already clears the fixed bar. */}
-      {COMMUNITY_ENABLED && <EventBanner banners={banners} onOpenEvent={openEvent} />}
 
       {/* Top control bar: card-type switcher (left) + action buttons/hamburger (center) + view toggle &
           settings (right). items-center keeps every control on the settings cog's centerline (the cog is
@@ -1858,12 +1341,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         {/* Grid/detailed view toggle + settings (cog stays right-most). min-w-0 so a chip beside them can
             be squeezed rather than pushing the cell past the bar's right edge. */}
         <div className="flex-1 min-w-0 flex items-center justify-end gap-2">
-          {/* Dismissed banners, centered in the slack this cell was already holding rather than pushed
-              against the buttons beside it. It takes the free width and gives it back as it shrinks, so
-              a chip costs the bar no row and never crowds the controls it sits between. */}
-          {COMMUNITY_ENABLED && (
-            <EventBannerChips banners={banners} onOpenEvent={openEvent} className="grow justify-center" />
-          )}
           <ToggleGroup
             type="single"
             value={layoutMode}
@@ -2031,10 +1508,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               />
             );
           }}
-          onPublish={isAuthenticated ? (id) => {
-            const target = models.find((m) => m.id === id);
-            if (target) void publishModel(target);
-          } : undefined}
           itemActions={(id) => {
             const model = models.find((m) => m.id === id);
             return model ? (
@@ -2180,7 +1653,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
           renderCard={(world, { layout, fill, compact }) => (
             <LibraryWorldCard
               world={world}
-              contests={contests}
               layout={layout}
               fill={fill}
               compact={compact}
@@ -2215,104 +1687,14 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         ))}
       </nav>
 
-      {/* Real footer: profile + version (left), copyright (center), social links (right). In-flow and
+      {/* Real footer: version (left), copyright (center), social links (right). In-flow and
           shrink-0 so it caps the flex-1 scroll frame above — the card grid ends at the footer instead of
           scrolling under floating buttons. Full-width (the root is no longer the max-width container — that
           moved to the grid scroll areas), so the profile/social sit at the viewport edges. Equal flex-1
           side cells keep the copyright truly centered. */}
       <footer className="shrink-0 flex items-center gap-2 py-3 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
-        {/* Left: user profile circle + app version (the version moves into the ⋯ menu on mobile). */}
+        {/* Left: app version (it moves into the ⋯ menu on mobile). */}
         <div className="flex-1 flex items-center justify-start gap-2">
-          {COMMUNITY_ENABLED && (
-            <TutorialPopover
-              entry={menuTutorial?.id === 'main-menu-sign-in' ? menuTutorial : null}
-              nav={menuTutorialNav}
-              side="top"
-              align="start"
-            >
-            <button
-              // A picture fills the circle edge to edge; an icon needs the padding around it. Both come
-              // out 48px, so the footer doesn't shift when somebody signs in.
-              className={cn(
-                'relative bg-secondary text-secondary-foreground rounded-full shadow-lg hover:bg-secondary/80 transition-colors',
-                isAuthenticated ? 'p-0' : 'p-3'
-              )}
-              onClick={() => {
-                dismissMenuTutorial('main-menu-sign-in');
-                // An account is what unlocks profiles and comments, so signing up sits behind the same
-                // attestation the browser does. A player who already attested is not asked twice.
-                if (isAuthenticated) setShowProfileDialog(true);
-                else requestSignIn();
-              }}
-              aria-label={
-                isAuthenticated
-                  ? unreadWaiting > 0 ? `User Profile (${unreadWaiting} unread)` : "User Profile"
-                  : "Login"
-              }
-            >
-              {isAuthenticated ? (
-                <UserAvatar
-                  username={(currentUser?.username as string | undefined) ?? (currentUser?.name as string | undefined)}
-                  avatarUrl={currentUser?.avatarUrl as string | null | undefined}
-                  size="lg"
-                  className="h-12 w-12 text-title"
-                />
-              ) : (
-                <User className="h-6 w-6" />
-              )}
-
-              {/* Unread badge: messages and bug replies together. Capped at 9+ so a long backlog can't
-                  stretch the circle. */}
-              {isAuthenticated && unreadWaiting > 0 && (
-                <span className={cn(
-                  'absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold',
-                  UNREAD_MARK_STYLES[unreadKind ?? 'feedback'].badge
-                )}>
-                  {unreadWaiting > 9 ? '9+' : unreadWaiting}
-                </span>
-              )}
-            </button>
-            </TutorialPopover>
-          )}
-          {/* Reading the queue needs an account as much as filing does, so this only appears once signed
-              in — the server refuses either way. */}
-          {COMMUNITY_ENABLED && isAuthenticated && (
-            // The tutorial hands its child the anchor ref, so the tip is built from the parts here: the
-            // trigger has to be the element the popover anchors to, which `Tip` cannot be.
-            <Tooltip>
-              <TutorialPopover
-                entry={menuTutorial?.id === 'main-menu-feedback' ? menuTutorial : null}
-                nav={menuTutorialNav}
-                side="top"
-                align="start"
-              >
-                <TooltipTrigger
-                  aria-label={feedbackLabel}
-                  render={(
-                    <button
-                      className="relative p-3 bg-secondary text-secondary-foreground rounded-full shadow-lg hover:bg-secondary/80 transition-colors"
-                      onClick={() => { dismissMenuTutorial('main-menu-feedback'); setShowFeedback(true); }}
-                    >
-                      <MessageSquarePlus className="h-6 w-6" />
-                      {unreadBugs > 0 && (
-                        <span className={cn(
-                          'absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 flex items-center justify-center rounded-full text-[10px] font-bold',
-                          UNREAD_MARK_STYLES.feedback.badge
-                        )}>
-                          {unreadBugs > 9 ? '9+' : unreadBugs}
-                        </span>
-                      )}
-                    </button>
-                  )}
-                />
-              </TutorialPopover>
-              <TooltipPortal>
-                <TooltipPositioner side="top">
-                  <TooltipPopup>{feedbackLabel}</TooltipPopup>
-                </TooltipPositioner>
-              </TooltipPortal>
-            </Tooltip>
-          )}
           {canUpdate ? <UpdateVersionControl /> : !isMobile && <WebVersionChangelog />}
         </div>
 
@@ -2426,8 +1808,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                 </Button>
               </Tip>
             </DialogTitle>
-            {/* Under the title, as on the card it was opened from — the library agrees with itself. */}
-            {selectedWorld && <PlaceBadges placements={placementsBy(selectedWorld, contests)} className="mr-8" />}
           </DialogHeader>
 
           <div className="flex-1 min-h-0 flex flex-col">
@@ -2441,10 +1821,7 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                   <div className="col-span-2">
                     <h3 className="text-helper font-semibold text-muted-foreground">Author</h3>
                     <p>
-                      <UserName
-                        userId={selectedWorld?.sourceAuthorId}
-                        username={selectedWorld?.data?.worldOverview?.author as string | undefined}
-                      />
+                      {(selectedWorld?.data?.worldOverview?.author as string | undefined) || 'Unknown'}
                     </p>
                   </div>
 
@@ -2486,25 +1863,10 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
               }
               actions={
                 <div className="space-y-2">
-                  {/* The blocked action's own way to the repair, which lives in the editor's issue list. */}
-                  {sourceBlock && (
-                    <div role="alert" className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-2">
-                      <p className="text-meta text-destructive">{sourceBlock}</p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 px-2 text-meta"
-                        onClick={() => setShowWorldEditor(true)}
-                      >
-                        Repair Sources
-                      </Button>
-                    </div>
-                  )}
                   <div className="flex">
                     <WorldActionButton
                       tone="sky"
                       className="w-2/3 rounded-r-none"
-                      disabled={!!sourceBlock}
                       onClick={startEntry}
                     >
                       <DoorOpen className="mr-2 h-4 w-4" /> Enter World
@@ -2513,7 +1875,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                     <WorldActionButton
                       tone="amberSoft"
                       className="w-1/3 rounded-l-none"
-                      disabled={!!sourceBlock}
                       onClick={() => entryFlow.current?.quickStart()}
                     >
                       <ChevronLast className="h-4 w-4 landscape:mr-2" />
@@ -2554,15 +1915,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
                     </WorldActionButton>
                   )}
 
-                  {isAuthenticated && (
-                    <WorldActionButton
-                      tone="redSoft"
-                      disabled={!!sourceBlock}
-                      onClick={() => { if (selectedWorld) publishWorld(selectedWorld); }}
-                    >
-                      <ActionIcon.publish className="mr-2 h-4 w-4" /> Publish World
-                    </WorldActionButton>
-                  )}
                 </div>
               }
             />
@@ -2714,7 +2066,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         initialTab={devRoute?.modal === 'dictionaryEditor' ? DICTIONARY_EDITOR_TABS.find((t) => t.value === devRoute.tab)?.value : undefined}
         draft={draftDictionary}
         onClose={() => { setEditingDictionaryId(null); setDraftDictionary(null); refreshDictionaries(); }}
-        onPublish={isAuthenticated ? (book, details) => openPublish(dictionaryPublishPayload(book, details), book.id) : undefined}
       />
 
       <ConfirmDialog
@@ -2755,7 +2106,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
 
       <ModelDetailsModal
         model={models.find((m) => m.id === previewModelId) ?? null}
-        onPublish={isAuthenticated ? publishModel : undefined}
         onClose={() => setPreviewModelId(null)}
       />
 
@@ -2763,7 +2113,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         entityId={editingEntityId}
         draft={draftEntity}
         onClose={() => { setEditingEntityId(null); setDraftEntity(null); refreshEntities(); }}
-        onPublish={isAuthenticated ? publishEntity : undefined}
         initialTab={devRoute?.modal === 'entityEditor' ? ENTITY_EDITOR_TABS.find((t) => t.value === devRoute.tab)?.value : undefined}
         initialSubTab={devRoute?.modal === 'entityEditor' ? ENTITY_EDITOR_SUBTABS.find((t) => t.value === devRoute.subtab)?.value : undefined}
       />
@@ -2800,15 +2149,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         rows={devUpdates?.rows ?? []}
         live={devUpdateWorlds}
         onClose={() => setDevUpdates(null)}
-      />
-
-      {/* DEV only: the world update review on canned rows. Apply closes it and writes nothing;
-          `devWorldUpdate` is never set in prod. */}
-      <WorldUpdateReviewDialog
-        open={!!devWorldUpdate}
-        review={devWorldUpdate}
-        onApply={() => setDevWorldUpdate(null)}
-        onCancel={() => setDevWorldUpdate(null)}
       />
 
       {/* DEV only: the Connect World References step on canned rows. `devReferences` is never set in prod. */}
@@ -2882,66 +2222,9 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         </DialogContent>
       </Dialog>
 
-      {/* Community-server dialogs (auth, publish, world browser) — omitted entirely in the hosted build. */}
-      {COMMUNITY_ENABLED && (
-        <>
-          {/* Profile dialogs (change password/logout). Sign-in is the app-wide SignInHost. */}
-          <AuthModals
-            showProfileDialog={showProfileDialog}
-            setShowProfileDialog={setShowProfileDialog}
-            currentUser={currentUser}
-            onAvatarChanged={() => setCurrentUser(AuthService.getCurrentUser())}
-            onLogout={handleLogout}
-            onUnreadChange={setUnreadMessages}
-            onNotificationsRead={handleNotificationsRead}
-            onOpenListing={handleOpenListing}
-            initialTab={surfaceNav.tab('profile') ?? (devRoute?.modal === 'profile' ? (devRoute.tab as ProfileTab | undefined) : undefined)}
-            requestKey={surfaceNav.key}
-          />
-
-          {/* Publish Modal — form/handlers live in the component */}
-          <PublishModal
-            open={showPublishModal}
-            onOpenChange={setShowPublishModal}
-            isAuthenticated={isAuthenticated}
-            payload={publishPayload}
-            localId={publishLocalId}
-            onLinked={() => { void refreshWorlds(); }}
-            events={activeEvents}
-          />
-
-          {/* One-time acknowledge poster for an event that has just started or just ended. It waits for
-              the welcome intro to finish, so a first-run player meets the menu before the poster. */}
-          <EventAckModal
-            events={announceable}
-            isAuthenticated={isAuthenticated}
-            onOpenEvent={openEvent}
-            held={introActive || gateOpen}
-          />
-
-          {/* Community Creations. The host reads its own libraries, account and events from the services,
-              so all the menu hands it is where to open — see CommunityBrowserHost.tsx. */}
-          <CommunityBrowserHost
-            open={showCommunityBrowser}
-            onOpenChange={handleCommunityBrowserOpenChange}
-            presentation={devRoute?.modal === 'community' && devRoute.mode === 'page' ? 'page' : 'dialog'}
-            initialTab={communityTab ?? (devRoute?.modal === 'community' ? asBrowseTab(devRoute.tab) : undefined)}
-            requestKey={surfaceNav.key}
-            openListing={pendingListing}
-            onListingOpened={handleListingOpened}
-            // Only on a press, and only where a guest's like cannot land: a server with the feature
-            // switched off, and the cap toast's own Sign in. Closing it leaves them on the listing.
-            onGuestLike={() => requestSignIn()}
-            promptLibrary={{ target: promptTarget, activeId: activePresetId, select: selectPreset }}
-            openLikersOnMount={devRoute?.modal === 'likers'}
-            openManageAddonsOnMount={devRoute?.modal === 'manageAddons'}
-          />
-        </>
-      )}
-
       {/* World Editor as a full-screen in-place modal — visually identical to the old top-level view (its own
           back arrow + unsaved-changes guard), but MainMenu stays mounted so it animates open/closed (zoom from
-          center, like Community Creations) and only the world grid refreshes on close. `hideClose` + no back
+          center) and only the world grid refreshes on close. `hideClose` + no back
           arrow means the editor's guarded back arrow is the sole exit; Esc/overlay are blocked so they can't
           bypass the dirty prompt. */}
       <Dialog open={showWorldEditor} onOpenChange={(open) => { if (open) setShowWorldEditor(true); }}>
@@ -2976,28 +2259,6 @@ const MainMenu = ({ onStartGame, onLoadSaveGame, onReplayIntro, introActive = fa
         src={viewerImage.src}
       />
 
-      {/* Admin Panel — user management and broadcasts; each tab owns its own fetching */}
-      <FeedbackHubDialog
-        open={showFeedback}
-        onOpenChange={setShowFeedback}
-        initialTab={surfaceNav.tab('feedbackHub') ?? (devRoute?.modal === 'feedbackHub' ? (devRoute.tab as MyFeedbackTabKey | undefined) : undefined)}
-        requestKey={surfaceNav.key}
-        onChanged={handleBugsChange}
-      />
-
-      <AdminPanelDialog
-        open={showAdminPanel}
-        onOpenChange={setShowAdminPanel}
-        initialTab={devRoute?.modal === 'adminPanel' ? (devRoute.tab as AdminPanelTab | undefined) : undefined}
-        initialPoliciesTab={devRoute?.modal === 'adminPanel' ? (devRoute.subtab as PoliciesSubTab | undefined) : undefined}
-        initialFeedbackTab={devRoute?.modal === 'adminPanel' ? (devRoute.subtab as FeedbackSubTab | undefined) : undefined}
-        onOpenListing={(listingId) => {
-          // The panel stays open behind the browser: judging a listing is a step inside working the
-          // queue, not a departure from it.
-          handleOpenListing({ id: listingId, kind: 'world' });
-        }}
-        onReportsChanged={() => setReportCountNonce((n) => n + 1)}
-      />
     </div>
   );
 

@@ -5,7 +5,6 @@ import { ACTIVATION_INFO, KEYWORDS_INFO } from './DictionaryManager';
 import { STARTING_INFO } from './LocationManager';
 import { KIND_INFO } from './PlaceholderManager';
 import { AVAILABILITY_INFO } from './StatManager';
-import { PUBLISH_SIZE_INFO } from '@/components/editor/IssuesInstrument';
 import { ALLOWED_PERSONAS_HINTS, START_PERSONA_HINT, WORLD_ONLY_WITHOUT_PERSONAS_HINT } from './WorldOverviewManager';
 import { AI_DESCRIPTION_INFO, PLAYER_DESCRIPTION_INFO } from './WorldDetailsManager';
 
@@ -16,7 +15,6 @@ const TIPS: Record<string, string> = {
   'Starting Location': STARTING_INFO,
   Kind: KIND_INFO,
   Availability: AVAILABILITY_INFO,
-  'Publish Size': PUBLISH_SIZE_INFO,
   'Player-Facing Description': PLAYER_DESCRIPTION_INFO,
   'AI-Facing Description': AI_DESCRIPTION_INFO,
 };

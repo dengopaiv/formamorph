@@ -1,24 +1,15 @@
 /** DEV only: mounts each `DEV_PANE_MODALS` pane on canned props; closing one clears the route. */
 import { useEffect, useRef, type ReactNode } from 'react';
-import { ChangelogEntryDialog } from '@/components/community/ChangelogEntryDialog';
 import PlaceholderSectionList from '@/components/editor/PlaceholderSectionList';
 import { FontTuneDialog } from '@/components/FontTuneDialog';
 import { GenerateImageButton } from '@/components/GenerateImageButton';
-import { EventFormDialog } from '@/components/menu/EventFormDialog';
-import { FeedbackDialog } from '@/components/menu/FeedbackDialog';
-import { FeedbackEditDialog } from '@/components/menu/FeedbackEditDialog';
-import { PodiumDialog } from '@/components/menu/PodiumDialog';
-import { SentMessagesDialog } from '@/components/menu/SentMessagesDialog';
-import { SuspendDialog } from '@/components/menu/SuspendDialog';
 import { ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
 import { RootCrashScreen } from '@/components/RootCrashScreen';
 import { RevealAnimationDialog } from '@/components/RevealAnimationDemo';
-import { devContestSamples } from '@/lib/devEventSample';
-import { devChangelogDraft, devFeedbackThread, devPickerRows, devPresetShareJson } from '@/lib/devPaneSamples';
+import { devPickerRows, devPresetShareJson } from '@/lib/devPaneSamples';
 import { useDevRoute } from '@/lib/devRouter';
 import { IMAGE_CAPS } from '@/lib/imageSlots';
 import { APP_VERSION } from '@/lib/version';
-import { FEEDBACK_TYPES } from '@/types';
 
 const clearRouteOnClose = (open: boolean) => { if (!open) window.location.hash = '#dev'; };
 const ignore = () => {};
@@ -47,17 +38,6 @@ function Pasted({ text, children }: { text: string; children: ReactNode }) {
 export default function DevPaneRoutes() {
   const route = useDevRoute();
   switch (route?.modal) {
-    case 'eventForm': return <EventFormDialog open onOpenChange={clearRouteOnClose} />;
-    case 'podium': return <PodiumDialog open onOpenChange={clearRouteOnClose} contest={devContestSamples()[1]} />;
-    case 'sentMessages': return <SentMessagesDialog open onOpenChange={clearRouteOnClose} username="Sample Player" />;
-    case 'suspend': return <SuspendDialog open onOpenChange={clearRouteOnClose} username="Sample Player" alreadySuspended={false} onConfirm={ignore} />;
-    case 'feedbackForm': {
-      const type = FEEDBACK_TYPES.find((value) => value === route.tab) ?? 'bug';
-      const { title, body } = devFeedbackThread(type);
-      return <FeedbackDialog open onOpenChange={clearRouteOnClose} initialType={type} initialTitle={title} initialBody={body} />;
-    }
-    case 'feedbackEdit': return <FeedbackEditDialog open onOpenChange={clearRouteOnClose} thread={devFeedbackThread()} mayEditProse mayRefile onSaved={ignore} />;
-    case 'changelogEntry': return <ChangelogEntryDialog open onOpenChange={clearRouteOnClose} entry={devChangelogDraft()} onSubmit={ignore} />;
     case 'fontTune': return <FontTuneDialog font="system" open onOpenChange={clearRouteOnClose} />;
     case 'revealDemo': return <RevealAnimationDialog open onOpenChange={clearRouteOnClose} kind="narration" />;
     case 'presetImport': return (

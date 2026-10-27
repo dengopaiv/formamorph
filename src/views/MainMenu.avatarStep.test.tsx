@@ -3,7 +3,6 @@ import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { renderMainMenu } from '@/test/mainMenu';
 import WorldStorageService from '@/services/WorldStorageService';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import { setUserDefaultAvatar } from '@/lib/defaultAvatar';
 import { rememberWorldPersona } from '@/lib/personaPick';
 import type { StoredWorldRecord } from '@/services/WorldStorageService';
@@ -55,7 +54,6 @@ const world: StoredWorldRecord = {
 beforeEach(async () => {
   localStorage.clear();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })));

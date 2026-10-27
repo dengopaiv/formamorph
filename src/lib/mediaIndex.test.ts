@@ -5,12 +5,14 @@ import {
   sectionCards, sectionSelection, sortSectionsLargestFirst, storedBytes, totalBytes, withAvatarsSection, worldImageSlots, type MediaFilter,
 } from './mediaIndex';
 import { IMAGE_CAPS } from './imageSlots';
-import { measurePublishBytes } from './publishLimits';
 import { LINKED_IMAGE, fakeDataUrl, mediaFixtureWorld } from '@/test/mediaFixture';
 
 const where = (items: ReturnType<typeof buildMediaIndex>) => items.map((i) => `${i.kind} ${i.parent.kind}:${i.parent.name} ${i.slot}`);
 
-/** The world with every media value emptied: what the publish measure counts besides media. */
+/** The world's compact JSON size in bytes. */
+const jsonBytes = (world: World) => new TextEncoder().encode(JSON.stringify(world)).length;
+
+/** The world with every media value emptied: what its JSON counts besides media. */
 function withoutMedia(world: World): World {
   const w = structuredClone(world);
   w.worldOverview.thumbnail = '';
@@ -60,11 +62,11 @@ describe('buildMediaIndex', () => {
     ]);
   });
 
-  it("sums to the publish measure, less exactly the world's non-media JSON bytes", () => {
-    // The bound: what the publish measure counts beyond the index is the world with every media value emptied.
+  it("sums to the world's JSON bytes, less exactly its non-media JSON bytes", () => {
+    // The bound: what the world's JSON counts beyond the index is the world with every media value emptied.
     const world = mediaFixtureWorld();
 
-    expect(measurePublishBytes(world) - totalBytes(buildMediaIndex(world))).toBe(measurePublishBytes(withoutMedia(world)));
+    expect(jsonBytes(world) - totalBytes(buildMediaIndex(world))).toBe(jsonBytes(withoutMedia(world)));
   });
 
   it('flags a linked image and counts only its URL bytes', () => {
@@ -381,9 +383,9 @@ describe('Map Background', () => {
     ]);
   });
 
-  it('counts toward the publish measure like other media', () => {
+  it("counts toward the world's JSON bytes like other media", () => {
     const world = mapWorld();
-    expect(measurePublishBytes(world) - totalBytes(buildMediaIndex(world))).toBe(measurePublishBytes(withoutMedia(world)));
+    expect(jsonBytes(world) - totalBytes(buildMediaIndex(world))).toBe(jsonBytes(withoutMedia(world)));
   });
 
   it('shows no blank card once it holds an image', () => {

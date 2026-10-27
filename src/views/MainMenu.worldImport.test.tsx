@@ -3,7 +3,6 @@ import { toast } from 'react-toastify';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { renderMainMenu } from '@/test/mainMenu';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import WorldStorageService from '@/services/WorldStorageService';
 
 vi.mock('react-toastify', () => ({
@@ -38,7 +37,6 @@ const importFiles = (...files: File[]) => {
 beforeEach(() => {
   localStorage.clear();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })));
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });

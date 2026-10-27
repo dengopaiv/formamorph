@@ -11,17 +11,13 @@ import EntityStorageService from '@/services/EntityStorageService';
 import WorldStorageService from '@/services/WorldStorageService';
 import type { Entity } from '@/types';
 
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 vi.mock('react-toastify', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
-const found: string[] = [];
-
 /** A host that reviews one file as soon as it mounts, the way the main menu does after reading it. */
 function Harness({ content, links }: { content: LinkableContent; links: ComponentFileLinks }) {
   const { reviewFile, storeFile, dialogs } = useComponentFileImport({
-    onFindWorld: (listingId) => found.push(listingId),
     onImported: () => {},
   });
   return (
@@ -56,7 +52,7 @@ async function open(links: ComponentFileLinks, content: LinkableContent = card) 
 
 describe('useComponentFileImport', () => {
   it.each([false, true])('retains file credit when storing a component (linked: %s)', async (linked) => {
-    const { result } = renderHook(() => useComponentFileImport({ onFindWorld: vi.fn(), onImported: vi.fn() }));
+    const { result } = renderHook(() => useComponentFileImport({ onImported: vi.fn() }));
     const links = linked ? { source: { sourceId: 'credit-listing' } } : {};
     const source = await result.current.storeFile('entity', card, links, { author: 'River Quill' });
     expect((await EntityStorageService.getEntityMetadata()).find((row) => row.id === source.id)?.author).toBe('River Quill');
@@ -64,7 +60,7 @@ describe('useComponentFileImport', () => {
   });
 
   it('updates a changed credit even when a linked file has identical entity content', async () => {
-    const { result } = renderHook(() => useComponentFileImport({ onFindWorld: vi.fn(), onImported: vi.fn() }));
+    const { result } = renderHook(() => useComponentFileImport({ onImported: vi.fn() }));
     const links = { source: { sourceId: 'credit-listing' } };
     const source = await result.current.storeFile('entity', card, links, { author: 'River Quill', tags: ['Guide'] });
     await act(async () => { await result.current.reviewFile('entity', card, links, { author: 'Fen Writer' }); });
@@ -74,7 +70,6 @@ describe('useComponentFileImport', () => {
   });
 
   beforeEach(async () => {
-    found.length = 0;
     for (const id of await WorldStorageService.getWorldIds()) await WorldStorageService.deleteWorld(id);
     for (const item of await libraryItems('entity')) await EntityStorageService.deleteEntity(item.id);
   });
@@ -116,29 +111,13 @@ describe('useComponentFileImport', () => {
     expect(stored.entities[0].aiDescription).toBe('From the file.');
   });
 
-  it('hands a world this machine has not got to Community Creations', async () => {
+  it('imports a file naming a world this machine has not got', async () => {
+    // The file's world is not installed, which resolves nothing and blocks nothing. The component still lands.
     await open({ associations: [{ id: 'listing-w', name: 'The Long Thaw' }] });
 
-    expect(await screen.findByText('Worlds You Do Not Have')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Open Listing' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Import Entity' }));
 
-    expect(found).toEqual(['listing-w']);
-  });
-
-  it('imports a file naming an unreachable world without reporting anything missing', async () => {
-    // Offline: the file's world is neither installed nor reachable, which resolves nothing and blocks
-    // nothing. The component still lands.
-    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
-    try {
-      await open({ associations: [{ id: 'listing-w', name: 'The Long Thaw' }] });
-      expect(await screen.findByText(/cannot connect to Community Creations/)).toBeInTheDocument();
-
-      await userEvent.click(screen.getByRole('button', { name: 'Import Entity' }));
-
-      await waitFor(async () => expect(await libraryItems('entity')).toHaveLength(1));
-    } finally {
-      online.mockRestore();
-    }
+    await waitFor(async () => expect(await libraryItems('entity')).toHaveLength(1));
   });
 
   it('stores a file naming a listing as one copy of it, however many times it is imported', async () => {

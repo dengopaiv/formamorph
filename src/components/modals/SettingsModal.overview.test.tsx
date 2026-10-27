@@ -9,7 +9,6 @@ import { presetStoreCodec, type PromptPresetStore } from '@/lib/promptPresets';
 import { OVERVIEW_LABEL } from '@/lib/promptGroups';
 import { resetEndpointModelCache } from '@/lib/endpointModels';
 import { resetProbeMemo } from '@/lib/probeMemo';
-import { clearCatalog, replaceCatalog } from '@/lib/worldCatalog';
 
 // The bundled-engine panel talks to Electron IPC, and the embedding model is a worker download.
 vi.mock('@/components/modals/LocalModelPanel', () => ({ LocalModelPanel: () => null }));
@@ -159,11 +158,10 @@ describe('Settings → Prompts: preset Overview', () => {
     });
   });
 
-  describe('suggestions from the cached catalog', () => {
-    beforeEach(async () => {
+  describe('suggestions with no network', () => {
+    beforeEach(() => {
       resetEndpointModelCache();
       resetProbeMemo();
-      await clearCatalog();
     });
     afterEach(() => vi.unstubAllGlobals());
 
@@ -174,40 +172,7 @@ describe('Settings → Prompts: preset Overview', () => {
       return input;
     };
 
-    it('Tags suggests prompt-listing tags only, and Models merges catalog and endpoint spellings', async () => {
-      await replaceCatalog([
-        { id: 'p1', kind: 'prompt', tags: ['slow burn'], models: ['Cydonia-24B'] },
-        { id: 'p2', kind: 'prompt', tags: ['slow burn'], models: ['Cydonia-24B'] },
-        { id: 'w1', kind: 'world', tags: ['slow world'], models: [] },
-      ]);
-      const doFetch = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'cydonia-24b' }, { id: 'local-only' }] }), { status: 200 }));
-      vi.stubGlobal('fetch', doFetch);
-      seed('mine');
-      openPrompts('overview');
-
-      typeInto('Tags', 'slow');
-      expect(await screen.findByRole('button', { name: 'slow burn' })).toBeTruthy();
-      expect(screen.queryByRole('button', { name: 'slow world' })).toBeNull();
-
-      typeInto('Models', '');
-      await waitFor(() => expect(screen.getByRole('button', { name: 'local-only' })).toBeTruthy());
-      const picks = screen.getAllByRole('button', { name: /cydonia|local-only/i }).map((b) => b.textContent);
-      expect(picks).toEqual(['Cydonia-24B', 'local-only']);
-    });
-
-    it('picks up a catalog cached after the Overview first opened', async () => {
-      seed('mine');
-      openPrompts('overview');
-      await waitFor(() => expect(screen.getByLabelText('Tags')).toBeTruthy());
-      fireEvent.click(screen.getAllByRole('button', { name: 'Narration' }).at(-1)!);
-      await replaceCatalog([{ id: 'p1', kind: 'prompt', tags: ['slow burn'], models: [] }]);
-      fireEvent.click(screen.getByRole('button', { name: OVERVIEW_LABEL }));
-
-      typeInto('Tags', 'slow');
-      expect(await screen.findByRole('button', { name: 'slow burn' })).toBeTruthy();
-    });
-
-    it('with no catalog and no network, opening makes no request and both fields take free text', async () => {
+    it('opening makes no request and both fields take free text', async () => {
       const doFetch = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
       vi.stubGlobal('fetch', doFetch);
       seed('mine');

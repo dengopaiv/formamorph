@@ -10,28 +10,14 @@ import type { AiContextData } from '@/lib/testBench/aiContext';
 import type { OpeningData } from '@/lib/testBench/opening';
 import type { BenchTab } from './benchTabs';
 import type { BenchPlacement } from './benchPlacement';
-import type { MissingSource, RepairAction } from '@/lib/sourceChecks';
 import type { ScriptPromptStore } from '@/lib/scriptPrompts';
 
 /** Where the author is sent when they click an item a finding names. */
 export type OpenFindingItem = (section: FindingSection, itemId: string) => void;
 
-/** How far one of the Bench's on-demand checks has got. Neither runs on its own: the script check costs
- *  a sandbox VM per script, and the source check costs a request per source. */
+/** How far the Bench's on-demand script check has got. It never runs on its own: it costs a sandbox VM
+ *  per script. */
 export type CheckStatus = 'idle' | 'running' | 'done';
-
-/** The missing-source check and the repairs its rows offer. */
-export interface SourceCheckProps {
-  /** How many copies in the world follow a published source — what a check would ask about. */
-  sourceCount: number;
-  status: CheckStatus;
-  /** The copies the last check could not confirm, each with its answer. */
-  missing: MissingSource[];
-  /** Ask the server about every source again. Also what Retry Check runs. */
-  onCheckSources: () => void;
-  /** Repair one copy. Replace opens the library picker; the other two land at once. */
-  onRepair: (copyId: string, action: RepairAction) => void;
-}
 
 /** The World Doctor's bundle: the marked finding rows and every action a row offers, fixes aside. */
 export interface IssuesProps {
@@ -54,8 +40,6 @@ export interface IssuesProps {
   /** The rule whose repair is running, when one is. Only the async image conversion can be — a pure fix
    *  lands within the click — and the row it belongs to shows the work rather than looking unresponsive. */
   fixingRuleId: string | null;
-  /** The world's publish size in bytes, null until the first measure lands. */
-  publishBytes: number | null;
   /** The first rule pass hasn't landed yet, so an empty list means nothing. */
   checking: boolean;
   onOpenItem: OpenFindingItem;
@@ -64,8 +48,6 @@ export interface IssuesProps {
   onMarkAllSeen: () => void;
   /** Run every stat's code in the real sandbox and fold the failures into the list. */
   onCheckScripts: () => void;
-  /** The missing-source check and the repairs its rows offer. */
-  sources: SourceCheckProps;
 }
 
 /** The Bench-level `Testing as [PC] · at [location]` selection, resolved against the world. */

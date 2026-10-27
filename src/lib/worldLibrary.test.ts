@@ -203,15 +203,6 @@ describe('every write keeps metadata in step', () => {
     expect(await WorldStorageService.worldsLinking('lib-2')).toEqual([{ id: 'a', name: 'World a' }]);
   });
 
-  it('listing link', async () => {
-    await WorldStorageService.storeWorld(world('a'));
-
-    await WorldStorageService.linkWorldToListing('a', 'srv-a', '2026-01-02');
-
-    await expectMetaInSync();
-    expect(await WorldStorageService.getWorldListingLink('a')).toEqual({ sourceId: 'srv-a', downloadedAt: undefined });
-  });
-
   it('delete', async () => {
     await WorldStorageService.storeWorld(world('a'));
     await WorldStorageService.storeWorld(world('b'));
@@ -251,7 +242,6 @@ describe('the list reads', () => {
     await WorldStorageService.getWorldMetadata();
     await WorldStorageService.worldsLinking('lib-1');
     await WorldStorageService.linkedCopies('lib-1');
-    await WorldStorageService.getWorldListingLink('a');
 
     expect(wholeReads.length).toBeGreaterThan(0);
     expect(wholeReads).not.toContain(WORLD_STORE);

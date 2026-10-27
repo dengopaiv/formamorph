@@ -26,8 +26,6 @@ const AFTER = ' now.';
 
 /** Opens the entity's description on the Values tab and returns its editor root. */
 async function openValues(page: Page): Promise<Locator> {
-  // An ended contest's results dialog reads the full list and would cover the editor.
-  await page.route(/\/events(\?|$)/, (route) => route.fulfill({ json: { data: [] } }));
   await openApp(page);
   await page.evaluate(async (world) => {
     const dev = (window as unknown as { __fmDev: DevRouter }).__fmDev;
