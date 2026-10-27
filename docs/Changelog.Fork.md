@@ -14,6 +14,15 @@ Sections follow upstream's shape so the two read alike: **Major** / **Minor**, t
 
 _Unreleased. Versions are upstream's to pin; entries accumulate here until the work they describe is settled._
 
+### Major Changes
+
+#### ➖ Removed
+
+- **👤 User-facing**
+  - **This fork is the desktop app and nothing else.** The Android app is gone: no APK, no Android updates, no **Install on Android** help page, and no back-button handling or **Close Formamorph** prompt, which only a phone's back button ever raised. The browser version is gone as a release too: nothing is built for formamorph.ai, itch.io's web page or GitHub Pages any more. On Windows, macOS and Linux nothing changes, and a narrow window still folds to the single-panel layout. Help pages that said "in the browser and on Android" now say only what still applies.
+- **🛠️ Developer tooling**
+  - **The Android, site and marketing trees are out of the repo.** Deleted: `android/`, Capacitor (six packages, `capacitor.config.ts`, the update plugin adapter, `useHardwareBack`, `useBackStop`, `backAction`, `AndroidBackHandler`, the `exitApp` surface), the formamorph.ai site (`site/`, `hosting/`, `vite.site.config.js`, the site Tailwind config, the deploy action, Cloudflare and serve scripts), the PWA manifest and iOS icon, and `marketing/` with the title card and banners. `release.yml` keeps the desktop matrix, the GitHub release and the itch desktop push, and `pages.yml` is gone. Playwright starts one dev server now, and the site specs and their servers are deleted. Browser code paths inside `src` stay, because the dev server, Vitest and Playwright all run the app in a browser. The update checker's tests now drive a fake desktop bridge, not the Android plugin. Every pre-cut tip is tagged `pre-pc-only/<branch>`. An upstream sync resolves a modify/delete conflict on these paths by keeping the deletion.
+
 ### Minor Changes
 
 #### ➕ Added
