@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
+import { useSettings } from '@/contexts/SettingsContext';
 import { summarizeDescription } from '@/lib/summarize';
 import { useAiSettingsSnapshot } from '@/lib/aiRequest/useAiSettingsSnapshot';
 import { bridgeDescription, type BridgeKind } from '@/lib/bridgeDescription';

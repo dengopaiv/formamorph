@@ -63,6 +63,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectSe
 import PromptField from '../prompt/PromptField';
 import { PROMPT_KIND_VARIABLES, PROMPT_KIND_USER_VARIABLES, NOW_LINE_VARIABLES, type PromptVariable } from '@/lib/promptVariables';
 import { defaultPromptSampler } from '@/lib/promptSamplers';
+import { numInput } from '@/lib/numInput';
 import { MAX_AUTOSAVE_SLOTS } from '@/lib/autosave';
 import { SamplerControl, type SamplerControlProps } from './SamplerControl';
 import { EndpointRouteField } from './EndpointRouteField';
