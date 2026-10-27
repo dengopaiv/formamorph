@@ -31,13 +31,7 @@ describe('EndpointReachabilityBadge', () => {
   it('probes the endpoint it is given', () => {
     reachable({ status: 'ok', checking: false });
     render(<EndpointReachabilityBadge target={target} />);
-    expect(useEndpointReachable).toHaveBeenLastCalledWith('http://llama.test/v1', '', 'gemma', true, 'text');
-  });
-
-  it('probes an image target with its provider', () => {
-    reachable({ status: 'ok', checking: false });
-    render(<EndpointReachabilityBadge target={{ ...target, provider: 'invokeai' }} />);
-    expect(useEndpointReachable).toHaveBeenLastCalledWith('http://llama.test/v1', '', 'gemma', true, 'invokeai');
+    expect(useEndpointReachable).toHaveBeenLastCalledWith('http://llama.test/v1', '', 'gemma', true);
   });
 
   it('draws nothing for a disabled target', () => {

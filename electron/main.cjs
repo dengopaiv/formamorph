@@ -279,8 +279,8 @@ function createWindow() {
   }
 }
 
-// Desktop-only network bridge: renderer → main HTTP fetch that isn't bound by browser CORS. Used by
-// cloud image providers (OpenAI-style) whose APIs can't be reached directly from the web build.
+// Desktop-only network bridge: renderer → main HTTP fetch that isn't bound by browser CORS. Used by the
+// update check (UpdateService), which reads the GitHub Releases API through it.
 ipcMain.handle('net-fetch', async (_event, { url, method = 'GET', headers = {}, body }) => {
   // Scheme allow-list: this bridge exists only for HTTP APIs. net.fetch would happily serve file:
   // (an arbitrary local-file read for anything that can script the renderer), so reject non-HTTP.

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { isDesktop, desktopVramStats } from "./imageGen/desktop";
+import { isDesktop, desktopVramStats } from "@/lib/desktop";
 
 export interface VramGpu {
   index: number | null;

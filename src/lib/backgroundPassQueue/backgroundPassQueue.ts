@@ -30,7 +30,7 @@ export interface QueueSnapshot {
   effectiveTurns: BandTurn[];
   milestoneSelection: StoredMilestoneSelection | null;
   memoryPins: MemoryPinMap;
-  /** A turn, a scene render, or other work holds the model, so nothing new starts. */
+  /** A turn or other work holds the model, so nothing new starts. */
   busy: boolean;
   concurrent: boolean;
   memoryDigests: boolean;
@@ -89,7 +89,7 @@ export interface QueueEnv {
 export interface BackgroundPassQueue {
   update(snapshot: QueueSnapshot): void;
   /**
-   * Runs a player-started request as a foreground job: it waits until no turn, scene render or pass holds
+   * Runs a player-started request as a foreground job: it waits until no turn or pass holds
    * the model, then holds the queue while it runs. `cancel` removes a waiting job and aborts a running one;
    * `abort` and `dispose` do the same. Resolves to the job's value in a wrapper, or null when it was canceled, so a job may return null itself.
    */

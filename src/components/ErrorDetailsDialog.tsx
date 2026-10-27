@@ -15,12 +15,10 @@ import { toastError } from '@/lib/linkToast';
 export function ErrorDetailsHost() {
   const { open, entry } = useSyncExternalStore(subscribeErrorDetails, getErrorDetailsState);
 
-  // DEV: `#dev?modal=errorDetails` raises a canned ComfyUI rejection toast.
+  // DEV: `#dev?modal=errorDetails` raises a canned failed-request toast.
   const devRoute = useDevRoute();
   useEffect(() => {
-    if (import.meta.env.DEV && devRoute?.modal === 'errorDetails') {
-      void import('@/lib/devErrorDetailsSample').then(({ devErrorDetailsSample }) => toastError(devErrorDetailsSample(), ''));
-    }
+    if (import.meta.env.DEV && devRoute?.modal === 'errorDetails') toastError(new Error('HTTP 503: model is loading'), '');
   }, [devRoute?.modal]);
 
   return (

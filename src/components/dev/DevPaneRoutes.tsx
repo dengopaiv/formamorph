@@ -2,13 +2,11 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import PlaceholderSectionList from '@/components/editor/PlaceholderSectionList';
 import { FontTuneDialog } from '@/components/FontTuneDialog';
-import { GenerateImageButton } from '@/components/GenerateImageButton';
 import { ImportPresetDialog } from '@/components/modals/PresetShareDialogs';
 import { RootCrashScreen } from '@/components/RootCrashScreen';
 import { RevealAnimationDialog } from '@/components/RevealAnimationDemo';
 import { devPickerRows, devPresetShareJson } from '@/lib/devPaneSamples';
 import { useDevRoute } from '@/lib/devRouter';
-import { IMAGE_CAPS } from '@/lib/imageSlots';
 import { APP_VERSION } from '@/lib/version';
 
 const clearRouteOnClose = (open: boolean) => { if (!open) window.location.hash = '#dev'; };
@@ -44,11 +42,6 @@ export default function DevPaneRoutes() {
       <Pasted text={devPresetShareJson(APP_VERSION)}>
         <ImportPresetDialog open onOpenChange={clearRouteOnClose} currentAppVersion={APP_VERSION} existingUserNames={[]} userTools={[]} onImport={ignore} />
       </Pasted>
-    );
-    case 'generateImage': return (
-      <Pressed>
-        <GenerateImageButton subject={{ description: 'A lantern keeper', kind: 'character' }} cap={IMAGE_CAPS.entity} onChange={ignore} />
-      </Pressed>
     );
     case 'placeholderPicker': return (
       <Pressed>

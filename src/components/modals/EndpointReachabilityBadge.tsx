@@ -52,9 +52,7 @@ export function RecheckButton({ onClick, disabled, children }: { onClick: () => 
 
 /** Whether one named endpoint is actually answering. A disabled target draws nothing and sends no probe. */
 export function EndpointReachabilityBadge({ target }: { target: ReachabilityTarget }) {
-  const { status, checking, recheck } = useEndpointReachable(
-    target.url, target.apiToken, target.model, target.enabled, target.provider ?? 'text',
-  );
+  const { status, checking, recheck } = useEndpointReachable(target.url, target.apiToken, target.model, target.enabled);
   if (!target.enabled) return null;
   return <EndpointReachabilityView status={status} checking={checking} model={target.model} onRecheck={recheck} />;
 }

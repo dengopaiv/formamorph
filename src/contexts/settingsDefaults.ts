@@ -83,35 +83,6 @@ export const DEFAULT_GEN_REPETITION_PENALTY = 1.1;
 export const DEFAULT_GEN_TOP_K = 40;
 export const DEFAULT_GEN_MIN_P = 0;
 
-// Image generation defaults. There's no shared hosted image server, so these describe a local
-// A1111/Forge instance the user runs. Neutral fallbacks keep the built exe generic.
-export const DEFAULT_IMAGE_PROVIDER = import.meta.env.VITE_DEFAULT_IMAGE_PROVIDER || 'comfyui';
-// Blank by default: a blank endpoint falls back to the selected provider's default at call time
-// (see resolveImageEndpoint / DEFAULT_ENDPOINT_BY_PROVIDER in lib/imageGen).
-export const DEFAULT_IMAGE_ENDPOINT = import.meta.env.VITE_DEFAULT_IMAGE_ENDPOINT || '';
-export const DEFAULT_IMAGE_API_TOKEN = import.meta.env.VITE_DEFAULT_IMAGE_API_TOKEN || '';
-export const DEFAULT_IMAGE_MODEL = import.meta.env.VITE_DEFAULT_IMAGE_MODEL || '';
-// Prepended to every generated prompt (e.g. quality tags). Neutral by default since good tags are
-// model-family specific (SDXL vs Pony vs Flux want different things) — the user fills this in.
-export const DEFAULT_IMAGE_POSITIVE = import.meta.env.VITE_DEFAULT_IMAGE_POSITIVE || '';
-export const DEFAULT_IMAGE_NEGATIVE = import.meta.env.VITE_DEFAULT_IMAGE_NEGATIVE || 'lowres, bad anatomy, worst quality, low quality, watermark, text';
-// Portrait dims are used for character/entity images; landscape for location backgrounds and the world
-// thumbnail. Defaults are the standard SDXL portrait/landscape buckets.
-export const DEFAULT_IMAGE_PORTRAIT_WIDTH = parseInt(import.meta.env.VITE_DEFAULT_IMAGE_PORTRAIT_WIDTH) || 832;
-export const DEFAULT_IMAGE_PORTRAIT_HEIGHT = parseInt(import.meta.env.VITE_DEFAULT_IMAGE_PORTRAIT_HEIGHT) || 1216;
-export const DEFAULT_IMAGE_LANDSCAPE_WIDTH = parseInt(import.meta.env.VITE_DEFAULT_IMAGE_LANDSCAPE_WIDTH) || 1216;
-export const DEFAULT_IMAGE_LANDSCAPE_HEIGHT = parseInt(import.meta.env.VITE_DEFAULT_IMAGE_LANDSCAPE_HEIGHT) || 832;
-export const DEFAULT_IMAGE_STEPS = parseInt(import.meta.env.VITE_DEFAULT_IMAGE_STEPS) || 25;
-export const DEFAULT_IMAGE_CFG = parseFloat(import.meta.env.VITE_DEFAULT_IMAGE_CFG) || 7;
-export const DEFAULT_IMAGE_SAMPLER = import.meta.env.VITE_DEFAULT_IMAGE_SAMPLER || 'Euler a';
-// A1111-only: run the ADetailer face/hand-fix pass (requires the extension installed on the server).
-export const DEFAULT_IMAGE_ADETAILER = import.meta.env.VITE_DEFAULT_IMAGE_ADETAILER === 'true';
-// Rewrite image tags as plain lowercase booru words. Off keeps prompt syntax (weights, NovelAI `{}`/`::`).
-export const DEFAULT_IMAGE_CLEAN_TAGS = true;
-// Draw a scene image automatically at the end of every turn. Off because the render blocks the next
-// action (one GPU). No VITE_DEFAULT_* override — a per-player toggle, not a deployment knob.
-export const DEFAULT_SCENE_IMAGE_AUTO = false;
-
 // Offer the hard-coded "[Continue the Story]" pseudo-choice beneath the generated ones. 'always' keeps it
 // even with the choices request switched off, where it's the only button the panel has left. On because
 // it's an accessibility affordance. No VITE_DEFAULT_* override — a per-player toggle, not a deployment knob.
@@ -122,7 +93,6 @@ export const CONTINUE_CHOICE_MODES: { value: ContinueChoiceMode; label: string }
   { value: 'always', label: 'Always' },
 ];
 export const DEFAULT_CONTINUE_CHOICE: ContinueChoiceMode = 'on';
-export const DEFAULT_IMAGE_ATTACHMENTS = false;
 
 // How the narration panel shows the story: one turn per page, or one scrolling list of turns. A per-player
 // display preference, never part of a world or save. No VITE_DEFAULT_* override.

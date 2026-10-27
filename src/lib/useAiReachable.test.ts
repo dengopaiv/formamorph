@@ -8,7 +8,7 @@ vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({ localModelActive: false, activeEndpointUrl: 'http://localhost:1234/v1/chat/completions', activeApiToken: '', activeModelName: 'default' }),
 }));
 vi.mock('@/lib/useLocalLlmStatus', () => ({ useLocalLlmStatus: () => ({ status: 'stopped' }) }));
-vi.mock('@/lib/imageGen/desktop', () => ({ isDesktop: () => false, listLocalModels: async () => [], localLlmStatus: async () => ({ status: 'stopped' }) }));
+vi.mock('@/lib/desktop', () => ({ isDesktop: () => false, listLocalModels: async () => [], localLlmStatus: async () => ({ status: 'stopped' }) }));
 
 const ENDPOINT = 'http://localhost:1234/v1/chat/completions';
 const OPENAI_URL = 'http://localhost:1234/v1/models';

@@ -11,7 +11,7 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { useLocalLlmStatus } from '@/lib/useLocalLlmStatus';
 import { useVramStats, resolveOwnVram } from '@/lib/useVramStats';
 import { EngineStatusLine, GpuMemoryBox } from '@/components/LocalModelStatus';
-import { setLocalLlmOptions, listLocalGpuDevices, pinnedEngineDevice, type EngineDeviceList } from '@/lib/imageGen/desktop';
+import { setLocalLlmOptions, listLocalGpuDevices, pinnedEngineDevice, type EngineDeviceList } from '@/lib/desktop';
 import {
   LOCAL_GPU_LAYERS_MAX, GPU_LAYERS_AUTO, GPU_LAYERS_MAX, LOCAL_PARALLEL_REQUESTS_MAX, DEFAULT_MAX_TOKENS,
   DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_UNIFIED_KV_CACHE, DEFAULT_LOCAL_K_CACHE_TYPE, DEFAULT_LOCAL_V_CACHE_TYPE, DEFAULT_LOCAL_KV_CACHE_IN_RAM, LOCAL_CACHE_TYPES, DEFAULT_LOCAL_PARALLEL_REQUESTS,

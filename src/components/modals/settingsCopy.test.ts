@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sentenceShapeViolation } from '@/test/copyShape';
-import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_NOTES, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, type SettingCopy, type SettingOptionCopy } from './settingsCopy';
+import { SETTINGS_COPY, SETTINGS_BUTTONS, SETTINGS_CONFIRMS, SETTINGS_OPTIONS, REASONING_EFFORT_HELP, type SettingCopy, type SettingOptionCopy } from './settingsCopy';
 
 /**
  * The Settings modal's copy rules, asserted rather than reviewed. Their point is that consistency
@@ -63,25 +63,6 @@ describe('settings copy', () => {
       return why ? [`${k}: ${c.description} (${why})`] : [];
     });
     expect(bad).toEqual([]);
-  });
-
-  it('gives every note the sentence shape: a lone sentence has no period, a longer note ends with one', () => {
-    const bad = Object.entries(SETTINGS_NOTES).flatMap(([k, note]) => {
-      const why = sentenceShapeViolation(note);
-      return why ? [`${k}: ${note} (${why})`] : [];
-    });
-    expect(bad).toEqual([]);
-  });
-
-  it('quotes the Enable Image Generation label exactly in its off note', () => {
-    expect(SETTINGS_NOTES.imageGenerationOff).toContain(`“${SETTINGS_COPY.enableImageGeneration.label}”`);
-  });
-
-  it('names the Workflow (API Format) control in bold where a note sends the reader to it', () => {
-    const bold = `**${SETTINGS_COPY.imageWorkflow.label}**`;
-    expect(SETTINGS_NOTES.imageModelFromWorkflow).toContain(bold);
-    expect(SETTINGS_NOTES.imageModelFromWorkflow).toContain('**Advanced**');
-    expect(SETTINGS_NOTES.imageFileNameNoPrefix).toContain(bold);
   });
 
   it('keeps every description within one line of the description column', () => {

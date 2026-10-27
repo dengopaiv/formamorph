@@ -45,7 +45,7 @@ export interface EntityCardData {
   playerDescription?: string;
   aiDescription?: string;
   aiSummary?: string;
-  /** Listing tags. Distinct from `imageTags`, which is the booru string for the image generator. */
+  /** Listing tags. Distinct from `imageTags`, the booru string kept from the retired image generator. */
   tags?: string[];
   imageTags?: string;
   /** Gallery slots past the first. The primary is the card's own pixels, so only these need carrying in the

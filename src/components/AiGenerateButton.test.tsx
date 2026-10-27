@@ -9,7 +9,7 @@ vi.mock('react-toastify', () => ({
 }));
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
-    activeEndpointUrl: 'http://x', activeApiToken: '', activeModelName: 'm', imageTagPrompt: 'p',
+    activeEndpointUrl: 'http://x', activeApiToken: '', activeModelName: 'm',
     describeEndpointForKind: () => ({ presetName: 'Test Endpoint', model: 'm' }),
   }),
 }));

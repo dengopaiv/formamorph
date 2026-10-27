@@ -1,8 +1,7 @@
 // Storage is real (in-memory): SettingsProvider and the modal both read it on mount.
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { cleanup } from '@testing-library/react';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { ThemeProvider } from '@/components/theme-provider';
 import { surfaceRegistry } from '@/lib/surface/surfaceRegistry';
@@ -36,8 +35,6 @@ describe('what Settings reports as open', () => {
       dialog: 'settings',
       tabs: ['settings.endpoints', 'settingsEndpoints.text'],
     });
-    await userEvent.click(screen.getByRole('tab', { name: 'Image' }));
-    expect(surfaceRegistry.get().tabs).toEqual(['settings.endpoints', 'settingsEndpoints.image']);
   });
 
   it('names the open prompt and its surface, with the hub as Anatomy', () => {

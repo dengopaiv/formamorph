@@ -4,7 +4,7 @@ import {
   localLlmStatus,
   subscribeLocalLlm,
   type LocalLlmState,
-} from '@/lib/imageGen/desktop';
+} from '@/lib/desktop';
 
 const STOPPED: LocalLlmState = { status: 'stopped', modelPath: null, modelId: null, port: null, error: null, loadProgress: null, contextSize: null, gpuLayers: null, flashAttention: null, parallelRequests: null, unifiedKvCache: null, kCacheType: null, vCacheType: null, kvCacheInRam: null, maxContextSize: null, engineVramMB: null, gpuBackend: null, gpuDeviceNames: null, deviceVramTotalMB: null, deviceVramFreeMB: null, gpuDeviceIndex: null, gpuDeviceRawIndex: null, gpuDeviceOrigin: null, gpuDeviceOptions: null, serverPid: null };
 

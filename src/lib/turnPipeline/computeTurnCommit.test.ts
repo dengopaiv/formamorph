@@ -46,7 +46,6 @@ const material = (over: Partial<TurnMaterial> = {}): TurnMaterial => ({
   npcCastSize: 0,
   intents: [],
   overflow: [],
-  sceneCast: [],
   ...over,
 });
 
@@ -161,15 +160,6 @@ describe('computeTurnCommit — the stored turn', () => {
     })?.turn;
     expect(turn?.notes).toBe('Ask about the ferry.');
     expect(turn?.reasoning).toEqual({ text: 'weighing it', ms: 900 });
-  });
-
-  it('stores the planner\'s player-in-frame call, and nothing when no planner judged it', () => {
-    const { plan, result } = runOf([{ id: 'narration', raw: NARRATION }]);
-    const commitWith = (playerInFrame: boolean | undefined) =>
-      computeTurnCommit({ result, plan, context: context({ playerInFrame }) })?.turn;
-    expect(commitWith(false)?.playerInFrame).toBe(false);
-    expect(commitWith(true)?.playerInFrame).toBe(true);
-    expect(commitWith(undefined)).not.toHaveProperty('playerInFrame');
   });
 
   it('stores the digest and the diaries the batch produced', () => {

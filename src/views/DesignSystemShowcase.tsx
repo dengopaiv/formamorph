@@ -157,8 +157,8 @@ function StateReference() {
           </Row>
           <Row label="Unavailable Option" muted>
             <label htmlFor="reference-disabled" className="flex items-center gap-2">
-              <Checkbox id="reference-disabled" aria-label="Scene Images" checked disabled />
-              <Hint as="span">This example has no image endpoint.</Hint>
+              <Checkbox id="reference-disabled" aria-label="Native Reasoning" checked disabled />
+              <Hint as="span">This example has no reasoning model.</Hint>
             </label>
           </Row>
           <Row top label="Context Window" htmlFor="reference-context-window">

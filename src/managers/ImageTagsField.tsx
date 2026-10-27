@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { type DragEndEvent } from '@dnd-kit/core';
 import { useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -6,16 +6,8 @@ import { EditorDndContext, StableSortableContext } from '@/components/dnd/Editor
 
 const NO_MODIFIERS: never[] = [];
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from "@/components/ui/dialog";
 import { Eye, Plus, Star, TriangleAlert } from "lucide-react";
 import { ImageRuleCog, ImageRuleSummary, useHasRuleSource, type RuleHost } from '@/components/editor/ImageRuleCog';
-import AiGenerateButton from "@/components/AiGenerateButton";
-import TagField from "@/components/prompt/TagField";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ImageUpload } from '../lib/UtilityComponents';
 import { fileToDataUrl } from '@/lib/imageDrop';
 import { followReorder } from '@/lib/imageGalleryOrder';
@@ -27,13 +19,9 @@ import { ImageConvertOverlay } from '@/components/ImageConvertOverlay';
 import { cn } from '@/lib/utils';
 import { useDownscalePrompt } from '@/lib/useDownscalePrompt';
 import { applyImageOptimize } from '@/lib/imageOptim';
-import { GenerateImageButton } from '../components/GenerateImageButton';
 import type { ImageCap } from '../lib/imageOptim';
-import type { ImageSubjectKind } from '@/lib/imagePrompt';
-import { useEditorMode } from '@/lib/editorMode';
-import type { GalleryImage, Placeholder, TraitRequirementRow } from '@/types';
+import type { GalleryImage, TraitRequirementRow } from '@/types';
 import { Tip } from '@/components/ui/tooltip';
-import { fieldFrame } from '@/lib/historyField';
 
 interface ImageWidgetProps {
   /** Field label above the upload — "Background Image" for locations, "Image" for entities. */
@@ -49,19 +37,8 @@ interface ImageWidgetProps {
   /** Stable id for the file input (must be unique per rendered subject). */
   imageId: string;
   cap: ImageCap;
-  /** The subject's description feeds the AI tag/prompt generators. Its name deliberately does not — a name
-   *  comes back as a tag no image model knows; an author who wants one types it into the tags. */
-  description?: string;
-  kind: ImageSubjectKind;
-  /** The subject's name for a generated image's file name on the image server; never sent to the model. */
-  fileSubject?: string;
-  tags?: string;
-  onTagsChange: (value: string) => void;
-  /** The world's (or the standalone item's) placeholders, so a tag can be one. None simply means no chip
-   *  is ever drawn — the field is the same either way. */
-  placeholders?: Placeholder[];
-  /** The entity or location whose tags these are — see `ownerId` on `PlaceholderField`. */
-  ownerId?: string;
+  /** What the pictures show: a character is framed portrait, a place or a world landscape. */
+  kind: 'character' | 'location' | 'world';
   /** Whose images carry Visibility rules. Set, each tile gets a cog, a badge and a summary where a rule source
    *  exists. Keep the object stable across renders. */
   ruleHost?: RuleHost;
@@ -79,20 +56,19 @@ const WidgetContext = createContext<ImageWidgetProps | null>(null);
 
 const useImageWidget = () => {
   const props = useContext(WidgetContext);
-  if (!props) throw new Error('ImageGallery and ImageTags must be rendered inside an ImageWidget.');
+  if (!props) throw new Error('ImageGallery must be rendered inside an ImageWidget.');
   return props;
 };
 
 /**
- * Holds the subject one image widget acts on, so its two pieces can sit in different boxes of a layout and
- * still write the same record. A host that wants them together uses `ImageTagsField` instead.
+ * Holds the subject one image widget acts on, so its gallery can sit wherever a host's layout wants it and
+ * still write the right record. A host with nothing else to place uses `ImageTagsField` instead.
  */
 export const ImageWidget = ({ children, ...props }: ImageWidgetProps & { children?: ReactNode }) => (
   <WidgetContext.Provider value={props}>{children}</WidgetContext.Provider>
 );
 
-/** The big frame the gallery shows its picture in. A character is drawn portrait, a place landscape — the
- *  same split the image generator already uses when it picks dimensions. */
+/** The big frame the gallery shows its picture in. A character is drawn portrait, a place landscape. */
 const FRAME_CLASS = {
   portrait: 'aspect-[3/4] w-full rounded-md',
   landscape: 'aspect-video w-full rounded-md',
@@ -212,37 +188,18 @@ function withSlotData(list: readonly GalleryImage[], index: number, data: string
 }
 
 /**
- * The picture half of the widget: the image-upload → embedded-prompt confirmation → generate-image stack
- * shared by the Location and Entity editors. Owns the `pendingPrompt` handshake: an uploaded image's
- * embedded SD prompt is held until the user confirms using it as the Image Tags (which replaces the current
- * tags).
+ * The picture widget shared by the Location and Entity editors and the Media tab.
  *
  * With more than one slot it authors a gallery: one framed picture with a strip of tiles beneath it, the
  * last tile adding. Clicking a tile frames it; dragging reorders, which is also how the stand-in picture is
- * chosen, since that is simply the first. Tag generation acts on the subject as a whole rather than on any one
- * slot; a generated picture fills a free slot, and asks which one it replaces when there is none.
- *
- * `tagsSlot` is the line between the picture strip and the Generate button. A host that keeps the tags under
- * the picture passes `ImageTags` there; a host that places them elsewhere passes nothing and draws the piece
- * itself. It is a named slot rather than `children` so that it cannot be confused with `ImageWidget`'s, which
- * takes the host's whole layout.
+ * chosen, since that is simply the first.
  */
-export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
+export const ImageGallery = () => {
   const {
-    label, images, onImagesChange, slots = 1, imageId, cap, description, kind, fileSubject, tags, onTagsChange, tourAnchor, ruleHost,
+    label, images, onImagesChange, slots = 1, imageId, cap, kind, tourAnchor, ruleHost,
     framed, onFramedChange, ruleCog = true,
   } = useImageWidget();
   const ruleSourced = useHasRuleSource();
-  // SD prompt pulled from an uploaded image, pending the user's OK to use it as Image Tags.
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
-  // A generated picture with nowhere free to go, held while the user picks the slot it replaces.
-  const [pendingGenerated, setPendingGenerated] = useState<string | null>(null);
-  const [overwriteSlot, setOverwriteSlot] = useState(0);
-  // Answers the generate dialog's accept: it stays open on its preview until this settles, so a cancelled
-  // pick comes back to the picture rather than throwing it away.
-  const settlePlacement = useRef<((placed: boolean) => void) | null>(null);
-  // Booru tags are Advanced-only; so is the offer to adopt an uploaded image's embedded prompt as them.
-  const { advanced } = useEditorMode();
   // The batch consent prompt for a multi-file drop. Each ImageUpload still owns the single-file one.
   const { promptImagesBatch, dialog: batchDialog } = useDownscalePrompt();
 
@@ -252,7 +209,7 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
   const rows = shown.length < slots ? [...shown, ''] : shown;
   // One slot renders as the plain uploader it always was; several earn the frame-and-strip pane.
   const gallery = slots > 1;
-  // A character is drawn portrait, a place landscape — the same split the image generator uses for its dimensions.
+  // A character is drawn portrait, a place landscape.
   const shape = kind === 'character' ? 'portrait' : 'landscape';
 
   // The batch of dropped pictures being re-encoded, covering the frame while it runs.
@@ -269,7 +226,7 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
   /** The file input inside each slot's uploader is keyed off this, and the add tile points a label at it. */
   const slotId = (i: number) => (i === 0 ? imageId : `${imageId}-${i}`);
 
-  /** The slot a drop or a generated picture lands in: the trailing empty one, or none once the gallery is full. */
+  /** The slot a drop lands in: the trailing empty one, or none once the gallery is full. */
   const openSlot = rows.findIndex((url) => !url);
 
   /** Write one slot; an emptied slot drops out rather than leaving a hole for the next one to fall into. */
@@ -285,31 +242,6 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
   const tileRuled = (i: number) => rulable && ruleSourced && !!shownImages[i].requires?.length;
   // Only an entity's primary stands in outside play, where no rule reads.
   const coverRuled = rulable && ruleHost.kind === 'entity' && !!shownImages[0]?.requires?.length;
-
-  /** Take a generated picture. It fills the open slot where there is one, and otherwise asks which picture it
-   *  replaces, resolving false if the author decides it replaces none of them. */
-  const placeGenerated = (url: string) => {
-    if (openSlot !== -1) {
-      setSlot(openSlot, url);
-      setShowing(openSlot);
-      return true;
-    }
-    // Start on the framed picture: the one being looked at is the one the author means to replace.
-    setOverwriteSlot(showing);
-    setPendingGenerated(url);
-    return new Promise<boolean>((resolve) => { settlePlacement.current = resolve; });
-  };
-
-  /** Settle the pick, writing the slot only when one was confirmed. */
-  const closeOverwrite = (confirmed: boolean) => {
-    if (confirmed && pendingGenerated) {
-      setSlot(overwriteSlot, pendingGenerated);
-      setShowing(overwriteSlot);
-    }
-    setPendingGenerated(null);
-    settlePlacement.current?.(confirmed);
-    settlePlacement.current = null;
-  };
 
   /** Several pictures dropped at once: they fill this slot and the ones after it, with a single consent
    *  prompt for the batch — a five-file drop raising five modals would be a worse gesture than five clicks.
@@ -394,9 +326,6 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
             cap={cap}
             // The gallery gives the picture a frame worth looking at; a single slot keeps its compact box.
             previewClassName={gallery ? FRAME_CLASS[shape] : undefined}
-            // Only the primary offers its embedded prompt as the tags: the tags describe the subject, and a
-            // later slot overwriting them would undo the choice made for the picture that represents it.
-            onPromptExtracted={i === 0 && advanced ? setPendingPrompt : undefined}
             // Only a gallery can take several at once; a single-slot subject keeps the first file.
             onFiles={gallery ? (files) => void takeFiles(i, files) : undefined}
           />
@@ -448,102 +377,14 @@ export const ImageGallery = ({ tagsSlot }: { tagsSlot?: ReactNode }) => {
           The primary image ignores its rule outside play
         </p>
       )}
-      <ConfirmDialog
-        open={pendingPrompt !== null}
-        onOpenChange={(o) => { if (!o) setPendingPrompt(null); }}
-        title="Use the image's prompt?"
-        description="This image has an embedded AI prompt. Use it as the Image Tags? This replaces the current tags."
-        onConfirm={() => { if (pendingPrompt) onTagsChange(pendingPrompt); setPendingPrompt(null); }}
-        onCancel={() => setPendingPrompt(null)}
-      />
-      {tagsSlot}
-      <GenerateImageButton
-        subject={{ description: description || '', kind, name: fileSubject }}
-        cap={cap}
-        onChange={placeGenerated}
-        tags={tags ?? ''}
-        onTagsChange={onTagsChange}
-      />
-      <ReplaceImageDialog
-        open={pendingGenerated !== null}
-        images={shown}
-        slot={overwriteSlot}
-        onSlotChange={setOverwriteSlot}
-        idPrefix={imageId}
-        onClose={closeOverwrite}
-      />
     </div>
   );
 };
 
-/** Asks which held image a generated one takes the place of. `onClose(true)` replaces the picked slot. */
-export function ReplaceImageDialog({ open, images, slot, onSlotChange, idPrefix, onClose }: {
-  open: boolean;
-  images: string[];
-  slot: number;
-  onSlotChange: (slot: number) => void;
-  idPrefix: string;
-  onClose: (replace: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(false); }}>
-      <DialogContent surface="imageReplace" className="sm:max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle>Replace which image?</DialogTitle>
-          <DialogDescription>
-            There is no free slot for the generated image. Choose the one it takes the place of.
-          </DialogDescription>
-        </DialogHeader>
-        <RadioGroup value={String(slot)} onValueChange={(v) => onSlotChange(Number(v))}>
-          {images.map((url, i) => (
-            <Label
-              key={i}
-              htmlFor={`${idPrefix}-overwrite-${i}`}
-              className="flex cursor-pointer items-center gap-3 rounded-md border p-2 hover:border-muted-foreground"
-            >
-              <RadioGroupItem value={String(i)} id={`${idPrefix}-overwrite-${i}`} />
-              <RemoteImg src={url} alt="" className="h-12 w-12 rounded object-cover" />
-              <span>{i === 0 ? 'Primary' : `Image ${i + 1}`}</span>
-            </Label>
-          ))}
-        </RadioGroup>
-        <DialogFooter className="flex flex-col sm:flex-row gap-2">
-          <Button type="button" variant="outline" onClick={() => onClose(false)}>Cancel</Button>
-          <Button type="button" onClick={() => onClose(true)}>Replace</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * The tags half of the widget: the booru Image Tags line with its AI tag writer. Advanced only, as the tags
- * themselves are. It reads the same subject the gallery does, so an adopted embedded prompt and generated
- * tags land here wherever the host draws it.
- */
-export const ImageTags = () => {
-  const { tags, onTagsChange, placeholders = [], ownerId, description, kind } = useImageWidget();
-  const { advanced } = useEditorMode();
-  if (!advanced) return null;
-  return (
-    <div {...fieldFrame('imageTags')}>
-      <TagField
-        label="Image Tags"
-        value={tags || ''}
-        onChange={onTagsChange}
-        placeholders={placeholders}
-        ownerId={ownerId}
-        placeholder="booru tags, comma separated"
-        aside={<AiGenerateButton mode="tags" kind={kind} source={description} onChange={onTagsChange} />}
-      />
-    </div>
-  );
-};
-
-/** The whole widget in one box: the gallery with its tags between the picture strip and the Generate button. */
+/** The whole widget in one box. */
 const ImageTagsField = (props: ImageWidgetProps) => (
   <ImageWidget {...props}>
-    <ImageGallery tagsSlot={<ImageTags />} />
+    <ImageGallery />
   </ImageWidget>
 );
 

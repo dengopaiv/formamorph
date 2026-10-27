@@ -19,7 +19,7 @@ import type { AiBlocker, AiMode } from '@/lib/useAiReachable';
 import {
   downloadLocalModel, cancelLocalDownload, subscribeLocalDownload, DOWNLOAD_PAUSED,
   type LocalDownloadProgress,
-} from '@/lib/imageGen/desktop';
+} from '@/lib/desktop';
 
 /** Why the gate opened: after the first-run intro, or on entering a world with the AI unreachable. Both are
  *  dismissible — the gate warns, it doesn't trap. A failed turn is recoverable; a modal with no exit isn't. */

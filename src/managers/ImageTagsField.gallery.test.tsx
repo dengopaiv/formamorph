@@ -25,8 +25,6 @@ vi.mock('../lib/UtilityComponents', async () => {
     },
   };
 });
-vi.mock('../components/GenerateImageButton', () => ({ GenerateImageButton: () => <div>generate</div> }));
-vi.mock('@/components/AiGenerateButton', () => ({ default: () => <div /> }));
 vi.mock('@/lib/useRemoteImage', () => ({ RemoteImg: ({ src }: { src?: string }) => <img src={src} alt="" /> }));
 
 // Answered "keep as-is" by default, so the stored URLs are the dropped ones untouched — most of these tests
@@ -59,7 +57,6 @@ const setup = (images: (string | GalleryImage)[], slots = 4) => {
       imageId="x"
       cap={IMAGE_CAPS.entity}
       kind="character"
-      onTagsChange={vi.fn()}
     />,
     { wrapper: TooltipProvider },
   );
@@ -125,14 +122,14 @@ describe('ImageTagsField gallery', () => {
     );
     const { rerender } = render(
       <ImageTagsField label="Image" images={wrap([A, B, C])} onImagesChange={vi.fn()} slots={4} imageId="x"
-        cap={IMAGE_CAPS.entity} kind="character" onTagsChange={vi.fn()} />,
+        cap={IMAGE_CAPS.entity} kind="character" />,
     );
     const before = instances();
 
     // The reorder a drag produces.
     rerender(
       <ImageTagsField label="Image" images={wrap([C, A, B])} onImagesChange={vi.fn()} slots={4} imageId="x"
-        cap={IMAGE_CAPS.entity} kind="character" onTagsChange={vi.fn()} />,
+        cap={IMAGE_CAPS.entity} kind="character" />,
     );
 
     // Each image stays with the uploader it was already in. Keyed by position they would swap uploaders,
@@ -143,7 +140,7 @@ describe('ImageTagsField gallery', () => {
   it('keeps the frame in range when the pictures behind it are removed', () => {
     const { rerender } = render(
       <ImageTagsField label="Image" images={wrap([A, B, C])} onImagesChange={vi.fn()} slots={4} imageId="x"
-        cap={IMAGE_CAPS.entity} kind="character" onTagsChange={vi.fn()} />,
+        cap={IMAGE_CAPS.entity} kind="character" />,
     );
     // Frame the third picture, then drop back to one: the trailing empty slot means index 1 would still be
     // in range, so only a selection past that proves the clamp does anything.
@@ -151,7 +148,7 @@ describe('ImageTagsField gallery', () => {
 
     rerender(
       <ImageTagsField label="Image" images={wrap([A])} onImagesChange={vi.fn()} slots={4} imageId="x"
-        cap={IMAGE_CAPS.entity} kind="character" onTagsChange={vi.fn()} />,
+        cap={IMAGE_CAPS.entity} kind="character" />,
     );
 
     // Slot 1 is now the empty add slot; the frame lands on it rather than past the end showing nothing.
@@ -350,7 +347,7 @@ describe('ImageTagsField gallery — a host-controlled frame', () => {
     render(
       <ImageTagsField
         label="Image" images={wrap([A, B, C])} onImagesChange={vi.fn()} slots={4} imageId="x"
-        cap={IMAGE_CAPS.entity} kind="character" onTagsChange={vi.fn()}
+        cap={IMAGE_CAPS.entity} kind="character"
         framed={framed} onFramedChange={onFramedChange}
       />,
       { wrapper: TooltipProvider },

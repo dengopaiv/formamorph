@@ -19,8 +19,8 @@ describe('resolveSurface', () => {
 
   it('adds the tab, and every outer tab before it', () => {
     expect(resolveSurface('settings.display')).toEqual({ view: null, dialog: 'settings', tabs: ['settings.display'] });
-    expect(resolveSurface('settingsEndpoints.image')).toEqual({
-      view: null, dialog: 'settings', tabs: ['settings.endpoints', 'settingsEndpoints.image'],
+    expect(resolveSurface('settingsEndpoints.text')).toEqual({
+      view: null, dialog: 'settings', tabs: ['settings.endpoints', 'settingsEndpoints.text'],
     });
   });
 
@@ -85,9 +85,9 @@ describe('targetRoute', () => {
 
 describe('stepTab', () => {
   it('reads one ledger tab out of the steps', () => {
-    const steps = resolveSurface('settingsEndpoints.image')!;
+    const steps = resolveSurface('settingsEndpoints.text')!;
     expect(stepTab(steps, 'settings')).toBe('endpoints');
-    expect(stepTab(steps, 'settingsEndpoints')).toBe('image');
+    expect(stepTab(steps, 'settingsEndpoints')).toBe('text');
     expect(stepTab(steps, 'worldEditor')).toBeUndefined();
   });
 });

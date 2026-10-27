@@ -6,9 +6,6 @@ import { SettingsProvider } from '@/contexts/SettingsContext';
 import { ThemeProvider } from '@/components/theme-provider';
 import { SettingsModal } from './SettingsModal';
 import { SURFACE_LABELS } from '@/lib/promptGroups';
-import { SAMPLE_PREVIEW_VALUES } from '@/lib/previewValuePool';
-import { resolveToken } from '@/lib/promptTemplate';
-import { DEFAULT_TAG_PROMPT } from '@/lib/imagePrompt';
 
 /** Settings hands Chip Options the scene the spec names (Q22): the sample world, or the live values a game gives. */
 
@@ -59,14 +56,5 @@ describe('Chip Options in Settings', () => {
     const reads = await readsOf('Entities');
     expect(reads).toHaveTextContent('Only the live cast.');
     expect(reads).not.toHaveTextContent('Wren');
-  });
-
-  it('renders the Subject chip in the Image Tag Prompt field with its sample value', async () => {
-    expect(DEFAULT_TAG_PROMPT).toContain('<SUBJECT>');
-    openSettings({ initialTab: 'endpoints', initialEndpointTab: 'img-tagprompt' });
-    const reads = await readsOf('Subject');
-    const sample = resolveToken('<SUBJECT>', SAMPLE_PREVIEW_VALUES);
-    expect(sample).not.toBe('');
-    expect(reads.lastElementChild?.textContent).toBe(sample);
   });
 });

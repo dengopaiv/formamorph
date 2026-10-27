@@ -67,7 +67,7 @@ export interface PromptVariable {
 }
 
 /** Every prompt editor maps to one of these kinds (mirrors the Settings → Output → Turn Extras toggles). */
-export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'entitylocation' | 'summary' | 'milestone' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'scenetags' | 'discover';
+export type PromptKind = 'narration' | 'thinking' | 'choices' | 'statupdates' | 'location' | 'entitylocation' | 'summary' | 'milestone' | 'diary' | 'director' | 'character' | 'storyboard' | 'timepassed' | 'timeopening' | 'discover';
 
 const SUMMARY_VARIANT: PromptVariant = {
   id: 'summary',
@@ -248,16 +248,12 @@ const CHARACTER: PromptVariable = { token: '<CHARACTER NAME>', label: 'Character
 // game text), distinct from the world/context tokens above.
 const PLAYER_ACTION: PromptVariable = { token: '<PLAYER ACTION>', label: 'Player Action', color: HIGHLIGHT_PALETTE[9] };
 const NARRATION: PromptVariable = { token: '<NARRATION>', label: 'Narration', color: HIGHLIGHT_PALETTE[10] };
-// Image-gen tag prompt only (Settings → Endpoints → Tag Prompt): expands to per-kind guidance. Registered
-// here so the shared prompt parser/chip recognize it; it is never offered in a game prompt's toolbar.
-export const SUBJECT: PromptVariable = { token: '<SUBJECT>', label: 'Subject', color: HIGHLIGHT_PALETTE[12] };
-
 // The story's own clock — "Day 3, evening" — as a plain inline value. Renders the uniform placeholder while
 // Time in Memory is off, so an affixed placement simply disappears rather than needing its own switch.
 const TIME: PromptVariable = { token: '<TIME>', label: 'Time', color: HIGHLIGHT_PALETTE[10], affixable: true };
 
-// Scene-image tag pass only: the characters the composer has put in frame, so the action tags describe
-// those people and no others. A value token like <NARRATION> — never a context block.
+// The retired scene-tag prompt's cast chip. No prompt offers it any more; it stays registered so a preset
+// that still carries the scene-tag text keeps parsing it as a chip.
 const IN_FRAME: PromptVariable = { token: '<IN FRAME>', label: 'In Frame', color: HIGHLIGHT_PALETTE[8] };
 
 // Character-note pass only: two headed blocks, each rendering its own header or nothing. The later
@@ -286,7 +282,7 @@ export const NOW_LINE_VARIABLES: PromptVariable[] = [LOCATION, ENTITIES, TIME, N
 
 /** All known variables — used by the parser to recognize any token regardless of which prompt it's in. */
 export const ALL_PROMPT_VARIABLES: PromptVariable[] = [
-  WORLD, STATS, TRAITS, PERSONA, LOCATION, ENTITIES, NOTES, DICTIONARY, LENGTH, MARKDOWN, ACTIVE_CHARACTER, PLAYER_ACTION, NARRATION, CHARACTER, SUBJECT,
+  WORLD, STATS, TRAITS, PERSONA, LOCATION, ENTITIES, NOTES, DICTIONARY, LENGTH, MARKDOWN, ACTIVE_CHARACTER, PLAYER_ACTION, NARRATION, CHARACTER,
   TIME, IN_FRAME, LANGUAGE, FIRST_PASSAGE, LATER_MATERIAL, REMEMBERED_MOMENTS, NEW_MOMENTS, MOVE_OPTIONS, MOVE_STATE,
 ];
 
@@ -311,7 +307,6 @@ export const PROMPT_KIND_VARIABLES: Record<PromptKind, PromptVariable[]> = {
   storyboard: [...CONTEXT_VARS],
   timepassed: [...CONTEXT_VARS],
   timeopening: [...CONTEXT_VARS],
-  scenetags: [...CONTEXT_VARS],
   discover: [...CONTEXT_VARS],
 };
 
@@ -331,9 +326,6 @@ export const PROMPT_KIND_USER_VARIABLES: Partial<Record<PromptKind, PromptVariab
   // The opening pass runs on turn one, where the player's action is "start the game" — only the narration
   // carries any time signal, so the action chip is deliberately not offered.
   timeopening: [NARRATION],
-  // The tag pass reads the prose of this turn and who the composer put in frame. The player's action is
-  // deliberately absent: what was attempted is not what the picture shows.
-  scenetags: [NARRATION, IN_FRAME],
   discover: [CHARACTER, FIRST_PASSAGE, LATER_MATERIAL],
 };
 

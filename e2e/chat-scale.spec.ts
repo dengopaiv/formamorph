@@ -4,8 +4,8 @@ import { READING_LINE } from '../src/lib/chatReadingLine';
 
 /**
  * Chat at scale and at the edges: a save of 1000 turns, an engine with no scroll anchoring, the on-screen
- * keyboard, and a narrow phone. The long save is real narration from the baseline runs, with a scene image
- * on every twentieth turn (the `thousandTurns` fixture).
+ * keyboard, and a narrow phone. The long save is real narration from the baseline runs (the `thousandTurns`
+ * fixture).
  */
 
 const REPLY = 'The console blinks once.';
@@ -111,10 +111,6 @@ async function pinnedAtTop(page: Page) {
   await expect.poll(async () => Math.abs((await geometry(page)).latestTop!), { timeout: 10_000 }).toBeLessThan(2);
 }
 
-/** Scene images mounted in the list that decoded from a data URL. */
-const decodedImages = (page: Page) => page.locator('[data-chat-scroller] img').evaluateAll((imgs) =>
-  imgs.filter((img) => (img as HTMLImageElement).naturalWidth > 0 && (img as HTMLImageElement).src.startsWith('data:image/')).length);
-
 /** Horizontal overflow of the page and the list, and the Chat parts that leave the list's box on either side. */
 const overflowAt = (page: Page) => page.evaluate(() => {
   const sc = document.querySelector<HTMLElement>('[data-chat-scroller]')!;
@@ -163,15 +159,12 @@ test.describe('Chat on a save of 1000 turns', () => {
     await countScrollWrites(page);
     await pointAtList(page);
     const start = (await onLine(page))!.index;
-    let imagesSeen = 0;
     for (let step = 0; step < 80; step++) {
       await page.mouse.wheel(0, -WHEEL_STEP * 2);
       await frames(page, 2);
-      imagesSeen = Math.max(imagesSeen, await decodedImages(page));
     }
-    // The scroll went through many turns, scene images among them, each mounted and measured on the way.
+    // The scroll went through many turns, each mounted and measured on the way.
     expect(Number(start) - Number((await onLine(page))!.index)).toBeGreaterThan(20);
-    expect(imagesSeen).toBeGreaterThan(0);
     expect(await scrollWrites(page)).toBe(0);
   });
 
@@ -213,17 +206,10 @@ test.describe('Chat on a save of 1000 turns', () => {
     const chatHeap = await heap();
     const g = await geometry(page);
     const nodes = await page.evaluate(() => document.getElementsByTagName('*').length);
-    // The bottom turns hold no image; read again with a scene image decoded in view.
-    await pointAtList(page);
-    await expect(async () => {
-      await page.mouse.wheel(0, -WHEEL_STEP * 2);
-      expect(await decodedImages(page)).toBeGreaterThan(0);
-    }).toPass({ timeout: 30_000, intervals: [50] });
-    const imageHeap = await heap();
     const mb = (bytes: number) => `${(bytes / 2 ** 20).toFixed(1)} MB`;
     test.info().annotations.push(
       { type: 'mount', description: `${Math.round(mount.mounted - mount.pressed)} ms to the first turn, ${g.mounted} turns mounted, ${nodes} nodes` },
-      { type: 'heap', description: `Pages ${mb(pagesHeap)}, Chat ${mb(chatHeap)}, Chat with an image in view ${mb(imageHeap)}` },
+      { type: 'heap', description: `Pages ${mb(pagesHeap)}, Chat ${mb(chatHeap)}` },
     );
     expect(g.mounted).toBeLessThanOrEqual(MAX_MOUNTED);
   });

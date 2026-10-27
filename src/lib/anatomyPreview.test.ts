@@ -393,7 +393,7 @@ const SYSTEM_TEMPLATE: Record<string, string> = {
   narration: 'system', thinking: 'thinking', director: 'director', character: 'character',
   storyboard: 'storyboard', choices: 'choices', statupdates: 'statUpdates',
   location: 'locationChange', entitylocation: 'entityLocation', summary: 'summary', diary: 'diary',
-  timepassed: 'timePassed', timeopening: 'openingTime', scenetags: 'sceneTags',
+  timepassed: 'timePassed', timeopening: 'openingTime',
   discover: 'discoverEntity', milestone: 'milestoneSelect',
 };
 
@@ -512,7 +512,6 @@ describe('the hub and the editor Preview tell one story', () => {
 
   it('renders the same current-turn values the field previews sample', () => {
     const pool = SAMPLE_PREVIEW_VALUES;
-    expect(text('scenetags')).toContain(pool('<IN FRAME>'));
     expect(text('statupdates')).toContain(pool('<NARRATION>'));
     expect(text('summary')).toContain(pool('<PLAYER ACTION>'));
     expect(text('character')).toContain(pool('<CHARACTER NAME>'));

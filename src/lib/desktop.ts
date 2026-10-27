@@ -1,6 +1,5 @@
 // Detection + bridge for desktop-only capabilities. In the Electron build, preload.cjs exposes
-// `window.formamorphDesktop`; in the plain web build it's absent. Cloud image providers (which need a
-// CORS-free proxy) route through this bridge and are disabled in the UI when it isn't present.
+// `window.formamorphDesktop`; in the plain web build it's absent.
 
 import type { LocalCacheType, LocalContextOverflow } from '@/contexts/settingsDefaults';
 import type { ProjectorSource } from '@/lib/localModels';
@@ -271,13 +270,6 @@ export async function desktopVramStats(): Promise<unknown> {
   const bridge = typeof window !== 'undefined' ? window.formamorphDesktop : undefined;
   if (!bridge?.vramStats) throw new Error('VRAM stats are only available in the Formamorph desktop app.');
   return bridge.vramStats();
-}
-
-/** POST/GET through the Electron main process (no browser CORS). Throws if not running in the desktop app. */
-export async function desktopFetch(req: DesktopFetchRequest): Promise<DesktopFetchResponse> {
-  const bridge = typeof window !== 'undefined' ? window.formamorphDesktop : undefined;
-  if (!bridge) throw new Error('This image provider is only available in the Formamorph desktop app.');
-  return bridge.fetch(req);
 }
 
 /** True when the desktop build exposes the local-LLM engine bridge. */

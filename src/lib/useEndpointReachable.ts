@@ -2,16 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMountedRef } from './useMountedRef';
 import { probeEndpoint, type EndpointProbe } from './useAiReachable';
 import { endpointSignature } from './promptEndpoints';
-import { probeImageEndpoint } from './imageGen/probe';
-import type { ImageProviderId } from './imageGen/types';
-
-/** Which protocol a probe speaks: a text chat endpoint, or one image provider's API. */
-export type ProbeProvider = 'text' | ImageProviderId;
 
 /** The endpoint a badge probes. `enabled` false draws nothing and sends no probe. */
 export interface ReachabilityTarget {
-  /** Absent means a text endpoint. */
-  provider?: ProbeProvider;
   url: string;
   apiToken: string;
   model: string;
@@ -31,7 +24,7 @@ export interface EndpointReachable {
   recheck: () => void;
 }
 
-/** Session cache of settled probe outcomes, keyed `provider|endpoint|model`. Two prompts routed to the same preset
+/** Session cache of settled probe outcomes, keyed `endpoint|model`. Two prompts routed to the same preset
  *  share one answer, so paging through the prompt list doesn't re-probe the same server. */
 const settled = new Map<string, EndpointProbe>();
 /** In-flight probes by signature, so concurrently-mounted badges for one target issue a single request. */
@@ -39,7 +32,7 @@ const inflight = new Map<string, Promise<EndpointProbe>>();
 
 /** Probe `sig`, reusing a settled answer or joining an in-flight one. `force` discards both first. */
 function probeShared(
-  sig: string, provider: ProbeProvider, url: string, apiToken: string, model: string, force: boolean,
+  sig: string, url: string, apiToken: string, model: string, force: boolean,
 ): Promise<EndpointProbe> {
   if (force) {
     settled.delete(sig);
@@ -50,7 +43,7 @@ function probeShared(
     const pending = inflight.get(sig);
     if (pending) return pending;
   }
-  const run = (provider === 'text' ? probeEndpoint(url, apiToken, model) : probeImageEndpoint(provider, url, apiToken, model))
+  const run = probeEndpoint(url, apiToken, model)
     .then((result) => {
       settled.set(sig, result);
       return result;
@@ -75,9 +68,8 @@ export function useEndpointReachable(
   apiToken: string,
   model: string,
   enabled = true,
-  provider: ProbeProvider = 'text',
 ): EndpointReachable {
-  const sig = `${provider}|${endpointSignature(url, model)}`;
+  const sig = endpointSignature(url, model);
   const active = enabled && !!url;
   const [status, setStatus] = useState<EndpointProbe | null>(() => (active ? settled.get(sig) ?? null : null));
   const [checking, setChecking] = useState(false);
@@ -101,24 +93,24 @@ export function useEndpointReachable(
     }
     setStatus(null);
     setChecking(true);
-    probeShared(sig, provider, url, apiToken, model, false).then((result) => {
+    probeShared(sig, url, apiToken, model, false).then((result) => {
       if (!mounted.current || currentSig.current !== sig) return;
       setStatus(result);
       setChecking(false);
     });
-  }, [sig, provider, url, apiToken, model, active]);
+  }, [sig, url, apiToken, model, active]);
 
   // Imperative rather than a nonce in the effect's deps: a nonce would stay raised, so any later re-run
   // (switching prompt tabs and back) would force a needless re-probe.
   const recheck = useCallback(() => {
     if (!active) return;
     setChecking(true);
-    probeShared(sig, provider, url, apiToken, model, true).then((result) => {
+    probeShared(sig, url, apiToken, model, true).then((result) => {
       if (!mounted.current || currentSig.current !== sig) return;
       setStatus(result);
       setChecking(false);
     });
-  }, [sig, provider, url, apiToken, model, active]);
+  }, [sig, url, apiToken, model, active]);
 
   return { status, checking, recheck };
 }

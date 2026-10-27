@@ -2,18 +2,9 @@ import { randomUUID } from "@/lib/uuid";
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { PROMPT_TEXT_DEFAULTS } from '../components/game/GamePrompts';
 import { EXPERIMENTAL_PROMPT_VALUES } from '../components/game/ExperimentalPrompts';
-import { DEFAULT_EDITOR_AUTO_SAVE_IDLE_S, clampEditorAutoSaveIdle, DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_UNIFIED_KV_CACHE, DEFAULT_LOCAL_K_CACHE_TYPE, DEFAULT_LOCAL_V_CACHE_TYPE, DEFAULT_LOCAL_KV_CACHE_IN_RAM, LOCAL_CACHE_TYPES, DEFAULT_LOCAL_CONTEXT_OVERFLOW, LOCAL_CONTEXT_OVERFLOW_POLICIES, DEFAULT_LOCAL_PARALLEL_REQUESTS, DEFAULT_LOCAL_GPU_DEVICE, DEFAULT_LOCAL_AUTO_LOAD, DEFAULT_GEN_TEMPERATURE, DEFAULT_GEN_TOP_P, DEFAULT_GEN_REPETITION_PENALTY, DEFAULT_GEN_TOP_K, DEFAULT_GEN_MIN_P, DEFAULT_THEME_COLOR, BASE_THEME_COLOR, THEME_COLORS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, FONT_OPTIONS, SYSTEM_FONT_STACK, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, DEFAULT_QUOTE_COLOR, DEFAULT_QUOTE_ITALIC, DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_COLOR_DARK, NARRATION_FONT_OPTIONS, fontStack, fontSizeAdjust, DEFAULT_UPDATE_CHANNEL, DEFAULT_SCENE_IMAGE_AUTO, DEFAULT_CONTINUE_CHOICE, DEFAULT_IMAGE_ATTACHMENTS, CONTINUE_CHOICE_MODES, DEFAULT_NARRATION_LAYOUT, NARRATION_LAYOUTS, DEFAULT_TOOLS_ENABLED, DEFAULT_EDITOR_AUTO_SAVE, type LocalCacheType, type LocalContextOverflow, type ContinueChoiceMode, type NarrationLayout, type ThemeColor, type FontChoice, type NarrationFont, type UpdateChannel } from './settingsDefaults';
-import { isDesktop } from '../lib/imageGen/desktop';
-import type { ImageProviderId } from '../lib/imageGen';
+import { DEFAULT_EDITOR_AUTO_SAVE_IDLE_S, clampEditorAutoSaveIdle, DEFAULT_ENDPOINT, DEFAULT_API_TOKEN, DEFAULT_MODEL_NAME, DEFAULT_MAX_TOKENS, DEFAULT_CONTEXT_WINDOW, DEFAULT_LOCAL_CONTEXT_SIZE, DEFAULT_LOCAL_GPU_LAYERS, DEFAULT_LOCAL_FLASH_ATTENTION, DEFAULT_LOCAL_UNIFIED_KV_CACHE, DEFAULT_LOCAL_K_CACHE_TYPE, DEFAULT_LOCAL_V_CACHE_TYPE, DEFAULT_LOCAL_KV_CACHE_IN_RAM, LOCAL_CACHE_TYPES, DEFAULT_LOCAL_CONTEXT_OVERFLOW, LOCAL_CONTEXT_OVERFLOW_POLICIES, DEFAULT_LOCAL_PARALLEL_REQUESTS, DEFAULT_LOCAL_GPU_DEVICE, DEFAULT_LOCAL_AUTO_LOAD, DEFAULT_GEN_TEMPERATURE, DEFAULT_GEN_TOP_P, DEFAULT_GEN_REPETITION_PENALTY, DEFAULT_GEN_TOP_K, DEFAULT_GEN_MIN_P, DEFAULT_THEME_COLOR, BASE_THEME_COLOR, THEME_COLORS, DEFAULT_FONT, DEFAULT_FONT_TUNINGS, FONT_OPTIONS, SYSTEM_FONT_STACK, DEFAULT_NARRATION_FONT, DEFAULT_NARRATION_SCALE, DEFAULT_NARRATION_LINE_HEIGHT, DEFAULT_QUOTE_COLOR, DEFAULT_QUOTE_ITALIC, DEFAULT_QUOTE_COLOR_LIGHT, DEFAULT_QUOTE_COLOR_DARK, NARRATION_FONT_OPTIONS, fontStack, fontSizeAdjust, DEFAULT_UPDATE_CHANNEL, DEFAULT_CONTINUE_CHOICE, CONTINUE_CHOICE_MODES, DEFAULT_NARRATION_LAYOUT, NARRATION_LAYOUTS, DEFAULT_TOOLS_ENABLED, DEFAULT_EDITOR_AUTO_SAVE, type LocalCacheType, type LocalContextOverflow, type ContinueChoiceMode, type NarrationLayout, type ThemeColor, type FontChoice, type NarrationFont, type UpdateChannel } from './settingsDefaults';
+import { isDesktop } from '@/lib/desktop';
 import { useLocalLlmStatus } from '../lib/useLocalLlmStatus';
-import { DEFAULT_TAG_PROMPT } from '../lib/imagePrompt';
-import {
-  imageEndpointPresetCodec, makeDefaultStore as makeImageStore, presetStoreFromEnv, DEFAULT_IMAGE_ENDPOINT_VALUES,
-  activeValues as imageEndpointActiveValues, setActive as imageSetActive, addPreset as imageAddPreset,
-  renamePreset as imageRenamePreset, deletePreset as imageDeletePreset, resetPreset as imageResetPreset,
-  updateValue as imageUpdateValue, setProvider as imageSetProvider,
-  type ImageEndpointPresetStore, type ImageEndpointValues, type ImageEndpointValueKey,
-} from '../lib/imageEndpointPresets';
 import {
   textEndpointPresetCodec, emptyStore as emptyTextStore, presetStoreFromEnv as textPresetStoreFromEnv,
   DEFAULT_TEXT_PRESET_ID, DEFAULT_TEXT_ENDPOINT_VALUES, BUILTIN_ENGINE_PRESET_ID, builtinTextPresets, textPresetName, canonicalPresetId, isDemoAI,
@@ -51,7 +42,7 @@ import {
   emptyStore, presetStoreCodec, activeValues, isBuiltInActive, activeStyle, BUILTIN_PRESETS,
   setActive as setActivePreset, addPreset as addPresetOp, renamePreset as renamePresetOp, deletePreset as deletePresetOp, resetPreset as resetPresetOp, updateValue,
   activeSamplers, activeReasoning, activeReasoningBudget, activeMaxOutput, activeAttachments, activeVerbatim, activePromptEndpoints,
-  updateSamplers, updateReasoning, updateReasoningBudget, updateMaxOutput, updateAttachments, updateVerbatim, updatePromptEndpoints, foldTuningIntoUserPresets,
+  updateSamplers, updateReasoning, updateReasoningBudget, updateMaxOutput, updateVerbatim, updatePromptEndpoints, foldTuningIntoUserPresets,
   addFullPreset, replacePreset, activeOverview, storedOverview, updateOverview, markEdited, linkPreset,
   userToolsCodec, saveUserTool, deleteUserTool, activeEnabledTools, setToolEnabled as setToolEnabledOp, dropToolEverywhere,
   builtinToolSwitchesCodec, activeBuiltinId, setBuiltinToolEnabled, dropToolFromBuiltins, type BuiltinToolSwitches,
@@ -95,11 +86,10 @@ import type { AiEndpointTarget } from '@/lib/aiRequest/aiRequestSpec';
 type CapabilityTarget = Pick<AiEndpointTarget, 'url' | 'apiToken' | 'model' | 'localEngine'>;
 import { FLAT_HOURS_PER_TURN } from '@/lib/gameClock';
 
-/** A request to open the Settings modal at a given tab (and, for `endpoints`, a given sub-tab). The nonce
- *  distinguishes two identical requests so the second one still re-opens the modal. */
+/** A request to open the Settings modal at a given tab. The nonce distinguishes two identical requests so
+ *  the second one still re-opens the modal. */
 export interface SettingsOpenRequest {
   tab: SettingsTabId;
-  endpointTab?: string;
   nonce: string;
 }
 
@@ -122,44 +112,6 @@ export type ReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | '
 export type { ParagraphLimit };
 
 const APP_ID = 'FORMAMORPH';
-
-/** Build the initial image-endpoint preset store, migrating a pre-preset config from the legacy
- *  individual `FORMAMORPH_image*` keys into the seeded Default preset when present. With no legacy
- *  config, VITE_DEFAULT_IMAGE_PRESETS (if set) seeds named presets; otherwise a single "Default". */
-function seedImagePresetStore(): ImageEndpointPresetStore {
-  const get = (k: string) => localStorage.getItem(`${APP_ID}_${k}`);
-  const legacyKeys = [
-    'imageProvider', 'imageEndpoint', 'imageApiToken', 'imageModel', 'imagePositivePrompt', 'imageNegativePrompt',
-    'imagePortraitWidth', 'imagePortraitHeight', 'imageLandscapeWidth', 'imageLandscapeHeight', 'imageSteps', 'imageCfg', 'imageSampler',
-  ];
-  if (!legacyKeys.some((k) => get(k) !== null)) return presetStoreFromEnv() ?? makeImageStore();
-  const d = DEFAULT_IMAGE_ENDPOINT_VALUES;
-  const str = (k: string, dflt: string) => get(k) ?? dflt;
-  const int = (k: string, dflt: number) => { const r = get(k); return r === null ? dflt : parseInt(r); };
-  const flt = (k: string, dflt: number) => { const r = get(k); return r === null ? dflt : parseFloat(r); };
-  return makeImageStore({
-    provider: get('imageProvider') === 'openai' ? 'openai' : 'a1111',
-    endpoint: str('imageEndpoint', d.endpoint),
-    apiToken: str('imageApiToken', d.apiToken),
-    model: str('imageModel', d.model),
-    positivePrompt: str('imagePositivePrompt', d.positivePrompt),
-    negativePrompt: str('imageNegativePrompt', d.negativePrompt),
-    portraitWidth: int('imagePortraitWidth', d.portraitWidth),
-    portraitHeight: int('imagePortraitHeight', d.portraitHeight),
-    landscapeWidth: int('imageLandscapeWidth', d.landscapeWidth),
-    landscapeHeight: int('imageLandscapeHeight', d.landscapeHeight),
-    steps: int('imageSteps', d.steps),
-    cfg: flt('imageCfg', d.cfg),
-    sampler: str('imageSampler', d.sampler),
-    adetailer: d.adetailer,
-    cleanTags: d.cleanTags,
-    workflow: d.workflow,
-    invokeEncoder: d.invokeEncoder,
-    invokeVae: d.invokeVae,
-    invokeBoard: d.invokeBoard,
-    fileName: d.fileName,
-  });
-}
 
 /** Build the initial text-endpoint preset store, migrating a pre-preset custom endpoint from the legacy
  *  individual `FORMAMORPH_endpointUrl`/`_apiToken`/`_modelName`/`_maxTokens`/`_contextWindowOverride` keys
@@ -452,8 +404,6 @@ function useProvideSettings() {
   // Ollama), harmless on serial endpoints (they queue). Turn off if a VRAM-tight local engine slows or OOMs
   // under concurrent decodes.
   const [concurrentTurnRequests, setConcurrentTurnRequests] = usePersistentState<boolean>(`${APP_ID}_concurrentTurnRequests`, true, boolCodec);
-  // Lets the player attach images to an action. Off hides every attachment control and sends no image.
-  const [imageAttachments, setImageAttachments] = usePersistentState<boolean>(`${APP_ID}_imageAttachments`, DEFAULT_IMAGE_ATTACHMENTS, boolCodec);
   // Master switch over every prompt's Tools; the endpoint capability gate still applies when on.
   const [toolsEnabled, setToolsEnabled] = usePersistentState<boolean>(`${APP_ID}_toolsEnabled`, DEFAULT_TOOLS_ENABLED, boolCodec);
   // Autosave after every completed turn (starting with the opening). On by default.
@@ -919,7 +869,7 @@ function useProvideSettings() {
     systemPrompt, narrationUserPrompt, recapUserPrompt, rehydrateUserPrompt, oocDirectivePrompt, choicesPrompt, statUpdatesPrompt, locationChangePromptText, thinkingPrompt, summaryPrompt,
     diaryPrompt, directorPrompt, directorUserPrompt, characterPrompt, storyboardPrompt,
     choicesUserPrompt, statUpdatesUserPrompt, locationChangeUserPrompt, entityLocationPrompt, entityLocationUserPrompt, summaryUserPrompt, nowLinePrompt, timePassedPrompt, timePassedUserPrompt,
-    openingTimePrompt, openingTimeUserPrompt, sceneTagsPrompt, sceneTagsUserPrompt, discoverEntityPrompt, discoverEntityUserPrompt,
+    openingTimePrompt, openingTimeUserPrompt, discoverEntityPrompt, discoverEntityUserPrompt,
     milestoneSelectPrompt, milestoneSelectUserPrompt,
   } = promptValues;
   const setSystemPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'systemPrompt', v));
@@ -950,8 +900,6 @@ function useProvideSettings() {
   const setTimePassedUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'timePassedUserPrompt', v));
   const setOpeningTimePrompt = (v: string) => editPresetStore((s) => updateValue(s, 'openingTimePrompt', v));
   const setOpeningTimeUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'openingTimeUserPrompt', v));
-  const setSceneTagsPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'sceneTagsPrompt', v));
-  const setSceneTagsUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'sceneTagsUserPrompt', v));
   const setDiscoverEntityPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'discoverEntityPrompt', v));
   const setDiscoverEntityUserPrompt = (v: string) => editPresetStore((s) => updateValue(s, 'discoverEntityUserPrompt', v));
 
@@ -966,6 +914,7 @@ function useProvideSettings() {
   );
   const promptReasoningBudget = useMemo(() => activeReasoningBudget(effectiveStore), [effectiveStore]);
   const promptMaxOutput = useMemo(() => activeMaxOutput(effectiveStore), [effectiveStore]);
+  // A preset's per-prompt attachment choices, kept only so an exported preset carries them unchanged.
   const promptAttachments = useMemo(() => activeAttachments(effectiveStore), [effectiveStore]);
   const promptEndpoints = useMemo(() => activePromptEndpoints(effectiveStore), [effectiveStore]);
   const setPromptEndpoint = useCallback(
@@ -1077,10 +1026,6 @@ function useProvideSettings() {
     editPresetStore((s) => updateMaxOutput(s, (prev) => ({
       ...prev, [kind]: { custom: prev[kind]?.custom ?? true, value: clampMaxOutput(value) },
     })));
-  }, [editPresetStore]);
-
-  const setPromptAttachments = useCallback((kind: AIRequestType, include: boolean) => {
-    editPresetStore((s) => updateAttachments(s, (prev) => ({ ...prev, [kind]: include })));
   }, [editPresetStore]);
 
   // Preset management (Settings → Prompts selector).
@@ -1227,84 +1172,6 @@ function useProvideSettings() {
   const setStatUpdatesVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'statUpdates', n));
   const setLocationChangeVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'locationChange', n));
   const setSummaryVerbatimTurns = (n: number) => editPresetStore((s) => updateVerbatim(s, 'summary', n));
-  // Hide every "Generate with AI" image affordance app-wide. Global (not per-preset) so the user can turn
-  // image generation off entirely without losing their endpoint configs.
-  const [imageGenDisabled, setImageGenDisabled] = usePersistentState<boolean>(`${APP_ID}_imageGenDisabled`, false, boolCodec);
-  // Generate a scene image for every turn automatically. Off by default: the image renders after the turn's
-  // text is finished and blocks the next action while it runs (one GPU, and a diffusion pass alongside the
-  // language model spills it to CPU), so it is a deliberate opt-in rather than a default cost.
-  const [sceneImageAuto, setSceneImageAuto] = usePersistentState<boolean>(`${APP_ID}_sceneImageAuto`, DEFAULT_SCENE_IMAGE_AUTO, boolCodec);
-  // Image generation config (Settings → Endpoints → Image). Lives in named, freely-editable presets so
-  // the user can keep several image-server configs. The active preset's values back the fields below; the
-  // public getter/setter names are unchanged so consumers (GenerateImageButton) don't care about presets.
-  const initialImageStore = useRef<ImageEndpointPresetStore | null>(null);
-  if (!initialImageStore.current) initialImageStore.current = seedImagePresetStore();
-  const [imagePresetStore, setImagePresetStore] = usePersistentState<ImageEndpointPresetStore>(
-    `${APP_ID}_imageEndpointPresets`, initialImageStore.current, imageEndpointPresetCodec,
-  );
-  const imageValues = useMemo(() => imageEndpointActiveValues(imagePresetStore), [imagePresetStore]);
-  const patchImage = <K extends ImageEndpointValueKey>(key: K) => (value: ImageEndpointValues[K]) =>
-    setImagePresetStore((s) => imageUpdateValue(s, key, value));
-  const {
-    provider: imageProvider, endpoint: imageEndpoint, apiToken: imageApiToken, model: imageModel,
-    positivePrompt: imagePositivePrompt, negativePrompt: imageNegativePrompt,
-    portraitWidth: imagePortraitWidth, portraitHeight: imagePortraitHeight,
-    landscapeWidth: imageLandscapeWidth, landscapeHeight: imageLandscapeHeight,
-    steps: imageSteps, cfg: imageCfg, sampler: imageSampler, adetailer: imageAdetailer, cleanTags: imageCleanTags,
-    workflow: imageWorkflow, invokeEncoder: imageInvokeEncoder, invokeVae: imageInvokeVae,
-    invokeBoard: imageInvokeBoard, fileName: imageFileName,
-  } = imageValues;
-  // Switching provider seeds that provider's own defaults the first time, so a NovelAI preset lands
-  // inside its free-generation window without hand-tuning.
-  const setImageProvider = (provider: ImageProviderId) => setImagePresetStore((s) => imageSetProvider(s, provider));
-  const setImageEndpoint = patchImage('endpoint');
-  const setImageApiToken = patchImage('apiToken');
-  const setImageModel = patchImage('model');
-  const setImagePositivePrompt = patchImage('positivePrompt');
-  const setImageNegativePrompt = patchImage('negativePrompt');
-  const setImagePortraitWidth = patchImage('portraitWidth');
-  const setImagePortraitHeight = patchImage('portraitHeight');
-  const setImageLandscapeWidth = patchImage('landscapeWidth');
-  const setImageLandscapeHeight = patchImage('landscapeHeight');
-  const setImageSteps = patchImage('steps');
-  const setImageCfg = patchImage('cfg');
-  const setImageSampler = patchImage('sampler');
-  const setImageAdetailer = patchImage('adetailer');
-  const setImageCleanTags = patchImage('cleanTags');
-  const setImageWorkflow = patchImage('workflow');
-  const setImageInvokeEncoder = patchImage('invokeEncoder');
-  const setImageInvokeVae = patchImage('invokeVae');
-  const setImageInvokeBoard = patchImage('invokeBoard');
-  const setImageFileName = patchImage('fileName');
-  // DEV-only: let preview verification set Image Gen values in one call (`window.__fmDev.setImage({...})`)
-  // instead of driving Radix dropdowns by hand. Tree-shaken from prod via the import.meta.env.DEV guard.
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    return registerDevHook('setImage', (partial: Partial<ImageEndpointValues>) => {
-      setImagePresetStore((s) => (Object.entries(partial) as [ImageEndpointValueKey, ImageEndpointValues[ImageEndpointValueKey]][])
-        // `provider` goes through the same seeding path the dropdown uses, so the hook lands the app in a
-        // state the UI can actually produce.
-        .reduce((acc, [key, value]) => (key === 'provider'
-          ? imageSetProvider(acc, value as ImageProviderId)
-          : imageUpdateValue(acc, key, value)), s));
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- register the dev hook once; setImagePresetStore is stable
-  }, []);
-  // Preset management (Settings → Endpoints → Image selector). Every preset is editable, including Default.
-  const imageEndpointPresets = imagePresetStore.presets.map((p) => ({ id: p.id, name: p.name }));
-  const activeImageEndpointPresetId = imagePresetStore.activeId;
-  const activeImageEndpointPresetName =
-    imagePresetStore.presets.find((p) => p.id === imagePresetStore.activeId)?.name ?? 'Default';
-  const selectImageEndpointPreset = (id: string) => setImagePresetStore((s) => imageSetActive(s, id));
-  const addImageEndpointPreset = (name: string) => {
-    const id = randomUUID();
-    setImagePresetStore((s) => imageAddPreset(s, id, name, imageEndpointActiveValues(s)));
-    return id;
-  };
-  const renameImageEndpointPreset = (id: string, name: string) => setImagePresetStore((s) => imageRenamePreset(s, id, name));
-  const deleteImageEndpointPreset = (id: string) => setImagePresetStore((s) => imageDeletePreset(s, id));
-  const resetImageEndpointPreset = (id: string) => setImagePresetStore((s) => imageResetPreset(s, id));
-
   // Preset management (Settings → Endpoints → Text selector). The immutable "Default" built-in is virtual
   // (never stored) and read-only; user presets are freely editable. Mirrors the prompt-preset UX.
   const builtinTextEndpointPresets = builtinTextPresets();
@@ -1495,9 +1362,6 @@ function useProvideSettings() {
     )
   );
 
-  // User-editable prompt that turns a subject's description into booru tags (Settings → Endpoints → Tag Prompt).
-  const [imageTagPrompt, setImageTagPrompt] = usePersistentState<string>(`${APP_ID}_imageTagPrompt`, DEFAULT_TAG_PROMPT, stringCodec);
-
   const [vramHelperUrl, setVramHelperUrl] = usePersistentState<string>(`${APP_ID}_vramHelperUrl`, 'http://localhost:5179', stringCodec);
 
   // Preset color theme. Sets a `data-theme` attribute on <html> that swaps a full token set (see the
@@ -1628,12 +1492,12 @@ function useProvideSettings() {
   const [ttsSpeed, setTtsSpeed] = usePersistentState<number>(`${APP_ID}_ttsSpeed`, 1, floatCodec);
   const [ttsHighlight, setTtsHighlight] = usePersistentState<boolean>(`${APP_ID}_ttsHighlight`, true, boolCodec);
 
-  // A pending "open Settings here" request. Deep-nested surfaces (the image generation dialog) can't reach
+  // A pending "open Settings here" request. Deep-nested surfaces (the Demo AI notice) can't reach
   // the modal — it's mounted by MainMenu/GameViewer — so they park a request here and the owning view acts
   // on it. Not persisted; the nonce makes a repeat request for the same tab fire again.
   const [settingsRequest, setSettingsRequest] = useState<SettingsOpenRequest | null>(null);
-  const requestSettings = useCallback((tab: SettingsTabId, endpointTab?: string) => {
-    setSettingsRequest({ tab, endpointTab, nonce: randomUUID() });
+  const requestSettings = useCallback((tab: SettingsTabId) => {
+    setSettingsRequest({ tab, nonce: randomUUID() });
   }, []);
   const clearSettingsRequest = useCallback(() => setSettingsRequest(null), []);
   // A pending "open this surface" request. The view that can host it acts on it and clears it.
@@ -1743,8 +1607,6 @@ function useProvideSettings() {
     setFixedTurnHours,
     concurrentTurnRequests,
     setConcurrentTurnRequests,
-    imageAttachments,
-    setImageAttachments,
     toolsEnabled,
     setToolsEnabled,
     autosaveEnabled,
@@ -1922,8 +1784,6 @@ function useProvideSettings() {
     promptMaxOutput,
     setPromptMaxOutputCustom,
     setPromptMaxOutputValue,
-    promptAttachments,
-    setPromptAttachments,
     thinkingPrompt,
     setThinkingPrompt,
     summaryPrompt,
@@ -1963,10 +1823,6 @@ function useProvideSettings() {
     setOpeningTimePrompt,
     openingTimeUserPrompt,
     setOpeningTimeUserPrompt,
-    sceneTagsPrompt,
-    setSceneTagsPrompt,
-    sceneTagsUserPrompt,
-    setSceneTagsUserPrompt,
     discoverEntityPrompt,
     setDiscoverEntityPrompt,
     discoverEntityUserPrompt,
@@ -2001,60 +1857,6 @@ function useProvideSettings() {
     importPreset,
     /** Every user preset with its community link, for the browser to find a listing's copy. */
     userPromptPresets: presetStore.presets,
-    imageGenDisabled,
-    setImageGenDisabled,
-    sceneImageAuto,
-    setSceneImageAuto,
-    imageProvider,
-    setImageProvider,
-    imageEndpoint,
-    setImageEndpoint,
-    imageApiToken,
-    setImageApiToken,
-    imageModel,
-    setImageModel,
-    imagePositivePrompt,
-    setImagePositivePrompt,
-    imageNegativePrompt,
-    setImageNegativePrompt,
-    imagePortraitWidth,
-    setImagePortraitWidth,
-    imagePortraitHeight,
-    setImagePortraitHeight,
-    imageLandscapeWidth,
-    setImageLandscapeWidth,
-    imageLandscapeHeight,
-    setImageLandscapeHeight,
-    imageSteps,
-    setImageSteps,
-    imageCfg,
-    setImageCfg,
-    imageSampler,
-    setImageSampler,
-    imageAdetailer,
-    setImageAdetailer,
-    imageCleanTags,
-    setImageCleanTags,
-    imageWorkflow,
-    setImageWorkflow,
-    imageInvokeEncoder,
-    setImageInvokeEncoder,
-    imageInvokeVae,
-    setImageInvokeVae,
-    imageInvokeBoard,
-    setImageInvokeBoard,
-    imageEndpointPresets,
-    activeImageEndpointPresetId,
-    activeImageEndpointPresetName,
-    selectImageEndpointPreset,
-    addImageEndpointPreset,
-    renameImageEndpointPreset,
-    deleteImageEndpointPreset,
-    resetImageEndpointPreset,
-    imageTagPrompt,
-    setImageTagPrompt,
-    imageFileName,
-    setImageFileName,
     vramHelperUrl,
     setVramHelperUrl,
     ttsVolume,
@@ -2073,7 +1875,7 @@ type SettingsContextValue = ReturnType<typeof useProvideSettings>;
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 /** Access all user settings (persisted to localStorage) — endpoint/model/token config, prompt presets,
- *  image-gen presets, TTS, memory/diary toggles, thinking mode — plus their setters and derived active
+ *  TTS, memory/diary toggles, thinking mode — plus their setters and derived active
  *  values. Throws if called outside a `SettingsProvider`. */
 // eslint-disable-next-line react-refresh/only-export-components
 export const useSettings = () => {
@@ -2098,7 +1900,7 @@ export function useSettingsSource<T>(source: T | undefined): T | SettingsContext
 }
 
 /** Provides all persisted user settings (see `useSettings`); runs one-time localStorage migrations and
- *  seeds the prompt/image preset stores on first render. */
+ *  seeds the prompt preset store on first render. */
 export const SettingsProvider = ({ children }: { children: ReactNode }) => {
   const value = useProvideSettings();
 

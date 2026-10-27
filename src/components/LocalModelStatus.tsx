@@ -2,7 +2,7 @@ import { Progress } from '@/components/ui/progress';
 import IndeterminateProgress from '@/components/ui/indeterminate-progress';
 import { fmtGB, type VramStats } from '@/lib/useVramStats';
 import VramReadout from '@/components/game/VramReadout';
-import type { EngineDeviceOrigin, LocalLlmState } from '@/lib/imageGen/desktop';
+import type { EngineDeviceOrigin, LocalLlmState } from '@/lib/desktop';
 
 const BACKEND_LABELS: Record<string, string> = { cuda: 'CUDA', vulkan: 'Vulkan', metal: 'Metal', cpu: 'CPU' };
 

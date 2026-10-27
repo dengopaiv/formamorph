@@ -18,7 +18,6 @@ export const PROMPT_GROUPS: PromptGroup[] = [
   { label: 'Story', tabs: ['narration', 'thinking', 'director', 'character', 'discover', 'storyboard', 'choices'] },
   { label: 'Trackers', tabs: ['statupdates', 'location', 'entitylocation', 'timepassed', 'timeopening'] },
   { label: 'Memory', tabs: ['summary', 'milestone', 'diary'] },
-  { label: 'Images', tabs: ['scenetags'] },
 ];
 
 /** Every prompt the Settings rail can select — the `promptTab` ids. A jump target names one of these, so
@@ -26,8 +25,7 @@ export const PROMPT_GROUPS: PromptGroup[] = [
 export type PromptTab =
   | 'narration' | 'thinking' | 'director' | 'character' | 'discover' | 'storyboard' | 'choices'
   | 'statupdates' | 'location' | 'entitylocation' | 'timepassed' | 'timeopening'
-  | 'summary' | 'milestone' | 'diary'
-  | 'scenetags';
+  | 'summary' | 'milestone' | 'diary';
 
 /** Which request each tab tunes: its samplers, endpoint pin and reasoning rows read and write this type. */
 export const PROMPT_TAB_REQUESTS: Record<PromptTab, AIRequestType> = {
@@ -46,7 +44,6 @@ export const PROMPT_TAB_REQUESTS: Record<PromptTab, AIRequestType> = {
   summary: 'summary',
   milestone: 'milestoneSelect',
   diary: 'diary',
-  scenetags: 'sceneTags',
 };
 
 export function isPromptTab(tab: string): tab is PromptTab {
@@ -66,7 +63,6 @@ export const PROMPT_LABELS: Record<PromptTab, string> = {
   milestone: 'Milestone Select',
   timepassed: 'Clock',
   timeopening: 'Opening',
-  scenetags: 'Scene Tags',
   diary: 'Diary',
   director: 'Director',
   character: 'Character',
@@ -99,7 +95,6 @@ export const PROMPT_DESCRIPTIONS: Record<string, string> = {
   diary: "Records each present character's private, first-person note on the turn",
   timepassed: 'Measures how much in-world time a turn took',
   timeopening: 'Reads the opening scene once to decide what time of day the story starts',
-  scenetags: "Tags only the action in a scene image. The characters' looks and the setting come from their own tags.",
   director: "Describes the scene for the turn: who's here, and what each of them is doing",
   character: 'States what one character wants this turn, in the first person',
   discover: 'Writes a lasting note for each new character the story names, and rewrites it on request',

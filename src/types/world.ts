@@ -390,11 +390,11 @@ export interface Entity {
   /**
    * Listing tags, the same kind a world carries — how somebody browsing Community Creations finds this.
    *
-   * Not to be confused with `imageTags` below, which is a comma-separated booru string for the image
+   * Not to be confused with `imageTags` below, a comma-separated booru string kept from the retired image
    * generator. These are semantic and player-facing; those describe a picture.
    */
   tags?: string[];
-  /** Booru tags used for AI image generation; editor-only, not sent to the narrative AI. */
+  /** Booru tags an earlier image generator read. Kept as world data; no editor shows them and no request sends them. */
   imageTags?: string;
   sound?: MediaAsset;
   model?: MediaAsset;
@@ -513,7 +513,7 @@ export interface GameLocation {
    *  owner-less Condition reads the played persona. Read it through `lib/locationImages`, which also covers
    *  records written before the gallery. */
   images?: GalleryImage[];
-  /** Booru tags used for AI image generation; editor-only, not sent to the narrative AI. */
+  /** Booru tags an earlier image generator read. Kept as world data; no editor shows them and no request sends them. */
   imageTags?: string;
   ambientSound?: MediaAsset;
   /** v1.2.0: a candidate starting location (one chosen at random on new game). */

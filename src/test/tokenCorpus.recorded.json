@@ -1443,17 +1443,6 @@
   }
  },
  {
-  "token": "<SUBJECT>",
-  "parts": {
-   "base": "<SUBJECT>",
-   "variantId": null,
-   "pre": "",
-   "post": "",
-   "key": "<SUBJECT>"
-  },
-  "selection": {}
- },
- {
   "token": "<TIME>",
   "parts": {
    "base": "<TIME>",

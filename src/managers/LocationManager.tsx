@@ -216,7 +216,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
       </PanelTabContent>
 
       <PanelTabContent value="media">
-        <LocationImageField location={editingLocation} onChange={handleChange} placeholders={placeholders} tourAnchor="location-image" />
+        <LocationImageField location={editingLocation} onChange={handleChange} tourAnchor="location-image" />
         {advanced && (
           <div className="space-y-2">
             <Label>Ambient Sound</Label>

@@ -78,7 +78,7 @@ const material = (): TurnMaterial => ({
   action: 'I rest.', effectiveAction: 'I rest.', turnId: 'turn-1', ctx: {}, baseCtx: {}, sceneEntityTokens: {}, destinations: [],
   narrationSystemPrompt: 'You narrate.', narrationSystemPromptRuns: [], historyRuns: [], trimmedHistory: [],
   narration: '', lastStory: '', plannerRecap: '', turnPlan: '', activeCharacterGuidance: '', directorScene: '', npcCastSize: 0,
-  intents: [], overflow: [], sceneCast: [],
+  intents: [], overflow: [],
 });
 
 /** Every pass but narration off, so the turn is the narration request alone. */

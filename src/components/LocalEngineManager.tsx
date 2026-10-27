@@ -8,7 +8,7 @@ import {
   listLocalInstalled,
   loadLocalModel,
   stopLocalLlm,
-} from '@/lib/imageGen/desktop';
+} from '@/lib/desktop';
 
 /**
  * Drives the desktop local-LLM engine lifecycle. The engine runs whenever anything references it — it's the

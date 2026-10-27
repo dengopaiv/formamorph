@@ -15,7 +15,7 @@ export type DevView = (typeof DEV_VIEWS)[number];
 /** Dev-only routes for panes whose real host needs a deep click path. `customCode` opens MainMenu's Custom
  *  Code Execution dialog on canned stat code when the selected world has none; the rest mount one pane on
  *  canned props (`DevPaneRoutes`). Players never navigate to these. */
-export const DEV_PANE_MODALS = ['customCode', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash'] as const;
+export const DEV_PANE_MODALS = ['customCode', 'fontTune', 'revealDemo', 'presetImport', 'placeholderPicker', 'rootCrash'] as const;
 export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
 
 /** Modals the router can open via `#dev?modal=…`. `settings` opens from MainMenu or GameViewer; `menu` and
@@ -48,29 +48,23 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  `importComponent` raises the component-file import review on a canned file
  *  (`devImportComponentSample.ts`), because in the app it opens only for a chosen file that names worlds.
  *  Importing from it does write: the character lands in the library, and a world you tick gets a copy.
- *  `imageReplace`, `codeRename` and `replaceAll` open the World Editor and raise,
- *  on canned text, the question a generated image with no free slot asks, the offer to carry a rename into
- *  stat code, and the Replace All confirm. In the app each opens only partway through an edit. Every answer
+ *  `codeRename` and `replaceAll` open the World Editor and raise, on canned text, the offer to carry a
+ *  rename into stat code, and the Replace All confirm. In the app each opens only partway through an edit. Every answer
  *  closes it and writes nothing. `savedElsewhere` and `deletedElsewhere` open the World Editor and raise
  *  the question another tab's save or delete of the open world asks. Either answer closes it and writes nothing.
  *  `demoAI` is in game
  *  (GameViewer) and opens the Demo AI dialog whatever the narration endpoint and the seen-key say, so it is
  *  reachable on a build that overrides the default endpoint.
  *  `persona` is in game (GameViewer) and opens the right panel's Change Persona picker. On mobile that panel
- *  mounts only on the Status tab, so open that tab first. `errorDetails` raises a canned ComfyUI rejection toast
- *  (`devErrorDetailsSample.ts`) from any view with toasts; its View Details link opens the dialog.
- *  `imageSetup` raises a canned ComfyUI connection toast the same way; its Fix connection link opens
- *  the image setup guide.
+ *  mounts only on the Status tab, so open that tab first. `errorDetails` raises a canned failed-request toast
+ *  from any view with toasts; its View Details link opens the dialog.
  *  `settingsCompare` opens Settings
  *  and the compare view over it, on a canned edit of the Narration prompt. `chipOptions` opens Settings and
  *  Chip Options over it, on a canned Entities chip. `scriptPrompt` is in game (GameViewer) and fires one
  *  canned `player.*` request through the live prompt store once the game has a turn; `tab=…` picks the shape
  *  (`devScriptPromptSamples.ts`). Pair it with `fixture=…`. `DEV_PANE_MODALS` follow. */
-export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'demoAI', 'persona', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
+export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'demoAI', 'persona', 'errorDetails', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
 export type DevModal = (typeof DEV_MODALS)[number];
-
-/** The `attach=…` value that stages sample attachments on the game view. */
-export const DEV_ATTACH_SAMPLE = 'sample';
 
 /** The `history=…` value that opens the World Editor's History popover. */
 export const DEV_HISTORY_OPEN = 'open';
@@ -84,9 +78,8 @@ export const DEV_MODAL_TABS = {
   // Settings → Tools opens a New Tool draft on its edit tab with `subtab=…`
   // (`#dev?modal=settings&tab=tools&subtab=handler`). The Tools tab is Advanced only.
   settingsToolEdit: ['definition', 'parameters', 'handler', 'tryIt'],
-  // Settings → Endpoints opens its own tab with the same `subtab=…` (`#dev?modal=settings&tab=endpoints&subtab=image`).
-  // `tagPrompt` is Advanced only and hidden while image generation is off.
-  settingsEndpoints: ['text', 'image', 'tagPrompt'],
+  // Settings → Endpoints names its one surface with the same `subtab=…` (`#dev?modal=settings&tab=endpoints&subtab=text`).
+  settingsEndpoints: ['text'],
   worldEditor: ['overview', 'media', 'entities', 'locations', 'traits', 'stats', 'dictionary', 'placeholders', 'scripts', 'tools'],
   // The World Editor's Locations tab shows one of two views of the same locations, switched with `subtab=…`
   // (`#dev?modal=worldEditor&tab=locations&subtab=canvas`). Adding `fullscreen=1` opens the canvas in its
@@ -163,7 +156,7 @@ export const DEV_MODAL_TABS = {
   // A prompt whose feature is off is not in the rail, and the panel lands on Narration.
   settingsPrompts: [
     'narration', 'thinking', 'director', 'character', 'discover', 'storyboard', 'choices',
-    'statupdates', 'location', 'entitylocation', 'timepassed', 'timeopening', 'summary', 'milestone', 'diary', 'scenetags',
+    'statupdates', 'location', 'entitylocation', 'timepassed', 'timeopening', 'summary', 'milestone', 'diary',
   ],
   // Settings → Prompts has a THIRD level: which surface of the open prompt is on show, reached with
   // `surface=…` (`#dev?modal=settings&tab=prompts&subtab=narration&surface=anatomy`). `anatomy` is the
@@ -178,10 +171,6 @@ export const DEV_MODAL_TABS = {
   // The narration panel's layout, reached with `mode=…` on the game view (`#dev?view=gameViewer&mode=chat`).
   // It overrides the Narration Layout setting without saving it.
   gameViewerLayout: ['pages', 'chat'],
-  // Attached images on the game view, reached with `attach=…` (`#dev?view=gameViewer&fixture=whiteRoom&attach=sample`).
-  // `sample` turns Image Attachments on, then runs sample images through the attach path: two wait in the
-  // action box and two ride the latest turn's action.
-  gameViewerAttach: [DEV_ATTACH_SAMPLE],
 } as const;
 
 // Admin Panel → Policies uses the `subtab=…` slot, and its two are fixed, so they are guarded above.

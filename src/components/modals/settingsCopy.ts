@@ -6,8 +6,8 @@
  * asserted in `settingsCopy.test.ts` against this table rather than trusted to review, so a new setting
  * cannot arrive without a description, with a period on one sentence, or with a sentence-case label.
  *
- * Out of scope: the setup guides (`LlmSetupGuide`, `ImageSetupGuide`), which are multi-paragraph
- * tutorials rather than settings, and dynamic status lines, which report what just happened rather than
+ * Out of scope: the setup guide (`LlmSetupGuide`), which is a multi-paragraph tutorial rather than a
+ * setting, and dynamic status lines, which report what just happened rather than
  * describing a control.
  */
 
@@ -309,16 +309,6 @@ Runs one extra request per participant. Edit its prompt under **Prompts → Diar
 **Always** keeps the button even when the **Choices** request is off.`,
   },
 
-  // ── Output · Attachments ────────────────────────────────────────────────────
-  imageAttachments: {
-    label: 'Image Attachments',
-    description: 'Attach up to 4 images to an action',
-    info: `Adds an attach button to the action box. The images go with your action text, on that turn only. Each prompt's **Include Attachments** option decides which requests get them. **Narration** has it on by default.
-
-- Your model must read images. A text-only model returns an error.
-- An image over 1568 px on its long side is shrunk to that size before it's sent.`,
-  },
-
   // ── Output · Performance ────────────────────────────────────────────────────
   concurrentRequests: {
     label: 'Concurrent Requests',
@@ -369,100 +359,6 @@ A field the app sets for a request wins over the same field here. These fields o
 You can't set \`model\`, \`messages\`, \`stream\`, \`tools\`, \`tool_choice\`, \`response_format\`, \`n\` or \`stop\`.
 
 If the text has an error, requests go out without these fields.`,
-  },
-
-  // ── Endpoints · Image ───────────────────────────────────────────────────────
-  enableImageGeneration: {
-    label: 'Enable Image Generation',
-    description: 'Shows the “Generate with AI” buttons',
-  },
-  sceneImages: {
-    label: 'Scene Images',
-    description: 'Generates an image of every turn automatically',
-    info: `Renders the image after the turn's text is done. Your next action waits for it, because one GPU can't run the image model and the text model at the same time. Each turn then takes as long as your image server needs.
-
-You can still generate a single scene yourself from the button above the story.`,
-  },
-  imageProvider: {
-    label: 'Provider',
-    description: 'Selects which image server to send requests to',
-  },
-  imageEndpointUrl: {
-    label: 'Endpoint URL',
-    description: 'Sends image requests to your server',
-  },
-  imageApiToken: {
-    label: 'API Token',
-    description: 'Authenticates you with this image endpoint',
-  },
-  imageModel: {
-    label: 'Model',
-    description: 'Selects which checkpoint generates the image',
-  },
-  promptPrefix: {
-    label: 'Prompt Prefix',
-    description: 'Prepends quality and style tags to every generated prompt',
-  },
-  negativePrompt: {
-    label: 'Negative Prompt',
-    description: 'Lists tags the image should avoid',
-  },
-  portraitSize: {
-    label: 'Portrait (W × H)',
-    description: 'Sets the size of entity portraits',
-  },
-  landscapeSize: {
-    label: 'Landscape (W × H)',
-    description: 'Sets the size of location images and thumbnails',
-  },
-  stepsCfg: {
-    label: 'Steps / CFG',
-    description: 'Sets sampling steps and prompt adherence',
-  },
-  imageSampler: {
-    label: 'Sampler',
-    description: 'Selects the sampling algorithm',
-  },
-  cleanTags: {
-    label: 'Clean Up Tags',
-    description: 'Rewrites scene and generated tags as plain lowercase words',
-    info: 'Also removes weights and other prompt syntax, such as NovelAI’s `{tag}` or `1.5::tag ::`. Turn off to send your entity and location tags as you wrote them. Never changes the **Prompt Prefix** or **Negative Prompt**.',
-  },
-  faceFix: {
-    label: 'Face Fix',
-    description: 'Re-renders faces in a second pass',
-  },
-  imageFileName: {
-    label: 'File Name',
-    description: 'Sets where ComfyUI saves each image in its output folder',
-    info: `A \`/\` makes a folder. ComfyUI adds a counter and \`.png\`.
-
-\`{world}\` \`{subject}\` (an entity's or location's name, or \`turn-12-scene\`) \`{turn}\` \`{preset}\`
-
-A custom workflow takes it where its save node's prefix is \`%prefix%\`.`,
-  },
-  imageWorkflow: {
-    label: 'Workflow (API Format)',
-    description: 'Replaces the default ComfyUI graph',
-  },
-  invokeBoard: {
-    label: 'Board',
-    description: 'Files generated images under an InvokeAI board',
-    info: '**Uncategorized** is InvokeAI\'s own default board',
-  },
-  invokeEncoder: {
-    label: 'Qwen3 Encoder',
-    description: 'Selects the text encoder this base requires',
-  },
-  // One row, but the label names the base it belongs to — so both spellings are guarded rather than one
-  // of them being a literal at the call site.
-  invokeVaeZImage: {
-    label: 'Z-Image VAE',
-    description: 'Selects the VAE this base requires',
-  },
-  invokeVaeAnima: {
-    label: 'Anima VAE',
-    description: 'Selects the VAE this base requires',
   },
 
   // ── Endpoints · Local engine ────────────────────────────────────────────────
@@ -629,10 +525,6 @@ Small steps matter: 1.05 to 1.15 is typical. High values can break names and pun
     label: 'Endpoint',
     description: 'Routes this prompt to a specific endpoint',
   },
-  promptAttachments: {
-    label: 'Include Attachments',
-    description: 'Sends the images attached to your action with this prompt',
-  },
   promptMaxOutput: {
     label: 'Max Output',
     description: 'Overrides how long this prompt’s answer can run, not its reasoning',
@@ -735,13 +627,6 @@ export const SETTINGS_BUTTONS = {
   retryWithSettings: 'Retry With These Settings',
 } as const;
 
-/** Status text the modal draws where a group of controls would be. */
-export const SETTINGS_NOTES = {
-  imageGenerationOff: 'Image generation is off. Select “Enable Image Generation” to turn it on.',
-  imageModelFromWorkflow: `Shows the model the workflow loads. Change it in **${SETTINGS_COPY.imageWorkflow.label}** under **Advanced**.`,
-  imageFileNameNoPrefix: `Add \`%prefix%\` to the save node in **${SETTINGS_COPY.imageWorkflow.label}** to use this setting`,
-} as const;
-
 /** Every confirmation the modal raises. Bodies are sentences and carry their own punctuation. */
 export const SETTINGS_CONFIRMS = {
   resetSizeSpacing: {
@@ -763,14 +648,6 @@ export const SETTINGS_CONFIRMS = {
   resetAiEndpoint: {
     title: 'Reset AI Endpoint',
     description: 'Are you sure you want to reset the endpoint URL, model name, API token, limits, and Extra Parameters to their default values?',
-  },
-  resetWorkflow: {
-    title: 'Reset Workflow',
-    description: 'Reset the ComfyUI workflow to the default graph? Your custom workflow will be lost.',
-  },
-  resetTagPrompt: {
-    title: 'Reset Tag Prompt',
-    description: 'Reset the image tag prompt to its default? Your edits will be lost.',
   },
 } as const satisfies Record<string, ConfirmCopy>;
 

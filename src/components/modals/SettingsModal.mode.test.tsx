@@ -96,21 +96,6 @@ describe('settings mode', () => {
     expect(screen.getByRole('tab', { name: 'Prompts', selected: true })).toBeTruthy();
   });
 
-  it('opens on the Endpoints tab the route names, in Advanced for Tag Prompt', () => {
-    const openOnEndpoint = (subtab: string) => render(
-      <ThemeProvider>
-        <SettingsProvider>
-          <SettingsModal isOpen onOpenChange={() => {}} initialTab="endpoints" initialPromptTab={subtab} />
-        </SettingsProvider>
-      </ThemeProvider>,
-    );
-    const { unmount } = openOnEndpoint('image');
-    expect(screen.getByRole('tab', { name: 'Image', selected: true })).toBeTruthy();
-    unmount();
-    openOnEndpoint('tagPrompt');
-    expect(screen.getByRole('tab', { name: 'Tag Prompt', selected: true })).toBeTruthy();
-  });
-
   it('hides Paragraph Limit and Markdown Formatting on Display in Simple only', () => {
     const { unmount } = openSettings('simple');
     expect(screen.queryByText('Paragraph Limit')).toBeNull();
@@ -174,38 +159,6 @@ describe('settings mode', () => {
     await user.click(screen.getByRole('tab', { name: 'Endpoints' }));
     expect(screen.getByText('Context Window (tokens)')).toBeTruthy();
     expect(screen.getByText('Max Output Tokens')).toBeTruthy();
-  });
-
-  it('hides the Tag Prompt sub-tab in Simple only', async () => {
-    const user = userEvent.setup();
-    const { unmount } = openSettings('simple');
-    await user.click(screen.getByRole('tab', { name: 'Endpoints' }));
-    expect(tabNames()).not.toContain('Tag Prompt');
-    expect(tabNames()).toContain('Image');
-    unmount();
-
-    openSettings('advanced');
-    await user.click(screen.getByRole('tab', { name: 'Endpoints' }));
-    expect(tabNames()).toContain('Tag Prompt');
-  });
-
-  it('hides the image sizes on the image endpoint in Simple only', async () => {
-    const user = userEvent.setup();
-    const { unmount } = openSettings('simple');
-    await user.click(screen.getByRole('tab', { name: 'Endpoints' }));
-    await user.click(screen.getByRole('tab', { name: 'Image' }));
-    expect(screen.queryByText('Portrait (W × H)')).toBeNull();
-    expect(screen.queryByText('Landscape (W × H)')).toBeNull();
-    // Everyday image tweaking stays.
-    expect(screen.getByText('Prompt Prefix')).toBeTruthy();
-    expect(screen.getByText('Steps / CFG')).toBeTruthy();
-    unmount();
-
-    openSettings('advanced');
-    await user.click(screen.getByRole('tab', { name: 'Endpoints' }));
-    await user.click(screen.getByRole('tab', { name: 'Image' }));
-    expect(screen.getByText('Portrait (W × H)')).toBeTruthy();
-    expect(screen.getByText('Landscape (W × H)')).toBeTruthy();
   });
 
   it('switches modes through the mode select', async () => {

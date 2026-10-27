@@ -53,7 +53,6 @@ export type EntityEditorTab = (typeof ENTITY_EDITOR_TABS)[number]['value'];
 const TAB_BY_FIELD: Record<string, EntityPanelTab> = {
   name: 'profile',
   type: 'profile',
-  imageTags: 'profile',
   'aliases[]': 'profile',
   pronouns: 'profile',
   'relationships[].label': 'profile',

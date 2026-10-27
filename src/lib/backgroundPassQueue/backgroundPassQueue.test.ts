@@ -259,7 +259,7 @@ describe('due rules', () => {
 });
 
 describe('the gate', () => {
-  it('starts nothing while a turn or a scene render holds the model', () => {
+  it('starts nothing while a turn holds the model', () => {
     const h = host(historyOf({ id: 't1' }), { busy: true });
     h.render();
     expect(h.sent).toHaveLength(0);

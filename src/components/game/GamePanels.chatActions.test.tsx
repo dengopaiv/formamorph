@@ -71,18 +71,11 @@ describe('Chat bubble actions', () => {
     expect(view.props.handleRollback).not.toHaveBeenCalled();
   });
 
-  it('runs the scene and audio actions for the bubble\'s own turn', async () => {
+  it('runs the audio actions for the bubble\'s own turn', async () => {
     const view = renderMiddlePanel({ ttsLoaded: true }, { turns: TURNS, settings: chat, page: 3 });
     const past = await row(2);
-    fireEvent.click(within(past).getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Generate Scene Image' }));
-    expect(view.props.onSceneImage).toHaveBeenCalledWith(undefined, 2);
     fireEvent.click(within(await row(3)).getByRole('button', { name: 'Text to Speech' }));
     expect(view.props.onTTSClick).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(within(past).getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Write Scene Tags' }));
-    expect(view.props.onSceneTags).toHaveBeenCalledWith(2);
 
     fireEvent.click(within(past).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Regenerate Audio' }));
@@ -188,7 +181,7 @@ describe('Chat bubble menus', () => {
       const icons = names(await row(turn)).filter((n) => n !== 'More');
       rightClick(await narrationBubble(turn));
       const rows = menuRows();
-      const menuOnly = ['Generate Scene Image', 'Write Scene Tags', 'Regenerate Audio'];
+      const menuOnly = ['Regenerate Audio'];
       if (turn === 3) menuOnly.push('Re-generate Stats');
       expect(rows.filter((r) => r !== '|').sort()).toEqual([...icons, ...menuOnly].sort());
       fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
@@ -196,11 +189,11 @@ describe('Chat bubble menus', () => {
     }
   });
 
-  it('orders the menu generate, content, destructive, with Rewind to Here last', async () => {
+  it('orders the menu content, then destructive, with Rewind to Here last', async () => {
     renderMiddlePanel({ ttsLoaded: true }, { turns: TURNS, stats: STATS, settings: chat });
     rightClick(await narrationBubble(2));
     expect(menuRows()).toEqual([
-      'Generate Scene Image', 'Write Scene Tags', '|', 'Edit', 'Copy Text', 'Regenerate Audio', '|', 'Rewind to Here',
+      'Edit', 'Copy Text', 'Regenerate Audio', '|', 'Rewind to Here',
     ]);
   });
 

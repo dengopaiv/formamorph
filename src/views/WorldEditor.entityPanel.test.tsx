@@ -45,7 +45,7 @@ const GROUPED_WORLD: World = benchEditorWorld({
 const openTab = openEditorTab;
 
 const FIELD_LABELS =
-  /^(Name|Aliases|Type|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Locations|Image|Image Tags)$/;
+  /^(Name|Aliases|Type|Player-Facing Description|AI-Facing Description|AI-Facing Summary|Locations|Image)$/;
 
 /** Every field label the panel shows, in document order. The editor's own Locations tab shares a label with
  *  the picker, so the match is taken from the panel body rather than the whole editor. */
@@ -93,7 +93,7 @@ describe('the World Editor entity panel tabs', () => {
     renderWorldEditorBench(WORLD, 'advanced');
     selectEntity('Wren');
     expect(panelLabels()).toEqual([
-      'Image', 'Name', 'Aliases', 'Type', 'Image Tags', 'Locations',
+      'Image', 'Name', 'Aliases', 'Type', 'Locations',
     ]);
   });
 
@@ -114,11 +114,10 @@ describe('the World Editor entity panel tabs', () => {
     expect(screen.getByText(/Placeholders of this entity's own/)).toBeInTheDocument();
   });
 
-  it('drops the Advanced-only fields from both tabs in Simple mode, keeping Generate with AI', () => {
+  it('drops the Advanced-only fields from both tabs in Simple mode', () => {
     renderWorldEditorBench(WORLD, 'simple');
     selectEntity('Wren');
     expect(panelLabels()).toEqual(['Image', 'Name', 'Locations']);
-    expect(screen.getByRole('button', { name: /Generate with AI/ })).toBeInTheDocument();
     openPanelTab('Descriptions');
     expect(panelLabels()).toEqual(['Player-Facing Description', 'AI-Facing Description']);
   });

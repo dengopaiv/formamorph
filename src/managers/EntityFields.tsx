@@ -12,7 +12,7 @@ import AiGenerateButton from "@/components/AiGenerateButton";
 import PlaceholderField, { PlaceholderNameField } from "@/components/prompt/PlaceholderField";
 import { IMAGE_CAPS } from '../lib/imageOptim';
 import { entityImages } from '../lib/entityImages';
-import { ImageGallery, ImageTags, ImageWidget, type GalleryFrameProps } from './ImageTagsField';
+import { ImageGallery, ImageWidget, type GalleryFrameProps } from './ImageTagsField';
 import { useEditorMode } from '@/lib/editorMode';
 import { labelPlaceholders } from '@/lib/placementLetters';
 import { customPersonaCounts, personaRole, personaRolePatch, unmarkLine, type PersonaRole } from '@/lib/customPersona';
@@ -284,10 +284,10 @@ export const EntityLocationsField = ({ value, options, selectedIds, onLocationsC
 );
 
 /**
- * The entity's picture widget with neither piece placed: a host draws `ImageGallery` and `ImageTags` where
- * its own layout wants them and both still write this entity. `EntityGalleryField` is the one-box version.
+ * The entity's picture widget with its gallery unplaced: a host draws `ImageGallery` where its own layout
+ * wants it and it still writes this entity. `EntityGalleryField` is the one-box version.
  */
-export const EntityImageWidget = ({ value, onChange, placeholders = [], ownerId, children, frame, imageId = `entity-image-${value.id}` }: EntityFieldGroupProps & {
+export const EntityImageWidget = ({ value, onChange, children, frame, imageId = `entity-image-${value.id}` }: EntityFieldGroupProps & {
   children: ReactNode;
   /** A host that shows the framed image's details controls the frame. */
   frame?: GalleryFrameProps;
@@ -304,13 +304,7 @@ export const EntityImageWidget = ({ value, onChange, placeholders = [], ownerId,
       slots={Infinity}
       imageId={imageId}
       cap={IMAGE_CAPS.entity}
-      description={value.aiDescription || value.playerDescription}
       kind="character"
-      fileSubject={labelPlaceholders(value.name, placeholders)}
-      tags={value.imageTags}
-      onTagsChange={(t) => onChange('imageTags', t)}
-      placeholders={placeholders}
-      ownerId={ownerId}
       ruleHost={ruleHost}
       {...frame}
     >
@@ -319,15 +313,15 @@ export const EntityImageWidget = ({ value, onChange, placeholders = [], ownerId,
   );
 };
 
-/** The picture gallery with its tags and generate controls, in one box. */
+/** The picture gallery in one box. */
 export const EntityGalleryField = (props: EntityFieldGroupProps) => (
   <EntityImageWidget {...props}>
-    <ImageGallery tagsSlot={<ImageTags />} />
+    <ImageGallery />
   </EntityImageWidget>
 );
 
 /**
- * The Profile tab of both entity editors: the picture and its tags in one grid with the identity fields and
+ * The Profile tab of both entity editors: the picture in one grid with the identity fields and
  * the Persona mark, then `locations` (World Editor only). `columnsClassName` sets when the grid splits into
  * two columns, since each host's pane widens differently.
  */
@@ -345,7 +339,6 @@ export const EntityProfileFields = ({ columnsClassName, nameHandlers, locations,
         <ImageGallery />
         <div className="space-y-4">
           <EntityIdentityFields {...props} nameHandlers={nameHandlers} home={home} customPersonaEntityName={customPersonaEntityName} />
-          <ImageTags />
         </div>
       </div>
     </EntityImageWidget>

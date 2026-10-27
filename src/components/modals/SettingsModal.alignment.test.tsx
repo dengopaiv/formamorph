@@ -1,10 +1,8 @@
 // Storage is real (in-memory): SettingsProvider and the modal both read it on mount.
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useEffect, useRef } from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { SettingsProvider, useSettings } from '@/contexts/SettingsContext';
+import { render, cleanup } from '@testing-library/react';
+import { SettingsProvider } from '@/contexts/SettingsContext';
 import { ThemeProvider } from '@/components/theme-provider';
 import { SettingsModal } from './SettingsModal';
 import { SETTINGS_TABS, type SettingsTabId } from './settingsTabs';
@@ -66,15 +64,6 @@ function visibleRows(container: HTMLElement) {
   });
 }
 
-/** Applies settings through the context on mount, so a test can reach a row that only exists in some
- *  configuration without hand-writing that configuration into storage. */
-function Configure({ apply }: { apply: (s: ReturnType<typeof useSettings>) => void }) {
-  const settings = useSettings();
-  const done = useRef(false);
-  useEffect(() => { if (!done.current) { done.current = true; apply(settings); } });
-  return null;
-}
-
 /** Every row on every tab. Radix unmounts the panel you leave, so each tab gets its own mount and the
  *  results are pooled — one assertion then covers the whole modal instead of whichever tab opened first. */
 function everyRow() {
@@ -117,26 +106,6 @@ describe('settings row alignment', () => {
     const nested = rows.filter(({ controlCell }) =>
       [...controlCell.children].some((c) => c.className.includes('sm:col-start-2')));
     expect(nested.map((r) => `${r.tab} → ${r.label}`)).toEqual([]);
-  });
-
-  it('pins the label of the multi-line workflow editor to its first line', async () => {
-    // The only textarea row in Settings, and it needs the world state that reveals it: image generation on
-    // and the ComfyUI provider picked. Set through the context, the way the provider dropdown sets it —
-    // without this the rule above passes over a tab that happens to contain no textarea at all.
-    render(
-      <ThemeProvider>
-        <SettingsProvider>
-          <Configure apply={(s) => { s.setImageGenDisabled(false); s.setImageProvider('comfyui'); }} />
-          <SettingsModal isOpen onOpenChange={() => {}} forcedMode="advanced" initialTab="endpoints" />
-        </SettingsProvider>
-      </ThemeProvider>,
-    );
-    // Radix's sub-tabs respond to a real pointer sequence, not a bare click event.
-    await userEvent.click(screen.getByRole('tab', { name: 'Image' }));
-
-    const rows = visibleRows(document.body).filter(({ controlCell }) => controlCell.querySelector('textarea'));
-    expect(rows.map((r) => r.label)).not.toEqual([]);
-    expect(rows.filter(({ labelCell }) => !labelCell.className.includes('self-start')).map((r) => r.label)).toEqual([]);
   });
 
   it('centers a checkbox on the line of text beside it', () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach, beforeEach } from 'vitest';
-import { isDesktop } from '@/lib/imageGen/desktop';
+import { isDesktop } from '@/lib/desktop';
 
 beforeEach(() => {
   delete (window as { formamorphDesktop?: unknown }).formamorphDesktop;

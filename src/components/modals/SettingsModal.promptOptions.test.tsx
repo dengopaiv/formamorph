@@ -14,7 +14,7 @@ import { presetStoreCodec } from '@/lib/promptPresets';
 import { SETTINGS_COPY } from './settingsCopy';
 
 /**
- * A prompt's Options panel tunes that prompt and no other. These cases open the Scene Tags tab, whose
+ * A prompt's Options panel tunes that prompt and no other. These cases open the Stat Updates tab, whose
  * shipped tuning differs from Narration's on every row, and read which prompt's values the rows show.
  */
 
@@ -67,54 +67,54 @@ const temperatureRow = () => {
 const reasoningSwitch = () => screen.getAllByRole('checkbox', { name: 'Native Reasoning' })[0];
 const budgetValue = () => screen.getByRole('slider', { name: 'Reasoning Budget' }).getAttribute('aria-valuenow');
 
-describe('the Scene Tags Options panel tunes Scene Tags', () => {
+describe('the Stat Updates Options panel tunes Stat Updates', () => {
   beforeEach(() => localStorage.clear());
 
-  it('shows the Scene Tags temperature pin while no custom value is set', () => {
-    openOptions('scenetags');
+  it('shows the Stat Updates temperature pin while no custom value is set', () => {
+    openOptions('statupdates');
     const { box, row } = temperatureRow();
     expect(box.getAttribute('data-state')).toBe('unchecked');
-    expect(within(row).getByText('0.30')).toBeTruthy();
+    expect(within(row).getByText('0.20')).toBeTruthy();
   });
 
-  it('keeps a custom temperature set on Scene Tags off the Narration tab', () => {
-    openOptions('scenetags');
+  it('keeps a custom temperature set on Stat Updates off the Narration tab', () => {
+    openOptions('statupdates');
     makeEditable();
     fireEvent.click(temperatureRow().box);
     fireEvent.keyDown(temperatureRow().slider, { key: 'ArrowRight' });
-    expect(within(temperatureRow().row).getByText('0.35')).toBeTruthy();
+    expect(within(temperatureRow().row).getByText('0.25')).toBeTruthy();
 
     switchTo('narration');
     const narration = temperatureRow();
     expect(narration.box.getAttribute('data-state')).toBe('unchecked');
-    expect(within(narration.row).queryByText('0.35')).toBeNull();
+    expect(within(narration.row).queryByText('0.25')).toBeNull();
   });
 
-  it('reads the Scene Tags reasoning switch and budget, not Narration’s', () => {
+  it('reads the Stat Updates reasoning switch and budget, not Narration’s', () => {
     seedTakesBudget();
-    openOptions('scenetags');
-    // Scene Tags ships switched off at a 75% budget; Narration ships on at 150%.
+    openOptions('statupdates');
+    // Stat Updates ships switched off at a 75% budget; Narration ships on at 150%.
     expect(reasoningSwitch().getAttribute('data-state')).toBe('unchecked');
     expect(budgetValue()).toBe('75');
   });
 
-  it('writes the Scene Tags reasoning switch and budget without moving Narration’s', () => {
+  it('writes the Stat Updates reasoning switch and budget without moving Narration’s', () => {
     seedTakesBudget();
-    openOptions('scenetags');
+    openOptions('statupdates');
     makeEditable();
     fireEvent.click(reasoningSwitch());
     fireEvent.keyDown(screen.getByRole('slider', { name: 'Reasoning Budget' }), { key: 'ArrowRight' });
     expect(reasoningSwitch().getAttribute('data-state')).toBe('checked');
-    const sceneBudget = budgetValue();
-    expect(sceneBudget).not.toBe('75');
+    const statBudget = budgetValue();
+    expect(statBudget).not.toBe('75');
 
     switchTo('narration');
     expect(reasoningSwitch().getAttribute('data-state')).toBe('checked');
     expect(budgetValue()).toBe('150');
 
-    switchTo('scenetags');
+    switchTo('statupdates');
     expect(reasoningSwitch().getAttribute('data-state')).toBe('checked');
-    expect(budgetValue()).toBe(sceneBudget);
+    expect(budgetValue()).toBe(statBudget);
   });
 });
 
@@ -137,7 +137,7 @@ describe('the Max Output row', () => {
 
   it('shows on the capped prompts and on no other', () => {
     openOptions('director');
-    const withRow = ['director', 'character', 'discover', 'storyboard', 'summary', 'milestone', 'diary', 'choices', 'scenetags'] as const;
+    const withRow = ['director', 'character', 'discover', 'storyboard', 'summary', 'milestone', 'diary', 'choices'] as const;
     const withoutRow = ['narration', 'statupdates', 'location', 'timepassed', 'timeopening'] as const;
     for (const tab of withRow) { switchTo(tab); expect(hasMaxOutputRow(), tab).toBe(true); }
     for (const tab of withoutRow) { switchTo(tab); expect(hasMaxOutputRow(), tab).toBe(false); }

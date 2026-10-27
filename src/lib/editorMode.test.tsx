@@ -72,7 +72,6 @@ describe('worldUsesAdvancedFeatures', () => {
     ['an AI lock', { stats: [{ ...emptyWorld.stats[0], noDecrease: true }] }],
     ['an alias', { entities: [{ ...emptyWorld.entities[0], aliases: ['Roz'] }] }],
     ['an entity summary', { entities: [{ ...emptyWorld.entities[0], aiSummary: 'Keeps the lamp.' }] }],
-    ['entity image tags', { entities: [{ ...emptyWorld.entities[0], imageTags: '1girl, lamp' }] }],
     ['a location summary', { locations: [{ ...emptyWorld.locations[0], aiSummary: 'Rotting boards.' }] }],
     ['a trait stat toggle', { traits: [{ ...emptyWorld.traits[0], statToggles: [{ statId: 's1', enabled: false }] }] }],
     ['a narration override', { worldOverview: { ...emptyWorld.worldOverview, promptOverrides: { systemPrompt: 'You narrate.' } } as unknown as WorldOverview }],

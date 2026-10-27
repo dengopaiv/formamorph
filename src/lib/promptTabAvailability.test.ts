@@ -11,7 +11,6 @@ const base: PromptTabFlags = {
   characterDiaries: false,
   describeCharacters: false,
   aiClock: false,
-  sceneImages: false,
 };
 
 describe('computePromptTabAvailability — Diary gating', () => {
@@ -60,8 +59,6 @@ describe('computePromptTabAvailability — other tabs', () => {
     expect(computePromptTabAvailability({ ...base, memoryDigests: true }).summary).toBe(true);
     expect(computePromptTabAvailability({ ...base, memoryDigests: true }).milestone).toBe(true);
     expect(computePromptTabAvailability(base).milestone).toBe(false);
-    expect(computePromptTabAvailability({ ...base, sceneImages: true }).scenetags).toBe(true);
-    expect(computePromptTabAvailability(base).scenetags).toBe(false);
     expect(computePromptTabAvailability({ ...base, describeCharacters: true }).discover).toBe(true);
     expect(computePromptTabAvailability(base).discover).toBe(false);
   });

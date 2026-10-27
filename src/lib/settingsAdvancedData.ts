@@ -4,19 +4,17 @@
  * rows' call sites in `SettingsModal`.
  *
  * The caller passes only the fields Advanced would actually show it: several hidden rows render under a
- * condition of their own (the ComfyUI workflow only for ComfyUI, Native Reasoning only under Native
- * thinking), and a marker promising a row that Advanced then doesn't draw is worse than no marker. Fields
+ * condition of their own (Native Reasoning only under Native thinking, Tools only where the endpoint
+ * supports them), and a marker promising a row that Advanced then doesn't draw is worse than no marker. Fields
  * left out are not compared.
  *
  * Auto-detected values are excluded outright: Context Window is filled in on connect, so it says nothing
- * about what the player chose. Two fields arrive pre-compared because their defaults live in heavier
- * modules — the ComfyUI workflow graph and the active prompt preset.
+ * about what the player chose. One field arrives pre-compared because its default lives in a heavier
+ * module — the active prompt preset.
  */
 import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_TOOLS_ENABLED,
-  DEFAULT_IMAGE_PORTRAIT_WIDTH, DEFAULT_IMAGE_PORTRAIT_HEIGHT,
-  DEFAULT_IMAGE_LANDSCAPE_WIDTH, DEFAULT_IMAGE_LANDSCAPE_HEIGHT,
 } from '@/contexts/settingsDefaults';
 import type { ParagraphLimit, ReasoningEffort } from '@/contexts/SettingsContext';
 import { reasoningRuledOut, toolsSupported, type ReasoningCapability } from '@/lib/reasoningEffort';
@@ -54,16 +52,6 @@ export interface SettingsAdvancedInput {
   showSilentRequests: boolean;
   // Endpoints → Text
   maxTokens: number;
-  // Endpoints → Image
-  imagePortraitWidth: number;
-  imagePortraitHeight: number;
-  imageLandscapeWidth: number;
-  imageLandscapeHeight: number;
-  /** The ComfyUI workflow differs from the shipped graph. */
-  imageWorkflowCustom: boolean;
-  imageInvokeBoard: string;
-  imageInvokeEncoder: string;
-  imageInvokeVae: string;
   /** A user-made prompt preset is active, so the hidden Prompts tab holds edits. */
   promptPresetCustom: boolean;
 }
@@ -92,14 +80,6 @@ export const HIDDEN_SETTING_DEFAULTS = {
   showReasoning: true,
   showSilentRequests: false,
   maxTokens: DEFAULT_MAX_TOKENS,
-  imagePortraitWidth: DEFAULT_IMAGE_PORTRAIT_WIDTH,
-  imagePortraitHeight: DEFAULT_IMAGE_PORTRAIT_HEIGHT,
-  imageLandscapeWidth: DEFAULT_IMAGE_LANDSCAPE_WIDTH,
-  imageLandscapeHeight: DEFAULT_IMAGE_LANDSCAPE_HEIGHT,
-  imageWorkflowCustom: false,
-  imageInvokeBoard: '',
-  imageInvokeEncoder: '',
-  imageInvokeVae: '',
   promptPresetCustom: false,
 } satisfies SettingsAdvancedInput;
 

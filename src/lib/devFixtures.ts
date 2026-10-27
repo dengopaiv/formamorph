@@ -11,8 +11,6 @@ export const DEV_FIXTURES = ['whiteRoom', 'thousandTurns', 'writtenOpening', 'pi
 export type DevFixtureName = (typeof DEV_FIXTURES)[number];
 
 // Real-sized images for the long save, fetched from the dev server.
-const THOUSAND_TURN_IMAGES = ['/thumbnails/1.jpg', '/thumbnails/2.jpg', '/thumbnails/3.jpg', '/thumbnails/4.jpg'];
-
 export interface DevFixture {
   world: World;
   /** Absent boots a new game in the world. */
@@ -96,24 +94,17 @@ export async function loadDevFixture(name: string): Promise<DevFixture | null> {
       };
     }
     case 'thousandTurns': {
-      // Real narration from the Sedge Landing baseline runs, and real-sized images held as data URLs, as a save holds them.
-      const [world, save, narrations, builder, { blobToDataUrl }] = await Promise.all([
+      // Real narration from the Sedge Landing baseline runs.
+      const [world, save, narrations, builder] = await Promise.all([
         import('./devFixtures/whiteRoomWorld.json'),
         import('./devFixtures/whiteRoomSave.json'),
         import('./devFixtures/sedgeNarration.json'),
         import('./devFixtures/longSave'),
-        import('./imageSource'),
       ]);
-      // Root paths the dev server serves: an asset import would put the images in the production build.
-      const images = await Promise.all(THOUSAND_TURN_IMAGES.map(async (path) => {
-        const response = await fetch(path);
-        if (!response.ok) throw new Error(`Fixture image ${path}: ${response.status}`);
-        return blobToDataUrl(await response.blob());
-      }));
       return {
         world: world.default as unknown as World,
         save: builder.buildLongSave(save.default as unknown as SaveObject, {
-          turns: 1000, narrations: narrations.default, images, imageEvery: 20,
+          turns: 1000, narrations: narrations.default,
         }),
         saveName: 'DEV: 1000 Turns',
       };

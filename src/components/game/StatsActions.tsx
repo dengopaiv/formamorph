@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 export function StatsActions({ past, busy, editing, onEditingChange, onRegenerate, className }: {
   /** The viewed turn is a past one. */
   past: boolean;
-  /** A reply or scene render runs, or no turn exists yet. */
+  /** A reply runs, or no turn exists yet. */
   busy: boolean;
   editing: boolean;
   onEditingChange: (editing: boolean) => void;

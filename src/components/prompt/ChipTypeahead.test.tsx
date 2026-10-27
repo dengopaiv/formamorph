@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ChipInput from './ChipInput';
-import TagChipField from './TagChipField';
 import { usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
 import { PlaceholderStoreProvider, placeholderStore } from '@/contexts/PlaceholderStoreContext';
 import { allPlaceholders, placeholderOwners } from '@/lib/placeholderHomes';
@@ -540,17 +539,15 @@ describe('the { menu and blueprint chips', () => {
   const worldTrait = { owned: false };
 
   /** A chip field under the world's store, which says which placeholders are blueprints. */
-  function Inner({ trait, tags }: { trait?: { owned: boolean }; tags: boolean }) {
+  function Inner({ trait }: { trait?: { owned: boolean } }) {
     const [value, setValue] = useState('.');
     const vocabulary = usePlaceholderChipVocabulary(lists.placeholders, undefined, { trait });
-    return tags
-      ? <TagChipField value={value} onChange={setValue} placeholders={lists.placeholders} ariaLabel="Name" />
-      : <ChipInput value={value} onChange={setValue} vocabulary={vocabulary} ariaLabel="Name" />;
+    return <ChipInput value={value} onChange={setValue} vocabulary={vocabulary} ariaLabel="Name" />;
   }
-  function BlueprintField({ trait, tags = false }: { trait?: { owned: boolean }; tags?: boolean }) {
+  function BlueprintField({ trait }: { trait?: { owned: boolean } }) {
     return (
       <PlaceholderStoreProvider value={{ ...placeholderStore(lists.placeholders, () => {}), lists }}>
-        <Inner trait={trait} tags={tags} />
+        <Inner trait={trait} />
       </PlaceholderStoreProvider>
     );
   }
@@ -564,7 +561,6 @@ describe('the { menu and blueprint chips', () => {
   it.each([
     ['an entity-owned trait', { trait: { owned: true } }],
     ['any other field', {}],
-    ['an image tags field', { tags: true }],
   ])('leaves blueprints out of %s', async (_name, props) => {
     render(<BlueprintField {...props} />);
     await open();

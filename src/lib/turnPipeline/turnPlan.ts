@@ -1,11 +1,10 @@
-import type { AIRequestType, ChatMessage, Entity, GameLocation, ImageAttachment, RequestMessage } from '@/types';
+import type { AIRequestType, ChatMessage, Entity, GameLocation, RequestMessage } from '@/types';
 import type { AnatomyRun, RequestAnatomy } from '@/lib/requestAnatomy';
 import type { ThinkingMode } from '@/contexts/SettingsContext';
 import type { StatRequestSnapshot } from '@/lib/statRequest';
 import type { StatText } from '@/lib/statTextPrompts';
 import type { TokenValues } from '@/lib/promptValues';
 import type { ResponseSchema } from '@/lib/aiRequest/responseSchema';
-import type { PromptAttachmentsMap } from '@/lib/promptAttachments';
 import type { EntityMoveReply } from '@/lib/entityFollowing';
 
 /**
@@ -35,7 +34,6 @@ export type TurnPassId =
   | 'openingTime'
   | 'diary'
   | 'discoverEntity'
-  | 'sceneTags'
   | 'milestoneSelect';
 
 /** Where a pass sits relative to the narration. Passes run in stage order, then in plan order. */
@@ -63,10 +61,6 @@ export interface TurnSettings {
   characterDiaries: boolean;
   /** The Describe New Characters setting, which governs the discovery pass. */
   describeCharacters: boolean;
-  /** The Image Attachments setting. Off, no pass includes the action's images. */
-  imageAttachments: boolean;
-  /** The active preset's Include Attachments flags. An absent prompt takes its default. */
-  promptAttachments: PromptAttachmentsMap;
   /** Narration language or style; anything but English appends a language directive to some prompts. */
   language: string;
   /** The Strip Links And Images setting. On, the diary entries and digests a pass reads lose their
@@ -107,8 +101,6 @@ export interface TurnPrompts {
   diary: string;
   discoverEntity: string;
   discoverEntityUser: string;
-  sceneTags: string;
-  sceneTagsUser: string;
 }
 
 /** Everything the planner decides from. Plain values only — no React, no clock, no globals. */
@@ -125,8 +117,6 @@ export interface TurnPlanInput {
   /** An Opening Narration's resolved text: page one as authored. The turn sends nothing before its
    *  post-narration stage. Blank counts as absent. */
   writtenNarration?: string;
-  /** The images the player attached to the action, in attach order. */
-  attachments?: ImageAttachment[];
   settings: TurnSettings;
   prompts: TurnPrompts;
 }
@@ -202,9 +192,6 @@ export interface TurnMaterial {
   intents: { name: string; text: string }[];
   /** Cast members beyond the active-character cap, named to the storyboarder but not asked. */
   overflow: string[];
-  /** Who the scene-tag pass has in frame, in narration order, already capped to what a booru model holds
-   *  apart. Empty draws an empty scene. */
-  sceneCast: string[];
   /** Who each fan-out pass runs for. A pass with no entry, or an empty one, sends nothing. */
   subjects?: Partial<Record<TurnPassId, TurnPassSubject[]>>;
   /** The being this request is about, for a fan-out pass. */
@@ -235,12 +222,10 @@ export function emptyTurnMaterial(seed: TurnMaterialSeed): TurnMaterial {
     npcCastSize: 0,
     intents: [],
     overflow: [],
-    sceneCast: [],
   };
 }
 
-/** One request, exactly as the request adapter receives it. A pass builds text only; the runner adds the
- *  turn's images to the passes that include them. */
+/** One request, exactly as the request adapter receives it. */
 export interface TurnPassRequest<TMessage extends RequestMessage = RequestMessage> {
   statRequest?: StatRequestSnapshot;
   /** A schema the reply must follow. */
@@ -304,8 +289,4 @@ export interface TurnPlan {
   writtenNarration: string | null;
   /** The due passes, in dispatch order. */
   passes: TurnPassRecord[];
-  /** The images this turn carries: the action's own, or none when the turn may not send them. */
-  attachments: ImageAttachment[];
-  /** The passes whose final request includes {@link attachments}. */
-  attachmentPasses: TurnPassId[];
 }
