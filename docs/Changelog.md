@@ -2,7 +2,7 @@
 
 All notable changes to Formamorph. This fork's first line is **2.0.0** — a full TypeScript rebuild of the upstream JavaScript app ([FieryLionite's Formamorph](https://fierylion.itch.io/formamorph), ~v1.2) — with feature parity as the baseline plus new features on top.
 
-> ✅ **3.0.0 – 3.4.0 are released** (collapsed below). Releases 2.0.0 – 2.19.x are in [Changelog-v2](Changelog-v2). New work lands under **🚧 In Progress** — an unnumbered section, so changes accumulate without pinning a version. When a batch earns a release its section is marked **Released** and collapsed, and a fresh In Progress opens. `package.json` reads **3.4.0** — the latest released version.
+> ✅ **3.0.0 – 3.5.0 are released** (collapsed below). Releases 2.0.0 – 2.19.x are in [Changelog-v2](Changelog-v2). New work lands under **🚧 In Progress** — an unnumbered section, so changes accumulate without pinning a version. When a batch earns a release its section is marked **Released** and collapsed, and a fresh In Progress opens. `package.json` reads **3.5.0** — the latest released version.
 
 Each release groups changes as **Major** / **Minor**, then **Added** / **Removed** / **Fixed**, and within those by audience: 👤 user-facing · 🛠️ developer tooling · ⚙️ backend. Where two or more changes touch the same feature, they sit together under that feature's name.
 
@@ -10,7 +10,19 @@ Each release groups changes as **Major** / **Minor**, then **Added** / **Removed
 
 ## 🚧 In Progress
 
-_Unreleased — new work accumulates here until it earns a version bump. The next batch will pin its own version; `package.json` reads **3.4.0** (just released below)._
+_Unreleased — new work accumulates here until it earns a version bump. The next batch will pin its own version; `package.json` reads **3.5.0** (just released below)._
+
+---
+
+<details>
+<summary><strong>✅ 3.5.0 — Released 2026-10-27</strong> — Bigger bundled worlds with art for every location and entity — Avatars for every entity — the World Editor's Media tab — the bundled llama-server engine with vision models — community questions and listing review — scripts that edit choices and read the clock (click to expand)</summary>
+
+### Major Changes
+
+#### ➕ Added
+
+- **👤 User-facing**
+  - **The seven bundled worlds are about twice as big, and every location and entity has art.** They also show newer features: World Tools, Relationship labels, Time of Day gates, Image Visibility rules and Map Backgrounds.
 
 ### Minor Changes
 
@@ -34,9 +46,9 @@ _Unreleased — new work accumulates here until it earns a version bump. The nex
     - **Context Overflow chooses what happens when a story is longer than Context Size.** Truncate Middle keeps the system prompt and your first message. Rolling Window keeps the system prompt and drops the oldest messages. Stop at Limit shows an error. Find it in **Advanced**.
     - **World Tools work on the desktop engine, and the model reads each Tool's result before it answers.** Context Overflow keeps the current Tool round whole and drops an older round only as a unit.
   - **Media Tab:**
-    - **The World Editor's new Media tab shows every image, sound, 3D Model and Avatar in the world, with sizes.** Cards sit in sections that follow your groups and locations, and an entity's images stack into one card. Select a card to preview, download or go to it.
+    - **The World Editor's new Media tab shows every image, sound, 3D Model and Avatar in the world, with sizes.** Cards sit in sections that follow your groups and locations, and an entity's images stack into one card. Entity and Avatar cards are tall; other cards are wide. Select a card to preview, download or go to it.
     - **The Media tab header shows Publish Size and lets you group, sort and filter the gallery.** Group by type, show the largest files first, or filter to linked, embedded, rule-bearing or over-budget images. An over-limit world's warning now opens this tab.
-    - **The Media tab's panel can now replace or remove a sound, 3D Model, background, thumbnail or cover image.** A replaced file keeps its slot, and each change undoes in one step.
+    - **The Media tab's panel replaces or removes a sound, 3D Model, background, thumbnail or cover image.** A replaced file keeps its slot, and each change undoes in one step.
     - **Optimize Images moves into the World Editor's Media tab header in both modes, and now shrinks dictionary cover images.** The app bar no longer has the button. Sizes and the meter update when a run ends.
     - **An entity's or location's image opens one Media tab panel with its gallery, and the framed image's actions sit below.** Reorder, generate, replace, download or remove images there. Each image also gets its Visibility rule editor, and an entity's links to its Avatar.
     - **The Media tab's No Images filter lists entities, locations, the thumbnail and the Map Background with no image.** Select a blank card to add its first image. Dictionaries without a cover image stay out.
@@ -52,26 +64,53 @@ _Unreleased — new work accumulates here until it earns a version bump. The nex
     - **A connection's Travel Hints now take placeholder chips in the World Editor.** Linked hints share one roll both ways. Unlink them, and each direction rolls on its own. The editor's map shows the values in braces.
     - **An entity's Relationship labels now take placeholder chips.** Type `{` or drag a chip in. Each label resolves with the entity's own placeholders, even when its line prints on the persona's block.
   - **Scripts:**
-    - **Scripts can now read the hour and minute of the story clock, with `clock.hour` and `clock.minute`.** `clock.previous` has both for the start of the turn. They match the clock in the panel. Hover cards and the Variable menu list them.
+    - **Scripts can now read the hour and minute of the story clock, with `clock.hour` and `clock.minute`.** `clock.previous` has both for the start of the turn. They match the clock in the panel, and trait gates change daypart on the same minute. Hover cards and the Variable menu list them.
     - **Scripts can now read the player's action and the turn number, with `turn.action` and `turn.number`.** The number matches each memory's turn, and undo and re-roll rewind it. Between turns, the action is empty. Test Code reads a sample action.
-    - **Scripts can now hide or show a stat during play, with `hidden`.** The stat leaves or joins the panel with this turn's changes. Undo takes it back. Hover cards and the Variable menu list it.
+    - **Scripts can now hide or show a stat during play, with `hidden`.** The stat leaves or joins the panel with this turn's changes. Undo reverses the change. Hover cards and the Variable menu list it.
     - **Scripts can now read a location's parent, children and exits, with `location.parent`, `.children` and `.exits`.** Each exit has the place's name and travel hint, from the same list the AI picks a move from. Hover cards and the Variable menu list them.
+    - **Scripts can now switch dictionary entries on or off during play, with `enabled` and `constant`.** A Before the AI write reaches this turn's narration, and undo reverses it. `entries` lists disabled entries too. The Test Bench doesn't report a disabled entry that a script switches on.
+    - **Scripts can now switch a whole dictionary on or off during play, with `enabled`.** A dictionary you ship off is listed as off, so a script can switch it on later. Undo reverses the change. Picked library dictionaries work too.
+    - **Scripts can now read a stat's active band text, with `descriptor` and `previous.descriptor`.** The second reads the band at the turn start. It matches the band the AI reads, chips filled in, and reads empty when no band applies. Hover cards and the Variable menu list it.
+    - **After the AI scripts can now read the turn's page and read or change its choices, with `turn.narration` and `turn.choices`.** The page includes During AI Output rewrites. Assign a choices list, or use `push`, `splice` or an index; each script reads the edits of the scripts before it. Earlier timings read both empty.
+    - **In a world whose After the AI scripts use `turn`, choices show once those scripts finish.** The scripted list shows once and never changes after it appears. Other worlds show choices as soon as the narration settles.
+    - **Re-generate Choices now runs a world's After the AI scripts again, so a choice a script removed stays removed.** Only their choice edits apply. A `player` call shows nothing on that run, and the new list shows once the scripts finish.
+    - **The script editor now underlines a write to `clock`, `location` or `notes`, which a run ignores.** It also underlines a `push`, `splice` or other in-place edit of `turn.choices` outside After the AI. `location.move` and `clock.advance` stay valid.
   - **Feedback Questions:**
     - **Feedback has a Questions tab, where you ask the community, reply and vote on questions you share.** It opens on everyone's unanswered questions, most voted first. **Ask a Question** opens the form. Staff can move a thread between bug, suggestion and question.
     - **While you type a question's title, the Feedback dialog lists Similar Questions.** Select one to read it, vote and reply in the dialog. **Back** returns to your draft.
+    - **The asker or staff can mark one reply as a question's answer, and the thread pins it under the question.** The reply keeps an **Accepted** mark in place. Clearing it reopens the question.
+    - **Each Formaquestion answer has an Ask the Community button, which opens a new question titled with what you asked.** If you have an unsent draft, the dialog asks before it replaces it.
   - **Listing Review:**
     - **Your listings show a Pending Review or Resubmitted badge while a mod reviews them.** After you publish, a message says when your listing went to review. The badges show on the card, the details window and your profile's creations.
+    - **Mods review new listings in the Admin Panel's new Moderation tab, which holds Reports and Review.** Each queue shows its count. Open an item to see it, download it, and approve or reject it. A rejection opens the message to the author.
+    - **Admins trust an author in the Users tab and switch Listing Review on in the Server tab.** Trusted authors skip review. Moderation has a third segment, Auto-Approved, that lists their recent uploads and opens each listing.
+    - **A live listing with an update waiting for review shows Update Pending, and you can compare or discard the update.** Mods see the changed fields side by side, both thumbnails and the changelog edits. A changelog entry you add to a live listing shows as Pending until a mod approves it.
+  - **Usernames:**
+    - **New usernames are 3–20 letters, numbers, spaces, `_` or `-` on the game's Register dialog and website's Create Account page.** Both show the rule under the field, trim the ends and join double spaces. A space and `_` count as the same character, so "That username is taken" shows for "Jake_James" when "Jake James" exists.
+    - **An account whose username breaks the rule chooses a new name in a rename dialog after login.** The field suggests a free name. Select Later to keep playing; likes, comments and publishing stay locked until you rename.
+    - **The website asks an account with a rule-breaking username to choose a new name.** Sign-in and any refused action open the **Choose a New Username** page. Select Later to leave it; account actions stay locked until you rename.
+  - **Feedback Links:**
+    - **Every feedback thread shows its number, and #23 or a pasted thread address in a post shows as a chip.** The chip shows the thread's type, title and status, and opens it in the app or on formamorph.ai. A thread you can't read shows as **Unavailable thread**. Text in code stays plain.
+    - **A listing address in a feedback post now shows as a chip with its image, title and kind.** Select it to open the listing. A hidden or deleted listing shows as **Unavailable listing**.
+    - **Typing @username in a feedback post shows the player as a chip that opens their profile.** On suggestions and questions it also badges them. Type `_` for a space in a name. A name with no account shows as **Unknown user**. A post over your mention limit is refused.
+    - **Typing @ or # in a feedback post suggests players or threads to link.** Players in the thread come first. Pick one with the arrow keys and Enter, or select it. Text in code gets no suggestions.
+  - **Website Feedback:**
+    - **The Suggestions and Questions boards are now readable on formamorph.ai/feedback.** No account is needed to read. Sign in to vote or reply. Each thread has its own link.
+    - **Signed-in visitors can vote, reply and edit their own posts on formamorph.ai/feedback.** A failed vote, reply or delete shows its message under the control.
+    - **File suggestions and questions from the website.** Press New on the feedback board, fill in the form, and land on your new thread. Similar questions show as you type, and bug reports point to the app.
   - **The Requires picker in a large world opens on Traits, Any Trait in a Group and Stats.** Each list splits by owner and shows a count of targets you can still add. Search still finds every target.
+  - **The World Editor's Downscale now turns every PNG, BMP and lossless WebP image into a smaller lossy WebP.** It works at any size. The size budgets changed too: thumbnail 200 KB, entity 1280 px and 250 KB, background 900 KB, map 1.5 MB.
 - **🛠️ Developer tooling**
   - **Typing `/turn test` in the action box plays a real turn on canned replies, with no model.** Its two-sentence narration keeps the choices in view. The turn lands in the story, so Rewind removes it. Add a profile such as `slow` to change the pace.
+  - **Web, Android and desktop builds ship the bundled worlds downscaled, re-encoded from the lossless files in the repo.** Set `FORMAMORPH_LOSSLESS_WORLDS=1` to ship the lossless files instead. `npm run fingerprints` records both forms, so the publish check knows each one.
+  - **`node scripts/affectedTests.mjs <base> --project node` runs only the node share of the affected tests.** It passes when no node test is related. The ticket review gates use it to catch guard-test failures before prepare.
 - **⚙️ Backend**
   - **Llama Server Engine:**
     - **The desktop build bundles a pinned llama-server.** One llama.cpp release tag names the version, and a fetch step downloads its Windows, macOS and Linux builds.
     - **The desktop engine now runs models through the bundled llama-server instead of node-llama-cpp.** Every engine setting maps to a server flag. A failed GPU load retries once on the CPU, and the server exits with the app, even on a crash.
     - **The engine's proxy shapes each chat request the way node-llama-cpp read it.** It merges system messages at the top, sends the last message as a user turn, drops images a text-only model can't see, and passes the model's thoughts in a separate reasoning field.
     - **The VRAM viewer reads the engine's share from llama-server's own load log.** The share sums the model, context and compute buffers on the GPU. The device line shows the free VRAM llama-server saw at load.
-  - **Dependencies:**
-    - **The app runs on React 19.** React, React DOM and their types move to 19.3, with next-themes 0.4.6 and react-resizable-panels 2.1.9. The code editor keeps newer keystrokes when a render lags, and surface requests reach dialogs that mount late.
+  - **The app runs on React 19.** React, React DOM and their types move to 19.3, with next-themes 0.4.6 and react-resizable-panels 2.1.9. The code editor keeps newer keystrokes when a render lags, and surface requests reach dialogs that mount late.
 
 #### ➖ Removed
 
@@ -80,12 +119,15 @@ _Unreleased — new work accumulates here until it earns a version bump. The nex
     - **The 3D Player Avatar checkbox and the Custom Player Avatar uploader leave the World Overview.** An older world that had the checkbox on still shows the same Avatar. Its old Avatar now sits in the world's Avatars.
     - **The Enter World avatar step no longer has a Delete button.** Delete an Avatar from its tile menu on the library's **Avatars** tab, which names the saves and entities that use it.
 - **⚙️ Backend**
-  - **Llama Server Engine:**
-    - **The desktop build no longer ships node-llama-cpp.** Its dependency, its prebuilt packages and its packaging rules are gone, and the Windows payload is 4 MB smaller.
+  - **The desktop build no longer ships node-llama-cpp.** Its dependency, its prebuilt packages and its packaging rules are gone, and the Windows payload is 4 MB smaller.
 
 #### 🔧 Fixed
 
 - **👤 User-facing**
+  - **World Tools:**
+    - **A world Tool on the narration or choices prompt no longer puts the model's planning into the story or choices.** Gemma models sometimes write a thought block first when a Tool is offered. It now shows as reasoning, and a thought that runs out of room retries without Tools.
+    - **A world Tool offered to the stat pass now gets called.** The stat reply's strict format blocked every call. The Tool round now runs first, and the reply still follows the format.
+  - **The code editor's Variable menu lists groups first, then fields, then verbs.** Timing groups such as Narration and Player now sit right after This Stat or This Trait.
   - **Turning off Flash Attention in the Local Model panel now turns it off when the model loads.** A box you unchecked before stays unchecked. A quantized V Cache Type needs Flash Attention on.
   - **The bundled model's out-of-VRAM error names your Context Size and Parallel Requests settings.** It said "sequences" before and gave no next step. Now it tells you which setting to lower.
   - **Editing a stat's or trait's script on the Scripts tab no longer slows down per keystroke and crashes the editor.** Each edit nested the script's stat and owner inside the script, and the next edit nested that again. A long edit ran the browser out of memory.
@@ -98,8 +140,15 @@ _Unreleased — new work accumulates here until it earns a version bump. The nex
   - **The request status strip floats over the bottom of the narration, so the Pager and the action box stay still.** It works the same in Pages and Chat. A fade keeps the label readable over the text.
   - **One drag of a World Editor slider or color picker now undoes in one step.** A drag that started while another field had focus used to split into many undo steps.
   - **The Test Bench's AI Context tab now reads each entity's text with that entity's own traits and placeholders.** Descriptions, pronouns and relationship labels show what play shows, and Character Name shows the entity's name. A location's pins still win, as in play.
+  - **The Test Bench now accepts an entity whose images cover every pick of a required group.** A group with a minimum and maximum of one always has one pick, so one image always shows. Rows that pair picks of two such groups count too.
+  - **Settings copy reads one way on every tab, and four labels drop their asides.** Context Window, Portrait Size, Landscape Size and Workflow now name the field, and the unit or format moves into the line beside it. Section hints and notes follow the same shape as row descriptions.
+  - **The desktop app now connects to ComfyUI without the `--enable-cors-header` flag.** Before, ComfyUI refused the app unless you added it. In the browser, **How to Set Up** now shows the flag with the app's address, so other websites can't send ComfyUI work.
+  - **In the Feedback dialog and Admin Panel, a list that fails to load says so and offers Try Again.** It no longer shows the message for an empty list.
 - **🛠️ Developer tooling**
+  - **`tool-spill-probe.cli.ts` replays captured world requests with a Tool offered or withheld.** It counts reasoning spills, Tool calls and usable replies per arm. On the cloud model, stat-pass calls went from 0 of 20 to 20 of 20.
   - **`npm test` passes on a busy machine and lists slow tests with how much load slowed each.** Timeouts now catch only hangs. Delay checks run on a fake clock, and speed checks compare sizes instead of timing a budget. A file that only timed out reruns alone once.
+
+</details>
 
 ---
 

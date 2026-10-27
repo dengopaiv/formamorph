@@ -8,17 +8,18 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMe
 import { useGameData } from "../contexts/GameDataContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useSettingsOpenRequest } from "@/lib/useSettingsOpenRequest";
+import { scriptsChangeChoices } from "@/lib/scriptedChoices";
 import { landsOnPage, settingsLanding, useSurfaceNav, useSurfaceOpenRequest } from "@/lib/surface/useSurfaceOpenRequest";
 import { stepTab, targetRoute, type SurfaceSteps } from "@/lib/surface/surfaceRoute";
 import { targetAttribute } from "@/lib/surface/surfaceTargets";
 import { EXIT_TO_MENU_PROMPT } from "@/lib/leavePrompts";
 import { useGameplay } from "@/contexts/GameplayContext";
-import { type SandboxMemory, type SandboxTurn, type StatClock, type WorldWrites } from "@/lib/statCodeExecutor";
+import { EMPTY_REPLY, type SandboxMemory, type SandboxTurn, type StatClock, type WorldWrites } from "@/lib/statCodeExecutor";
 import { advancedClock, mergeWorldWrites } from "@/lib/worldWrites";
 import { addScriptPins, pruneScriptPins, withScriptPins } from "@/lib/scriptPins";
 import { deletedAfter, editsAfter, notesAfter, pinsAfter } from "@/lib/memoryWrites";
 import {
-  overlayStatCodeResult, playthroughPlaceholderSet, runStatCodeTurn, runSwitchScripts, splitOwnerTurns, withPinWrites, type SandboxState, type ScriptTrigger,
+  changedAnyStat, overlayStatCodeResult, playthroughPlaceholderSet, runStatCodeTurn, runSwitchScripts, splitOwnerTurns, withPinWrites, type SandboxState, type ScriptTrigger,
   type StatCodeTurn, type StatCodeTurnResult,
 } from "@/lib/statCodeTurn";
 import { landSwitchRun } from "@/lib/switchRunLanding";
@@ -50,7 +51,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tip } from "@/components/ui/tooltip";
 import { toast } from "react-toastify";
 import { toastError } from "@/lib/linkToast";
-import { cancelOpenPrompts, noticeHost, scriptPrompts, type ScriptPromptHost } from "@/lib/scriptPrompts";
+import { cancelOpenPrompts, noticeHost, scriptPrompts, silentPrompts, type ScriptPromptHost } from "@/lib/scriptPrompts";
 import { isScriptPromptSample, SCRIPT_PROMPT_SAMPLES } from "@/lib/devScriptPromptSamples";
 import { addTell, latestTurnId, pruneTells, REROLLED_TIMINGS, setTurnTells, turnTells, withoutTimings } from "@/lib/scriptTells";
 import { useScriptPromptListener } from "@/lib/useScriptPromptListener";
@@ -80,7 +81,7 @@ import WorldStorageService from "../services/WorldStorageService";
 import { MenuModal } from "../components/modals/MenuModal";
 import LlmSetupGuide from "../components/modals/LlmSetupGuide";
 import WorldEditor, { type EditorExit } from "./WorldEditor";
-import type { CharacterData, ChatMessage, ChatRole, AIRequestType, AITurnResult, GameLocation, MediaAsset, Dictionary, Entity, EntityStatValues, SaveRecord, World, PlayerStat, Trait, PersonaRef, OwnedTraitPicks, OwnedTraitStates } from "@/types";
+import type { CharacterData, ChatMessage, ChatRole, AIRequestType, AITurnResult, GameLocation, MediaAsset, Dictionary, DictionaryEntry, Entity, EntityStatValues, SaveRecord, World, PlayerStat, Trait, PersonaRef, OwnedTraitPicks, OwnedTraitStates } from "@/types";
 import { UnsavedChangesDialog } from "../components/UnsavedChangesDialog";
 import { estimateHistoryChars, estimateTokens } from "../lib/memoryUtils";
 import { narrationOf, storyText, stripReasoningLive, extractReasoning, extractReasoningLive } from "../lib/aiResponse";
@@ -140,6 +141,7 @@ import {
   milestoneSelectPass,
   summaryPass,
   scriptActionFor,
+  OPENING_STAND_IN,
 } from "../lib/turnPipeline/turnPasses";
 import {
   createBackgroundPassQueue, digestTarget,
@@ -194,8 +196,9 @@ import { parseSlashCommand } from "../lib/slashCommands";
 import { appliedStatDeltas, applyRegen, sumDeltas } from "../lib/statChanges";
 import type { OwnerId } from "../lib/scope";
 
-import { applyStatResponse, createStatRequest, keyedScene, readStatResponse, statResponseChanges, type StatRequestSnapshot, type StatResponse } from "../lib/statRequest";
-import { resolveEntityTexts, resolveStatGroupTexts, resolveStatNames, resolveStatText } from "../lib/resolveWorldNames";
+import { applyStatResponse, createStatRequest, keyedScene, readStatResponse, replayedStatResponse, savedStatAsks, statResponseChanges, type StatRequestSnapshot, type StatResponse } from "../lib/statRequest";
+import { resolveDictionaryEntryNames, resolveEntityTexts, resolveStatGroupTexts, resolveStatNames, resolveStatText } from "../lib/resolveWorldNames";
+import { loreEntries, withLoreToggles, withLoreWrites } from "../lib/loreToggles";
 import { AiContextRequestCard, type AiContextCardSection, type AiContextTextSlot } from "@/components/aiContext/AiContextRequestCard";
 import { AiContextExportButton } from "@/components/aiContext/AiContextExportButton";
 import type { AiRequestRecord } from "@/lib/aiContext/requestRecord";
@@ -304,6 +307,25 @@ const withLatestTurnPatched = (history: readonly ChatMessage[], patch: Partial<A
   return updated;
 };
 
+/** The page and choices `turn` reads from a stored turn. */
+const turnReply = (stored: AITurnResult | null): Pick<SandboxTurn, "narration" | "choices"> => ({
+  narration: stored?.narration ?? "", choices: stored?.choices ?? [],
+});
+
+/** `turn` as a run reads it now: no choices while the player has them off (Q24). */
+const underChoicesSetting = (turn: SandboxTurn, choicesOn: boolean): SandboxTurn => (choicesOn ? turn : { ...turn, choices: [], choicesOff: true });
+
+/** The turn's choices as the AI gave them, before any script edit (Q18). */
+const aiChoicesOf = (stored: AITurnResult): string[] => stored.aiChoices ?? stored.choices ?? [];
+
+/** The patch that stores the choices an After the AI batch left: the shown list, with the AI's kept beside it
+ *  when a script changed it. */
+const choicesPatch = (aiChoices: readonly string[], scripted: readonly string[] | undefined): Pick<AITurnResult, "choices" | "aiChoices"> =>
+  (scripted ? { choices: [...scripted], aiChoices: [...aiChoices] } : { choices: [...aiChoices], aiChoices: undefined });
+
+/** What a Re-generate Choices rerun of the After the AI batch answers: not started, no change, or the scripts' list. */
+type ChoicesRerun = { ran: false } | { ran: true; changed: false } | { ran: true; changed: true; choices: readonly string[] };
+
 /** Page one as stored. */
 const pageOneTurn = (history: readonly ChatMessage[]): AITurnResult | null => {
   const pageOne = history.find((m) => m.role === "assistant");
@@ -315,7 +337,8 @@ const pageOneNarration = (history: readonly ChatMessage[]) => pageOneTurn(histor
 
 /** The pre-turn state a stat re-roll hands stat code, so code reads and switches as the turn it replaces did. */
 type PreTurnCodeState = Pick<
-  LiveSnapshot, 'codePins' | 'globalTraits' | 'disabledTraitIds' | 'appliedTraitValues' | 'cascadeOffTraitIds' | 'ownedTraits' | 'entityStats'
+  LiveSnapshot, 'codePins' | 'loreToggles' | 'globalTraits' | 'disabledTraitIds' | 'appliedTraitValues' | 'cascadeOffTraitIds' | 'ownedTraits'
+  | 'entityStats'
 >;
 
 /** What one stat-code run left, in the shapes state holds. The before box hands this to the turn's own
@@ -330,12 +353,20 @@ interface HistoryTurnView {
   values?: TokenValues;
   /** The first trim's picks, on a re-render. */
   picks?: HistoryPicks;
+  /** The lore the turn's code left in play. */
+  dictionary?: DictionaryEntry[];
 }
 
 /** A stat-code run set up but not yet executed: its turn, and the step that lays the result onto live state. */
 interface PreparedStatCode {
   turn: StatCodeTurn;
-  finish: (result: StatCodeTurnResult) => { written: TurnCodeState | null; gateStats: GateStats; world?: WorldWrites };
+  finish: (result: StatCodeTurnResult) => {
+    written: TurnCodeState | null; gateStats: GateStats; world?: WorldWrites;
+    /** The choices an After the AI batch's scripts left; absent when none changed them. */
+    choices?: readonly string[];
+  };
+  /** What the run left, with nothing landed: `finish`'s `written`. */
+  writtenBy: (result: StatCodeTurnResult) => TurnCodeState | null;
 }
 
 /** The traits in force on one slice of saved trait state, and the stats live under them. The live pair is
@@ -426,6 +457,8 @@ const GameViewer = ({
     placeholders: worldPlaceholders,
     placeholderOwners,
     worldScripts,
+    stats: worldStats,
+    traitGroups: worldTraitGroups,
     worldTools,
     worldOverview,
     worldId,
@@ -599,6 +632,8 @@ const GameViewer = ({
     setSelectedEntityId,
     codePins,
     setCodePins,
+    loreToggles,
+    setLoreToggles,
     statDeltas,
     addLogEntry,
     addSystemLogEntry,
@@ -646,6 +681,7 @@ const GameViewer = ({
     setRuntimeDictionaries,
     runtimeDictionaries,
     libraryDictionaries,
+    playthroughDictionaries,
     memoryPins,
     setMemoryPins,
     setEntityVisualPreference,
@@ -664,8 +700,8 @@ const GameViewer = ({
     rehydratedMemoryIds,
     scriptTells,
     setScriptTells,
-    openingCue: openingTurnAction,
-    setOpeningCue: setOpeningTurnAction,
+    openingAction: openingTurnAction,
+    setOpeningAction: setOpeningTurnAction,
   } = useGameplay();
   const {
     show: showStatDeltas, add: addStatDeltas, hold: holdStatDeltas, settle: settleStatDeltas,
@@ -683,6 +719,12 @@ const GameViewer = ({
     presentEntitiesUnder,
   } = useResolvedWorld();
   usePersonaNotice();
+  // Whether an After the AI script can change the choices, so a turn holds them until that batch lands (Q7, Q8).
+  // The entities are every one whose scripts run: the played one and the picked library ones included.
+  const worldScriptsChangeChoices = useMemo(() => scriptsChangeChoices({
+    scripts: worldScripts, stats: worldStats, statGroups: authoredStatGroups, traits: authoredTraits, traitGroups: worldTraitGroups,
+    entities: [...codeEntities.world, ...codeEntities.library], placeholders: worldPlaceholders,
+  }), [worldScripts, worldStats, authoredStatGroups, authoredTraits, worldTraitGroups, codeEntities, worldPlaceholders]);
   // The session's rolls for the init effect's pins, and its Placeholder Set with the library's lists.
   const {
     rolls: sessionRolls, placeholders, setPersona: setSessionPersona, setLibraryAdditions: setSessionLibraryAdditions,
@@ -990,6 +1032,7 @@ const GameViewer = ({
   // set by the narration request's stream and read into the committed turn JSON. Also drives the live block.
   const turnReasoningRef = useRef<{ text: string; ms: number }>({ text: "", ms: 0 });
   const embedDrainingRef = useRef(false); // an embedding batch is in flight (serializes the drainer)
+  const [embedDrains, setEmbedDrains] = useState(0); // clean drains so far; each one re-runs the drainer
   // Digest vectors by vectorKey, hydrated from the embedding cache and topped up by the drainer.
   // Session-local derived data — never persisted with the save.
   const embedVectorsRef = useRef<Map<string, Float32Array>>(new Map());
@@ -1415,7 +1458,7 @@ const GameViewer = ({
   });
   /** The `turn.action` a re-rolled turn reads: history's "START GAME" proxy stands for the opening cue. */
   const rerolledAction = (action: string): string => {
-    if (action !== "START GAME") return action.trim();
+    if (action !== OPENING_STAND_IN) return action.trim();
     if (openingTurnAction !== null) return openingTurnAction;
     return openingSessionRef.current.drawn?.opening.kind === "narration" ? "" : resolveDrawn(openingCue()).trim();
   };
@@ -1495,7 +1538,7 @@ const GameViewer = ({
       };
       setIsGameStarted(false);
       if (redraw.opening.kind === "narration") {
-        pendingTurnRef.current = { action: "START GAME", writtenNarration: redrawText };
+        pendingTurnRef.current = { action: OPENING_STAND_IN, writtenNarration: redrawText };
         setPendingTurnNonce((n) => n + 1);
         return;
       }
@@ -1503,7 +1546,7 @@ const GameViewer = ({
       // the ref. A save from before the proxy kept the real text in history, and its first redraw keeps it.
       const sameRow = priorOpening?.opening === redraw.opening;
       setPlayerInput(
-        priorOpening === null && action !== "START GAME" ? action : (sameRow && openingActionRef.current) || redrawText,
+        priorOpening === null && action !== OPENING_STAND_IN ? action : (sameRow && openingActionRef.current) || redrawText,
       );
       return;
     }
@@ -1546,36 +1589,138 @@ const GameViewer = ({
     }
   };
 
-  // Re-roll only the choices for the latest turn, keeping its narration and stats.
+  /**
+   * A turn replayed up to its After the AI batch, for the stats re-roll and the choices rerun: the start scripts on
+   * a fresh game's first page, the before box, then the turn's On Call writes. `land` writes each run to the game.
+   * `quiet` answers every `player` call silent (Q20) and lands nothing. The batch then reads the turn's own page
+   * and `afterChoices`. `onWrote` hears what the runs have left after each stage, so a caller can undo it when
+   * `signal` stops the replay (null then).
+   */
+  const replayToAfter = async (
+    landing: "land" | "quiet",
+    { prev, action, page, preTurn, turnHours, afterChoices, signal, onWrote }: {
+      prev: AITurnResult; action: string; page: number; preTurn: LiveSnapshot; turnHours: number;
+      afterChoices: readonly string[]; signal?: AbortSignal; onWrote?: (written: TurnCodeState | null) => void;
+    },
+  ): Promise<{ written: TurnCodeState | null; base: TurnCodeState; afterTriggers: ReturnType<typeof replayedToolEffects>["afterTriggers"] } | null> => {
+    /** What a prepared run leaves with nothing landed and every `player` call silent; null when it changed nothing or failed. */
+    const quietly = async (prepared: PreparedStatCode | null, mode: Partial<StatCodeTurn> = {}) => {
+      if (!prepared) return null;
+      try {
+        return prepared.writtenBy(await runStatCodeTurn({ ...prepared.turn, prompts: silentPrompts, ...mode }));
+      } catch (error) {
+        console.error("Error processing stat code:", error);
+        return null;
+      }
+    };
+    turnReadRef.current = { action: rerolledAction(action), number: closedTurns(fullMessageHistoryRef.current), ...EMPTY_REPLY };
+    const clock = { deltaHours: 0, elapsedHours: gameTime - turnHours, calendar };
+    const stats = preTurn.globalStats ?? [];
+    const opening = page === 1 && newPlaythroughRef.current;
+    let written: TurnCodeState | null;
+    if (landing === "land") {
+      ({ written } = await runBeforeAI(stats, clock, preTurn, opening));
+    } else {
+      const started = opening ? await quietly(prepareStatCode(stats, stats, [], clock, preTurn, "start")) : null;
+      const boxStats = started?.globalStats ?? stats;
+      written = await quietly(prepareStatCode(boxStats, boxStats, [], clock, started ?? preTurn, "before")) ?? started;
+    }
+    onWrote?.(written);
+    // Past the before box, the batch reads the turn's own page and the choices it is given.
+    if (turnReadRef.current) turnReadRef.current = { ...turnReadRef.current, ...turnReply(prev), choices: [...afterChoices] };
+    if (signal?.aborted) return null;
+    const { onCallWrites, afterTriggers } = replayedToolEffects(worldTools, prev.toolCalls ?? []);
+    if (onCallWrites.length) {
+      const replay = { replayed: onCallWrites, triggersOnly: true };
+      const onCalled = prepareTurnStartCode(written ?? preTurn);
+      if (landing === "land") {
+        if (onCalled) written = onCalled.finish(await runStatCodeTurn({ ...onCalled.turn, ...replay })).written ?? written;
+      } else {
+        written = await quietly(onCalled, replay) ?? written;
+      }
+      onWrote?.(written);
+    }
+    if (signal?.aborted) return null;
+    return { written, base: written ?? preTurn, afterTriggers };
+  };
+
+  /**
+   * The After the AI batch rerun over a new draw, on the turn's replay state (Q19): the pre-turn state, the before
+   * box, the turn's On Call writes and its saved asks, replayed with nothing landing. Answers `ran: false` when
+   * the rerun cannot start, else whether the scripts changed the choices.
+   */
+  const rerunChoiceScripts = async (
+    prev: AITurnResult, action: string, drawn: readonly string[], page: number,
+  ): Promise<ChoicesRerun> => {
+    const preTurnState = regenerateState(gameStates, initialStateRef.current, page);
+    if (!preTurnState?.globalStats) return { ran: false };
+    const preTurn = liveSnapshotOf(preTurnState);
+    const turnHours = prev.timeDelta ?? FLAT_HOURS_PER_TURN;
+    const replay = await replayToAfter("quiet", { prev, action, page, preTurn, turnHours, afterChoices: drawn });
+    if (!replay) return { ran: false };
+    const { base } = replay;
+    const baseStats = base.globalStats ?? [];
+    const response = replayedStatResponse(prev, resolveStatNames(baseStats, resolvePH));
+    const { applied, asks, entityTurn } = askedOver(response, baseStats, base.entityStats ?? {}, base.ownedTraits ?? {});
+    const prepared = prepareStatCode(
+      baseStats, applied.stats, asks, { deltaHours: turnHours, elapsedHours: gameTime, calendar }, base, "after",
+      { entityTurn, thresholdStats: baseStats },
+    );
+    if (!prepared) return { ran: false };
+    try {
+      const result = await runStatCodeTurn({ ...prepared.turn, prompts: silentPrompts, choicesOnly: true });
+      return result.choices ? { ran: true, changed: true, choices: result.choices } : { ran: true, changed: false };
+    } catch (error) {
+      console.error("Error processing stat code:", error);
+      return { ran: false };
+    }
+  };
+
+  // Re-roll only the choices for the latest turn, keeping its narration and stats. A world whose scripts change
+  // choices reruns them over the new draw, which stays off screen until the rerun lands (Q10, Q29).
   const handleRegenerateChoices = () => {
     const target = partialRegenTarget();
     if (!target || !choicesEnabled) return;
     const { prev, action } = target;
+    const scripted = worldScriptsChangeChoices && choicesEnabledRef.current;
+    const page = currentPage;
     // The new list streams in from empty; replacing the old one row by row would show it at once.
     setChoices([]);
+    if (scripted) {
+      choicesHeldRef.current = true;
+      heldChoicesRef.current = null;
+    }
     void runPartialRegen(async (signal) => {
       const presentNames = new Set([
         ...(prev.entities ?? []),
         ...recentParticipants(fullMessageHistory, CHOICES_PRESENCE_TURNS - 1),
       ]);
       const sceneEntities = allEntities.filter((e) => presentNames.has(e.name));
-      let response = "";
+      let shown: Pick<AITurnResult, "choices" | "aiChoices"> | null = null;
       try {
-        response = await requestChoices(
+        const response = await requestChoices(
           contextValues(),
           sceneEntityOverride(currentLocation, sceneEntities),
           action,
           prev.narration ?? "",
           signal,
         );
+        if (signal.aborted || !response) return;
+        const drawn = parseChoices(response);
+        const rerun: ChoicesRerun = scripted ? await rerunChoiceScripts(prev, action, drawn, page) : { ran: true, changed: false };
+        if (signal.aborted || !rerun.ran) return;
+        // The new draw is the AI's own list now.
+        shown = choicesPatch(drawn, rerun.changed ? rerun.choices : undefined);
       } finally {
+        if (scripted) {
+          choicesHeldRef.current = false;
+          heldChoicesRef.current = null;
+        }
         // A stopped or failed re-roll puts the turn's own choices back.
-        if (signal.aborted || !response) setChoices(prev.choices ?? []);
+        setChoices(shown ? shown.choices : prev.choices ?? []);
       }
-      if (signal.aborted) return;
-      const choices = parseChoices(response);
-      setChoices(choices);
-      patchLatestTurn({ choices });
+      if (!shown) return;
+      patchLatestTurn(shown);
       armTurnSnapshot();
     });
   };
@@ -1605,6 +1750,7 @@ const GameViewer = ({
       const toPreTurn = () => {
         resetEntityStats(preTurn.entityStats ?? {});
         setCodePins(preTurn.codePins ?? {});
+        setLoreToggles(preTurn.loreToggles ?? {});
         setGlobalTraits(preTurn.globalTraits);
         setDisabledTraitIds(preTurn.disabledTraitIds ?? []);
         setAppliedTraitValues(preTurn.appliedTraitValues ?? {});
@@ -1612,8 +1758,6 @@ const GameViewer = ({
         setOwnedTraits(preTurn.ownedTraits ?? {});
       };
       toPreTurn();
-      // The replayed turn is still the latest in history, so its number is the closed count.
-      turnReadRef.current = { action: rerolledAction(action), number: closedTurns(fullMessageHistoryRef.current) };
       // A re-roll replays the whole turn, so the before box runs again first, on the clock as it read at
       // turn start. Its writes are the baseline the asks then land on, and the request reads them.
       beforeBoxDeltasRef.current = {};
@@ -1621,26 +1765,20 @@ const GameViewer = ({
       const tellTurn = latestTurnId(fullMessageHistoryRef.current);
       const priorTells = turnTells(scriptTells, tellTurn);
       if (tellTurn) setScriptTells((now) => withoutTimings(now, tellTurn, REROLLED_TIMINGS));
-      // Page one of a fresh game restores the pre-start state, so the start scripts run again first.
-      // A stat re-roll keeps the turn's location, clock and cast, so the replay's world writes drop.
-      let { written } = await runBeforeAI(
-        preTurn.globalStats ?? [], { deltaHours: 0, elapsedHours: gameTime - turnHours, calendar }, preTurn,
-        page === 1 && newPlaythroughRef.current,
-      );
       // The box has written by the time the request can be stopped, so every exit that abandons the
       // re-roll puts the pre-turn state back rather than leaving those writes over a turn with no asks.
+      let boxed = false;
       let committed = false;
       try {
-        if (signal.aborted) return;
-        // The turn's Tool effects replay (Q39): its On Call writes land as saved, with no script run (Q41), and
-        // its After calls fire again with the batch.
-        const { onCallWrites, afterTriggers } = replayedToolEffects(worldTools, prev.toolCalls ?? []);
-        const onCalled = onCallWrites.length ? prepareTurnStartCode(written ?? preTurn) : null;
-        if (onCalled) {
-          written = onCalled.finish(await runStatCodeTurn({ ...onCalled.turn, replayed: onCallWrites, triggersOnly: true })).written ?? written;
-        }
-        if (signal.aborted) return;
-        const base = written ?? preTurn;
+        // Page one of a fresh game restores the pre-start state, so the start scripts run again first.
+        // A stat re-roll keeps the turn's location, clock and cast, so the replay's world writes drop.
+        // The replay reads the turn's own page and the AI's own choices (Q18), and replays the turn's Tool
+        // effects (Q39): its On Call writes land as saved, with no script run (Q41), its After calls fire again.
+        const replay = await replayToAfter("land", {
+          prev, action, page, preTurn, turnHours, afterChoices: aiChoicesOf(prev), signal, onWrote: (w) => { boxed = !!w; },
+        });
+        if (!replay) return;
+        const { written, base, afterTriggers } = replay;
         const snapshot = statRequestFor(enabledStats(
           written ? resolveStatNames(written.globalStats ?? [], resolvePH) : globalStatsRef.current,
           statEnabledRef.current,
@@ -1659,14 +1797,20 @@ const GameViewer = ({
           calendar,
         }, base, base.globalStats, afterTriggers);
         applyRegenTick(turnHours, base.globalStats);
-        patchLatestTurn({ stat_changes: statChanges });
+        patchLatestTurn({ stat_changes: statChanges, statAsks: savedStatAsks(parsed) });
         committed = true;
         // Code writes land after the sandbox settles; the settle and the snapshot wait for them.
         const run = await statCode;
+        // The replay's scripted choices, else the AI's own, replace a scripted list (Q18). With choices off, no script wrote.
+        if (choicesEnabledRef.current && (run?.choices || prev.aiChoices)) {
+          const patch = choicesPatch(aiChoicesOf(prev), run?.choices);
+          setChoices(patch.choices);
+          patchLatestTurn(patch);
+        }
         await settleTurn(run?.gateStats ?? null);
         armTurnSnapshot();
       } finally {
-        if (!committed && written) {
+        if (!committed && boxed) {
           beforeBoxDeltasRef.current = {};
           setGlobalStats(preTurn.globalStats ?? []);
           toPreTurn();
@@ -1750,7 +1894,7 @@ const GameViewer = ({
   ): { messages: ChatMessage[]; runs: AnatomyRun[][]; picks?: HistoryPicks } => {
     const turns = parseEffectiveTurns(fullMessageHistory);
     if (memoryDigests) {
-      const keywords = extractKeywords(action, dictionary);
+      const keywords = extractKeywords(action, turnView.dictionary ?? dictionary);
       // Entities the action references (case-insensitive — actions are lowercase) drive participation rehydration.
       const actionEntities = findEntityNames(action, allEntities, { requireCapital: false });
       const rehydrateCap = Math.round(Math.max(0, contextWindow - promptTokens - reserveTokens) * 0.25);
@@ -1987,6 +2131,12 @@ const GameViewer = ({
     };
   }, [pinsFor, resolveFor, resolveTraitFor, resolveEntityFor, traits, traitOrder, gatedWorld]);
 
+  // The lore a running turn's prompts read under its code's lore writes; the live entries when they changed none.
+  const turnLore = useCallback((over: TurnCodeState | null, view: SceneWrites | null): DictionaryEntry[] => {
+    if (!over?.loreToggles || over.loreToggles === liveCodeStateRef.current.loreToggles) return dictionary;
+    return resolveDictionaryEntryNames(loreEntries(playthroughDictionaries, over.loreToggles), view?.resolve ?? resolvePH);
+  }, [dictionary, playthroughDictionaries, resolvePH]);
+
   // The README is authored text shown to the player, so its chips resolve like any other.
   const readmeResolved = useMemo(() => resolvePH(readmeText), [resolvePH, readmeText]);
 
@@ -2096,15 +2246,32 @@ const GameViewer = ({
   // What a user Tool's script reads (Q24): the turn's start as code has left it, as an On Call World Tool reads it.
   // Set beside `prepareTurnStartCode`, once per render.
   const toolScriptSourceRef = useRef<((base: TurnCodeState | null) => ToolScriptSource) | null>(null);
+  // The turn in progress as `turn` reads it; between turns, null and the last closed turn reads instead.
+  const turnReadRef = useRef<SandboxTurn | null>(null);
+  const choicesEnabledRef = useRef(choicesEnabled);
+  choicesEnabledRef.current = choicesEnabled;
+  /** The `turn` a run between turns reads: no action, and the last finished turn. While a turn runs, its page
+   *  and choices read empty until its reply lands (Q22). */
+  const betweenTurnsRead = useCallback((): SandboxTurn => {
+    const history = fullMessageHistoryRef.current;
+    const running = turnReadRef.current;
+    const reply = running
+      ? { narration: running.narration, choices: running.choices }
+      : turnReply(parseTurnContent(history.findLast((message) => message.role === "assistant")?.content ?? ""));
+    return underChoicesSetting({ action: "", number: closedTurns(history), ...reply }, choicesEnabledRef.current);
+  }, []);
+  /** The turn in progress as a run reads it, else the between-turns read. */
+  const currentTurnRead = useCallback(
+    (): SandboxTurn => (turnReadRef.current ? underChoicesSetting(turnReadRef.current, choicesEnabledRef.current) : betweenTurnsRead()),
+    [betweenTurnsRead],
+  );
   // Settings → Tools runs Try It on the playthrough, read as a Tool call in play reads it.
   const toolWorld = useCallback(() => {
     const source = toolScriptSourceRef.current?.(null);
     // A call outside the turn's requests reads between turns, even while a turn runs.
-    const between = source?.state
-      ? { ...source, state: { ...source.state, turn: { action: "", number: closedTurns(fullMessageHistoryRef.current) } } }
-      : source;
-    return buildToolSnapshot(liveScene(), dictionaries, toolMemorySource(), between);
-  }, [liveScene, dictionaries, toolMemorySource]);
+    const between = source?.state ? { ...source, state: { ...source.state, turn: betweenTurnsRead() } } : source;
+    return buildToolSnapshot(liveScene(), withLoreToggles(playthroughDictionaries, loreToggles), toolMemorySource(), between);
+  }, [liveScene, playthroughDictionaries, loreToggles, toolMemorySource, betweenTurnsRead]);
   // Each request's round between its Tool calls and the next round's first token, as the called Tool names.
   const [toolLookups, setToolLookups] = useState<readonly (readonly string[])[]>([]);
 
@@ -2320,7 +2487,11 @@ const GameViewer = ({
     // abortGeneration already kept the narration.
     if (signal.aborted) return;
 
-    setChoices(commit.turn.choices);
+    const holdForScripts = choicesScriptedRef.current;
+    const turnSeq = turnSeqRef.current;
+    if (!holdForScripts) setChoices(commit.turn.choices);
+    // The After the AI batch and later runs of the turn read the finished page and its choices.
+    if (turnReadRef.current) turnReadRef.current = { ...turnReadRef.current, ...turnReply(commit.turn) };
 
     // Seed the story's opening hour. Only ever written on the opening turn; null reads downstream as the
     // shipped DEFAULT_START_HOUR, so an unreadable answer plays exactly as before this pass existed.
@@ -2358,6 +2529,20 @@ const GameViewer = ({
 
     // The output and After the AI code writes beat the passes too, so the stored turn waits for them.
     const final = withCodeWrites(commit, mergeWorldWrites(outputWorld, run?.world), turn.context);
+    // The scripts' list replaces the AI's once the batch lands, and the turn keeps both (Q7, Q18). A Stop during
+    // a held batch keeps the AI's own list (Q30).
+    const scriptedChoices = holdForScripts && signal.aborted ? undefined : run?.choices;
+    if (scriptedChoices && turnReadRef.current) turnReadRef.current = { ...turnReadRef.current, choices: scriptedChoices };
+    if (turnSeqRef.current === turnSeq) {
+      // Held choices show once, with the input box unlocking behind them.
+      if (holdForScripts) {
+        choicesHeldRef.current = false;
+        heldChoicesRef.current = null;
+        setChoices([...(scriptedChoices ?? commit.turn.choices)]);
+        if (!signal.aborted) setChoicesReady(true);
+      } else if (scriptedChoices) setChoices([...scriptedChoices]);
+    }
+    const storedTurn: AITurnResult = { ...final.turn, ...choicesPatch(final.turn.choices, scriptedChoices) };
     if (commit.suggestedLocation && !final.suggestedLocation) setSuggestedLocation(null);
     // Regen already ticked at the commit's hours: a longer code duration ticks the extra, a shorter one moves the clock alone.
     const extraHours = final.turnHours - commit.turnHours;
@@ -2396,7 +2581,7 @@ const GameViewer = ({
       ) {
         updatedHistory[updatedHistory.length - 1] = {
           role: "assistant",
-          content: JSON.stringify(final.turn),
+          content: JSON.stringify(storedTurn),
         };
       }
       return updatedHistory;
@@ -2494,6 +2679,7 @@ const GameViewer = ({
     landingRef.current = null;
     choicesHeldRef.current = true;
     heldChoicesRef.current = null;
+    choicesScriptedRef.current = worldScriptsChangeChoices && planHasPass(plan, "choices");
     setNarrationSettled(false);
 
     // What the turn's own derivations carry between passes. The pipeline's material holds everything the
@@ -2572,13 +2758,13 @@ const GameViewer = ({
       // `codeView`, which React has not re-rendered for.
       beforeBoxDeltasRef.current = {};
       const preBox: TurnCodeState = {
-        globalStats: rawGlobalStatsRef.current, codePins, globalTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds,
+        globalStats: rawGlobalStatsRef.current, codePins, loreToggles, globalTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds,
         ownedTraits, entityStats: entityStatsRef.current,
       };
       // The At Game Start scripts shape the opening: once per new playthrough, ahead of the before box.
       scriptLocationRef.current = turnLocation;
       turnMemoriesRef.current = scriptMemoriesRef.current;
-      turnReadRef.current = { action: scriptActionFor(planInput), number: closedTurns(fullMessageHistory) + 1 };
+      turnReadRef.current = { action: scriptActionFor(planInput), number: closedTurns(fullMessageHistory) + 1, ...EMPTY_REPLY };
       if (isOpeningTurn) setOpeningTurnAction(turnReadRef.current.action);
       const { written: beforeBox, world: beforeWorld } = await runBeforeAI(
         rawGlobalStatsRef.current, { deltaHours: 0, elapsedHours: gameTime, calendar }, undefined, isOpeningTurn && newPlaythroughRef.current,
@@ -2600,6 +2786,7 @@ const GameViewer = ({
       const beforeClock = advancedClock(gameTime, beforeWorld);
       turnClockRef.current = beforeClock ?? null;
       let codeView = turnCodeView(beforeBox, beforeClock);
+      let lore = turnLore(beforeBox, codeView);
       /** The world the turn's prompts read: the code view, with the followers at the player's side. */
       const sceneBox = (): SceneWrites | null => {
         if (!turnJoin) return codeView;
@@ -2627,7 +2814,7 @@ const GameViewer = ({
           ctx,
           action: effectiveAction,
           history: fullMessageHistory,
-          dictionary,
+          dictionary: lore,
           actionVec,
           semanticLore,
           embedVectors: embedVectorsRef.current,
@@ -2644,7 +2831,7 @@ const GameViewer = ({
         const history = getTrimmedMessageHistory(
           estimateTokens(prompt.length), effectiveAction, relevanceScores, actionVec, !picks,
           // A turn its code left alone keeps the live now-line, byte for byte.
-          { nowHours: codeView?.elapsed, values: codeView ? ctx : undefined, picks },
+          { nowHours: codeView?.elapsed, values: codeView ? ctx : undefined, picks, ...(lore !== dictionary && { dictionary: lore }) },
         );
         // Track the assembled system-prompt size for the memory-usage breakdown
         setLastPromptChars(prompt.length);
@@ -2823,6 +3010,7 @@ const GameViewer = ({
             const clock = advancedClock(gameTime, turnWorldWrites);
             turnClockRef.current = clock ?? null;
             codeView = turnCodeView(onCallStateRef.current ?? turnBeforeBoxRef.current, clock);
+            lore = turnLore(onCallStateRef.current ?? turnBeforeBoxRef.current, codeView);
             if (narrationBuilt) ctxStale = planCtxStale = true;
           },
         };
@@ -2830,9 +3018,13 @@ const GameViewer = ({
       const worldToolTurn = openWorldToolTurn(worldTools, onCall);
       worldToolTurnRef.current = worldToolTurn;
       const turnToolExecutor = () => worldToolTurn.executor(
-        snapshotToolExecutor(() => buildToolSnapshot(
-          liveScene(turnLocation, sceneBox()), dictionaries, toolMemorySource(), toolScriptSourceRef.current?.(onCallStateRef.current ?? turnBeforeBoxRef.current),
-        )),
+        snapshotToolExecutor(() => {
+          const base = onCallStateRef.current ?? turnBeforeBoxRef.current;
+          return buildToolSnapshot(
+            liveScene(turnLocation, sceneBox()), withLoreToggles(playthroughDictionaries, base?.loreToggles ?? liveCodeStateRef.current.loreToggles),
+            toolMemorySource(), toolScriptSourceRef.current?.(base),
+          );
+        }),
       );
       let executeTool = turnToolExecutor();
 
@@ -3012,9 +3204,10 @@ const GameViewer = ({
         signal,
         advance,
         // Choices are the interactive part: unblock the input the moment they show rather than when the rest
-        // of their batch settles. They show once the turn end lands, so Continue joins after them.
+        // of their batch settles. They show once the turn end lands, so Continue joins after them. Held
+        // choices unblock it at the commit instead.
         onPassSettled: (id, outcome) => {
-          if (id !== "choices" || !outcome.ok || signal.aborted) return;
+          if (id !== "choices" || !outcome.ok || signal.aborted || choicesScriptedRef.current) return;
           void landNarration(plan.writtenNarration !== null).then(() => { if (!signal.aborted) setChoicesReady(true); });
         },
       });
@@ -3120,10 +3313,10 @@ const GameViewer = ({
   // The pin and trait state a run reads, by ref. A turn's after box runs out of the closure its render
   // minted, which is older than the before box's writes — the same reason the stats ride in on a ref.
   const liveCodeStateRef = useRef({
-    codePins, pins, chosenTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds, ownedTraits, statTraits,
+    codePins, loreToggles, pins, chosenTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds, ownedTraits, statTraits,
   });
   liveCodeStateRef.current = {
-    codePins, pins, chosenTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds, ownedTraits, statTraits,
+    codePins, loreToggles, pins, chosenTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds, ownedTraits, statTraits,
   };
   /** The gameplay slice the trait runtime reads and rewrites. */
   const traitState = useMemo<TraitRuntimeState>(
@@ -3179,8 +3372,6 @@ const GameViewer = ({
   scriptMemoriesRef.current = scriptMemoryList;
   // The list every run of a turn reads, taken once as the turn starts (Q40). Null between turns, where the live list stands.
   const turnMemoriesRef = useRef<SandboxMemory[] | null>(null);
-  // The turn in progress as `turn` reads it; between turns, null and the last closed turn reads instead.
-  const turnReadRef = useRef<SandboxTurn | null>(null);
   // The story hours a running turn's clock advances reached, which its later runs read (Q45). Null when the
   // turn has not advanced the clock, and between turns.
   const turnClockRef = useRef<number | null>(null);
@@ -3223,18 +3414,10 @@ const GameViewer = ({
         // for the run; names do not — code reaches a stat by its code name, which the turn derives from the
         // authored name, so a chip in a name reads the same in every playthrough.
         const regenStats = tick ? [...tick.stats] : afterAsks;
-        const stats = resolveStatText(refreshSavedStats(regenStats, authoredStats), resolvePH);
         // Every entity in the playthrough runs beside the player, over the same tick, each over its own asks.
         const entityPrevious = preTurn ? preTurn.entityStats ?? {} : entityStatsRef.current;
         const entityBase = entityTurn?.values ?? entityPrevious;
         const world = traitWorld ?? gatedWorld();
-        const ownerRows = entityCodeTurns(
-          entityOwnersOf(entityBase, preTurn ? preTurn.ownedTraits ?? {} : undefined, world), readsTurnStart(timing) ? null : clock.deltaHours ?? FLAT_HOURS_PER_TURN,
-          (ownerId, ticked) => resolveStatText(
-            refreshSavedStats(ticked, statEntities.find((e) => e.id === ownerId)?.stats ?? []), resolvePH,
-          ),
-          { previous: entityPrevious, asks: entityTurn?.asks },
-        );
         // The same slice the player's checkbox switches, so a code switch is that switch.
         const live = liveCodeStateRef.current;
         const held = preTurn ? savedTraits(preTurn, traits)
@@ -3244,6 +3427,28 @@ const GameViewer = ({
           };
         const inForce = preTurn ? inForceOn(held, entityBase) : live.statTraits;
         const basePins = preTurn ? preTurn.codePins ?? {} : live.codePins;
+        const baseLore = preTurn ? preTurn.loreToggles ?? {} : live.loreToggles;
+        // The run's stat text resolves under the pins its `placeholders` read, so the two agree.
+        const runPins = preTurn ? pinsFor(basePins).world : live.pins;
+        const resolveRun = (text: string) => resolveFor(runPins, text);
+        const stats = resolveStatText(refreshSavedStats(regenStats, authoredStats), resolveRun);
+        // `previous` reads its bands under the pins the turn started with: its own stats' bands, traits and code pins.
+        const startPins = pinsFor(basePins, {
+          traits: [...held.acquired], disabledTraitIds: [...held.disabledTraitIds], ownedTraits: held.ownedTraits, stats: before,
+        }).world;
+        const resolveStart = (text: string) => resolveFor(startPins, text);
+        const ownerRows = entityCodeTurns(
+          entityOwnersOf(entityBase, preTurn ? preTurn.ownedTraits ?? {} : undefined, world), readsTurnStart(timing) ? null : clock.deltaHours ?? FLAT_HOURS_PER_TURN,
+          (ownerId, ticked) => resolveStatText(
+            refreshSavedStats(ticked, statEntities.find((e) => e.id === ownerId)?.stats ?? []), resolveRun,
+          ),
+          // An owner with no turn-start stats reads its base as `previous`, as entityCodeTurns does.
+          {
+            previous: Object.fromEntries(Object.entries({ ...entityBase, ...entityPrevious })
+              .map(([ownerId, ownerStats]) => [ownerId, resolveStatText(ownerStats, resolveStart)])),
+            asks: entityTurn?.asks,
+          },
+        );
         // The starvation penalty the regen tick lands beside this run, so the run's stat snapshot holds it.
         const healthLoss = tick && thresholdStats ? starvationLoss(thresholdStats, enabled, clock.deltaHours ?? FLAT_HOURS_PER_TURN) : null;
         const health = healthLoss === null ? undefined : stats.find((s) => s.name === "Health");
@@ -3260,7 +3465,7 @@ const GameViewer = ({
           },
           placeholders: {
             ...statCodePlaceholders,
-            pins: preTurn ? pinsFor(basePins).world : live.pins,
+            pins: runPins,
             // The stored shape too, so an Object pinned to a list reads that list back rather than its join.
             codePins: basePins,
             // A During AI Output run reads the pins its earlier sentences left.
@@ -3275,27 +3480,47 @@ const GameViewer = ({
           resolveText: (text, owner) => (owner ? resolveEntityText(owner, text) : resolvePH(text)),
           memories: turnMemoriesRef.current ?? scriptMemoriesRef.current,
           notes: liveScene().notes,
-          turn: turnReadRef.current ?? { action: "", number: closedTurns(fullMessageHistoryRef.current) },
+          turn: currentTurnRead(),
+          loreToggles: baseLore,
         };
         const turn: StatCodeTurn = {
           state,
           timing,
           prompts: playPrompts(timing),
-          previous: before, asks, regenApplied, ownerTurns,
+          previous: resolveStatText(before, resolveStart), asks, regenApplied, ownerTurns,
           ...(health && healthLoss !== null ? { penalties: { [health.id]: healthLoss } } : {}),
           statNameOf: (stat) => resolvePH(stat.name),
           traitNameOf: (trait) => resolveTraitText(trait, trait.name),
           worldScripts,
           ...(triggers?.length ? { triggers } : {}),
         };
+        /** What the run left, in the shapes state holds, with nothing landed; null when it changed nothing. */
+        const writtenBy = (result: StatCodeTurnResult): TurnCodeState | null => {
+          const nextPins = withPinWrites(basePins, result.pinWrites);
+          const nextLore = withLoreWrites(baseLore, result.loreWrites);
+          const ownersInForce = entityInForceUnder(result.traits?.ownedTraits ?? held.ownedTraits ?? {});
+          const nextEntityStats = withOwnerCodeResults(entityBase, result.owners, ownersInForce);
+          if (!result.traits && !changedAnyStat(result)
+            && nextPins === basePins && nextLore === baseLore && nextEntityStats === entityPrevious) return null;
+          return {
+            globalStats: overlayStatCodeResult(afterAsks, result, inForce),
+            codePins: nextPins,
+            loreToggles: nextLore,
+            globalTraits: [...(result.traits?.acquired ?? held.acquired)],
+            disabledTraitIds: [...(result.traits?.disabledTraitIds ?? held.disabledTraitIds)],
+            appliedTraitValues: result.traits?.appliedValues ?? held.appliedValues,
+            cascadeOffTraitIds: result.traits?.cascadeOffTraitIds ?? held.cascadeOffTraitIds,
+            ownedTraits: result.traits?.ownedTraits ?? held.ownedTraits,
+            entityStats: nextEntityStats,
+          };
+        };
         /** Lays the run's result onto live state and hands back what it left. */
         const finish = (result: StatCodeTurnResult) => {
           if (timing === 'switch') return landSwitch(result);
-          const nextPins = withPinWrites(basePins, result.pinWrites);
+          setLoreToggles((prev) => withLoreWrites(prev, result.loreWrites));
           // Onto the latest values, as the player's stats below: the regen tick can apply while the run awaits.
           const ownersInForce = entityInForceUnder(result.traits?.ownedTraits ?? held.ownedTraits ?? {});
           setEntityStats((prev) => withOwnerCodeResults(prev, result.owners, ownersInForce));
-          const nextEntityStats = withOwnerCodeResults(entityBase, result.owners, ownersInForce);
           setCodePins((prev) => withPinWrites(prev, result.pinWrites));
           if (result.traits) {
             setGlobalTraits(result.traits.acquired);
@@ -3305,21 +3530,9 @@ const GameViewer = ({
             setOwnedTraits(result.traits.ownedTraits);
             for (const line of result.traits.log) addLogEntry(line);
           }
-          /** What this run left, in the shapes state holds. */
-          const stateAfterRun = (): TurnCodeState => ({
-            globalStats: overlayStatCodeResult(afterAsks, result, inForce),
-            codePins: nextPins,
-            globalTraits: [...(result.traits?.acquired ?? held.acquired)],
-            disabledTraitIds: [...(result.traits?.disabledTraitIds ?? held.disabledTraitIds)],
-            appliedTraitValues: result.traits?.appliedValues ?? held.appliedValues,
-            cascadeOffTraitIds: result.traits?.cascadeOffTraitIds ?? held.cascadeOffTraitIds,
-            ownedTraits: result.traits?.ownedTraits ?? held.ownedTraits,
-            entityStats: nextEntityStats,
-          });
-          const world = result.worldWrites;
-          if (!result.traits && result.moved.length === 0 && result.boundsChanged.length === 0 && result.hiddenChanged.length === 0) {
-            const written = nextPins === basePins && nextEntityStats === entityPrevious ? null : stateAfterRun();
-            return { written, gateStats: result.gateStats, world };
+          const { worldWrites: world, choices } = result;
+          if (!result.traits && !changedAnyStat(result)) {
+            return { written: writtenBy(result), gateStats: result.gateStats, world, choices };
           }
           // The bars are keyed by the name the player reads, so the run's stats resolve theirs here.
           const codeChanges = appliedStatDeltas(stats, resolveStatNames(result.stats, resolvePH));
@@ -3332,7 +3545,7 @@ const GameViewer = ({
           // The commit resets the bar deltas mid-turn, so the share of the runs before the AI is re-laid over that.
           // The start scripts, the before box and the output scripts can move one stat, so their shares add.
           if (readsTurnStart(timing)) beforeBoxDeltasRef.current = sumDeltas(beforeBoxDeltasRef.current, codeChanges);
-          return { written: stateAfterRun(), gateStats: result.gateStats, world };
+          return { written: writtenBy(result), gateStats: result.gateStats, world, choices };
         };
         /** A switch run's landing: only what the run changed lands on the state play reached meanwhile. */
         const landSwitch = (result: StatCodeTurnResult) => {
@@ -3352,6 +3565,7 @@ const GameViewer = ({
           const { state: landed, dropped } = landSwitchRun(start, ran, latest, world);
           commitTraitState(landed);
           setCodePins((prev) => withPinWrites(prev, result.pinWrites));
+          setLoreToggles((prev) => withLoreWrites(prev, result.loreWrites));
           ranTraits?.log.forEach((line, i) => {
             const trait = ranTraits.logTraits?.[i];
             if (!trait || !dropped.has(trait)) addLogEntry(line);
@@ -3359,13 +3573,13 @@ const GameViewer = ({
           addStatDeltas(null, appliedStatDeltas(resolveStatNames(latest.stats, resolvePH), resolveStatNames(landed.stats, resolvePH)));
           return { written: null, gateStats: result.gateStats, world: result.worldWrites };
         };
-        return { turn, finish };
+        return { turn, finish, writtenBy };
       } catch (error) {
         console.error("Error processing stat code:", error);
         return null;
       }
     },
-    [setGlobalStats, setEntityStats, entityOwnersOf, entityInForceUnder, addStatDeltas, setCodePins, resolvePH, statCodePlaceholders, pinsFor, traits, authoredStats, worldScripts, resolveTraitText, gatedWorld, codeEntities, statEntities, inForceOn, liveScene, libraryIn, locations, currentLocation, discoveredEntities,
+    [setGlobalStats, setEntityStats, entityOwnersOf, entityInForceUnder, addStatDeltas, setCodePins, setLoreToggles, resolvePH, resolveFor, statCodePlaceholders, pinsFor, traits, authoredStats, worldScripts, resolveTraitText, gatedWorld, codeEntities, statEntities, inForceOn, liveScene, libraryIn, locations, currentLocation, discoveredEntities,
       entityPositions, entityFollowers, resolveEntityText, setGlobalTraits, setDisabledTraitIds, setAppliedTraitValues, setCascadeOffTraitIds, setOwnedTraits, addLogEntry, playPrompts, commitTraitState],
   );
 
@@ -3424,7 +3638,7 @@ const GameViewer = ({
       const events = traitSwitchEvents(from, to, world, fromWorld);
       if (!events.length) return;
       const prepared = prepareStatCode(to.stats, to.stats, [], { deltaHours: 0, elapsedHours: gameTime, calendar }, {
-        codePins: liveCodeStateRef.current.codePins, globalTraits: to.traits, disabledTraitIds: to.disabledTraitIds,
+        codePins: liveCodeStateRef.current.codePins, loreToggles: liveCodeStateRef.current.loreToggles, globalTraits: to.traits, disabledTraitIds: to.disabledTraitIds,
         appliedTraitValues: to.appliedValues, cascadeOffTraitIds: to.cascadeOffTraitIds ?? {}, ownedTraits: to.ownedTraits ?? {},
         entityStats: to.entityStats ?? {},
         // The render that committed `to` has not run yet, so the run reads `world` rather than the live one.
@@ -3432,7 +3646,7 @@ const GameViewer = ({
       if (!prepared) return;
       try {
         // No action caused a player's switch, so it reads none, even while a turn runs.
-        const read = { action: "", number: turnReadRef.current?.number ?? closedTurns(fullMessageHistoryRef.current) };
+        const read = { ...currentTurnRead(), action: "" };
         const played = { ...prepared.turn, state: { ...prepared.turn.state, turn: read } };
         const turn = fromWorld === world ? played : { ...played, switchedFrom: fromWorld };
         const result = await runSwitchScripts(turn, events);
@@ -3458,6 +3672,22 @@ const GameViewer = ({
     return { written: before?.written ?? started, world: mergeWorldWrites(start?.world, before?.world) };
   };
 
+  // A stat response laid over a turn's stats and its entities' stats, with the asks the After batch reads, by owner.
+  const askedOver = useCallback(
+    (response: StatResponse, baseStats: PlayerStat[], entityBase: EntityStatValues, owned: OwnedTraitStates) => {
+      const live = new Set(enabledStats(rawGlobalStatsRef.current, statEnabledRef.current).map((s) => s.id));
+      const applied = applyStatResponse(baseStats, response, live, null);
+      const entityApplied = applyEntityStatResponse(entityBase, response, entityInForceUnder(owned));
+      const asksOf = (ownerId: OwnerId) => response.updates.filter((update) => update.ownerId === ownerId);
+      const entityTurn = {
+        values: entityApplied.values,
+        asks: Object.fromEntries(Object.keys(entityApplied.values).map((id) => [id, asksOf(id)])),
+      };
+      return { applied, entityApplied, asks: asksOf(null), entityTurn };
+    },
+    [entityInForceUnder],
+  );
+
   // Apply request identities to authored state; resolved names are only for code and display feedback.
   const applyStatChanges = useCallback(
     // `base` is the pre-turn snapshot a stat re-generation starts from (defaults to the live state), so
@@ -3472,11 +3702,9 @@ const GameViewer = ({
       triggers: readonly ScriptTrigger[] = [],
     ) => {
       const baseStats = base?.globalStats ?? rawGlobalStatsRef.current;
-      const live = new Set(enabledStats(rawGlobalStatsRef.current, statEnabledRef.current).map((s) => s.id));
-      const applied = applyStatResponse(baseStats, response, live, null);
-      const directApplied = applied.stats;
       const entityBase = base ? base.entityStats ?? {} : entityStatsRef.current;
-      const entityApplied = applyEntityStatResponse(entityBase, response, entityInForceUnder(base ? base.ownedTraits ?? {} : ownedTraits));
+      const { applied, entityApplied, asks, entityTurn } = askedOver(response, baseStats, entityBase, base ? base.ownedTraits ?? {} : ownedTraits);
+      const directApplied = applied.stats;
       const diagnostics = [...applied.diagnostics, ...entityApplied.diagnostics];
       setDebugTurns((turns) => turns.map((turn) => ({ ...turn, requests: turn.requests.map((request) =>
         request.statRequestId === response.requestId ? { ...request, statDiagnostics: diagnostics } : request,
@@ -3499,17 +3727,9 @@ const GameViewer = ({
       showStatDeltas(null, actualChanges);
 
       setGlobalStats(directApplied);
-      const asksOf = (ownerId: OwnerId) => response.updates.filter((update) => update.ownerId === ownerId);
-      return runStatCode(baseStats, directApplied, asksOf(null), clock, base ?? undefined, 'after', {
-        entityTurn: {
-          values: entityApplied.values,
-          asks: Object.fromEntries(Object.keys(entityApplied.values).map((id) => [id, asksOf(id)])),
-        },
-        thresholdStats,
-        triggers,
-      });
+      return runStatCode(baseStats, directApplied, asks, clock, base ?? undefined, 'after', { entityTurn, thresholdStats, triggers });
     },
-    [runStatCode, setGlobalStats, setEntityStats, showStatDeltas, resolvePH, entityInForceUnder, ownedTraits],
+    [runStatCode, setGlobalStats, setEntityStats, showStatDeltas, resolvePH, askedOver, ownedTraits],
   );
 
   // Discard a turn's dangling, unpaired user message. The failure exits (empty narration, request error)
@@ -3526,6 +3746,7 @@ const GameViewer = ({
       beforeBoxDeltasRef.current = {};
       setGlobalStats(undo.globalStats ?? []);
       setCodePins(undo.codePins ?? {});
+      setLoreToggles(undo.loreToggles ?? {});
       setGlobalTraits(undo.globalTraits ?? []);
       setDisabledTraitIds(undo.disabledTraitIds ?? []);
       setAppliedTraitValues(undo.appliedTraitValues ?? {});
@@ -3671,10 +3892,12 @@ const GameViewer = ({
   };
 
   // The turn end plays in order: the narration's last word fades in, its action row opens, then the choices
-  // stream. A turn holds its choices from its start until `landNarration` resolves.
+  // stream. A turn holds its choices from its start until `landNarration` resolves, or, in a world whose After
+  // the AI scripts can change them, until that batch lands.
   const turnSeqRef = useRef(0);
   const landingRef = useRef<{ turn: number; landed: Promise<void> } | null>(null);
   const choicesHeldRef = useRef(false);
+  const choicesScriptedRef = useRef(false);
   const heldChoicesRef = useRef<string[] | null>(null);
 
   const releaseChoices = () => {
@@ -3693,7 +3916,7 @@ const GameViewer = ({
       if (turnSeqRef.current !== turn) return;
       setNarrationSettled(true);
       return new Promise<void>((resolve) => setTimeout(() => {
-        if (turnSeqRef.current === turn) releaseChoices();
+        if (turnSeqRef.current === turn && !choicesScriptedRef.current) releaseChoices();
         resolve();
       }, TURN_CHROME_ENTER_MS));
     });
@@ -4146,13 +4369,15 @@ const GameViewer = ({
             return putVector(batch[i], vec).catch(() => {}); // cache write is best-effort
           }));
         }
+        // A clean drain looks again, so an item wanted while it ran is queued now (Q28).
+        if (mounted.current) setEmbedDrains((n) => n + 1);
       } catch {
         // Non-fatal: uncovered items stay fail-open; retried on a later history/dictionary change.
       } finally {
         embedDrainingRef.current = false;
       }
     })();
-  }, [semanticMemory, memoryDigests, semanticLore, semanticDiaries, characterDiaries, fullMessageHistory, dictionary]);
+  }, [semanticMemory, memoryDigests, semanticLore, semanticDiaries, characterDiaries, fullMessageHistory, dictionary, embedDrains]);
 
   // --- Discovered-character description: player edit + regenerate -----------------------------------
   // A discovered character's description is minted from the single passage that introduced them, so it
@@ -4408,6 +4633,7 @@ const GameViewer = ({
       // Fresh playthrough: no memory pins, Code Pins, selection or player overrides yet. loadGame overrides.
       setMemoryPins({});
       setCodePins({});
+      setLoreToggles({});
       setEntityVisualPreference({});
       // A new game always holds a reference; None is a choice, and absence means a save from before personas.
       const personaPick: PersonaPick = initialPersona ?? { ref: { source: 'none' } };
@@ -4457,7 +4683,7 @@ const GameViewer = ({
         extraPins: openingPins, persona: drawnPersona, rolls: openingRolls, libraryAdditions: [...picked, ...libraryBooks], owner: drawnOwner,
       });
       if (drawn.opening.kind === "narration") {
-        pendingTurnRef.current = { action: "START GAME", writtenNarration: openingText };
+        pendingTurnRef.current = { action: OPENING_STAND_IN, writtenNarration: openingText };
         setPendingTurnNonce((n) => n + 1);
       } else {
         setPlayerInput(openingText);

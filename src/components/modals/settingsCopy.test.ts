@@ -133,6 +133,20 @@ describe('settings copy', () => {
     expect(bad.map(([k]) => k)).toEqual([]);
   });
 
+  it('breaks every ⓘ body into paragraphs of at most three sentences', () => {
+    // One paragraph that runs on reads as a wall. The shape is a lead line, then bullets or short paragraphs;
+    // the sweep script's `popover-block` rule says the same, and this pins it for the table.
+    const bodies: [string, string][] = [
+      ...entries.flatMap(([k, c]) => (c.info ? [[k, c.info] as [string, string]] : [])),
+      ...options.flatMap(([k, o]) => (o.detail ? [[k, o.detail] as [string, string]] : [])),
+    ];
+    const bad = bodies.flatMap(([k, body]) => body.split(/\n\s*\n|\n(?=\s*- )/).flatMap((para) => {
+      const n = para.trim().split(/(?<=[.!?])\s+/).filter(Boolean).length;
+      return n > 3 ? [`${k}: ${n} sentences in one paragraph`] : [];
+    }));
+    expect(bad).toEqual([]);
+  });
+
   it('keeps every option detail beyond a restatement of its help', () => {
     // The `ⓘ` is worth opening only if it says something the line under the control didn't — a detail that
     // opens with its own help is the padding this table exists to keep out.

@@ -40,7 +40,7 @@ export function MediaFacts({ item, className, children }: { item: MediaItem; cla
     <div className={cn('flex flex-wrap items-center gap-2 text-meta text-muted-foreground', className)}>
       {children}
       <MediaSize item={item} />
-      {item.budget && !item.linked && <span>· Budget {formatMediaBytes(item.budget.maxBytes)}</span>}
+      {item.budget && !item.linked && <span>· Up to {item.budget.maxDim} px on the long edge, {formatMediaBytes(item.budget.maxBytes)}</span>}
       {item.overBudget && <Badge variant="outline" className="border-warning text-warning">Over Budget</Badge>}
     </div>
   );

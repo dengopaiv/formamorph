@@ -7,7 +7,7 @@ import { toastError } from '@/lib/linkToast';
 import { convertSaveFile, terminateWorker } from '../lib/saveConversionWorkerUtils';
 import { useTtsPlayback } from '../lib/useTtsPlayback';
 import { APP_VERSION, isSaveEnvelope, migrateSave, migrateLegacySaveState, stripSnapshotHistory } from '../lib/version';
-import { flattenEnabledBookEntries } from '../lib/dictionaryUtils';
+import { loreEntries, NO_LORE_TOGGLES, playthroughBooks } from '../lib/loreToggles';
 import { getGameplayText, setGameplayText } from '../lib/gameplayTextStore';
 import { turnActivity } from '../lib/turnActivity';
 import { setLiveReasoning } from '../lib/reasoningStreamStore';
@@ -41,6 +41,7 @@ import type { MemoryEditMap, MemoryNote } from '../lib/memoryOverrides';
 import type {
   CharacterData,
   CodePins,
+  LoreToggles,
   Entity,
   EntityStatChanges,
   EntityStatValues,
@@ -166,6 +167,8 @@ function useProvideGameplay() {
   }, []);
   // Placeholder id → the text stat code pinned it to. Snapshotted per turn, so undo and re-roll restore it.
   const [codePins, setCodePins] = useState<CodePins>(EMPTY_PINS);
+  // What scripts switched on dictionary entries. Snapshotted per turn, so undo and re-roll restore it.
+  const [loreToggles, setLoreToggles] = useState<LoreToggles>(NO_LORE_TOGGLES);
   // Per-playthrough dictionary set chosen at world entry (or restored from a save). Runtime-only: the
   // authored world's books live in GameDataContext and are never mutated by gameplay.
   const [runtimeDictionaries, setRuntimeDictionaries] = useState<Dictionary[]>([]);
@@ -229,9 +232,11 @@ function useProvideGameplay() {
   // What scripts told the player, by turn id, beside the history so no request carries it (Q23).
   const [scriptTells, setScriptTells] = useState<TellMap>({});
   // The opening turn's `turn.action`; null until a playthrough opens, and on a save that lacks it.
-  const [openingCue, setOpeningCue] = useState<string | null>(null);
-  // Flattened enabled entries fed to the injection pipeline (mirrors GameData's old derived `dictionary`).
-  const runtimeDictionary = useMemo(() => flattenEnabledBookEntries(runtimeDictionaries), [runtimeDictionaries]);
+  const [openingAction, setOpeningAction] = useState<string | null>(null);
+  // The books in play: the save's, plus the world's shipped-off books a script may switch on.
+  const playthroughDictionaries = useMemo(() => playthroughBooks(runtimeDictionaries, worldBooks), [runtimeDictionaries, worldBooks]);
+  // The enabled entries the injection pipeline reads, with the lore overlay applied.
+  const runtimeDictionary = useMemo(() => loreEntries(playthroughDictionaries, loreToggles), [playthroughDictionaries, loreToggles]);
   const libraryDictionaries = useMemo(() => libraryBooksInPlay(runtimeDictionaries, worldBooks), [runtimeDictionaries, worldBooks]);
   const added = useMemo(() => addedCharacters(discoveredEntities), [discoveredEntities]);
   // Added characters' and library books' placeholders join the session's set, and their Wildcards are drawn.
@@ -326,6 +331,7 @@ function useProvideGameplay() {
       ...(metEntities.length ? { metEntities: [...metEntities] } : {}),
       ...(Object.keys(entityStatChanges).length ? { entityStatChanges } : {}),
       ...(Object.keys(codePins).length ? { codePins } : {}),
+      ...(Object.keys(loreToggles).length ? { loreToggles } : {}),
       visibleEntities,
       discoveredEntities,
       suppressedCharacterNames,
@@ -346,8 +352,8 @@ function useProvideGameplay() {
       // Add a version flag for backward compatibility
       stateVersion: 2
     };
-  }, [globalStats, globalTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds, ownedTraits, entityStats, entityPositions, entityFollowers, metEntities, entityStatChanges, codePins, visibleEntities, discoveredEntities, suppressedCharacterNames, logEntries, currentLocation,
-      gameTime, startHour, fullMessageHistory, characterData, choices, isGameStarted, playerNotes, currentPage]);
+  }, [globalStats, globalTraits, disabledTraitIds, appliedTraitValues, cascadeOffTraitIds, ownedTraits, entityStats, entityPositions, entityFollowers, metEntities, entityStatChanges, codePins, loreToggles, visibleEntities, discoveredEntities, suppressedCharacterNames, logEntries,
+      currentLocation, gameTime, startHour, fullMessageHistory, characterData, choices, isGameStarted, playerNotes, currentPage]);
 
   /** Restore a `GameState` into the live gameplay state, resolving `locationId` against `locations` and
    *  recovering `playerNotes` from the newest nested state when the top-level field is absent (legacy saves).
@@ -375,6 +381,7 @@ function useProvideGameplay() {
       setEntityFollowers(gameState.entityFollowers ?? []);
       setMetEntities(gameState.metEntities ?? []);
       setCodePins(gameState.codePins ?? EMPTY_PINS);
+      setLoreToggles(gameState.loreToggles ?? NO_LORE_TOGGLES);
       setVisibleEntities(normalizeVisibleEntities(gameState.visibleEntities));
       // Rollback / re-generate also keep the live discovered cast + suppressed names (they carry the
       // player's edits and deletions, which land after the snapshot froze); the rewind handlers prune
@@ -473,7 +480,7 @@ function useProvideGameplay() {
         ...(memoryDeleted.length ? { memoryDeleted } : {}),
         ...(memoryNotes.length ? { memoryNotes } : {}),
         ...(Object.keys(scriptTells).length ? { scriptTells } : {}),
-        ...(openingCue !== null ? { openingCue } : {}),
+        ...(openingAction !== null ? { openingAction } : {}),
         ...(isAutosave ? { isAutosave: true } : {}),
       };
 
@@ -492,7 +499,7 @@ function useProvideGameplay() {
       }
       return false;
     }
-  }, [saveCurrentGameState, gameStates, runtimeDictionaries, placeholderRolls, memoryPins, entityVisualPreference, personaRef, milestoneSelection, memoryEdits, memoryDeleted, memoryNotes, scriptTells, openingCue, addSystemLogEntry]);
+  }, [saveCurrentGameState, gameStates, runtimeDictionaries, placeholderRolls, memoryPins, entityVisualPreference, personaRef, milestoneSelection, memoryEdits, memoryDeleted, memoryNotes, scriptTells, openingAction, addSystemLogEntry]);
 
   // Autosave has failed at least once this session — used to toast only once, re-armed on a later success.
   const autosaveFailedRef = useRef(false);
@@ -587,7 +594,7 @@ function useProvideGameplay() {
           setMemoryDeleted(migrated.memoryDeleted ?? []);
           setMemoryNotes(migrated.memoryNotes ?? []);
           setScriptTells(restoreTells(migrated.scriptTells));
-          setOpeningCue(typeof migrated.openingCue === 'string' ? migrated.openingCue : null);
+          setOpeningAction(typeof migrated.openingAction === 'string' ? migrated.openingAction : null);
           addSystemLogEntry(`Game loaded from "${saveName}"`);
           setSaveLoads((n) => n + 1);
         }
@@ -636,7 +643,7 @@ function useProvideGameplay() {
           if (success) {
             setPersonaRef(undefined);
             setScriptTells({});
-            setOpeningCue(null);
+            setOpeningAction(null);
             addSystemLogEntry(`Game loaded from "${saveName}"`);
             setSaveLoads((n) => n + 1);
           }
@@ -844,15 +851,18 @@ function useProvideGameplay() {
     setMetEntities,
     codePins,
     setCodePins,
+    loreToggles,
+    setLoreToggles,
     runtimeDictionaries,
     setRuntimeDictionaries,
     libraryDictionaries,
+    playthroughDictionaries,
     placeholderRolls,
     setPlaceholderRolls,
     scriptTells,
     setScriptTells,
-    openingCue,
-    setOpeningCue,
+    openingAction,
+    setOpeningAction,
     memoryPins,
     setMemoryPins,
     entityVisualPreference,

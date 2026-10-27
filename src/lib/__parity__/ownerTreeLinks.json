@@ -3676,6 +3676,7 @@
             "aiDescription": "The kaiju's presentation:",
             "id": "dcd9df65-88fe-4851-afc7-8e6f6d5814bc",
             "maxPicks": 1,
+            "minPicks": 1,
             "name": "Presentation",
             "order": 1,
             "parentId": null,
@@ -3693,6 +3694,7 @@
             "aiDescription": "The player’s kaiju type:",
             "id": "5927c5c9-d030-462f-82a7-dde2710d2f77",
             "maxPicks": 1,
+            "minPicks": 1,
             "name": "Type",
             "order": 0,
             "parentId": null,
@@ -4046,6 +4048,7 @@
             "aiDescription": "The kaiju's presentation:",
             "id": "dcd9df65-88fe-4851-afc7-8e6f6d5814bc",
             "maxPicks": 1,
+            "minPicks": 1,
             "name": "Presentation",
             "order": 1,
             "parentId": null,
@@ -4063,6 +4066,7 @@
             "aiDescription": "The player’s kaiju type:",
             "id": "5927c5c9-d030-462f-82a7-dde2710d2f77",
             "maxPicks": 1,
+            "minPicks": 1,
             "name": "Type",
             "order": 0,
             "parentId": null,
@@ -4416,6 +4420,7 @@
             "aiDescription": "The kaiju's presentation:",
             "id": "dcd9df65-88fe-4851-afc7-8e6f6d5814bc",
             "maxPicks": 1,
+            "minPicks": 1,
             "name": "Presentation",
             "order": 1,
             "parentId": null,
@@ -4433,6 +4438,7 @@
             "aiDescription": "The player’s kaiju type:",
             "id": "5927c5c9-d030-462f-82a7-dde2710d2f77",
             "maxPicks": 1,
+            "minPicks": 1,
             "name": "Type",
             "order": 0,
             "parentId": null,
@@ -4637,6 +4643,89 @@
     }
   },
   "slime": {
+    "Hollis Pratt": {
+      "boundStats": {},
+      "boundTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: night hours. Hollis has the Night Pharmacy counter open and rations the iodine, antihistamines and electrolyte salts to whoever answers her questions honestly.",
+            "id": "counter_open",
+            "mode": "alwaysOn",
+            "name": "Counter Open",
+            "order": 0,
+            "playerDescription": "Night hours. Hollis is at the counter, and the remedies are on offer.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "night",
+                      "evening"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          }
+        ]
+      },
+      "carriedStats": {},
+      "carriedTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: night hours. Hollis has the Night Pharmacy counter open and rations the iodine, antihistamines and electrolyte salts to whoever answers her questions honestly.",
+            "id": "counter_open",
+            "mode": "alwaysOn",
+            "name": "Counter Open",
+            "order": 0,
+            "playerDescription": "Night hours. Hollis is at the counter, and the remedies are on offer.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "night",
+                      "evening"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          }
+        ]
+      },
+      "portableStats": {},
+      "portableTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: night hours. Hollis has the Night Pharmacy counter open and rations the iodine, antihistamines and electrolyte salts to whoever answers her questions honestly.",
+            "id": "counter_open",
+            "mode": "alwaysOn",
+            "name": "Counter Open",
+            "order": 0,
+            "playerDescription": "Night hours. Hollis is at the counter, and the remedies are on offer.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "night",
+                      "evening"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          }
+        ]
+      }
+    },
     "The Resident": {
       "boundStats": {
         "stats": [
@@ -6862,6 +6951,161 @@
           }
         ]
       }
+    },
+    "The Daylight Seam": {
+      "boundStats": {},
+      "boundTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: the sun is up, and the seam is full of plain daylight from home. Stepping through it from the Stalefront ends the ordeal: narrate the crossing as a triumphant finale that ends on the player's first bite of real, savory food. From the Leftover Wastes side, the seam leads back to the Stalefront.",
+            "id": "open_to_daylight",
+            "mode": "alwaysOn",
+            "name": "Open to Daylight",
+            "order": 0,
+            "playerDescription": "The sun is up. The seam is full of daylight, and stepping through it takes you home.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "dawn",
+                      "morning",
+                      "midday",
+                      "afternoon"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          },
+          {
+            "aiDescription": "ACTIVE: the sun is down, and the seam holds no daylight. It is a dark, cold crack in the crust. Stepping through it from the Stalefront leads only to the Leftover Wastes behind the crust, never home, and from the Wastes side it leads back to the Stalefront. It fills with daylight again at dawn.",
+            "id": "dark_seam",
+            "mode": "alwaysOn",
+            "name": "Dark Seam",
+            "order": 1,
+            "playerDescription": "The sun is down. The seam is a dark crack, and through it lie only the Leftover Wastes.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          }
+        ]
+      },
+      "carriedStats": {},
+      "carriedTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: the sun is up, and the seam is full of plain daylight from home. Stepping through it from the Stalefront ends the ordeal: narrate the crossing as a triumphant finale that ends on the player's first bite of real, savory food. From the Leftover Wastes side, the seam leads back to the Stalefront.",
+            "id": "open_to_daylight",
+            "mode": "alwaysOn",
+            "name": "Open to Daylight",
+            "order": 0,
+            "playerDescription": "The sun is up. The seam is full of daylight, and stepping through it takes you home.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "dawn",
+                      "morning",
+                      "midday",
+                      "afternoon"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          },
+          {
+            "aiDescription": "ACTIVE: the sun is down, and the seam holds no daylight. It is a dark, cold crack in the crust. Stepping through it from the Stalefront leads only to the Leftover Wastes behind the crust, never home, and from the Wastes side it leads back to the Stalefront. It fills with daylight again at dawn.",
+            "id": "dark_seam",
+            "mode": "alwaysOn",
+            "name": "Dark Seam",
+            "order": 1,
+            "playerDescription": "The sun is down. The seam is a dark crack, and through it lie only the Leftover Wastes.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          }
+        ]
+      },
+      "portableStats": {},
+      "portableTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: the sun is up, and the seam is full of plain daylight from home. Stepping through it from the Stalefront ends the ordeal: narrate the crossing as a triumphant finale that ends on the player's first bite of real, savory food. From the Leftover Wastes side, the seam leads back to the Stalefront.",
+            "id": "open_to_daylight",
+            "mode": "alwaysOn",
+            "name": "Open to Daylight",
+            "order": 0,
+            "playerDescription": "The sun is up. The seam is full of daylight, and stepping through it takes you home.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "dawn",
+                      "morning",
+                      "midday",
+                      "afternoon"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          },
+          {
+            "aiDescription": "ACTIVE: the sun is down, and the seam holds no daylight. It is a dark, cold crack in the crust. Stepping through it from the Stalefront leads only to the Leftover Wastes behind the crust, never home, and from the Wastes side it leads back to the Stalefront. It fills with daylight again at dawn.",
+            "id": "dark_seam",
+            "mode": "alwaysOn",
+            "name": "Dark Seam",
+            "order": 1,
+            "playerDescription": "The sun is down. The seam is a dark crack, and through it lie only the Leftover Wastes.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": []
+          }
+        ]
+      }
     }
   },
   "valentines": {
@@ -7718,6 +7962,208 @@
     }
   },
   "veilwood": {
+    "Dread Crawler": {
+      "boundStats": {},
+      "boundTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: it is evening or night, and the Dread Crawler has left the Dens. It swims the channels and climbs the trunks across the whole wood, listening. Every sound the player makes carries farther in the night quiet.",
+            "id": "crawler_night_hunt",
+            "mode": "alwaysOn",
+            "name": "Night Hunt",
+            "order": 0,
+            "playerDescription": "After dusk the crawler leaves its den and hunts the whole wood.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": [
+              {
+                "statId": "attention",
+                "type": "regen",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "carriedStats": {},
+      "carriedTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: it is evening or night, and the Dread Crawler has left the Dens. It swims the channels and climbs the trunks across the whole wood, listening. Every sound the player makes carries farther in the night quiet.",
+            "id": "crawler_night_hunt",
+            "mode": "alwaysOn",
+            "name": "Night Hunt",
+            "order": 0,
+            "playerDescription": "After dusk the crawler leaves its den and hunts the whole wood.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": [
+              {
+                "statId": "attention",
+                "type": "regen",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "portableStats": {},
+      "portableTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: it is evening or night, and the Dread Crawler has left the Dens. It swims the channels and climbs the trunks across the whole wood, listening. Every sound the player makes carries farther in the night quiet.",
+            "id": "crawler_night_hunt",
+            "mode": "alwaysOn",
+            "name": "Night Hunt",
+            "order": 0,
+            "playerDescription": "After dusk the crawler leaves its den and hunts the whole wood.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": [
+              {
+                "statId": "attention",
+                "type": "regen",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "Shadow Raptor": {
+      "boundStats": {},
+      "boundTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: it is evening or night, and the Shadow Raptor has left the Dens. It ranges the whole wood on the ground, fast and silent until it screams. Any open ground can hold it now.",
+            "id": "raptor_night_hunt",
+            "mode": "alwaysOn",
+            "name": "Night Hunt",
+            "order": 0,
+            "playerDescription": "After dusk the raptor leaves its den and hunts the whole wood.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": [
+              {
+                "statId": "attention",
+                "type": "regen",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "carriedStats": {},
+      "carriedTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: it is evening or night, and the Shadow Raptor has left the Dens. It ranges the whole wood on the ground, fast and silent until it screams. Any open ground can hold it now.",
+            "id": "raptor_night_hunt",
+            "mode": "alwaysOn",
+            "name": "Night Hunt",
+            "order": 0,
+            "playerDescription": "After dusk the raptor leaves its den and hunts the whole wood.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": [
+              {
+                "statId": "attention",
+                "type": "regen",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "portableStats": {},
+      "portableTraits": {
+        "traits": [
+          {
+            "aiDescription": "ACTIVE: it is evening or night, and the Shadow Raptor has left the Dens. It ranges the whole wood on the ground, fast and silent until it screams. Any open ground can hold it now.",
+            "id": "raptor_night_hunt",
+            "mode": "alwaysOn",
+            "name": "Night Hunt",
+            "order": 0,
+            "playerDescription": "After dusk the raptor leaves its den and hunts the whole wood.",
+            "requires": [
+              {
+                "all": [
+                  {
+                    "dayparts": [
+                      "evening",
+                      "night"
+                    ],
+                    "kind": "time"
+                  }
+                ]
+              }
+            ],
+            "statChanges": [
+              {
+                "statId": "attention",
+                "type": "regen",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
     "The Wanderer": {
       "boundStats": {
         "stats": [
@@ -8155,7 +8601,7 @@
             ]
           },
           {
-            "aiDescription": "The wood turns the player in circles. Every path except east bends back toward the Drowned Hollow, and the player keeps finding their own tracks. East, the way the lantern moths drift at dusk, is the one direction that keeps going.",
+            "aiDescription": "The wood turns the player in circles. Every path that tries to leave the wood, except east, bends back toward the Drowned Hollow, and the player keeps finding their own tracks. East, the way the lantern moths drift at dusk, is the one direction that keeps going.",
             "groupId": "7d1c5e2a-3b84-4f6e-9a17-c2e85b40d913",
             "id": "veils_hold",
             "mode": "alwaysOn",
@@ -8632,7 +9078,7 @@
             ]
           },
           {
-            "aiDescription": "The wood turns the player in circles. Every path except east bends back toward the Drowned Hollow, and the player keeps finding their own tracks. East, the way the lantern moths drift at dusk, is the one direction that keeps going.",
+            "aiDescription": "The wood turns the player in circles. Every path that tries to leave the wood, except east, bends back toward the Drowned Hollow, and the player keeps finding their own tracks. East, the way the lantern moths drift at dusk, is the one direction that keeps going.",
             "groupId": "7d1c5e2a-3b84-4f6e-9a17-c2e85b40d913",
             "id": "veils_hold",
             "mode": "alwaysOn",
@@ -9109,7 +9555,7 @@
             ]
           },
           {
-            "aiDescription": "The wood turns the player in circles. Every path except east bends back toward the Drowned Hollow, and the player keeps finding their own tracks. East, the way the lantern moths drift at dusk, is the one direction that keeps going.",
+            "aiDescription": "The wood turns the player in circles. Every path that tries to leave the wood, except east, bends back toward the Drowned Hollow, and the player keeps finding their own tracks. East, the way the lantern moths drift at dusk, is the one direction that keeps going.",
             "groupId": "7d1c5e2a-3b84-4f6e-9a17-c2e85b40d913",
             "id": "veils_hold",
             "mode": "alwaysOn",

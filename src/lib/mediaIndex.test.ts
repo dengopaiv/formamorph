@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { World } from '@/types';
 import {
-  blankSections, buildMediaIndex, filterSections, formatMediaBytes, groupSections, kindBreakdown, largestItems, mediaFileName, mediaHolds, mediaSections,
+  blankSections, buildMediaIndex, filterSections, formatMediaBytes, groupSections, kindBreakdown, largestItems, mediaAspect, mediaFileName, mediaHolds, mediaSections,
   sectionCards, sectionSelection, sortSectionsLargestFirst, storedBytes, totalBytes, worldImageSlots, type MediaFilter,
 } from './mediaIndex';
 import { IMAGE_CAPS } from './imageSlots';
+import { dataUrlBytes } from './imageBytes';
+import { scanItem, type ImageCodec } from './imageOptimCore';
+import { runRules } from './testBench/rules';
 import { LINKED_IMAGE, fakeDataUrl, mediaFixtureWorld } from '@/test/mediaFixture';
 
 const where = (items: ReturnType<typeof buildMediaIndex>) => items.map((i) => `${i.kind} ${i.parent.kind}:${i.parent.name} ${i.slot}`);
@@ -98,6 +101,28 @@ describe('buildMediaIndex', () => {
     const wick = buildMediaIndex(mediaFixtureWorld()).filter((i) => i.parent.name === 'Odd Wick' && i.kind === 'image');
 
     expect(wick.map((i) => [i.galleryIndex, i.rules?.length ?? 0])).toEqual([[0, 0], [1, 1], [2, 0]]);
+  });
+});
+
+describe('mediaAspect', () => {
+  it('frames Avatars and entity media as portraits, everything else as landscape', () => {
+    expect(buildMediaIndex(mediaFixtureWorld()).map((i) => `${where([i])[0]}: ${mediaAspect(i)}`)).toEqual([
+      'image world:World Thumbnail: landscape',
+      'sound world:World Background Music: landscape',
+      'avatar world:World Fen Walker: portrait',
+      'avatar world:World Spare: portrait',
+      'image entity:Odd Wick Image 1: portrait',
+      'image entity:Odd Wick Image 2: portrait',
+      'image entity:Odd Wick Image 3: portrait',
+      'sound entity:Odd Wick Sound: portrait',
+      'model entity:Odd Wick 3D Model: portrait',
+      'image entity:Bram Image 1: portrait',
+      'image location:Marsh Image 1: landscape',
+      'image location:Harbor Steps Image 1: landscape',
+      'image location:Lamp Room Image 1: landscape',
+      'sound location:Lamp Room Ambient Sound: landscape',
+      'image dictionary:Fen Lore Cover Image: landscape',
+    ]);
   });
 });
 
@@ -310,7 +335,7 @@ describe('location galleries', () => {
 describe('Map Background', () => {
   const RUINED = [{ all: [{ kind: 'stat' as const, id: 'ruin', operator: '>' as const, value: 4, unit: 'raw' as const }] }];
   // Over the background budget, under the map's own.
-  const BIG = fakeDataUrl('image/webp', 2_000_000, 'd');
+  const BIG = fakeDataUrl('image/webp', 1_200_000, 'd');
   const mapWorld = () => {
     const world = mediaFixtureWorld();
     world.worldOverview.mapBackground = {
@@ -336,7 +361,7 @@ describe('Map Background', () => {
     expect(sectionCards(section.items).map((c) => c.images?.length)).toEqual([2]);
   });
 
-  it('judges size against the 2560 px, 2.5 MB cap, and feeds the optimize walk with it', () => {
+  it('judges size against the 2560 px, 1.5 MB cap, and feeds the optimize walk with it', () => {
     expect(mapItems().map((i) => i.overBudget)).toEqual([false, true]);
     expect(worldImageSlots(mapWorld()).filter((s) => s.path.startsWith('map:'))).toEqual([
       { url: BIG, cap: IMAGE_CAPS.map, path: 'map:map:image:0' },
@@ -391,5 +416,68 @@ describe('filterSections', () => {
 
     expect(stack.map((i) => i.slot)).toEqual(['Image 1', 'Image 2']);
     expect(totalBytes(stack)).toBe(totalBytes(embeddedWick));
+  });
+});
+
+describe('the slot budgets', () => {
+  /** A data URL whose payload decodes to exactly `bytes` (a multiple of 3). */
+  const exactly = (bytes: number, fill: string) => `data:image/jpeg;base64,${fill.repeat((bytes / 3) * 4)}`;
+  // Each pair sits at or just under its budget, then just over it.
+  const PAIRS = {
+    thumbnail: [204_798, 204_801],
+    entity: [255_999, 256_002],
+    background: [921_600, 921_603],
+    map: [1_572_864, 1_572_867],
+  } as const;
+
+  /** One world with an image at and past each budget, in every image slot the scan walks. */
+  const budgetWorld = (): World => {
+    const world = mediaFixtureWorld();
+    const [thumbAt, thumbOver] = PAIRS.thumbnail;
+    world.worldOverview.thumbnail = exactly(thumbOver, 't');
+    world.dictionaries = [
+      { id: 'lore', name: 'Fen Lore', entries: [], thumbnail: exactly(thumbAt, 'a') },
+      { id: 'tide', name: 'Tide Book', entries: [], thumbnail: exactly(thumbOver, 'b') },
+    ];
+    world.entities = [{ id: 'bram', name: 'Bram', playerDescription: '', aiDescription: '', locations: [], images: PAIRS.entity.map((n, i) => ({ data: exactly(n, 'ef'[i]) })) }];
+    world.locations = [{ id: 'harbor', name: 'Harbor Steps', isStarting: true, images: PAIRS.background.map((n, i) => ({ data: exactly(n, 'lk'[i]) })) }];
+    world.worldOverview.mapBackground = { images: PAIRS.map.map((n, i) => ({ data: exactly(n, 'mn'[i]) })), frame: { x: 0, y: 0, width: 10, height: 10 }, opacity: 1 };
+    return world;
+  };
+
+  it('flips each slot’s Over Budget flag past its byte budget', () => {
+    const images = buildMediaIndex(budgetWorld()).filter((i) => i.kind === 'image');
+    expect(images.map((i) => [`${i.parent.name} ${i.slot}`, i.overBudget])).toEqual([
+      ['World Thumbnail', true],
+      ['Map Background Image 1', false],
+      ['Map Background Image 2', true],
+      ['Bram Image 1', false],
+      ['Bram Image 2', true],
+      ['Harbor Steps Image 1', false],
+      ['Harbor Steps Image 2', true],
+      ['Fen Lore Cover Image', false],
+      ['Tide Book Cover Image', true],
+    ]);
+    expect(Object.fromEntries(Object.entries(IMAGE_CAPS).map(([slot, cap]) => [slot, cap.maxBytes])))
+      .toEqual({ thumbnail: 204_800, entity: 256_000, background: 921_600, map: 1_572_864 });
+  });
+
+  it('agrees with the Over Size Budget filter, the Test Bench size rule and the scan', async () => {
+    const world = budgetWorld();
+    const flagged = buildMediaIndex(world).filter((i) => i.overBudget).map((i) => i.id);
+    const filtered = filterSections(mediaSections(world), 'overBudget').flatMap((s) => s.items).map((i) => i.id);
+    const bench = runRules(world).filter((f) => f.ruleId === 'world-oversized-images');
+    const codec: ImageCodec = {
+      encode: (url) => Promise.resolve(url),
+      measure: (url) => Promise.resolve({ w: 100, h: 100, bytes: dataUrlBytes(url) }),
+    };
+    const scanned = (await Promise.all(worldImageSlots(world).map((s) => scanItem(codec, s.url, s.cap, s.path))))
+      .filter((item) => item?.oversized).map((item) => item!.path);
+
+    expect(flagged).toHaveLength(5);
+    expect(new Set(filtered)).toEqual(new Set(flagged));
+    expect(new Set(scanned)).toEqual(new Set(flagged));
+    expect(bench).toHaveLength(flagged.length);
+    expect(bench.flatMap((f) => f.items.map((i) => i.name)).sort()).toEqual(['Bram', 'Harbor Steps', 'Map Background', 'Sedge Landing', 'Tide Book']);
   });
 });

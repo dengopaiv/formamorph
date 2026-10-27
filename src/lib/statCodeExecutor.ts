@@ -1,7 +1,9 @@
 import type { CodeBounds, Stat } from '@/types';
 import { clamp } from './utils';
+import { activeDescriptor } from './statContext';
 import { runInSandbox, type SandboxEngine, type SandboxHostFunction } from './scriptSandbox';
 import { isPromptCanceled, namesPlayer, scriptPrompts, type ScriptPromptHost, type ScriptPromptRequest } from './scriptPrompts';
+import { sameChoices } from './scriptedChoices';
 import { VALUE_JOIN } from './placeholders';
 import { hasEntityKey, statsByCodeName } from './statCodeNames';
 import {
@@ -9,6 +11,10 @@ import {
 } from './statCodePaths';
 import { clockReading, FLAT_HOURS_PER_TURN, type WorldCalendar } from './gameClock';
 import { SCRIPT_TIMING_LABEL } from './scripts';
+import { namedEntries, type LoreWrite } from './loreToggles';
+
+/** A lore write with the path code wrote it through. */
+export type PathedLoreWrite = LoreWrite & { path: string };
 
 // Stat code sees only the marshalled stat data below.
 
@@ -101,8 +107,15 @@ export interface StatCodeResult {
   entities?: EntityTraitWrites[];
   /** Entity names the code switched a trait through that no entity in play has; each switch was dropped. */
   unknownEntities?: string[];
+  /** The dictionary entry fields the code wrote, each entry's in assignment order, with the path code wrote through.
+   *  Absent when it wrote none. */
+  lore?: PathedLoreWrite[];
+  /** Entry fields the code wrote through a name no entry has, as code spelled them; each write was ignored. */
+  unknownLore?: string[];
   /** Read-only fields the code wrote, as code spelled them, such as `traits.Brave.mode`; each write was dropped. */
   readOnlyWrites?: string[];
+  /** The `turn.choices` the run left, when it takes the write and the list differs from the one it read (Q12). */
+  choices?: string[];
   /** The sentence the code left, by return or by `narration.sentence`. Present on a During AI Output run that
    *  succeeded, the sentence as it came when the code did not touch it. */
   sentence?: string;
@@ -310,10 +323,15 @@ export interface SandboxStats {
   enabled?: Readonly<Record<string, boolean>>;
 }
 
-/** What `turn` reads: the player's action and the turn number on the `memories[].turn` scale. */
+/** What `turn` reads: the player's action, the turn number on the `memories[].turn` scale, and the finished
+ *  page and choices, empty until the turn's reply lands. */
 export interface SandboxTurn {
   action: string;
   number: number;
+  narration: string;
+  choices: readonly string[];
+  /** The player has choices off: `choices` reads empty and takes no write (Q11). */
+  choicesOff?: boolean;
 }
 
 /** One entry of a book's `entries`, by its code name. */
@@ -322,13 +340,18 @@ export interface SandboxDictionaryEntry {
   name: string;
   keys: readonly string[];
   value: string;
+  /** As the lore overlay leaves it. */
+  enabled: boolean;
+  constant: boolean;
 }
 
 /** One entry of the sandbox's `dictionaries`: a book's code name, its owner node in the placeholder tree, and its
- *  enabled entries in authored order. */
+ *  entries in authored order, disabled ones included. */
 export interface SandboxDictionary {
   name: string;
   id?: string;
+  /** As the lore overlay leaves it; absent, on. */
+  enabled?: boolean;
   /** Absent, its `placeholders` holds no names. */
   placeholders?: SandboxPlaceholderNode;
   entries?: readonly SandboxDictionaryEntry[];
@@ -352,6 +375,8 @@ export interface StatSnapshot {
   value: number;
   regen: number;
   hidden: boolean;
+  /** The active band's text, chips as the caller resolved them; empty when no band applies. */
+  descriptor: string;
 }
 
 /** The numbers a stat carries, and the fields of every `delta` source. */
@@ -387,6 +412,7 @@ const marshalSnapshot = (stat: Stat): StatSnapshot => ({
   value: stat.value || 0,
   regen: stat.regen || 0,
   hidden: stat.hidden === true,
+  descriptor: activeDescriptor(stat, stat.value || 0)?.description ?? '',
 });
 
 /** `value` clamped to the range an authored `stat` holds after a run's own bound writes, the min floored at
@@ -894,18 +920,19 @@ const isPlayed = (entity: SandboxEntity, persona: SandboxEntity): boolean =>
   entity === persona || (!!persona.id && entity.id === persona.id);
 
 /** JS source of `(fields, entries, blank, build) => [map, readWrites, entry]`: frozen entries with read-only
- *  `fields`, built by `build(key, data, unknown) => [values, rows, hidden?]`, where `hidden` fields are left
- *  out of the entry's keys; an unknown name builds from `blank`.
+ *  `fields`, built by `build(key, data, unknown) => [values, rows, hidden?, setters?]`, where `hidden` fields are
+ *  left out of the entry's keys and a field in `setters` takes its write there; an unknown name builds from `blank`.
  *  `entry(key, data, unknown, tag)` builds one more, whose reader row carries `tag`. */
 const READ_ONLY_ENTRY_MAP = `(fields, entries, blank, build) => {
   const readers = [];
   const entry = (key, data, unknown, tag = null) => {
-    const [values, rows, hidden = []] = build(key, data, unknown);
+    const [values, rows, hidden = [], setters = {}] = build(key, data, unknown);
     const written = [];
     readers.push([key, unknown, rows, written, tag]);
     const out = {};
     for (const field of fields) {
-      define(out, field, { enumerable: !hidden.includes(field), get: () => values[field], set: () => (${ADD_ONCE})(written, field) });
+      const set = setters[field] || (() => (${ADD_ONCE})(written, field));
+      define(out, field, { enumerable: !hidden.includes(field), get: () => values[field], set });
     }
     return freeze(out);
   };
@@ -1008,33 +1035,52 @@ const entitiesPrelude = (
 const ownerIndex = (indexOf: FlatPlaceholderMap['indexOf'], node: SandboxPlaceholderNode | undefined): number =>
   (node ? indexOf.get(node) ?? -1 : -1);
 
-/** The fields on a dictionary entry. None takes a write. */
-const DICTIONARY_READ_ONLY_FIELDS = ['id', 'name', 'entries', 'placeholders'] as const;
+/** The fields on a dictionary entry. Only `DICTIONARY_WRITABLE_FIELD` takes a write. */
+const DICTIONARY_KEYS = ['id', 'name', 'enabled', 'entries', 'placeholders'] as const;
 
-/** The fields on an entry of a book's `entries`. None takes a write. */
-const DICTIONARY_ENTRY_READ_ONLY_FIELDS = ['id', 'name', 'keys', 'value'] as const;
+/** The book field a write sets, through the lore overlay. */
+export const DICTIONARY_WRITABLE_FIELD = 'enabled' satisfies keyof SandboxDictionary;
 
-/** The `dictionaries` prelude, the later of two books or two entries sharing a name winning. A book's `entries` map
- *  comes from the host on its first read (Q48), and each `value` resolves on its own (Q54). A book's reader rows are
- *  its `entries` map's rows. */
+/** The fields on an entry of a book's `entries`. Only `DICTIONARY_ENTRY_WRITABLE_FIELDS` take a write. */
+const DICTIONARY_ENTRY_KEYS = ['id', 'name', 'keys', 'value', 'enabled', 'constant'] as const;
+
+/** The entry fields a write sets, through the lore overlay. */
+export const DICTIONARY_ENTRY_WRITABLE_FIELDS = ['enabled', 'constant'] as const satisfies readonly (keyof SandboxDictionaryEntry)[];
+
+/** Each book under its code name, the later of two sharing one winning. */
+const namedBooks = (dictionaries: readonly SandboxDictionary[]) => new Map(dictionaries.map((book) => [book.name, book]));
+
+/** The `dictionaries` prelude, the later of two books sharing a name winning. A book's `entries` map comes from the
+ *  host on its first read (Q48), and each `value` resolves on its own (Q54). A book's `enabled` and an entry's
+ *  `enabled` and `constant` take writes, which read back in the run; an entry's reader rows are the `[field, value]`
+ *  pairs assigned, in order. A book's reader rows are `[entriesRows, assignedPairs]`, or none when both are empty. */
 const dictionariesPrelude = (
   dictionaries: readonly SandboxDictionary[], { indexOf }: FlatPlaceholderMap, reads: HostReads, resolve?: (value: string) => string,
 ): string => {
-  const entriesOf = (book: SandboxDictionary) =>
-    [...new Map((book.entries ?? []).map(({ id, name, keys, value }) => [name, { id, keys, value: reads.text(value, resolve) }]))];
-  const spec = [...new Map(dictionaries.map((book) =>
-    [book.name, { id: book.id ?? '', ph: ownerIndex(indexOf, book.placeholders), entries: reads.deferred(() => entriesOf(book)) }]))];
+  const entriesOf = (book: SandboxDictionary) => [...namedEntries(book.entries ?? [])]
+    .map(([name, { id, keys, value, enabled, constant }]) => [name, { id, keys, value: reads.text(value, resolve), enabled, constant }]);
+  const spec = [...namedBooks(dictionaries)].map(([name, book]) =>
+    [name, { id: book.id ?? '', on: book.enabled !== false, ph: ownerIndex(indexOf, book.placeholders), entries: reads.deferred(() => entriesOf(book)) }]);
   return readOnlyEntryMapPrelude(`dictionaries, ${DICTIONARY_WRITES}`, spec, [
     `const lazy = ${LAZY_TEXT};`,
-    `const blankEntry = { id: '', keys: [], value: -1 };`,
-    `const [dictionaries, readWrites] = entryMap(${JSON.stringify(DICTIONARY_READ_ONLY_FIELDS)}, spec, { id: '', ph: -1, entries: -1 }, (key, data, unknown) => {`,
+    `const blankEntry = { id: '', keys: [], value: -1, enabled: false, constant: false };`,
+    `const [dictionaries, readWrites] = entryMap(${JSON.stringify(DICTIONARY_KEYS)}, spec, { id: '', on: false, ph: -1, entries: -1 }, (key, data, unknown) => {`,
     `  let built = null;`,
-    `  const entries = () => built || (built = entryMap(${JSON.stringify(DICTIONARY_ENTRY_READ_ONLY_FIELDS)},`,
-    `    data.entries < 0 ? [] : ${HOST_READ}(data.entries), blankEntry, (name, entry, stray) =>`,
-    `    [lazy({ id: entry.id, name: stray ? '' : name, keys: freeze([...entry.keys]), value: entry.value }, ['value'], '', ${NO_NOTE}), () => []]));`,
-    `  const values = { id: data.id, name: unknown ? '' : key, placeholders: ${OWNER_VIEW}(data.ph, ['dictionary', key], unknown) };`,
+    `  const entries = () => built || (built = entryMap(${JSON.stringify(DICTIONARY_ENTRY_KEYS)},`,
+    `    data.entries < 0 ? [] : ${HOST_READ}(data.entries), blankEntry, (name, entry, stray) => {`,
+    `      const values = lazy({ id: entry.id, name: stray ? '' : name, keys: freeze([...entry.keys]), value: entry.value,`,
+    `        enabled: entry.enabled, constant: entry.constant }, ['value'], '', ${NO_NOTE});`,
+    `      const assigned = [];`,
+    `      const setters = {};`,
+    `      for (const field of ${JSON.stringify(DICTIONARY_ENTRY_WRITABLE_FIELDS)}) setters[field] = (next) => { values[field] = next; assigned.push([field, next]); };`,
+    `      return [values, () => assigned, [], setters];`,
+    `    }));`,
+    `  const values = { id: data.id, name: unknown ? '' : key, enabled: data.on, placeholders: ${OWNER_VIEW}(data.ph, ['dictionary', key], unknown) };`,
     `  define(values, 'entries', { get: () => entries()[0] });`,
-    `  return [values, () => (built ? built[3]() : [])];`,
+    `  const assigned = [];`,
+    `  const setters = { ${DICTIONARY_WRITABLE_FIELD}: (next) => { values.${DICTIONARY_WRITABLE_FIELD} = next; assigned.push(next); } };`,
+    `  const rows = () => { const entryRows = built ? built[3]() : []; return entryRows.length || assigned.length ? [entryRows, assigned] : []; };`,
+    `  return [values, rows, [], setters];`,
     `});`,
     `return [dictionaries, readWrites];`,
   ]);
@@ -1059,13 +1105,45 @@ const entryWriteRows = (rows: unknown): EntryWriteRow[] =>
 /** The rows in a read-only entry map's dump. */
 const readEntryWriteRows = (dump: string): EntryWriteRow[] => entryWriteRows(JSON.parse(dump));
 
-/** The read-only fields the run wrote on `dictionaries` entries and their `entries`, as code spelled them. */
-const readDictionaryWrites = (dump: string): string[] =>
-  readEntryWriteRows(dump).flatMap(({ name, fields, mapRows }) => {
-    const book = memberPath('dictionaries', name);
-    return [...readOnlyPaths(book, fields),
-      ...entryWriteRows(mapRows).flatMap((row) => readOnlyPaths(memberPath(`${book}.entries`, row.name), row.fields))];
-  });
+/** What the run wrote through `dictionaries`: the entry fields it set, the ones through a name no entry has and
+ *  the read-only fields, as code spelled them; or why the run fails. */
+function readDictionaryWrites(
+  dump: string, dictionaries: readonly SandboxDictionary[],
+): { writes: PathedLoreWrite[]; unknown: string[]; readOnly: string[] } | { error: string } {
+  const books = namedBooks(dictionaries);
+  const writes: PathedLoreWrite[] = [];
+  const unknown: string[] = [];
+  const readOnly: string[] = [];
+  for (const { name, unknown: stray, fields, mapRows } of readEntryWriteRows(dump)) {
+    const path = memberPath('dictionaries', name);
+    readOnly.push(...readOnlyPaths(path, fields));
+    const book = stray ? undefined : books.get(name);
+    const [entryRows, assigned] = Array.isArray(mapRows) ? mapRows : [];
+    const bookPath = `${path}.${DICTIONARY_WRITABLE_FIELD}`;
+    for (const value of Array.isArray(assigned) ? assigned : []) {
+      if (typeof value !== 'boolean') return { error: `${bookPath} must be true or false` };
+      if (book?.id) writes.push({ book: book.id, field: DICTIONARY_WRITABLE_FIELD, value, path: bookPath });
+      else if (!unknown.includes(bookPath)) unknown.push(bookPath);
+    }
+    const entries = namedEntries(book?.entries ?? []);
+    for (const row of entryWriteRows(entryRows)) {
+      const entryPath = memberPath(`${path}.entries`, row.name);
+      readOnly.push(...readOnlyPaths(entryPath, row.fields));
+      const entry = row.unknown ? undefined : entries.get(row.name);
+      for (const pair of Array.isArray(row.mapRows) ? row.mapRows : []) {
+        const [field, value] = Array.isArray(pair) ? pair : [];
+        if (!isLoreField(field)) continue;
+        if (typeof value !== 'boolean') return { error: `${entryPath}.${field} must be true or false` };
+        if (book?.id && entry) writes.push({ book: book.id, entry: entry.id, field, value, path: `${entryPath}.${field}` });
+        else if (!unknown.includes(`${entryPath}.${field}`)) unknown.push(`${entryPath}.${field}`);
+      }
+    }
+  }
+  return { writes, unknown, readOnly };
+}
+
+const isLoreField = (field: unknown): field is LoreWrite['field'] =>
+  (DICTIONARY_ENTRY_WRITABLE_FIELDS as readonly unknown[]).includes(field);
 
 /** How code names an entry of `root`: dot syntax for an identifier, brackets otherwise. */
 export const memberPath = (root: string, name: string) =>
@@ -1318,6 +1396,8 @@ export interface StatCodeRunOptions {
   readings?: Readonly<Record<string, StatTurnInputs>>;
   /** Absent, `turn` reads an empty action at turn 0. */
   turn?: SandboxTurn;
+  /** `turn.choices` takes the write: an After the AI script's, with choices on (Q21). A change elsewhere is dropped. */
+  choicesWritable?: boolean;
   /** The live stat-enabled map. A stat set false here reads `enabled: false`. */
   enabled?: Readonly<Record<string, boolean>>;
   /** The map's top-level keys, in authored order. Absent, the map is empty. */
@@ -1519,7 +1599,25 @@ const worldPrelude = (
 
 const NO_PLACES: SandboxPlaces = { locations: [], location: null };
 
-const NO_TURN: SandboxTurn = { action: '', number: 0 };
+/** A turn reply with nothing in it: the narration and choices of a turn not yet told. Spread it; never push to it. */
+export const EMPTY_REPLY: { narration: string; choices: string[] } = { narration: '', choices: [] };
+
+const NO_TURN: SandboxTurn = { action: '', number: 0, ...EMPTY_REPLY };
+
+/** The prelude's reader of `turn.choices` at run end: JSON with null for each item that isn't text, or null for no list. */
+const CHOICES_AT_END = '__formamorphChoicesAtEnd';
+
+/** `turn.choices` at run end: the list the run read, or what the scripts left, which is any value until checked. */
+type ChoicesAtEnd = { changed: false } | { changed: true; end: unknown };
+
+function choicesAtEnd(start: readonly string[], dump: string | null): ChoicesAtEnd {
+  const end: unknown = dump === null ? null : JSON.parse(dump);
+  return Array.isArray(end) && sameChoices(end, start) ? { changed: false } : { changed: true, end };
+}
+
+/** Whether `list` is text items with no blank one (Q13). */
+const isTextList = (list: unknown): list is string[] =>
+  Array.isArray(list) && list.every((item) => typeof item === 'string' && item.trim() !== '');
 
 /** Who an unknown entry's diary can name: every entity but the persona, by id, else by name, then the discovered. */
 const diaryCast = (entities: readonly SandboxEntity[], persona: SandboxEntity, discovered: readonly SandboxPlace[]): SandboxPlace[] => [
@@ -1683,7 +1781,7 @@ const PLAYER_PRELUDE = [
   `      if (!list.length) throw new TypeError('player.ask needs at least one option');`,
   `      const multiple = !!(settings && settings.multiple);`,
   `      const picked = call({ kind: 'ask', question: text('ask', 'a question', question), options: list.map((o) => o.label), multiple });`,
-  `      return multiple ? picked.map((at) => list[at].value) : list[picked].value;`,
+  `      return multiple ? picked.map((at) => list[at].value) : picked === null ? null : list[picked].value;`,
   `    },`,
   `    input: (question, placeholder) => call({`,
   `      kind: 'input', question: text('input', 'a question', question),`,
@@ -1713,9 +1811,9 @@ export const executeStatCode = async (
    *  write is ignored. */
   currentStat: Stat | null,
   {
-    clock, readings, turn = NO_TURN, enabled, placeholders = [], traits = [], entities = [], persona = EMPTY_PERSONA, owner, dictionaries = [], resolveEntryValue,
-    narration, selfTrait, switchedTrait, prompts = scriptPrompts, places = NO_PLACES, discovered = [], args, openCast = false,
-    memories = [], notes = '', readOnly = false,
+    clock, readings, turn = NO_TURN, choicesWritable = false, enabled, placeholders = [], traits = [], entities = [], persona = EMPTY_PERSONA, owner,
+    dictionaries = [], resolveEntryValue, narration, selfTrait, switchedTrait, prompts = scriptPrompts, places = NO_PLACES, discovered = [], args,
+    openCast = false, memories = [], notes = '', readOnly = false,
   }: StatCodeRunOptions = {},
 ): Promise<StatCodeResult> => {
   // If code is empty, return null (use the manually set value)
@@ -1815,7 +1913,17 @@ export const executeStatCode = async (
       `  Object.defineProperty(clock, 'advance', { value: advance, enumerable: true });`,
       `  return Object.freeze(clock);`,
       `})(${LOCK_FIELDS}, ${ADVANCE_CLOCK});`,
-      `const turn = Object.freeze((${LOCK_FIELDS})(${JSON.stringify({ action: turn.action, number: turn.number })}, ['action', 'number'], 'turn.', ${LOOSE_NOTE}));`,
+      // `choices` is a plain array at every timing: the run end reads it back, and a change is the write (Q12).
+      `const turn = ((entry, choices) => Object.freeze(Object.defineProperty(entry, 'choices', {`,
+      `  enumerable: true, get: () => choices, set: (next) => { choices = next; },`,
+      `})))((${LOCK_FIELDS})(${JSON.stringify({ action: turn.action, number: turn.number, narration: turn.narration })}, ['action', 'number', 'narration'], 'turn.', ${LOOSE_NOTE}),`,
+      `  ${JSON.stringify(turn.choices)});`,
+      `const ${CHOICES_AT_END} = ((isArray, stringify) => (list) => {`,
+      `  if (!isArray(list)) return null;`,
+      `  const out = [];`,
+      `  for (let i = 0; i < list.length; i += 1) out[i] = typeof list[i] === 'string' ? list[i] : null;`,
+      `  return stringify(out);`,
+      `})(Array.isArray, JSON.stringify);`,
       ...(narration ? [
         // `sent` and `buffered` freeze, so code can neither swap nor grow them.
         `const narration = Object.seal((${LOCK_FIELDS})(((entry) => (Object.freeze(entry.sent), Object.freeze(entry.buffered), entry))(`,
@@ -1842,7 +1950,8 @@ export const executeStatCode = async (
       readOnly ? readOnlyCode(code, !!args) : code,
       `})(), ${selfRead('value')}, ${CODE_BOUND_FIELDS.map(selfRead).join(', ')}, ${PLACEHOLDER_WRITES}(), ${TRAIT_WRITES}(), ${ENTITY_WRITES}(),`,
       `  ${STAT_WRITES}(), ${DICTIONARY_WRITES}(), ${STRINGIFY}(${SELF_ASSIGNED}), ${OWNER_STAT_WRITES}(), ${STRINGIFY}(${LOOSE_WRITES}),`,
-      `  ${ENTITY_STAT_WRITES}(), ${narration ? 'narration.sentence' : 'undefined'}, ${STRINGIFY}(${WORLD_WRITES}), ${selfRead('hidden')}];`,
+      `  ${ENTITY_STAT_WRITES}(), ${narration ? 'narration.sentence' : 'undefined'}, ${STRINGIFY}(${WORLD_WRITES}), ${selfRead('hidden')},`,
+      `  ${CHOICES_AT_END}(turn.choices)];`,
     ].join('\n');
 
     return await runInSandbox(program, ({ vm, result, consoleOutput, timedOut }): StatCodeResult => {
@@ -1908,6 +2017,7 @@ export const executeStatCode = async (
       const assignedSentence = readSlot(11 + CODE_BOUND_FIELDS.length);
       const worldWrites = readWorldWrites(readDump(12 + CODE_BOUND_FIELDS.length));
       const selfHidden = readSlot(13 + CODE_BOUND_FIELDS.length);
+      const choicesDump = readSlot(14 + CODE_BOUND_FIELDS.length);
 
       if (consoleOutput.trim()) {
         console.log('Console output:', consoleOutput);
@@ -1918,6 +2028,12 @@ export const executeStatCode = async (
       if (narration && assignedSentence.type !== 'string') return failure('narration.sentence must be a string', 'bad-write');
       const sentence = narration && (returnsSentence ? returned.text : assignedSentence.text);
       if ('error' in worldWrites) return failure(worldWrites.error, 'throw');
+      const endChoices = choicesAtEnd(turn.choices, choicesDump.type === 'string' ? choicesDump.text : null);
+      let choices: string[] | undefined;
+      if (endChoices.changed && choicesWritable) {
+        if (!isTextList(endChoices.end)) return failure('turn.choices must be a list of text with no blank item', 'bad-write');
+        choices = endChoices.end;
+      }
       if (currentStat && !returnsSentence && returned.type !== 'number' && returned.type !== 'undefined') {
         return nonNumberFailure('Code must return a number or nothing');
       }
@@ -1951,6 +2067,8 @@ export const executeStatCode = async (
       if ('error' in traitWrites) return failure(traitWrites.error, 'bad-write');
       const entityWrites = readEntityWrites(entitiesDump, keyed, place);
       if ('error' in entityWrites) return failure(entityWrites.error, 'bad-write');
+      const loreWrites = readDictionaryWrites(dictionariesDump, dictionaries);
+      if ('error' in loreWrites) return failure(loreWrites.error, 'bad-write');
       const unknownStatWrites = [...statWrites.unknown, ...ownerStatWrites.unknown, ...entityStatWrites.unknown];
       const disabledStatWrites = [...statWrites.disabled, ...ownerStatWrites.disabled, ...entityStatWrites.disabled];
       const readOnlyWrites = [
@@ -1961,7 +2079,8 @@ export const executeStatCode = async (
         ...placeholderWrites.readOnly,
         ...traitWrites.readOnly,
         ...entityWrites.readOnly,
-        ...readDictionaryWrites(dictionariesDump),
+        ...loreWrites.readOnly,
+        ...(endChoices.changed && !choicesWritable ? ['turn.choices'] : []),
       ];
 
       const settled = (value: number | null): StatCodeResult => ({
@@ -1981,7 +2100,10 @@ export const executeStatCode = async (
         ...(traitWrites.acquired.length ? { acquiredWrites: traitWrites.acquired } : {}),
         ...(entityWrites.writes.length ? { entities: entityWrites.writes } : {}),
         ...(entityWrites.unknown.length ? { unknownEntities: entityWrites.unknown } : {}),
+        ...(loreWrites.writes.length ? { lore: loreWrites.writes } : {}),
+        ...(loreWrites.unknown.length ? { unknownLore: loreWrites.unknown } : {}),
         ...(readOnlyWrites.length ? { readOnlyWrites } : {}),
+        ...(choices ? { choices } : {}),
         ...(sentence === undefined ? {} : { sentence }),
         ...(worldWrites.writes ? { worldWrites: worldWrites.writes } : {}),
         ...(worldWrites.maybeDiary ? { maybeDiary: worldWrites.maybeDiary } : {}),

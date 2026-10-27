@@ -58,7 +58,7 @@ When you pick another entity, the stat and trait inputs that list its names clea
 <!-- keywords: reference an entity's trait, trait of an entity, find a name, pick a name, insert a path, menu, variable button, drill down, dictionary placeholder, persona trait, stat value, don't type names, copy the right spelling -->
 <!-- route: worldEditorStat.code -->
 
-Select the **Variable** button in the toolbar of a code box on a stat's **Scripts** tab. The menu opens on **This Stat**, **Stats**, **Traits**, **Entities**, **Persona**, **Placeholders**, **Dictionaries** and **Clock**. In the box of an entity's stat or a Blueprint stat, an **Owner** group follows **This Stat**. **Stats** always lists the global stats. Each group opens level by level: a list of your world's own names, then a name's fields, and for an entity, its **Traits** and **Placeholders**. Select a field to insert its whole path at the caret. To reach `entities.Mira.traits.Wounded.enabled`, open **Entities**, **Mira**, **Traits**, **Wounded**, and then select **enabled**. The path runs as inserted, with no name to type.
+Select the **Variable** button in the toolbar of a code box on a stat's **Scripts** tab. The menu opens on **This Stat**, **Stats**, **Traits**, **Entities**, **Persona**, **Placeholders**, **Dictionaries**, **Clock**, **Turn**, **Locations**, **Location** and **Memories**, then fields such as `notes`, then verbs such as `discover`. In the box of an entity's stat or a Blueprint stat, an **Owner** group follows **This Stat**. **Stats** always lists the global stats. Each group opens level by level: a list of your world's own names, then a name's fields, and for an entity, its **Traits** and **Placeholders**. Select a field to insert its whole path at the caret. To reach `entities.Mira.traits.Wounded.enabled`, open **Entities**, **Mira**, **Traits**, **Wounded**, and then select **enabled**. The path runs as inserted, with no name to type.
 
 ## How to Limit the AI's Change to a Stat
 <!-- keywords: clamp, cap, max, restrict, prevent, too fast, delta, script, throttle, big swings, jumps too much, slow down gains, never go up, dampen, narrator overreacts, at most per turn -->
@@ -243,7 +243,7 @@ A turn runs scripts at five points:
 | **At Game Start** | Once, on the opening turn of a new game, before the Before the AI scripts | In the opening prompt | `player` |
 | **When a Trait Switches** | Each time a trait turns on or off in play | At once | `player` and `trait` |
 
-A timing adds names to the ones every script reads. The editor's **Variable** menu lists the names a timing adds in a group at the end: **Narration**, **Player**, and **Switched Trait**. In a trait's script, **This Trait** replaces **This Stat**, and a world script has neither.
+A timing adds names to the ones every script reads. The editor's **Variable** menu lists the names a timing adds in a group near the top, right after **This Stat** (or **This Trait**) and **Owner**: **Narration**, **Player**, and **Switched Trait**. In a trait's script, **This Trait** replaces **This Stat**, and a world script has neither.
 
 | Step | What happens |
 | --- | --- |
@@ -351,11 +351,11 @@ A script can use only these objects. A word in angle brackets stands for a name 
 
 | Object | Members | Read | Write |
 | --- | --- | --- | --- |
-| `self` | `id`, `name`, `type`, `description`, `enabled`, `min`, `max`, `value`, `regen`, `hidden`, `previous`, `delta` | `self.value` | `self.value = <n>` |
-| `stats` | `id`, `name`, `type`, `description`, `enabled`, `min`, `max`, `value`, `regen`, `hidden`, `previous`, `delta` | `stats.<Stat>.value` | `stats.<Stat>.value = <n>` |
+| `self` | `id`, `name`, `type`, `description`, `enabled`, `min`, `max`, `value`, `regen`, `hidden`, `descriptor`, `previous`, `delta` | `self.value` | `self.value = <n>` |
+| `stats` | `id`, `name`, `type`, `description`, `enabled`, `min`, `max`, `value`, `regen`, `hidden`, `descriptor`, `previous`, `delta` | `stats.<Stat>.value` | `stats.<Stat>.value = <n>` |
 | `owner` | `id`, `name`, `type`, `pronouns`, `inScene`, `location`, `following`, `description`, `summary`, `aliases`, `traits`, `placeholders`, `stats`, `move()`, `follow()`, `unfollow()`, `diary()` | `owner.stats.<Stat>.value` | `owner.stats.<Stat>.value = <n>` |
 | `clock` | `day`, `daypart`, `hour`, `minute`, `deltaHours`, `elapsedHours`, `previous`, `advance()` | `clock.day` | `clock.advance(<n>)` |
-| `turn` | `action`, `number` | `turn.number` | Read-only |
+| `turn` | `action`, `number`, `narration`, `choices` | `turn.number` | `turn.choices = [<text>]`, After the AI only |
 | `locations` | `id`, `name`, `description`, `summary`, `starting`, `present`, `parent`, `children`, `exits` | `locations.<Location>.present` | Read-only |
 | `location` | `id`, `name`, `description`, `summary`, `starting`, `present`, `parent`, `children`, `exits`, `move()` | `location.name` | `location.move("<Location>")` |
 | `discover` | — | — | `discover(<text>)` |
@@ -365,7 +365,7 @@ A script can use only these objects. A word in angle brackets stands for a name 
 | `persona` | `id`, `name`, `type`, `pronouns`, `inScene`, `location`, `following`, `description`, `summary`, `aliases`, `traits`, `placeholders`, `stats` | `persona.traits.<Trait>.enabled` | `persona.traits.<Trait>.enabled = true` |
 | `entities` | `id`, `name`, `type`, `pronouns`, `inScene`, `location`, `following`, `description`, `summary`, `aliases`, `traits`, `placeholders`, `stats`, `move()`, `follow()`, `unfollow()`, `diary()` | `entities.<Entity>.stats.<Stat>.value` | `entities.<Entity>.traits.<Trait>.enabled = true` |
 | `placeholders` | `id`, `name`, `value`, `values`, `text`, `roll()`, `pin()`, `unpin()` | `placeholders.<Placeholder>.text` | `placeholders.<Placeholder>.pin(<text>)` |
-| `dictionaries` | `id`, `name`, `entries`, `placeholders` | `dictionaries.<Dictionary>.placeholders.<Placeholder>.text` | `dictionaries.<Dictionary>.placeholders.<Placeholder>.pin(<text>)` |
+| `dictionaries` | `id`, `name`, `enabled`, `entries`, `placeholders` | `dictionaries.<Dictionary>.enabled` | `dictionaries.<Dictionary>.enabled = true` |
 | `console` | `log()` | — | `console.log(<text>)` |
 
 A timing adds one name to those objects. A script reads only the name its own timing adds:
@@ -482,12 +482,21 @@ Each stat in the `stats` map, `self` included, exposes the following properties.
 | `enabled` | False while a trait's stat toggle switches the stat off. Read-only |
 | `regen` | Regen per story hour, with traits applied |
 | `hidden` | True when the stat is hidden from the player. The AI still reads it. See [Hiding and Showing a Stat](#hiding-and-showing-a-stat) |
-| `previous` | The full stat at the start of the turn: `id`, `name`, `type`, `description`, `min`, `max`, `value`, `regen`, `hidden`. Read-only |
+| `descriptor` | Text of the band the value falls in, with chips filled in, as the AI reads it. Empty when no band applies. Read-only |
+| `previous` | The full stat at the start of the turn: `id`, `name`, `type`, `description`, `min`, `max`, `value`, `regen`, `hidden`, `descriptor`. Read-only |
 | `delta` | Every change this turn made, by source: `ai`, `regen`, `total`, `actual`. Read-only |
 
 A stat that a trait switched off still reads as a real entry. Its name, value and bounds read as usual, with `enabled` false. A write to it is ignored and reported. A live stat wins a code name over a switched-off one. Between stats in the same state, the later one wins.
 
-> ℹ️ Only these fields are passed into the sandbox. A stat's own `code` and `descriptors` are **not** available from inside a script.
+> ℹ️ Only these fields are passed into the sandbox. A stat's own `code` and its list of bands are **not** available from inside a script. `descriptor` gives the one band in force.
+
+How `descriptor` reads:
+
+- 📏 It uses the same thresholds the AI's stat context uses, raw or percent.
+- ⏱️ It reads the band at the start of the run. A write to `self.value` doesn't change it until the next run.
+- 👁️ It reads the band whatever the player's display settings, and on a stat a trait switched off.
+- ↩️ `previous.descriptor` reads the band at the start of the turn, with the placeholder pins in force then. So `self.previous.descriptor !== self.descriptor` is true on a turn whose change crossed a band.
+- 🧪 In Test Code and the Test Bench, chips read as you wrote them.
 
 ### Writing to `self`
 <!-- keywords: raise the ceiling, upper limit, lower limit, regeneration rate, assign, modify own stat, underlined write, scale with level up, this keyword -->
@@ -559,7 +568,7 @@ Every stat entry on every route takes writes to the same five fields as `self`: 
 | Blueprint stats | A Blueprint stat's code runs once for each owner. In it, `owner` is the entity the run is for, and `owner.stats.Mana.value` lands on that owner's own copy of Mana. A write through `stats` lands on the global stat |
 | Unknown or switched-off stats | A write to a name the target doesn't have, or to a stat a trait switched off, is ignored and reported. The editor underlines an unknown name |
 | An entity not in the game | A write through `entities.<Entity>.stats` to an entity that isn't in the game is ignored and reported |
-| Fields that stay read-only | `id`, `name`, `type`, `description`, `previous` and `delta` never take a write, on any route |
+| Fields that stay read-only | `id`, `name`, `type`, `description`, `descriptor`, `previous` and `delta` never take a write, on any route |
 | A whole entry | `stats.Health = 5` is ignored. Write `stats.Health.value = 5` |
 
 A stat that a hub moved shows the change on its bar, as any code change does. The turn log gets no new line. A failed or stopped turn rolls the write back with the rest of the turn.
@@ -862,7 +871,7 @@ if (entities.Albus.stats.Trust.value >= 50) entities.Albus.follow();
 **Test Code** lists every authored entity, with no trait chosen and each stat at its starting value. A switch or a stat write it makes is reported and never applied.
 
 ### Dictionaries
-<!-- keywords: book variables, disabled book, lore owned values -->
+<!-- keywords: book variables, disabled book, lore owned values, unlock a book, switch a book on, switch a book off, hidden book -->
 
 `dictionaries` holds every dictionary in the game by its code name. Each entry has:
 
@@ -870,6 +879,7 @@ if (entities.Albus.stats.Trust.value >= 50) entities.Albus.follow();
 | --- | --- |
 | `id` | Unique identifier. Read-only |
 | `name` | The dictionary's code name. Read-only |
+| `enabled` | True when the dictionary is on, so the AI can get its entries. Write `true` or `false` to switch it |
 | `entries` | The dictionary's entries by name. See [Entries](#entries) |
 | `placeholders` | The placeholders the dictionary owns. See [Owned Placeholders](#owned-placeholders) |
 
@@ -878,15 +888,24 @@ if (entities.Albus.stats.Trust.value >= 50) entities.Albus.follow();
 dictionaries.Weather.placeholders.Sky.pin(self.value < 20 ? 'storm' : 'clear');
 ```
 
-- The list holds the world's dictionaries that the player left on at **Enter World**, then the library dictionaries the player picked there. Of two that share a code name, the later one is the entry.
-- A dictionary the player turned off reads as an unknown dictionary.
+```javascript
+// A world script: open the second chapter's lore once the gate falls.
+if (stats.Gate.value === 0) dictionaries["Chapter Two"].enabled = true;
+```
+
+- The list holds the world's dictionaries that the player left on at **Enter World** and the ones you ship off, then the library dictionaries the player picked there. Of two that share a code name, the later one is the entry.
+- **A dictionary you ship off reads `enabled: false`.** Clear the dictionary's **Enabled** checkbox (Advanced mode) to keep its entries from the AI. A script can switch it on later in the story.
+- **A dictionary the player turned off at Enter World reads as an unknown dictionary.** A write to it is ignored and reported.
+- **A write applies as an entry write does.** It applies after the run, and later in the same run the dictionary reads what you set. An undo or a re-roll clears it with the turn. A Before the AI write changes this turn's narration.
+- **A library dictionary the player picked takes writes like any other.** The player's library copy never changes.
+- **Test Code reads each dictionary's own Enabled setting,** because it has no Enter World.
 - A name no dictionary in the game has reads as a blank entry. Its `name` and `id` are `''`, and every placeholder under it reads as blank. A pin through it is ignored.
 - The editor warns on a dictionary name it doesn't know, because a library dictionary can bring more.
 
 #### Entries
-<!-- keywords: dictionary entries, lorebook entry, entry text, trigger keywords, read an entry, entry value, keys -->
+<!-- keywords: dictionary entries, lorebook entry, entry text, trigger keywords, read an entry, entry value, keys, unlock lore, enable an entry, disable an entry, constant entry, always on lore -->
 
-`dictionaries.<Dictionary>.entries` holds the dictionary's entries by entry name. A name with a space needs brackets: `dictionaries.Lore.entries["Old King"]`. Each entry has four fields. All are read-only.
+`dictionaries.<Dictionary>.entries` holds the dictionary's entries by entry name, disabled ones included. A name with a space needs brackets: `dictionaries.Lore.entries["Old King"]`. Each entry has six fields. `enabled` and `constant` take writes; the others are read-only.
 
 | Field | What it is |
 | --- | --- |
@@ -894,15 +913,28 @@ dictionaries.Weather.placeholders.Sky.pin(self.value < 20 ? 'storm' : 'clear');
 | `name` | The entry's name |
 | `keys` | The entry's Trigger Keywords, as a list |
 | `value` | The entry's Value, with each placeholder chip filled in |
+| `enabled` | True when the entry is on. Write `true` or `false` to switch it |
+| `constant` | True when the AI gets the entry on every turn, with no keyword match. Write `true` or `false` to change it |
 
 ```javascript
 // The lore entry names the king. Use it when the story is quiet.
 if (dictionaries.Lore.entries["Old King"].value.includes("exiled")) self.value += 1;
 ```
 
-- A disabled entry is not listed. A dictionary the player turned off lists none.
-- Of two entries with one name in a dictionary, the later one is the entry. An entry with no name has no key.
-- A name the dictionary has no entry for reads as a blank entry. Its `id`, `name` and `value` are `''` and `keys` is an empty list.
+```javascript
+// A world script: unlock the vault's lore once the player holds the key.
+if (traits["Vault Key"].enabled) dictionaries.Lore.entries["Sealed Vault"].enabled = true;
+```
+
+- **A disabled entry reads `enabled: false`.** A dictionary the player turned off lists none.
+- **Of two entries with one name, an enabled one is the entry.** Among two enabled or two disabled entries, the later one is. A write through the name reaches that entry. An entry with no name has no key.
+- **A name the dictionary has no entry for reads as a blank entry.** Its `id`, `name` and `value` are `''`, `keys` is an empty list, and `enabled` and `constant` are false. A write through it is ignored and reported.
+- **A write applies after the run.** Writes apply in run order, so a later write wins. Later in the same run, the entry reads what you set, and its name stays on the entry it named at the start of the run.
+- **A Before the AI write shapes this turn.** The narration reads the entry this turn. An After the AI write shapes the next turn. A During AI Output write waits for the After the AI scripts' writes.
+- **It persists for the playthrough.** The save keeps it, and an undo or a re-roll takes it back with the turn. The dictionary itself never changes.
+- **Keywords find a newly enabled entry at once.** Meaning-based recall can miss it until the game has indexed it, which starts at once and does not hold up the turn.
+- **Writing anything but `true` or `false` fails the run.**
+- **A user Tool can't write it.** The write is ignored and reported, as every user Tool write is.
 ### Narration
 <!-- keywords: rewrite a sentence, sentence hook, during ai output, narration object, narration sentence, sent, buffered, full, index, filter narration, replace words in the story, narration is not defined, error underline on narration -->
 <!-- route: worldEditorStat.code -->
@@ -1034,24 +1066,48 @@ if (traits.Resting.enabled) clock.advance(8 * 60);
 ```
 
 ### Turn
-<!-- keywords: player action, what the player typed, player input, turn count, turn counter, every fifth turn, ooc, what did the player say -->
+<!-- keywords: player action, what the player typed, player input, turn count, turn counter, every fifth turn, ooc, what did the player say, what the ai wrote, read the narration, read the reply, read the choices, what choices the player has -->
 
-`turn` holds what the player did and which turn it is. Its fields are read-only: a write to one is ignored and reported.
+`turn` holds what the player did, which turn it is, and what the AI wrote back. Its fields are read-only, except `turn.choices` in an After the AI script (see [Change the choices](#change-the-choices)). A write to a read-only field is ignored and reported. `clock`, `location` and `notes` are read-only too, and the editor underlines a write to them.
 
 | Field | What it is |
 | --- | --- |
 | `turn.action` | The player's action this turn, without spaces at the ends. OOC square brackets stay in. Images are never in it. |
 | `turn.number` | The turn number, on the same scale as `memories[].turn`. The opening turn is `1`. |
+| `turn.narration` | The page the player sees this turn, with the During AI Output rewrites applied. |
+| `turn.choices` | The choices the player sees this turn, in order, as a list of strings. |
 
+- **The page and choices wait for the reply.** Before the AI, At Game Start and During AI Output read `turn.narration` as `""` and `turn.choices` as `[]`. After the AI reads them filled. To work on each sentence as it streams, use `narration` (see [Narration](#narration)).
+- **Choices off reads no choices.** When the player turns choices off, `turn.choices` is `[]`.
+- **Between turns, it reads the last page.** A switch the player makes or a Tool call reads the page and choices of the last turn that ended. While a turn runs, they read empty until its reply lands.
 - **The opening turn reads the opening.** `turn.action` is the opening text the AI gets: the player's edit, else the drawn opening. An Opening Narration reads `""`.
 - **Undo and re-roll rewind it.** A re-rolled turn reads the same action and number it read the first time.
 - **A switch the player makes reads an empty action.** Between turns, it reads the number of the last turn that ended; during a turn, that turn's number. Before the opening turn, `turn.number` is `0`.
 - **A switch inside a turn reads that turn.** A trait a script or a gate switches reads the same `turn` as the scripts around it.
-- **Test Code reads a sample.** Test Code and the Test Bench read `"Look around."` at turn `2`. An At Game Start script reads the world's heaviest Opening Action at turn `1`.
+- **Test Code reads a sample.** Test Code and the Test Bench read `"Look around."` at turn `2`. An At Game Start script reads the world's heaviest Opening Action at turn `1`. An After the AI script reads a short sample page and three sample choices.
 
 ```js
 // Every fifth turn the market restocks, unless the player only gave an OOC direction.
 if (turn.number % 5 === 0 && !turn.action.startsWith('[')) stats.Stock.value = stats.Stock.max;
+```
+
+#### Change the choices
+<!-- keywords: change the choices, remove a choice, add a choice, hide an option, reorder choices, edit choices, clear the choices, filter choices -->
+
+An After the AI script can change the choices the player sees. Edit `turn.choices` as you edit any list: assign a new or filtered list, or use `push`, `splice` or an index.
+
+- **The choices wait for the scripts.** In a world with an After the AI script that uses `turn`, the choices show when the After the AI scripts finish. The input box unlocks with them. In other worlds, the choices show as soon as the narration settles.
+- **Scripts edit one list in turn.** Each After the AI script reads the list as the scripts before it left it. The player sees the list the last script leaves.
+- **A bad item fails the run.** Every item must be text that isn't blank. Otherwise the script fails and none of its writes land. The list stays as the scripts before it left it.
+- **An empty list is allowed.** The turn then shows no choices, and the player types an action.
+- **It's read-only at other timings.** Before the AI, At Game Start, During AI Output, When a Trait Switches, Tools and runs between turns read the list. A change there is ignored and reported. With the player's choices off, a change is ignored too.
+- **A stats re-roll starts again.** It runs the scripts on the AI's own choices. Edits never stack. The save keeps both lists.
+- **Re-generate Choices runs the scripts again.** They read the new list and the AI's stat changes for the turn. Only their choice edits apply. The new list shows once they finish.
+- **A `player` call shows nothing on that run.** `tell` and `toast` show nothing, `confirm` answers `false`, `ask` answers `null` (`[]` with `multiple`), and `input` answers `""`. The script runs on.
+
+```js
+// Once the bridge is down, no choice crosses it.
+if (stats.Bridge.value === 0) turn.choices = turn.choices.filter((choice) => !/bridge/i.test(choice));
 ```
 
 ### Location

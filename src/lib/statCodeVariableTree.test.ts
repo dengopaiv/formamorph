@@ -113,7 +113,19 @@ const asLevel = (entries: readonly { name: string }[]) => entries.map((entry) =>
 
 describe('the top level', () => {
   it('lists the sandbox’s globals in the order an author meets them, without console', () => {
-    expect(tree.map(labelOf)).toEqual(['This Stat', 'Stats', 'Traits', 'Entities', 'Persona', 'Placeholders', 'Dictionaries', 'Clock', 'Turn', 'Locations', 'Location', 'discover', 'Memories', 'notes']);
+    expect(tree.map(labelOf)).toEqual(['This Stat', 'Stats', 'Traits', 'Entities', 'Persona', 'Placeholders', 'Dictionaries', 'Clock', 'Turn', 'Locations', 'Location', 'Memories', 'notes', 'discover']);
+  });
+
+  it('keeps the in-group order of a stat’s fields', () => {
+    expect(levelAt(tree, 'Stats', 'Health')).toEqual(expect.arrayContaining(['previous', 'delta']));
+  });
+
+  it('puts the timing groups right after This Stat or This Trait and Owner', () => {
+    const all = { narration: true, player: true, trait: true };
+    const owned = { kind: 'entity', entity: miraNames() } as const;
+    expect(buildVariableTree(editorNames(), owned, 'stat', all).map(labelOf).slice(0, 5)).toEqual(['This Stat', 'Owner', 'Narration', 'Player', 'Switched Trait']);
+    expect(buildVariableTree(editorNames(), null, 'trait', all).map(labelOf).slice(0, 4)).toEqual(['This Trait', 'Narration', 'Player', 'Switched Trait']);
+    expect(buildVariableTree(editorNames(), null, 'empty', { narration: false, player: true, trait: false }).map(labelOf).slice(0, 2)).toEqual(['Player', 'Stats']);
   });
 
   it('inserts discover directly, with no group around the one call', () => {
@@ -257,9 +269,9 @@ describe('entities, the persona and dictionaries', () => {
     expect(inserts(tree, 'Dictionaries', 'Lore', 'Placeholders', 'Era', 'value')).toBe('dictionaries.Lore.placeholders.Era.value');
   });
 
-  it('lists a dictionary’s enabled entries under it, each with its four fields', () => {
-    expect(levelAt(tree, 'Dictionaries', 'Lore', 'Entries')).toEqual(['Iron Crown']);
-    expect(levelAt(tree, 'Dictionaries', 'Lore', 'Entries', 'Iron Crown')).toEqual(['id', 'name', 'keys', 'value']);
+  it('lists a dictionary’s entries under it, a disabled one too, each with its six fields', () => {
+    expect(levelAt(tree, 'Dictionaries', 'Lore', 'Entries')).toEqual(['Iron Crown', 'Sealed']);
+    expect(levelAt(tree, 'Dictionaries', 'Lore', 'Entries', 'Iron Crown')).toEqual(['id', 'name', 'keys', 'value', 'enabled', 'constant']);
     expect(inserts(tree, 'Dictionaries', 'Lore', 'Entries', 'Iron Crown', 'keys')).toBe('dictionaries.Lore.entries["Iron Crown"].keys');
   });
 
@@ -269,10 +281,24 @@ describe('entities, the persona and dictionaries', () => {
     expect(inserts(tree, 'Clock', 'previous', 'daypart')).toBe('clock.previous.daypart');
   });
 
-  it('opens turn to its action and number, each read-only', () => {
-    expect(levelAt(tree, 'Turn')).toEqual(['action', 'number']);
+  it('opens turn to its action, number, page and choices, each read-only', () => {
+    expect(levelAt(tree, 'Turn')).toEqual(['action', 'number', 'narration', 'choices']);
     expect(inserts(tree, 'Turn', 'number')).toBe('turn.number');
-    expect(childrenOf(pick(tree, 'Turn')).map((node) => node.kind === 'field' && node.access)).toEqual(['readOnly', 'readOnly']);
+    expect(inserts(tree, 'Turn', 'choices')).toBe('turn.choices');
+    expect(childrenOf(pick(tree, 'Turn')).map((node) => node.kind === 'field' && node.access)).toEqual(['readOnly', 'readOnly', 'readOnly', 'readOnly']);
+  });
+
+  it('shows turn.choices writable in an After the AI box and read-only in every other', () => {
+    const accessAt = (timing: ScriptTiming) => childrenOf(pick(
+      buildVariableTree(undefined, null, 'empty', timingGlobalsOf(scriptSurface(STAT_CODE_SURFACE, timing))), 'Turn',
+    )).map((node) => node.kind === 'field' && node.access);
+    expect(accessAt('after')).toEqual(['readOnly', 'readOnly', 'readOnly', 'writable']);
+    for (const timing of ['start', 'before', 'output', 'switch'] as const) expect(accessAt(timing), timing).toEqual(['readOnly', 'readOnly', 'readOnly', 'readOnly']);
+  });
+
+  it('keeps turn.choices read-only in a user Tool’s menu at any timing', () => {
+    const toolTree = readOnlyTree(buildVariableTree(undefined, null, 'empty', timingGlobalsOf(scriptSurface(STAT_CODE_SURFACE, 'after'))));
+    expect(childrenOf(pick(toolTree, 'Turn')).map((node) => node.kind === 'field' && node.access)).toEqual(['readOnly', 'readOnly', 'readOnly', 'readOnly']);
   });
 });
 
@@ -624,9 +650,9 @@ describe('the names a script’s timing adds', () => {
   };
 
   it('lists Narration in During AI Output only, Player in every other timing, and Switched Trait on a switch only', () => {
-    expect(treeAt('output').built.map(labelOf).slice(-1)).toEqual(['Narration']);
-    expect(treeAt('before').built.map(labelOf).slice(-1)).toEqual(['Player']);
-    expect(treeAt('switch').built.map(labelOf).slice(-2)).toEqual(['Player', 'Switched Trait']);
+    expect(treeAt('output').built.map(labelOf).slice(1, 2)).toEqual(['Narration']);
+    expect(treeAt('before').built.map(labelOf).slice(1, 2)).toEqual(['Player']);
+    expect(treeAt('switch').built.map(labelOf).slice(1, 3)).toEqual(['Player', 'Switched Trait']);
     for (const timing of ['before', 'after', 'output', 'start'] as const) {
       expect(treeAt(timing).built.map(labelOf)).not.toContain('Switched Trait');
     }
