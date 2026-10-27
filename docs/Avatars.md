@@ -7,7 +7,6 @@ An Avatar is a 3D model that an entity can show. It is a VRM file. You keep your
 
 ## How to Import an Avatar
 <!-- keywords: add, load, upload, vrm, glb, 3d model, character model, vroid, file, bring in my model, custom body, booth, vrchat model, blender export, use own mesh, duplicate warning -->
-<!-- route: mainMenu.models#import-avatar -->
 
 1. On the main menu, select the **Avatars** tab.
 2. Select **Import Avatar**. On a narrow screen, the button is in the **Menu** button at the top center.
@@ -19,7 +18,6 @@ You can also add a file during **Character Customization**: select **Add .vrm**.
 
 ## How to Customize Your Avatar
 <!-- keywords: change, edit, hair, body, colors, appearance, look, character creator, 3d model, skin tone, eye shade, hairstyle, outfit recolor, body sliders, proportions, dress up, makeover -->
-<!-- route: avatar#finalize-character -->
 
 You customize an Avatar when you start a game as a persona that has an Avatar. See [The Avatar Step](Starting-a-Game#the-avatar-step).
 
@@ -32,7 +30,6 @@ Your choices are kept in the game and its saves. The Avatar in your library does
 
 ## How to Set Your Default Avatar
 <!-- keywords: favorite avatar, preferred model, which avatar do i wear, default badge, clear default, bundled avatar, users default -->
-<!-- route: mainMenu.models -->
 
 **User's Default** is the Avatar you prefer. An entity set to **User's Default** shows it.
 
@@ -43,7 +40,6 @@ The tile gets a **Default** badge. To go back, right-click the tile and select *
 
 ## How to Check an Avatar's License
 <!-- keywords: allowed, permission, rights, terms of use, copyright, share, redistribute, commercial, credit, vroid hub, legal to upload, who made it, attribution needed, ownership, usage rules, says not shareable, am i allowed -->
-<!-- route: modelDetails -->
 
 1. On the **Avatars** tab, select the Avatar's tile. Its details open.
 2. Open **Details**.
@@ -54,7 +50,6 @@ If it shows **Not shareable**, a line under it names what the file does not allo
 
 ## How to Export an Avatar
 <!-- keywords: download, save to file, get the file, back up, vrm file, copy out, extract model, send to a friend, move to other device, transfer, take out of app, keep offline copy -->
-<!-- route: mainMenu.models -->
 
 1. On the **Avatars** tab, select the Avatar's tile.
 2. Select **Export**.
@@ -63,7 +58,6 @@ You get the file as you imported it: a `.vrm` file, or `.glb` for a file with no
 
 ## How to Add Body Sliders in Blender
 <!-- keywords: shape keys, shapekeys, blend shapes, morph targets, custom avatar, slider not showing, key missing, body mesh, wings, horns, tail, transform during play, grow, ctrl+j, join mesh, weight paint, vertex group, ponytail, hair length key, vrm addon, basis, object data properties, part left behind, floating horns -->
-<!-- route: modelDetails -->
 
 Formamorph makes a body slider from each shape key on the object named `Body`. A world's stats can drive these sliders. Formamorph reads no other object for body sliders.
 
@@ -93,7 +87,6 @@ To tie a slider to a stat, open a world stat in the World Editor and pick the ke
 
 ## Character Customization
 <!-- keywords: creator screen, rotate the model, spin view, stop it moving, sliders missing, clothing recolor, body grows with stats, hide model in game, transformation -->
-<!-- route: avatar -->
 
 **Character Customization** opens between the **Enter World** dialog and the game, when the persona you play has an Avatar. It fills the screen: the viewer on the left and the controls on the right. On mobile, the controls are in a sheet. Select **Customize** to open it.
 
@@ -121,7 +114,6 @@ A world author can tie body sliders to a stat. As the stat changes, the Avatar's
 
 ## The Avatar Details Dialog
 <!-- keywords: model info, metadata, properties, inspect file, vrm version, remove a model, saves using it, right click options -->
-<!-- route: modelDetails -->
 
 Select an Avatar's tile on the **Avatars** tab to open its details. The dialog's title is the Avatar's name. The viewer is on the left. On mobile, select **Details & sliders** to open the controls.
 

@@ -28,7 +28,6 @@ A linked copy of your own item also updates the next time you open its world.
 
 ## How to Publish Linked Content
 <!-- keywords: required, dependencies, include, share, upload, entities with world, bundle together, prerequisites, ship characters along, pack lorebooks in, hidden from store, refused retry, requirements list -->
-<!-- route: publish.world -->
 
 1. On the main menu, select your world.
 2. Select **Publish World**.
@@ -39,7 +38,6 @@ A linked copy of your own item also updates the next time you open its world.
 
 ## How to Offer an Entity or Dictionary as an Add-on
 <!-- keywords: extra, optional, dlc, mod, share, compatible, expansion pack, plugin, addon, fan made extension, submit to someones world, character pack, bonus content -->
-<!-- route: publish -->
 
 1. In the library, open the entity or dictionary.
 2. Select **Publish**.
@@ -49,7 +47,6 @@ A linked copy of your own item also updates the next time you open its world.
 
 ## How to Review Add-ons for Your World
 <!-- keywords: approve, decline, accept, reject, moderate, offers, pending submissions, deny a request, allow fan content, curate extras, vet contributions, endorse, incoming requests -->
-<!-- route: manageAddons -->
 
 1. In Community Creations, find your own published world.
 2. Select **Manage Add-ons**.
