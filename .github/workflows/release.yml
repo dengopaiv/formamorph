@@ -2,8 +2,8 @@ name: Release
 
 # Build release artifacts for every tagged release. Each desktop runner packages for its own OS
 # (electron-builder can't reliably cross-build AppImage from Windows), so the matrix produces the Windows
-# launcher distributable, Linux AppImage, and macOS .dmg from one tag. A separate `web` job zips the browser
-# build. Everything is attached to the one GitHub Release for the tag.
+# launcher distributable, Linux AppImage, and macOS .dmg from one tag. Everything is attached to the one
+# GitHub Release for the tag.
 #
 # INVARIANT: the tag must equal `v<package.json version>`. The app bakes package.json's version as its
 # APP_VERSION and every artifact is named from it, and electron-builder publishes the Linux AppImage +
@@ -16,38 +16,17 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      site_only:
-        description: 'Redeploy Website - Update formamorph.ai while keeping the latest released game'
-        type: boolean
-        default: false
-      cloudflare_web:
-        description: 'Deploy Web Game - Build and publish the game to formamorph.ai'
-        type: boolean
-        default: false
-      itch_web:
-        description: 'Deploy itch.io Web - Build and publish the browser game to itch.io'
-        type: boolean
-        default: false
       itch_desktop:
-        description: 'Deploy itch.io Apps - Build and publish desktop and Android apps to itch.io'
-        type: boolean
-        default: false
-      android_only:
-        description: 'Build Android APK - Create a signed app for device testing without publishing'
+        description: 'Deploy itch.io Apps - Build and publish the desktop apps to itch.io'
         type: boolean
         default: false
 
 jobs:
-  # A site redeploy ships no app code, and a device-test APK is never published.
   check:
-    if: ${{ !inputs.site_only && !inputs.android_only }}
     uses: ./.github/workflows/ci.yml
 
   build:
     needs: check
-    # A site-only redeploy ships no app code, so nothing is built and nothing is published. `publish`
-    # needs this job, so skipping here skips that too.
-    if: ${{ !inputs.site_only && !inputs.android_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -85,7 +64,7 @@ jobs:
             exit 1
           fi
       - run: npm ci
-      # Releases ship the alternate avatar. The tracked default stays on the Pages dev build and local dev.
+      # Releases ship the alternate avatar. The tracked default stays on local dev builds.
       - name: Swap in the release avatar
         shell: bash
         run: cp build-assets/alternate-avatar.vrm public/default-avatar.vrm
@@ -130,120 +109,8 @@ jobs:
             release/*-win.zip.sha512
           if-no-files-found: error
 
-  web:
-    needs: check
-    # Skipped on a site-only redeploy, which serves the already-released build instead.
-    if: ${{ !inputs.site_only && !inputs.android_only }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      # Releases ship the alternate avatar. The tracked default stays on the Pages dev build and local dev.
-      - name: Swap in the release avatar
-        run: cp build-assets/alternate-avatar.vrm public/default-avatar.vrm
-      # No env overrides → full build (community on, full tag data), unlike the Pages demo build.
-      # FORMAMORPH_BUILD=web keeps the footer bare (no build tag) for the browser build.
-      - run: npm run build
-        env:
-          FORMAMORPH_BUILD: web
-      # Zip from inside dist so index.html sits at the zip root (itch.io requires this to serve it). Named
-      # from package.json version (== the tag, per the guard) so every artifact shares one version string.
-      - name: Zip web build
-        run: |
-          VER=$(node -p "require('./package.json').version")
-          cd dist && zip -r "../formamorph-web-${VER}.zip" .
-      - uses: actions/upload-artifact@v7
-        with:
-          name: web
-          path: formamorph-web-*.zip
-          if-no-files-found: error
-
-  # The Android APK: the same web build with the `android` build class, wrapped by Capacitor and signed
-  # from the four ANDROID_* secrets that scripts/android-signing-wizard.sh sets. The asset name carries
-  # no version so the landing page can link the GitHub latest redirect; the release tag carries it.
-  android:
-    needs: check
-    if: ${{ !cancelled() && !inputs.site_only && (needs.check.result == 'success' || (inputs.android_only && needs.check.result == 'skipped')) }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - name: Tag must match package.json version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          PKG="v$(node -p "require('./package.json').version")"
-          if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag '$GITHUB_REF_NAME' must equal 'v<package.json version>' ('$PKG'). Bump package.json, commit, then tag."
-            exit 1
-          fi
-      # Capacitor 8 compiles against Java 21; `cache: gradle` keys on the wrapper and lockfiles.
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-      # The action's default package list includes `tools`, which Google no longer serves; the runner
-      # image already ships cmdline-tools, so only platform-tools is requested.
-      - uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools
-      - run: npm ci
-      # Releases ship the alternate avatar. The tracked default stays on the Pages dev build and local dev.
-      - name: Swap in the release avatar
-        run: cp build-assets/alternate-avatar.vrm public/default-avatar.vrm
-      # buildAndroid.mjs sets FORMAMORPH_BUILD=android before the Vite build; sync copies dist/ into the
-      # native project and regenerates its plugin list.
-      - name: Build the web app with the android build class
-        run: node scripts/buildAndroid.mjs
-      - run: npx cap sync android
-      # The keystore never touches the checkout: it is decoded into the runner's temp dir and the Gradle
-      # signing config reads it from ANDROID_KEYSTORE_PATH. An empty secret fails here, not on a phone.
-      - name: Decode the signing keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          set -euo pipefail
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. Run scripts/android-signing-wizard.sh to set the four ANDROID_* secrets."
-            exit 1
-          fi
-          KEYSTORE="$RUNNER_TEMP/formamorph-release.p12"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
-          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
-      - name: Build and sign the release APK
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: cd android && ./gradlew assembleRelease --no-daemon --console=plain
-      - name: Verify the APK signature
-        run: |
-          set -euo pipefail
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
-          "$APKSIGNER" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk
-      # Gradle names an unsigned build app-release-unsigned.apk, so this copy fails if signing did not happen.
-      # The sidecar holds the bare hex digest, the same shape as the Windows app zip's.
-      - name: Name the release asset and write its checksum
-        run: |
-          set -euo pipefail
-          mkdir -p release-android
-          cp android/app/build/outputs/apk/release/app-release.apk release-android/Formamorph-android.apk
-          cd release-android && sha512sum Formamorph-android.apk | cut -d' ' -f1 > Formamorph-android.apk.sha512
-      - uses: actions/upload-artifact@v7
-        with:
-          name: android
-          path: release-android/*
-          if-no-files-found: error
-
   publish:
-    needs: [build, web, android]
+    needs: [build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -262,7 +129,7 @@ jobs:
       - run: node scripts/extractReleaseNotes.mjs --release "${GITHUB_REF_NAME#v}" > notes.md
       # The Linux build already published the AppImage + latest-linux.yml to this tag's release as a draft
       # (electron-builder targets `v<package.json version>`, which the guard forces to equal the tag). This
-      # step attaches the Windows/mac/web artifacts to that SAME release, sets the notes, and publishes it.
+      # step attaches the Windows/mac artifacts to that SAME release, sets the notes, and publishes it.
       # AppImage is intentionally omitted — electron-builder already uploaded it (and its update metadata).
       - uses: softprops/action-gh-release@v3
         with:
@@ -273,44 +140,18 @@ jobs:
             artifacts/*.dmg
             artifacts/*-win.zip
             artifacts/*-win.zip.sha512
-            artifacts/formamorph-web-*.zip
-            artifacts/Formamorph-android.apk
-            artifacts/Formamorph-android.apk.sha512
 
   # itch.io deployment via butler. Butler updates by CHANNEL, not filename: every push to a visible
   # channel replaces the live build immediately. Full-release tags (no suffix) deploy automatically;
   # pre-release tags (-beta) never do — push those by hand via workflow_dispatch on the tag's ref.
   # Needs the BUTLER_API_KEY secret (itch.io → Settings → API keys, from an account with access to
   # fierylion/formamorph). Versions are parsed from artifact filenames so they always match the build.
-  itch-web:
-    needs: [web, publish]
-    runs-on: ubuntu-latest
-    if: >
-      !cancelled() && needs.web.result == 'success' &&
-      ((github.event_name == 'push' && needs.publish.result == 'success' && !contains(github.ref_name, '-'))
-      || (github.event_name == 'workflow_dispatch' && inputs.itch_web &&
-      (needs.publish.result == 'success' || (github.ref_type != 'tag' && needs.publish.result == 'skipped'))))
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: web
-      - uses: remarkablegames/setup-butler@v3
-      - name: Push web build to itch.io
-        env:
-          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
-        run: |
-          set -euo pipefail
-          ZIP=$(ls formamorph-web-*.zip)
-          VER=${ZIP#formamorph-web-}; VER=${VER%.zip}
-          unzip -q "$ZIP" -d web
-          butler push web fierylion/formamorph:html5 --userversion "$VER"
-
-  # Desktop and Android go to itch only on major/minor releases (tag ends in .0), never on patches.
+  # Desktop goes to itch only on major/minor releases (tag ends in .0), never on patches.
   itch-desktop:
-    needs: [build, android, publish]
+    needs: [build, publish]
     runs-on: ubuntu-latest
     if: >
-      !cancelled() && needs.build.result == 'success' && needs.android.result == 'success' &&
+      !cancelled() && needs.build.result == 'success' &&
       ((github.event_name == 'push' && needs.publish.result == 'success' && !contains(github.ref_name, '-') && endsWith(github.ref_name, '.0'))
       || (github.event_name == 'workflow_dispatch' && inputs.itch_desktop &&
       (needs.publish.result == 'success' || (github.ref_type != 'tag' && needs.publish.result == 'skipped'))))
@@ -319,11 +160,8 @@ jobs:
         with:
           pattern: desktop-*
           merge-multiple: true
-      - uses: actions/download-artifact@v8
-        with:
-          name: android
       - uses: remarkablegames/setup-butler@v3
-      - name: Push desktop and Android builds to itch.io
+      - name: Push desktop builds to itch.io
         env:
           BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
         run: |
@@ -335,65 +173,3 @@ jobs:
           butler push win fierylion/formamorph:windows --userversion "$VER"
           butler push "$(ls *.AppImage)" fierylion/formamorph:linux --userversion "$VER"
           butler push "$(ls *.dmg)" fierylion/formamorph:mac --userversion "$VER"
-          butler push Formamorph-android.apk fierylion/formamorph:android --userversion "$VER"
-
-  # Cloudflare Pages deploy → https://formamorph.ai. The upload root is `out/`: the app build unpacked
-  # into out/play/, plus everything tracked in hosting/ at the root — the landing page, its images, and
-  # the Pages config. Both deploy paths below hand that same assemble-guard-deploy-check sequence a
-  # different app build. Needs the CLOUDFLARE_API_TOKEN (Pages Edit scope) and CLOUDFLARE_ACCOUNT_ID
-  # secrets.
-  #
-  # Release path: same gate as itch-web — full-release tags deploy automatically, suffixed tags never do
-  # (push one by hand via workflow_dispatch on the tag's ref). Ships the build this run just made.
-  cloudflare-web:
-    needs: [web, publish]
-    runs-on: ubuntu-latest
-    if: >
-      !cancelled() && needs.web.result == 'success' &&
-      ((github.event_name == 'push' && needs.publish.result == 'success' && !contains(github.ref_name, '-'))
-      || (github.event_name == 'workflow_dispatch' && inputs.cloudflare_web &&
-      (needs.publish.result == 'success' || (github.ref_type != 'tag' && needs.publish.result == 'skipped'))))
-    steps:
-      # Checked out for hosting/ and the shared action — every /play/ byte comes from the web artifact.
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: web
-          path: web-zip
-      - id: zip
-        run: echo "path=$(ls web-zip/formamorph-web-*.zip)" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/deploy-site
-        with:
-          web-zip: ${{ steps.zip.outputs.path }}
-          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          run-checks: ${{ vars.CLOUDFLARE_CHECKS }}
-
-  # Site path: redeploy hosting/ against the app build from the latest RELEASE, so a landing-page edit
-  # reaches formamorph.ai without cutting a release and without shipping unreleased app code. The
-  # `formamorph-web-<version>.zip` asset it downloads exists on every release, and the tag-version guard
-  # in the build job is what keeps that name predictable.
-  cloudflare-site:
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.site_only && !inputs.android_only }}
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - name: Fetch the latest released web build
-        id: zip
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # `releases/latest` skips drafts and pre-releases, so a beta never becomes what /play/ serves.
-          TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
-          echo "Pairing the site with the app from $TAG"
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'formamorph-web-*.zip' --dir web-zip
-          echo "path=$(ls web-zip/formamorph-web-*.zip)" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/deploy-site
-        with:
-          web-zip: ${{ steps.zip.outputs.path }}
-          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          run-checks: ${{ vars.CLOUDFLARE_CHECKS }}

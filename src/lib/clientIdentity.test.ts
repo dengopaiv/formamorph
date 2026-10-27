@@ -1,17 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { APP_VERSION } from '@/lib/version';
-
-// The build class is a compile-time constant, so the one platform that reads off it is only reachable
-// through the module it comes from.
-const build = vi.hoisted(() => ({ target: '' }));
-vi.mock('@/lib/buildInfo', () => ({
-  get BUILD_TARGET() { return build.target; },
-  get BUILD_TAG() { return build.target || 'dev'; },
-  buildSignature: () => '',
-}));
-
-const { CLIENT_HEADER, clientPlatform, watchClientVersion } = await import('@/lib/clientIdentity');
+import { CLIENT_HEADER, clientPlatform, watchClientVersion } from '@/lib/clientIdentity';
 
 const API = 'https://api.example.test/api';
 
@@ -24,7 +14,6 @@ const refusal = { success: false, code: 'CLIENT_UPDATE_REQUIRED', minVersion: '2
 let stop: (() => void) | null = null;
 
 beforeEach(() => {
-  build.target = '';
   delete (window as { formamorphDesktop?: unknown }).formamorphDesktop;
 });
 
@@ -102,12 +91,6 @@ describe('the client identity header', () => {
 describe('the platform the header names', () => {
   it('is web in the browser build', () => {
     expect(clientPlatform()).toBe('web');
-  });
-
-  it('is android in the Android build, bridge or no bridge', () => {
-    build.target = 'android';
-
-    expect(clientPlatform()).toBe('android');
   });
 
   it('is the operating system in the desktop build', () => {

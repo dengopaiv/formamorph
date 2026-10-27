@@ -2,11 +2,11 @@
 // every ~3h, and on demand), reflects the channel setting, and exposes download/apply that route to
 // whichever bridge this build has. Progress + completion come back through the bridge's events and dispatch
 // into the same reducer. Detection is one GitHub fetch everywhere; only download/apply differ per platform
-// (the desktop main process, or the Android plugin).
+// (the desktop main process).
 
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer } from 'react';
 import { APP_VERSION } from '@/lib/version';
-import { checkForUpdate, androidAssets, type AndroidDownloadUrls } from '@/services/UpdateService';
+import { checkForUpdate } from '@/services/UpdateService';
 import { initialUpdateState, updateReducer, type UpdateState } from '@/lib/updates/updateState';
 import { updateBridge } from '@/lib/updates/updateBridge';
 import type { UpdateChannel } from '@/contexts/settingsDefaults';
@@ -19,15 +19,12 @@ export interface UpdateChecker {
   check: () => void;
   /** Begin the platform download for the available update. */
   download: () => void;
-  /** Install what was downloaded. The desktop shell relaunches; Android hands it to its own installer. */
+  /** Install what was downloaded. The desktop shell relaunches. */
   applyUpdate: () => void;
 }
 
 export function useUpdateChecker(channel: UpdateChannel): UpdateChecker {
   const [state, dispatch] = useReducer(updateReducer, undefined, () => initialUpdateState(APP_VERSION, channel));
-  // Android downloads the release asset itself, so the URLs the check already found travel with the
-  // download call. The desktop main process finds its own asset and ignores them.
-  const assets = useRef<AndroidDownloadUrls | null>(null);
 
   const runCheck = useCallback(async () => {
     dispatch({ type: 'CHECK_START' });
@@ -37,7 +34,6 @@ export function useUpdateChecker(channel: UpdateChannel): UpdateChecker {
       return;
     }
     const r = res.result;
-    assets.current = androidAssets(r.release);
     if (r.available && r.latestVersion) {
       dispatch({ type: 'CHECK_RESULT', available: true, latestVersion: r.latestVersion, changelog: r.changelog ?? '', at: Date.now() });
       // If this exact version was already downloaded in a prior session (staged on disk), resume at the
@@ -64,8 +60,7 @@ export function useUpdateChecker(channel: UpdateChannel): UpdateChecker {
     return () => clearInterval(id);
   }, [runCheck]);
 
-  // Platform update events (electron-updater on Linux, the Windows swap downloader, the Android plugin's
-  // stream to the cache directory) drive progress.
+  // Platform update events (electron-updater on Linux, the Windows swap downloader) drive progress.
   useEffect(() => {
     const bridge = updateBridge();
     if (!bridge) return;
@@ -79,19 +74,17 @@ export function useUpdateChecker(channel: UpdateChannel): UpdateChecker {
   const download = useCallback(() => {
     dispatch({ type: 'DOWNLOAD_START' });
     // The bridge exposes no error event, so a rejected download would otherwise leave the UI stuck at
-    // 'downloading' forever — surface it as an error the dialog can show and retry from. A failed checksum
-    // arrives here too, which is why the Android plugin rejects rather than reporting a finished download.
+    // 'downloading' forever — surface it as an error the dialog can show and retry from.
     updateBridge()
-      ?.download({ version: state.latestVersion, channel, ...assets.current })
+      ?.download({ version: state.latestVersion, channel })
       .catch((e) => dispatch({ type: 'ERROR', error: (e as Error)?.message ?? 'Update download failed' }));
   }, [state.latestVersion, channel]);
 
   const applyUpdate = useCallback(() => {
     const bridge = updateBridge();
     if (!bridge) return;
-    // A resolved apply leaves the state alone: the desktop shell relaunches, and Android's `needsPermission`
-    // sends the player to a setting they come back from, so the offer must survive. Only a rejection is an
-    // error worth showing.
+    // A resolved apply leaves the state alone: the desktop shell relaunches. Only a rejection is an error
+    // worth showing.
     void Promise.resolve(bridge.apply())
       .catch((e) => dispatch({ type: 'ERROR', error: (e as Error)?.message ?? 'Update install failed' }));
   }, []);

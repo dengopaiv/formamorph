@@ -1558,7 +1558,6 @@ Below the `md` breakpoint the window is a full-screen sheet in the narrow layout
 - The sheet pads for the system bars with the safe-area insets.
 - Focus goes to the sheet, not to the search field, so no keyboard opens until the player selects a field.
 - The tab hides while the sheet is open, and focus returns to it on close.
-- The Android back action closes the sheet or the window before any dialog under it. Escape still never closes it.
 
 ### State reference
 

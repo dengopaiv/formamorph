@@ -6,7 +6,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Trait, TraitGroup, Stat } from "@/types";
-import { useBackStop } from "@/hooks/useBackStop";
 
 const GENERAL = 'general';
 
@@ -101,9 +100,6 @@ const TraitSelectionModal = ({
   const [localIndex, setLocalIndex] = useState(0);
   const index = sectionIndex ?? localIndex;
   const setIndex = (next: number) => (onSectionChange ?? setLocalIndex)(next);
-  // These cards are not Radix layers, so the Android back button cannot see them; it steps back the way the
-  // Back button does, and leaves the flow from its first step.
-  useBackStop(() => (index > 0 ? setIndex(index - 1) : (onBack ?? onAbort)()));
   const current = stops[Math.min(index, stops.length - 1)];
 
   // Defensive: the parent skips this modal entirely when the world has no traits.

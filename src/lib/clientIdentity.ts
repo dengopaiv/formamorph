@@ -1,5 +1,4 @@
 import { APP_VERSION } from '@/lib/version';
-import { BUILD_TARGET } from '@/lib/buildInfo';
 import { urlOf } from '@/lib/fetchTarget';
 
 /** The header every request to the community server carries: the version, a space, the platform. */
@@ -9,7 +8,7 @@ export const CLIENT_HEADER = 'X-Formamorph-Client';
 export const CLIENT_UPDATE_REQUIRED = 'CLIENT_UPDATE_REQUIRED';
 
 /** Which build is talking. The server logs it and gates routes on the version beside it. */
-export type ClientPlatform = 'web' | 'windows' | 'linux' | 'mac' | 'android';
+export type ClientPlatform = 'web' | 'windows' | 'linux' | 'mac';
 
 /** What a refused request said it wants. */
 export interface ClientUpdateRequired {
@@ -27,17 +26,14 @@ interface RefusalBody {
 }
 
 /**
- * Which build this is, in the five names the server knows.
+ * Which build this is, in the names the server knows.
  *
- * The build class decides Android, because the Android app is a WebView with its own bridge and the
- * desktop check must stay false inside it. Everything else is the desktop bridge plus the agent string,
- * which is the only thing that separates the three desktop builds from each other.
+ * The desktop bridge plus the agent string, which is the only thing that separates the three desktop
+ * builds from each other.
  *
  * @returns The platform half of the client header
  */
 export function clientPlatform(): ClientPlatform {
-  if (BUILD_TARGET === 'android') return 'android';
-
   const desktop = typeof window !== 'undefined'
     && Boolean((window as { formamorphDesktop?: unknown }).formamorphDesktop);
   if (!desktop) return 'web';

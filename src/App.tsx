@@ -1,8 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Capacitor } from '@capacitor/core';
 import { ThemeProvider } from "./components/theme-provider";
-import { AndroidBackHandler } from './components/AndroidBackHandler';
-import { recordView } from './lib/backAction';
 import { watchSessionForClaim } from './lib/anonymousLikeClaim';
 import { COMMUNITY_ENABLED } from './lib/featureFlags';
 import { useDevRoute, installDevRouter, registerDevHook } from './lib/devRouter';
@@ -23,7 +20,6 @@ import { PrivacyPolicyProvider } from './contexts/PrivacyPolicyContext';
 import { AccountDeletionProvider } from './contexts/AccountDeletionContext';
 import { UpdateRequiredGate } from './components/modals/UpdateRequiredDialog';
 import { SignInHost } from './components/SignInHost';
-import { EXIT_TO_MENU_PROMPT } from './lib/leavePrompts';
 import { LocalEngineManager } from './components/LocalEngineManager';
 import { IntroSequence } from './components/IntroSequence';
 import { Formaquestion } from './components/formaquestion/Formaquestion';
@@ -48,13 +44,6 @@ function AppViews() {
   const [currentView, setCurrentView] = useState<DevView>('mainMenu');
   const devRoute = useDevRoute();
   const { beginSession, endSession } = usePlaceholderSession();
-
-  // The trail of views this run has passed through, oldest first, so the Android back button knows
-  // whether there is anywhere to go back to. Returning to a view already in the trail pops back to it.
-  const [viewHistory, setViewHistory] = useState<DevView[]>([currentView]);
-  useEffect(() => {
-    setViewHistory((trail) => recordView(trail, currentView));
-  }, [currentView]);
 
   // First-run welcome intro: cinematic on the first ever launch (kicker + slow reveal), snappy on replay.
   // Suppressed when a dev-router hash is steering the app somewhere specific, so verification isn't blocked.
@@ -155,28 +144,9 @@ function AppViews() {
     setCurrentView('mainMenu');
   };
 
-  // One view back, for the hardware back button. Leaving the game ends its session, exactly as the
-  // in-game Exit does.
-  const handleBackOneView = () => {
-    const previous = viewHistory[viewHistory.length - 2];
-    if (!previous) return;
-    if (currentView === 'gameViewer') handleExitToMenu();
-    else setCurrentView(previous);
-  };
-
   return (
     <>
       <DevFixtureLoader onPicked={setInitialCharacters} />
-      {/* Android only: elsewhere there is no hardware back button and the plugin has nothing to send.
-          The DEV route mounts it anyway, so the exit prompt's copy is reachable without a phone. */}
-      {(Capacitor.isNativePlatform() || (import.meta.env.DEV && devRoute?.modal === 'exitApp')) && (
-        <AndroidBackHandler
-          viewHistory={viewHistory}
-          onGoBack={handleBackOneView}
-          // Leaving the game costs the turn in hand, so back asks the same thing the in-game Exit does.
-          confirmGoBack={currentView === 'gameViewer' ? EXIT_TO_MENU_PROMPT : undefined}
-        />
-      )}
       {import.meta.env.DEV && devRoute?.probe === 'viewport' && <ViewportReadout />}
       {DevPaneRoutes && devRoute?.modal && <Suspense fallback={null}><DevPaneRoutes /></Suspense>}
       {/* One help window for every view, so it stays open with its state across a view swap. The welcome

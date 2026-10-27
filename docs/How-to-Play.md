@@ -332,7 +332,7 @@ Most error messages have a **View Details →** link. The **Error Details** dial
 <!-- keywords: free model, badge, trial, default narrator, popup at start, weak ai, upgrade, no setup -->
 <!-- route: demoAI -->
 
-In the browser and on Android, Formamorph starts on the **Demo AI**, a small free model that needs no setup. The first time you start a game on it, **You're Playing on the Demo AI** opens. A **Demo AI** badge at the top right of the story opens it again.
+In the browser, Formamorph starts on the **Demo AI**, a small free model that needs no setup. The first time you start a game on it, **You're Playing on the Demo AI** opens. A **Demo AI** badge at the top right of the story opens it again.
 
 | Button | What it does |
 |---|---|

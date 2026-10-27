@@ -25,7 +25,6 @@ import { UpdateVersionControl } from './UpdateVersionControl';
 describe('UpdateVersionControl', () => {
   afterEach(() => {
     delete (window as { formamorphDesktop?: unknown }).formamorphDesktop;
-    delete (window as { Capacitor?: unknown }).Capacitor;
   });
 
   it('tags the version when an update is available and opens the dialog with a Download action', async () => {
@@ -67,37 +66,17 @@ describe('UpdateVersionControl', () => {
     expect(await screen.findByRole('button', { name: /Update.*Restart/ })).toBeInTheDocument();
   });
 
-  it('offers Install rather than a restart on Android, where the system installer takes over', async () => {
-    (window as unknown as { Capacitor: unknown }).Capacitor = {
-      isPluginAvailable: (name: string) => name === 'FormamorphUpdate',
-      Plugins: {
-        FormamorphUpdate: {
-          pending: async () => ({ version: '9.9.9' }),
-          addListener: async () => ({ remove: async () => {} }),
-        },
-      },
-    };
-
-    render(<UpdateVersionControl />);
-
-    // Nothing this button does restarts the app: it opens Android's install sheet and the player confirms.
-    expect(await screen.findByRole('button', { name: 'Install' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Restart/ })).not.toBeInTheDocument();
-  });
-
   it('counts up alone while the server reports no download size', async () => {
     let progress: ((p: { received: number; total: number }) => void) | null = null;
-    (window as unknown as { Capacitor: unknown }).Capacitor = {
-      isPluginAvailable: (name: string) => name === 'FormamorphUpdate',
-      Plugins: {
-        FormamorphUpdate: {
-          pending: async () => ({ version: null }),
-          download: async () => {},
-          addListener: async (event: string, cb: (p: { received: number; total: number }) => void) => {
-            if (event === 'downloadProgress') progress = cb;
-            return { remove: async () => {} };
-          },
+    (window as unknown as { formamorphDesktop: unknown }).formamorphDesktop = {
+      update: {
+        pending: async () => null,
+        download: async () => {},
+        onProgress: (cb: (p: { received: number; total: number }) => void) => {
+          progress = cb;
+          return () => {};
         },
+        onDownloaded: () => () => {},
       },
     };
     render(<UpdateVersionControl />);

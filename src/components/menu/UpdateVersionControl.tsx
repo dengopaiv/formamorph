@@ -7,7 +7,6 @@ import { formatModelSize } from '@/lib/localModels';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useUpdateChecker } from '@/hooks/useUpdateChecker';
 import { UpdateDialog } from '@/components/modals/UpdateDialog';
-import { updateBridge } from '@/lib/updates/updateBridge';
 import { Tip } from '@/components/ui/tooltip';
 import { targetAttribute } from '@/lib/surface/surfaceTargets';
 
@@ -20,9 +19,6 @@ export function UpdateVersionControl() {
   const { state, check, download, applyUpdate } = useUpdateChecker(updateChannel);
   const [dialogOpen, setDialogOpen] = useState(false);
   const updateReady = state.phase === 'available' || state.phase === 'downloaded' || state.phase === 'downloading';
-  // Android hands the file to the system installer and the player confirms there, so nothing restarts on
-  // this button's say-so. The desktop shell swaps the build and relaunches itself.
-  const applyLabel = updateBridge()?.kind === 'android' ? 'Install' : 'Update & Restart';
 
   return (
     <div className="flex flex-col items-start gap-1">
@@ -51,7 +47,7 @@ export function UpdateVersionControl() {
 
       {state.phase === 'downloaded' && (
         <Button size="sm" variant="outline" className="h-6 px-2 text-meta" onClick={applyUpdate}>
-          {applyLabel}
+          Update &amp; Restart
         </Button>
       )}
 

@@ -2,7 +2,6 @@
  * The label the player sees for each surface id. A label comes from the constant that renders it where
  * one exists; the rest are the fixed word of a title that has none, or a generic noun for a dynamic one.
  */
-import { CLOSE_APP_PROMPT } from '@/lib/leavePrompts';
 import { TOUR_STEPS } from '@/lib/authoringTour/steps';
 import { BROWSE_TAB_LABELS } from '@/lib/browseTabs';
 import { KIND_LABELS } from '@/lib/catalogKinds';
@@ -38,7 +37,6 @@ const ENTRIES: [string, string][] = [
   ['connectReferences', 'Connect World References'],
   ['dictionaryEditor', 'Dictionary'],
   ['entityEditor', 'Entity'],
-  ['exitApp', CLOSE_APP_PROMPT.title],
   ['importComponent', 'Import'],
   ['manageAddons', 'Manage Add-ons'],
   ['memoryManager', 'Memories'],

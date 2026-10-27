@@ -7,7 +7,6 @@ import VRMViewer from '@/views/VRMViewer';
 import { MobileControlsDrawer } from '@/components/MobileControlsDrawer';
 import { useVrmCustomization } from '@/lib/useVrmCustomization';
 import { useIsMobile } from '@/lib/useIsMobile';
-import { useBackStop } from '@/hooks/useBackStop';
 import { useAvatarDetailsOpen } from '@/lib/useAvatarDetailsOpen';
 import { CollapsibleSection } from '@/components/ui/collapsible-section';
 import { VrmFileDetails, Row } from '@/components/VrmFileDetails';
@@ -53,8 +52,6 @@ export function ModelDetailsPanel({ open, name, url, license, size, failed = fal
   const { setCaps, vrmViewerRef, viewerProps, controls } = useVrmCustomization();
   const [detailsOpen, setDetailsOpen] = useAvatarDetailsOpen();
   const isMobile = useIsMobile();
-  // The mobile overlay is not a Radix layer, so the Android back button cannot see it and closes it here.
-  useBackStop(isMobile && open ? onClose : undefined);
 
   // Absence is failure, same as every other license read: a model whose license hasn't resolved yet gates
   // exactly like a plain glTF would, never like a pass.

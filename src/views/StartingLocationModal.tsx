@@ -4,7 +4,6 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { GameLocation } from "@/types";
-import { useBackStop } from "@/hooks/useBackStop";
 
 const RANDOM = "random";
 
@@ -33,9 +32,6 @@ const StartingLocationModal = ({
   /** Label for the confirm button — names the next step in the flow (e.g. "Avatar", "Start"). */
   confirmLabel?: string;
 }) => {
-  // This card is not a Radix layer, so the Android back button cannot see it; it steps back the way the Back
-  // button does, and leaves the flow from its first step.
-  useBackStop(onBack ?? onAbort);
   const selected = selectedLocationId ?? RANDOM;
 
   return (

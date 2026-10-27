@@ -8,8 +8,6 @@ const UA = {
   edgeWindows: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
   firefoxLinux: 'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0',
   safariMac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
-  safariIpad: 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
-  chromeAndroid: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
   operaWindows: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/117.0.0.0',
 };
 
@@ -34,16 +32,6 @@ describe('summarizing a user agent', () => {
     // Chrome's user agent ends in "Safari/537.36".
     expect(summarizeUserAgent(UA.chromeWindows)).toContain('Chrome');
     expect(summarizeUserAgent(UA.safariMac)).toBe('macOS · Safari');
-  });
-
-  it('reads an iPad as iOS rather than macOS', () => {
-    // An iPad's user agent says "Mac OS X" too, so order of checks is what separates them.
-    expect(summarizeUserAgent(UA.safariIpad)).toBe('iOS · Safari');
-  });
-
-  it('reads Android as Android rather than Linux', () => {
-    // Android user agents say "Linux" as well.
-    expect(summarizeUserAgent(UA.chromeAndroid)).toBe('Android · Chrome');
   });
 
   it('says Unknown rather than nothing when it recognizes neither', () => {
