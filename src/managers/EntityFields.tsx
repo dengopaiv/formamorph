@@ -202,6 +202,7 @@ export const EntityDescriptionFields = ({ value, onChange, placeholders = [], ow
     <>
       <PlaceholderField
         label="Author's Brief"
+        historyField="authorBrief"
         labelAside={<HelpButton topicId="worldEditor.authorBrief" className="h-6 w-6" />}
         hint={AUTHOR_BRIEF_HINT}
         value={value.authorBrief || ''}

@@ -128,6 +128,7 @@ const LocationManager = ({ location, tab, onTabChange, focusField }: {
         </div>
         <PlaceholderField
           label="Author's Brief"
+          historyField="authorBrief"
           labelAside={<HelpButton topicId="worldEditor.authorBrief" className="h-6 w-6" />}
           hint={AUTHOR_BRIEF_HINT}
           value={editingLocation.authorBrief || ''}
