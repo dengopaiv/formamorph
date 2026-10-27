@@ -7,7 +7,6 @@ Community Creations is where players share what they make. You can download worl
 
 ## How to Download a World
 <!-- keywords: get, find, browse, install, community, workshop, online, add to library, more scenarios, other players worlds, new stories to play, grab a game, get mods, player made adventures, fetch from server -->
-<!-- route: community.world -->
 
 1. On the main menu, select **Community Creations**.
 2. If the **Adult Content Ahead** dialog opens, read it and select **Accept**.
@@ -19,7 +18,6 @@ The world goes into your library. To play it, see [How to Start a Game](Starting
 
 ## How to Publish a World
 <!-- keywords: share, upload, post, put online, community page, release, make public, submit my world, let others play it, go live, list my scenario, distribute, contribute my creation, show it to everyone -->
-<!-- route: publish.world -->
 
 1. Log in. See [Login and Register](#login-and-register).
 2. On the main menu, open the library's **Worlds** tab and select your world. The world dialog opens.
@@ -32,7 +30,6 @@ The listing takes its name, description, image and tags from the world itself. S
 
 ## How to Update a Listing
 <!-- keywords: new version, republish, upload again, change, edit published world, push, changelog, patch, replace my upload, overwrite old upload, revise, fix after publishing -->
-<!-- route: publish -->
 
 1. Open the item's publish dialog. For a world, select **Publish World** in the world dialog. For other kinds, see [Where to Publish Each Kind](#where-to-publish-each-kind).
 2. Under **Or update existing world:**, select your listing.
@@ -43,7 +40,6 @@ The listing gets your current version. Players who downloaded it see that an upd
 
 ## How to Enter a Contest
 <!-- keywords: competition, jam, event, submit, join, compete, tournament, participate, take part, challenge, enroll, win prizes, pull out, swap my entry -->
-<!-- route: publish.world -->
 
 1. While a contest runs, start [How to Publish a World](#how-to-publish-a-world).
 2. In the **Publish World** dialog, find the contest card. Select **Contest Rules** to read the rules.
@@ -54,7 +50,6 @@ You can enter one world per contest. Only a world can enter. To enter a world yo
 
 ## How to Report a Listing
 <!-- keywords: flag, abuse, inappropriate, complain, offensive, rule break, moderation, plagiarism, copied my world, tell the admins, bad content, troll, harasser, stolen work, notify staff -->
-<!-- route: community -->
 
 1. Log in.
 2. Open the listing's details window.
@@ -67,7 +62,6 @@ To report a comment, select its **Report comment** button. To report a person, o
 
 ## How to Change Your Profile Image
 <!-- keywords: picture, photo, pfp, icon, account picture, upload, crop, display pic, user portrait, animated gif, account face, take off my pic, reposition, initial letter shown -->
-<!-- route: profile -->
 
 You need a Community Creations account.
 
@@ -81,7 +75,6 @@ To remove it, select **Remove your profile image**. With no picture, your initia
 
 ## How to Delete Your Account
 <!-- keywords: remove, close, erase, cancel, deactivate, my data, profile, gdpr, unregister, terminate membership, wipe my info, leave for good, right to erasure, undo deletion, privacy request -->
-<!-- route: profile.settings -->
 
 1. On the main menu, select the round **User Profile** button at the bottom left.
 2. Select the **Settings** tab, then select **Delete Account**.
@@ -93,7 +86,6 @@ You are logged out immediately. The account is erased seven days later. To cance
 
 ## How to Report a Bug or Suggest Something
 <!-- keywords: feedback, issue, problem, error, broken, crash, idea, feature request, contact, developer, glitch, support ticket, tell the devs, wishlist, send a complaint, propose improvement, get support, something went wrong -->
-<!-- route: feedbackHub -->
 
 1. Log in.
 2. On the main menu, select the round **Feedback** button at the bottom left.
@@ -106,7 +98,6 @@ In a game, **Send Feedback** in the menu opens the form directly. See [Bugs and 
 
 ## Opening Community Creations
 <!-- keywords: age check, nsfw warning, 18 plus, age verification, mature popup, age gate, keeps asking my age, disclaimer, logged out after declining -->
-<!-- route: community -->
 
 Select **Community Creations** on the main menu. The window opens on the **Worlds** tab. The **Back** button closes it.
 
@@ -123,7 +114,6 @@ The dialog has no close button. After **Decline**, the app asks again the next t
 
 ## Browsing
 <!-- keywords: block a creator, blacklist tags, mute an uploader, most popular, top rated, newest first, genre categories, look up by name, unhide, version history of world -->
-<!-- route: community -->
 
 ### The Tabs
 
@@ -257,7 +247,6 @@ Comments have no replies. **Load more** shows older comments. You must log in to
 
 ## Profiles and Following
 <!-- keywords: subscribe to creator, alerts for uploads, watch a user, user page, everything by one person, stop subscribing, who i subscribe to, fans count -->
-<!-- route: profile -->
 
 ### An Author's Profile
 
@@ -273,7 +262,6 @@ The **Notifications** tab of your **User Profile** dialog is the follow feed. It
 
 ## Publishing
 <!-- keywords: unpublish, take down my upload, upload size cap, too big to upload, tos agreement, share a character, wrong title shown, remove from store, discord picture warning -->
-<!-- route: publish -->
 
 ### Where to Publish Each Kind
 
@@ -339,7 +327,6 @@ Deleting a world from your library does not delete its listing.
 
 ## Contests
 <!-- keywords: leaderboard, final standings, deadline, voting period, trophy, medal, event popup, hide event notice, ranking, who came first -->
-<!-- route: community.contest -->
 
 The **Contest** tab lists the entries of one contest. When several contests exist, pick one in the **Contest** menu. **Rules** opens the contest's rules.
 
@@ -451,7 +438,6 @@ A suspended account can't be deleted from here. Select **Open Feedback** to ask 
 
 ## Bugs and Suggestions
 <!-- keywords: ticket status, track my ticket, known issues, roadmap, upvote an idea, dev response, planned features, what data is sent, ask a question, community help, unanswered, me too -->
-<!-- route: feedbackHub -->
 
 Select the round **Feedback** button at the bottom left of the main menu. It shows when you are logged in. The steps to send one are in [How to Report a Bug or Suggest Something](#how-to-report-a-bug-or-suggest-something).
 

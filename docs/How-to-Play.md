@@ -344,7 +344,6 @@ A stronger model writes better narration and keeps each entity consistent. See [
 
 ## The Like Prompt
 <!-- keywords: enjoying popup, heart, rate this world, thumbs up, upvote, stop asking, favorite, review -->
-<!-- route: likePrompt -->
 
 After 15 turns in a world you downloaded from Community Creations, a card under the story asks *Enjoying …?*
 

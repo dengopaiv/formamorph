@@ -293,7 +293,6 @@ Sampling changes apply on the next turn. The other changes need **Save & Reload 
 It never cuts a message in half. A change applies on the next turn, with no reload.
 
 ### Image
-<!-- route: settingsEndpoints.image -->
 
 | Setting | What it does |
 |---|---|
@@ -324,7 +323,6 @@ The **Image** section sets how each image is made.
 | **Qwen3 Encoder**, **Z-Image VAE**, **Anima VAE** | **Advanced**, InvokeAI only. Shows for a Z-Image or Anima model. Leave them empty to pick one automatically. |
 
 ### Tag Prompt
-<!-- route: settingsEndpoints.tagPrompt -->
 
 **Advanced.** Shows when **Enable Image Generation** is on. It is the prompt that your text model gets to turn a description into image tags. **Reset to Defaults** brings back the original text.
 

@@ -7,7 +7,6 @@ Formamorph can draw images with an image server that you connect. It makes portr
 
 ## How to Turn On Image Generation
 <!-- keywords: enable, pictures, art, stable diffusion, ai art, set up, illustrations, activate drawings, generate button missing, render visuals, image backend, photos in game, where are picture settings -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 1. Open **Settings**, then the **Endpoints** tab, then the **Image** tab.
 2. Select the **Enable Image Generation** checkbox.
@@ -19,7 +18,6 @@ The **Generate with AI** buttons now show beside the World Editor's image fields
 
 ## How to Connect ComfyUI
 <!-- keywords: comfy, stable diffusion, local, set up, cors, checkpoint, sdxl, port 8188, will not connect, request blocked, own graphics card, offline drawing, flux, model list empty, bat file flag -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 1. Install ComfyUI.
 2. Add `--enable-cors-header` to the start command in your `run_*.bat` file.
@@ -32,7 +30,6 @@ To use your own ComfyUI graph, see [How to Use Your Own ComfyUI Workflow](#how-t
 
 ## How to Connect InvokeAI
 <!-- keywords: invoke, stable diffusion, local, set up, cors, allow_origins, sdxl, port 9090, yaml config edit, connection refused, text encoder missing, z image, anima, restart after config -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 1. Install InvokeAI.
 2. Open `invokeai.yaml` in the InvokeAI root folder.
@@ -46,7 +43,6 @@ A Z-Image or Anima model also needs a Qwen3 text encoder and a VAE. Formamorph p
 
 ## How to Connect Automatic1111 or Forge
 <!-- keywords: a1111, auto1111, sd webui, stable diffusion, local, set up, cors, api, webui, port 7860, reforge, sd next, launch flags, fix ugly faces, face detailer, server unreachable -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 1. Install Automatic1111 or Forge.
 2. Add this line to `webui-user.bat`:
@@ -64,7 +60,6 @@ To use **Face Fix**, install the **ADetailer** extension on your server.
 
 ## How to Connect NovelAI
 <!-- keywords: nai, novel ai, anime, anlas, subscription, cloud, api token, set up, paid service, credits cost, opus tier free, got charged, access key, persistent key, no gpu needed -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 You need a NovelAI subscription.
 
@@ -78,7 +73,6 @@ NovelAI starts at 1024×1024 and 28 steps. **Opus** subscribers get one free ima
 
 ## How to Connect an OpenAI-Compatible Service
 <!-- keywords: dall-e, dalle, gpt-image, api key, cloud, set up, chatgpt pictures, greyed out in browser, provider not selectable, base address, third party image api, pay per image, fixed image sizes, negative prompt ignored -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 This provider works only in the [desktop app](Connect-Your-Own-AI). The desktop app sends the requests for you, so the service needs no CORS setup.
 
@@ -91,7 +85,6 @@ This provider ignores **Negative Prompt**, **Steps / CFG** and **Sampler**. Each
 
 ## How to Use Your Own ComfyUI Workflow
 <!-- keywords: graph, custom, nodes, json, api format, lora, template, setup, custom pipeline, upscaler, controlnet, refiner, paste exported file, dev mode export, hires fix, own node layout -->
-<!-- route: settingsEndpoints.image#enable-image-generation -->
 
 The **Workflow (API Format)** field shows in Advanced mode. It holds the ComfyUI graph that Formamorph sends. **How to Get This** shows these steps too.
 
@@ -124,7 +117,6 @@ If a turn is still running, the image starts when it ends. **Write Scene Tags** 
 
 ## How to Add an Image Preset
 <!-- keywords: save settings, profile, switch, multiple, config, new setup, second server, different art styles, swap models quickly, loadout, duplicate configuration, keep two servers, named settings -->
-<!-- route: settingsEndpoints.image -->
 
 1. On the **Image** tab, open **Preset**.
 2. Select **Add New Preset…**.
@@ -135,7 +127,6 @@ Select a preset in **Preset** to switch to it. See [Image Presets](#image-preset
 
 ## Providers
 <!-- keywords: supported backends, which image service, compare options, default ports, local versus paid, gallery folder, face fix slow, detector download -->
-<!-- route: imageSetup -->
 
 | Provider | Runs on | Default address | Setup |
 |---|---|---|---|
