@@ -26,9 +26,7 @@ export const ALWAYS_RUN = {
   'src/components/FullscreenShell.test.tsx': 'reads view sources and src/index.css',
   'src/components/menu/WebVersionChangelog.test.tsx': 'reads src/index.css',
   'src/lib/aiRequest/localEngineImageDrop.test.ts': 'reads electron/llmEngine.cjs',
-  'src/lib/bundledFingerprint.test.ts': 'scans src/defaultworlds and reads the shipped avatars',
   'src/lib/codeHighlight.test.ts': 'reads src/index.css',
-  'src/lib/docs/bundledDocsIndex.test.ts': 'scans src for the Docs Index loader',
   'src/lib/elementIcons.test.ts': 'scans every src file for direct lucide-react imports',
   'src/lib/helpTopics.test.ts': 'checks that each help topic page exists in docs/',
   'src/lib/ownerTermGuard.test.ts': 'scans the docs, every src file and the e2e specs for bearer and holder',
@@ -36,7 +34,6 @@ export const ALWAYS_RUN = {
   'src/lib/playerInputRename.test.ts': 'scans the docs, every src file, electron and the e2e specs for the retired call',
   'src/lib/sandboxSnapshot.boundary.test.ts': 'scans every src file for an executor import',
   'src/lib/scrollGuard.test.ts': 'scans every src file for native overflow scrollers',
-  'src/lib/supporterTokens.test.ts': 'reads src/index.css',
   'src/lib/surface/surfaceReportChecks.test.ts': 'scans every src file for surface reports',
   'src/lib/useResolvedWorld.playerName.test.tsx': 'reads src/views/GameViewer.tsx',
   'src/lib/viewportSizing.test.ts': 'reads view sources and src/index.css',
@@ -98,8 +95,6 @@ export const PATH_TRIGGERS = {
   'scripts/llamaServerPin.json': ['electron/fakeLlamaServer.mjs'],
   // The pin load test runs the generator as a child process.
   'testing/editor-speed/genLargeWorld.mjs': ['src/test/pinWorld.ts'],
-  'public/default-avatar.vrm': ['src/lib/avatarLicenseGate.bundledAvatars.test.ts'],
-  'build-assets/alternate-avatar.vrm': ['src/lib/avatarLicenseGate.bundledAvatars.test.ts'],
   'package-lock.json': ['src/components/ui/radixSingleCopy.test.ts'],
 };
 

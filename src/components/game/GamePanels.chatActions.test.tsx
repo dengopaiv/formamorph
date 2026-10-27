@@ -34,7 +34,8 @@ describe('Chat bubble actions', () => {
     expect(names(await row(3))).toEqual([
       'Re-generate Narration', 'Edit', 'Text to Speech', 'Copy Text', 'More',
     ]);
-    expect(names(await row(2))).toEqual(['Edit', 'Copy Text', 'Rewind to Here', 'More']);
+    // A past bubble has no menu-only action, so its row has no More icon; right-click still opens its menu.
+    expect(names(await row(2))).toEqual(['Edit', 'Copy Text', 'Rewind to Here']);
   });
 
   it('shows each turn number on its row', async () => {
@@ -216,15 +217,16 @@ describe('Chat bubble menus', () => {
   });
 
   it('leaves a right-click on selected text to the browser', async () => {
-    renderMiddlePanel({}, { turns: TURNS, settings: chat });
-    const bubble = await narrationBubble(2);
-    const text = within(bubble).getByText(/Boards creak/);
+    // Stats give the latest bubble a menu-only action, and with it the More icon.
+    renderMiddlePanel({}, { turns: TURNS, stats: STATS, settings: chat });
+    const bubble = await narrationBubble(3);
+    const text = within(bubble).getByText(/The gull does not wave back/);
     window.getSelection()!.selectAllChildren(text);
     // The event is not prevented, so the browser shows its own menu.
     expect(rightClick(text)).toBe(true);
     expect(screen.queryByRole('menu')).toBeNull();
     // A right-click off the selection, in the same bubble, still opens ours.
-    expect(rightClick(within(bubble).getByText('Turn 2'))).toBe(false);
+    expect(rightClick(within(bubble).getByText('Turn 3'))).toBe(false);
     expect(screen.getByRole('menu')).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
@@ -234,7 +236,7 @@ describe('Chat bubble menus', () => {
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
     // A selection elsewhere does not block this bubble's menu.
-    window.getSelection()!.selectAllChildren(await actionBubble(3));
+    window.getSelection()!.selectAllChildren(await actionBubble(2));
     expect(rightClick(bubble)).toBe(false);
     expect(screen.getByRole('menu')).toBeTruthy();
   });

@@ -450,7 +450,9 @@ describe('the retained entry draft', () => {
     await waitFor(() => expect(onStartGame).toHaveBeenCalledOnce());
     const order = () => within(screen.getByRole('list', { name: 'Dictionary Order' }))
       .getAllByRole('listitem').map((item) => item.textContent);
-    // The harness keeps MainMenu mounted after handoff; start another ordinary visit.
+    // The app leaves the menu on handoff, and the setup dialog stays up until it does; remount for the next visit.
+    cleanup();
+    renderMainMenu({ onStartGame });
     await enter();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Default trait' }));
     fireEvent.click(screen.getByRole('button', { name: 'Starting Location' }));

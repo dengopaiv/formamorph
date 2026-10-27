@@ -98,7 +98,6 @@ The **Workflow (API Format)** field shows in Advanced mode. It holds the ComfyUI
 
 ## How to Turn On Scene Images
 <!-- keywords: every, automatic, pictures, illustrations, art, each, show, auto generate, per message, picture with replies, visual novel style, always draw, illustrate the story -->
-<!-- route: settings.display#scene-images -->
 
 1. Turn on image generation. See [How to Turn On Image Generation](#how-to-turn-on-image-generation).
 2. Open **Settings**, then the **Display** tab.

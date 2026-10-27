@@ -186,9 +186,9 @@ describe('#dev?modal=errorDetails', () => {
     window.dispatchEvent(new HashChangeEvent('hashchange'));
     render(<ThemedToastContainer />);
 
-    await screen.findByText(/^The server rejected the request/);
+    await screen.findByText('HTTP 503: model is loading');
     const text = (await openDetails()).textContent ?? '';
-    expect(text).toContain('CheckpointLoaderSimple');
+    expect(text).toContain('HTTP 503: model is loading');
     expect(text).toContain(`Version: ${APP_VERSION}`);
   });
 });

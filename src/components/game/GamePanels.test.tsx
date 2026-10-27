@@ -54,8 +54,8 @@ describe('MiddlePanel — partial re-generate', () => {
     expect(screen.queryByRole('button', { name: 'Re-generate Stats' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Re-generate Choices' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Re-generate Narration' })).toBeInTheDocument();
-    fireEvent.click(within(screen.getByTestId('bubble-actions')).getByRole('button', { name: 'More' }));
-    expect(screen.queryByRole('menuitem', { name: 'Re-generate Stats' })).toBeNull();
+    // Re-generate Stats is the only menu-only action, so without it the row has no More icon.
+    expect(within(screen.getByTestId('bubble-actions')).queryByRole('button', { name: 'More' })).toBeNull();
   });
 
   it('offers them with nothing in flight', () => {

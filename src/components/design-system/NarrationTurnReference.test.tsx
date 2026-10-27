@@ -28,20 +28,6 @@ describe('narration turn reference', () => {
     expect(within(past()).queryByRole('button', { name: 'Re-generate Choices' })).toBeNull();
   });
 
-  it('shows a plate only where the turn has an image, and deletes the image in view', async () => {
-    const user = userEvent.setup();
-    renderReference();
-
-    expect(within(past()).queryByRole('img', { name: 'Scene illustration' })).toBeNull();
-    expect(within(latest()).getByText('2/2')).toBeInTheDocument();
-
-    await user.click(within(latest()).getByRole('button', { name: 'Delete this image' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Images: 1');
-
-    await user.click(screen.getByRole('button', { name: 'Restore Images' }));
-    expect(within(latest()).getByText('2/2')).toBeInTheDocument();
-  });
-
   it('stages a choice on click and appends one with Ctrl', async () => {
     const user = userEvent.setup();
     renderReference();

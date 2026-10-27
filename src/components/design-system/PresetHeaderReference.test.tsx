@@ -16,13 +16,13 @@ describe('preset header reference', () => {
     const user = userEvent.setup();
     renderReference();
     expect(rowNames(screen.getByRole('region', { name: 'Editable, Wide' })))
-      .toEqual(['Delete', 'Reset', 'select', 'Duplicate', 'Rename', 'Import', 'Export', 'Publish']);
+      .toEqual(['Delete', 'Reset', 'select', 'Duplicate', 'Rename', 'Import', 'Export']);
 
     const narrow = screen.getByRole('region', { name: 'Editable, Narrow' });
     expect(rowNames(narrow)).toEqual(['select', 'Preset Actions']);
     await user.click(within(narrow).getByRole('button', { name: 'Preset Actions' }));
     expect((await screen.findAllByRole('menuitem')).map((n) => n.textContent))
-      .toEqual(['Duplicate', 'Rename', 'Import', 'Export', 'Publish', 'Reset', 'Delete']);
+      .toEqual(['Duplicate', 'Rename', 'Import', 'Export', 'Reset', 'Delete']);
   });
 
   it('keeps Duplicate, Import and Export on the built-in header', () => {
@@ -31,7 +31,7 @@ describe('preset header reference', () => {
       .toEqual(['select', 'Duplicate', 'Import', 'Export']);
   });
 
-  it('offers no Import, Export or Publish on the endpoint header', () => {
+  it('offers no Import or Export on the endpoint header', () => {
     renderReference();
     expect(rowNames(screen.getByRole('region', { name: 'Endpoint, Wide' })))
       .toEqual(['Delete', 'Reset', 'select', 'Duplicate', 'Rename']);
@@ -39,7 +39,7 @@ describe('preset header reference', () => {
 
   it('hides Delete while one image preset remains and shows the heading form without a select', () => {
     renderReference();
-    expect(rowNames(screen.getByRole('region', { name: 'Image, One Preset' })))
+    expect(rowNames(screen.getByRole('region', { name: 'One Preset' })))
       .toEqual(['Reset', 'select', 'Duplicate', 'Rename']);
     const heading = screen.getByRole('region', { name: 'Heading Form' });
     expect(within(heading).getByRole('heading', { name: 'Edit Local Llama' })).toBeInTheDocument();

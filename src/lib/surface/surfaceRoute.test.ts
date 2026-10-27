@@ -33,7 +33,7 @@ describe('resolveSurface', () => {
       view: null, dialog: 'worldEditor', tabs: ['worldEditor.entities'],
     });
     expect(resolveSurface('entity')).toEqual({ view: 'gameViewer', dialog: null, tabs: ['gameViewer.entities'] });
-    expect(resolveSurface('publish.prompt')).toEqual({ view: 'mainMenu', dialog: null, tabs: [] });
+    expect(resolveSurface('gameViewerLayout.pages')).toEqual({ view: 'gameViewer', dialog: null, tabs: [] });
   });
 
   it('gives nothing for an unknown id, an excluded surface, or one only the app raises', () => {

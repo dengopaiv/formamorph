@@ -146,7 +146,7 @@ export function PresetHeaderReference() {
                 <EndpointReachabilityView status="ok" checking={false} model="gemma-3-12b" onRecheck={() => {}} />
               </div>
             </Sample>
-            <Sample title="Image, One Preset" width="wide">
+            <Sample title="One Preset" width="wide">
               <PresetHeader label="Preset" layout="wide" actions={presetHeaderActions(false, { ...endpoint, delete: undefined })}
                 select={<PresetSelect value="Local Llama" names={['Local Llama']} />} />
             </Sample>

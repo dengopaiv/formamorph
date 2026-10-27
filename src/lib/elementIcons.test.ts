@@ -30,23 +30,15 @@ const MAPPED = new Set<string>(Object.values(ELEMENT_ICONS).map((icon) => icon.d
 
 /** Direct imports of a mapped icon that mean something else. A new element-type call site reads the map instead. */
 const OTHER_MEANINGS: Record<string, { icons: string[]; meaning: string }> = {
-  'components/community/ProfileStats.tsx': { icons: ['Users'], meaning: 'follower count' },
-  'components/community/RemoteWorldDetailsModal.tsx': { icons: ['Play'], meaning: 'use-preset action' },
   'components/editor/IssuesInstrument.tsx': { icons: ['Play'], meaning: 'run-check action' },
-  'components/formaquestion/FormaquestionMascotTab.tsx': { icons: ['Play'], meaning: 'preview action' },
-  'components/formaquestion/FormaquestionGuide.tsx': { icons: ['BookOpen'], meaning: 'Guide full-screen header' },
-  'components/formaquestion/FormaquestionMenu.tsx': { icons: ['BookOpen'], meaning: 'Open Guide item' },
-  'components/formaquestion/GuideBody.tsx': { icons: ['BookOpen'], meaning: 'Guide tab' },
-  'components/formaquestion/MinimalChat.tsx': { icons: ['PersonStanding'], meaning: 'full-body view toggle' },
   'components/game/AudioPlayer.tsx': { icons: ['Play'], meaning: 'playback' },
   'components/game/TtsPlaybackBar.tsx': { icons: ['Play'], meaning: 'playback' },
-  'components/menu/SentMessageList.tsx': { icons: ['Users'], meaning: 'message audience' },
   'components/modals/LoadGameDialog.tsx': { icons: ['Folder'], meaning: 'save folder' },
   'components/modals/ToolTryIt.tsx': { icons: ['Play'], meaning: 'run action' },
   'components/modals/toolsView.ts': { icons: ['Braces'], meaning: 'Parameters tab' },
   'components/prompt/CodeArea.tsx': { icons: ['Braces'], meaning: 'slot snippet menu' },
   'views/DesignSystemShowcase.tsx': { icons: ['BookOpen'], meaning: 'guide link' },
-  'views/MainMenu.tsx': { icons: ['BookOpen', 'User'], meaning: 'View Prompts action, account button' },
+  'views/MainMenu.tsx': { icons: ['BookOpen'], meaning: 'View Prompts action' },
 };
 
 /** Icons an element type used to wear that no surface may import again. */
