@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Hint } from '@/components/ui/typography';
 import { HelpButton } from '@/components/HelpButton';
@@ -9,7 +9,6 @@ import PlaceholderText from '@/components/prompt/PlaceholderText';
 import { useGameData } from '@/contexts/GameDataContext';
 import { useCodeCardNavigation } from '@/lib/codeCardNavigation';
 import { useCodeUseReveal } from '@/lib/codeUseReveal';
-import { registerScriptInsert, reportScriptInsert } from '@/lib/formaquestion/scriptInsert';
 import { newScript } from '@/lib/scriptRows';
 import { patchScript, SCRIPT_TIMING_DESCRIPTION, SCRIPT_TIMING_LABEL, SCRIPT_TIMINGS, type ScriptPatch } from '@/lib/scripts';
 import { isStatOn } from '@/lib/statCodeTargets';
@@ -114,11 +113,9 @@ function OpenOwnerFooter({ entry }: { entry: ScriptEntry }) {
  * The Scripts tab: every script in the world under its timing, in run order. A drag reorders within a timing and
  * writes `order` (Q5); the timing menu alone moves a script between timings (Q4). Add Script adds a world script.
  */
-export function useWorldScriptsAdapter({ selectedId, onSelect, active = false }: {
+export function useWorldScriptsAdapter({ selectedId, onSelect }: {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  /** True while the Scripts tab shows: the help window's Insert targets the world then. */
-  active?: boolean;
 }): ListEditorAdapter {
   const { worldScripts, stats, statGroups, traits, traitGroups, entities, placeholders, setWorldScripts } = useGameData();
   const write = useScriptWrites();
@@ -138,20 +135,6 @@ export function useWorldScriptsAdapter({ selectedId, onSelect, active = false }:
     setFocusKey(key);
     onSelect(key);
   }, [worldScripts, setWorldScripts, onSelect]);
-
-  // Read at insert time, so the registration does not change with each keystroke.
-  const latestAdd = useRef(add);
-  latestAdd.current = add;
-  useEffect(() => {
-    if (!active) return;
-    return registerScriptInsert({
-      homeName: 'World Scripts',
-      insert: (timing, code) => {
-        latestAdd.current(timing, '', code);
-        reportScriptInsert('written');
-      },
-    });
-  }, [active]);
 
   const tree: SortableTreeAdapter<ScriptTreeRow> = {
     visibleDeps: [byTiming],

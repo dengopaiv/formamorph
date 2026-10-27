@@ -136,7 +136,6 @@ import { Tip } from '@/components/ui/tooltip';
 import { authoredChipScene } from '@/lib/chipValues/authoredScene';
 import { buildToolSnapshot } from '@/lib/tools/toolSnapshot';
 import { openingStateOf } from '@/lib/openingState';
-import { useHelpWorldSource } from '@/lib/formaquestion/helpWorld';
 
 /** The Take Me There mark for a tab's search and add row. The registry says which tabs have one; Overview has no list. */
 function listToolbarTarget(tab: string): TargetAttribute | undefined {
@@ -206,13 +205,11 @@ const WorldEditorInner = ({
   const { editorAutoSave, setEditorAutoSave, editorAutoSaveIdleSeconds } = useSettings();
   const { promptWorld, dialog: downscaleDialog } = useDownscalePrompt();
 
-  // A Formaquestion Tool, a World Tool's Try It and the code test read the world as the editor holds it,
-  // unsaved edits included.
+  // A World Tool's Try It reads the world as the editor holds it, unsaved edits included.
   const editorToolWorld = useCallback(() => {
     const world = getWorldData();
     return buildToolSnapshot(authoredChipScene(world), world.dictionaries ?? [], null, { state: openingStateOf(world), authored: world });
   }, [getWorldData]);
-  useHelpWorldSource(editorToolWorld, getWorldData);
 
   // Assemble the editor's live world for an image scan/downscale (id/version unused by the scan).
   const buildCurrentWorld = (): World => ({
@@ -978,7 +975,7 @@ const WorldEditorInner = ({
   });
   const statsParts = useListEditor(statsAdapter, { selectedId: selections.stats ?? null, onSelect: selectStat, search });
   const selectScript = useCallback((id: string | null) => select('scripts', id), [select]);
-  const scriptsAdapter = useWorldScriptsAdapter({ selectedId: selections.scripts ?? null, onSelect: selectScript, active: activeTab === 'scripts' });
+  const scriptsAdapter = useWorldScriptsAdapter({ selectedId: selections.scripts ?? null, onSelect: selectScript });
   const scriptsParts = useListEditor(scriptsAdapter, { selectedId: selections.scripts ?? null, onSelect: selectScript, search });
   const selectTool = useCallback((id: string | null) => select('tools', id), [select]);
   const toolsAdapter = useWorldToolsAdapter({ selectedId: selections.tools ?? null, onSelect: selectTool, snapshot: editorToolWorld });

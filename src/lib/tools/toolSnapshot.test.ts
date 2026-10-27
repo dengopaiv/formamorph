@@ -3,7 +3,6 @@
  * (No DOM needed; node keeps the QuickJS WASM engine loading through its filesystem path.)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { helpTool } from '@/test/helpFixtures';
 import { authoredChipScene, type AuthoredWorld } from '@/lib/chipValues/authoredScene';
 import { openingStateOf } from '@/lib/openingState';
 import { snapshotOf } from '@/lib/sandboxSnapshot';
@@ -13,14 +12,21 @@ import { runToolCall } from './toolRunner';
 import { buildToolSnapshot, emptyToolSnapshot, type ToolSnapshot } from './toolSnapshot';
 import { sampleToolSnapshot } from './sampleToolSnapshot';
 
+/** A Tool: an entity lookup by name, offered to no prompt, with `patch` applied. */
+const lookupTool = (patch: Partial<Tool> = {}): Tool => ({
+  id: 'h-1', name: 'find_person', description: 'Finds a person of the world by name.',
+  params: [{ name: 'name', type: 'string', description: 'The name.', required: true, options: [] }],
+  handler: { kind: 'lookup', source: 'entities', param: 'name', returns: 'full' }, emptyResult: '{"matches": []}', offeredTo: [], ...patch,
+});
+
 describe('the empty Tool Snapshot', () => {
   it('holds no world, so a lookup returns its empty result', async () => {
-    const tool = helpTool();
+    const tool = lookupTool();
     expect(await runToolCall(tool, '{"name":"Wren"}', emptyToolSnapshot())).toEqual({ text: tool.emptyResult });
   });
 
   it('renders a Template’s scene chips as a world with nothing in it does', async () => {
-    const template = helpTool({ handler: { kind: 'template', body: 'Notes: <NOTES>' }, params: [] });
+    const template = lookupTool({ handler: { kind: 'template', body: 'Notes: <NOTES>' }, params: [] });
     expect((await runToolCall(template, '', emptyToolSnapshot())).text).toBe('Notes: N/A');
   });
 });

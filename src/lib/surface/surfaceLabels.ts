@@ -9,8 +9,6 @@ import { FEEDBACK_TYPE_LABELS } from '@/lib/feedbackPresentation';
 import { HUB_LABEL, OVERVIEW_LABEL, PROMPT_LABELS, SURFACE_LABELS as PROMPT_SURFACE_LABELS } from '@/lib/promptGroups';
 import { BENCH_TABS } from '@/lib/testBench/benchTabs';
 import type { SurfaceId } from '@/lib/docs/surfaceMap';
-import { FORMAQUESTION_TABS } from '@/components/formaquestion/formaquestionTabs';
-import { FORMAQUESTION_SETTINGS_TABS, WIKI_CONFIRM_COPY } from '@/components/formaquestion/formaquestionSettingsTabs';
 import { SETTINGS_ENDPOINT_TABS, SETTINGS_TABS } from '@/components/modals/settingsTabs';
 import { TOOL_EDIT_TABS } from '@/components/modals/toolsView';
 import { DICTIONARY_BOOK_PANEL_TABS } from '@/views/dictionaryBookPanelTabs';
@@ -79,13 +77,8 @@ const ENTRIES: [string, string][] = [
   ['feedbackHub', 'Feedback'],
   ['worldPrompts', 'Custom Prompts'],
   ['likePrompt', 'Like Prompt'],
-  ['formaquestion', 'Formaquestion'],
-  ['formaquestionSettings', 'Formaquestion Settings'],
-  ['formaquestionCompare', 'Compare'],
   ['settingsCompare', 'Compare'],
   ['chipOptions', 'Chip Options'],
-  ['formaquestionAiContext', 'AI Context'],
-  ['formaquestionWikiConfirm', WIKI_CONFIRM_COPY.title],
   ['designSystemGroupPicker.picker', 'Add To Group'],
   ['designSystemGroupPicker.create', 'Create New Group'],
 
@@ -111,8 +104,6 @@ const ENTRIES: [string, string][] = [
   ...tabsOf('entityEditor', ENTITY_EDITOR_TABS),
   ...tabsOf('entityEditorEntity', ENTITY_EDITOR_SUBTABS),
   ...tabsOf('dictionaryEditor', DICTIONARY_EDITOR_TABS),
-  ...tabsOf('formaquestion', FORMAQUESTION_TABS),
-  ...tabsOf('formaquestionSettings', FORMAQUESTION_SETTINGS_TABS),
   ...tabsOf('mainMenu', [
     { value: 'worlds', label: BROWSE_TAB_LABELS.world.many },
     { value: 'entities', label: BROWSE_TAB_LABELS.entity.many },

@@ -231,7 +231,6 @@ const EntityEditorModal = ({
               {/* The right column is narrow until `lg`, so labels wait for it. */}
               <PanelTabs
                 surfaceTabs="entityEditorEntity"
-                focus={{ kind: 'entity', id: entity.id, name: entity.name }}
                 tabs={ENTITY_EDITOR_SUBTABS}
                 value={subTab}
                 onValueChange={setSubTab}

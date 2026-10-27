@@ -8,7 +8,6 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { variableAxes, variableForToken } from '@/lib/promptVariables';
 import { promptVocabulary, usePlaceholderChipVocabulary } from '@/lib/chipVocabulary';
-import { HELP_CHIP, helpChipVocabulary } from '@/lib/formaquestion/helpChips';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { surfaceRegistry } from '@/lib/surface/surfaceRegistry';
 import { phValues } from '@/test/placeholderValues';
@@ -318,11 +317,4 @@ describe('Chip Options', () => {
     expect(within(dialog()).getByRole('radio', { name: 'Unique' })).toBeInTheDocument();
   });
 
-  it('gives a help prompt chip one column that says it has no options', async () => {
-    const user = userEvent.setup();
-    renderReporting(<PromptField value="<VOICE>" onChange={() => {}} vocabulary={helpChipVocabulary([HELP_CHIP.voice])} />);
-    const options = await open(user);
-    expect(within(options).queryByRole('region', { name: 'What the AI Reads' })).toBeNull();
-    expect(within(options).getByText('No options for this variable.')).toBeInTheDocument();
-  });
 });

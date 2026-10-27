@@ -3,7 +3,6 @@ import { PromptNavigationReference } from '@/components/design-system/PromptNavi
 import { OwnerFlyoutReference } from '@/components/design-system/OwnerFlyoutReference';
 import { BreadcrumbPickerReference } from '@/components/design-system/BreadcrumbPickerReference';
 import { TravelHintPairReference } from '@/components/design-system/TravelHintPairReference';
-import { FormaquestionReference } from '@/components/design-system/FormaquestionReference';
 import { FeedbackFilterRowReference } from '@/components/design-system/FeedbackFilterRowReference';
 import { SupporterFlairReference } from '@/components/design-system/SupporterFlairReference';
 import { PresetHeaderReference } from '@/components/design-system/PresetHeaderReference';
@@ -407,12 +406,6 @@ const DESIGN_SYSTEM_REFERENCES: readonly ReferenceDefinition[] = [
     label: 'Travel Hints',
     description: 'Two Travel Hint boxes joined by a link toggle',
     Component: TravelHintPairReference,
-  },
-  {
-    id: 'formaquestion',
-    label: 'Formaquestion',
-    description: 'Help tab, floating window, search results, and reader',
-    Component: FormaquestionReference,
   },
   {
     id: 'filter-row',

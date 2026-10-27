@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { Tool, World } from '@/types';
 import { codeDiagnostics } from '@/lib/statCodeAnalysis';
 import { userToolsCodec } from '@/lib/promptPresets';
-import { parseHelpTools } from '@/lib/formaquestion/helpTools';
 import { migrateWorld } from '@/lib/version';
 import { buildToolPack, parseToolPack } from './toolPack';
 import { runToolScript } from './toolScript';
@@ -203,10 +202,6 @@ describe('every other way a user Tool arrives', () => {
   it('rewrites a Tool pack imported with old text', () => {
     const pack = JSON.stringify(buildToolPack([scriptTool(SHIPPED), scriptTool(FLAGGED, 'u-2')], '3.3.3'));
     expect(parseToolPack(pack).tools.map(codeOf)).toEqual([MIGRATED, FLAGGED]);
-  });
-
-  it('rewrites a stored Formaquestion Tool', () => {
-    expect(parseHelpTools([scriptTool(SHIPPED)]).map(codeOf)).toEqual([MIGRATED]);
   });
 
   it('leaves a World Tool’s text to the world’s own pass', () => {

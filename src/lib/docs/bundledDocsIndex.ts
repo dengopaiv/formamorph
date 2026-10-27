@@ -1,6 +1,6 @@
 /**
- * The Docs Index over the docs bundled into this build. Load it through `loadDocsIndex`, so the docs stay
- * out of the start bundle. The `docs-index` query (see `vite.config.js`) trims the changelog at build time.
+ * The Docs Index over the docs in this repo, for the tests that hold the guides to the code. The
+ * `docs-index` query (see `vite.config.js`) trims the changelog.
  */
 import sidebar from '../../../docs/_Sidebar.md?raw';
 import { createDocsIndex, type DocsIndex } from './docsIndex';

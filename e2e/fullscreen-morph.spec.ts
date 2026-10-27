@@ -75,53 +75,11 @@ const area = (s: Sample) => s.rect.w * s.rect.h;
 
 type Page = import('@playwright/test').Page;
 
-/** Waits out every animation under `locator`, so a later click lands at once. */
-const settle = (locator: import('@playwright/test').Locator) =>
-  locator.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)));
-
-/** Opens a Formaquestion Settings tab the way a player does. */
-async function openHelpSettingsTab(page: Page, tab: 'Prompts' | 'Mascot'): Promise<void> {
-  // The player's path: the window's menu opens Formaquestion Settings and hides the window meanwhile.
-  // The dev route keeps both on screen, a state no player reaches.
-  await openApp(page, { FORMAMORPH_helpSettings: { mascot: false } });
-  await page.keyboard.press('F1');
-  await page.locator('#formaquestion-window').getByRole('button', { name: 'More Actions' }).click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Formaquestion Settings' });
-  // Below `sm` (640px) the tab strip is a select.
-  const goTo = async (name: string) => {
-    if (page.viewportSize()!.width >= 640) await dialog.getByRole('tab', { name }).click();
-    else {
-      await dialog.getByRole('combobox', { name: 'Tab' }).click();
-      await page.getByRole('option', { name }).click();
-    }
-  };
-  // The Mascot tab edits nothing while the Mascot is off; its switch is on General.
-  if (tab === 'Mascot') await dialog.getByRole('checkbox', { name: 'Mascot' }).click();
-  await goTo(tab);
-  await dialog.getByRole('combobox', { name: 'Preset' }).waitFor();
-  // Settled first: a click on a still-zooming dialog waits for it, and the recorder's clock runs meanwhile.
-  await settle(dialog);
-}
-
 /** One way through the toggle: `arm` readies it off the clock, `press` is the click the trip answers. */
 interface Toggle {
   arm?: (page: Page) => Promise<void>;
   press: (page: Page) => Promise<void>;
 }
-
-const narrow = (page: Page) => page.viewportSize()!.width < 768;
-
-/** A preset header action: an icon at `md` (768px) and up, a ⋯ menu item below. */
-const headerAction = (name: string): Toggle => ({
-  arm: async (page) => {
-    if (!narrow(page)) return;
-    await page.getByRole('button', { name: 'Preset Actions' }).last().click();
-    // Settled, so the press is one click and not a wait on the menu's open animation.
-    await settle(page.getByRole('menu'));
-  },
-  press: (page) => (narrow(page) ? page.getByRole('menuitem', { name }) : page.getByRole('button', { name, exact: true })).click(),
-});
 
 const toggle = async (page: Page, way: Toggle) => { await way.arm?.(page); await way.press(page); };
 
@@ -141,58 +99,12 @@ const fieldToggle = { enter: { press: (page: Page) => chrome.enterFullscreen(pag
 /** Each panel that lifts into the window whole: the trip is the same shell from either modal. */
 const SURFACES: Surface[] = [
   { name: 'Settings Prompts', window: 'Prompts', open: async (page) => { await openApp(page); await openPromptEditor(page); }, ...fieldToggle },
-  { name: 'Formaquestion Prompts', window: 'Prompts', open: (page) => openHelpSettingsTab(page, 'Prompts'), ...fieldToggle },
-  {
-    name: 'Formaquestion Mascot',
-    window: 'Mascot',
-    open: (page) => openHelpSettingsTab(page, 'Mascot'),
-    enter: headerAction('View full screen'),
-    exit: headerAction('Exit full screen'),
-  },
 ];
-
-const WIDE_VIEWPORT = { width: 1600, height: 900 };
-/** The docked preview column: 22rem at 16px. */
-const DOCKED_PREVIEW_PX = 352;
-
-test.describe('Formaquestion Mascot split', () => {
-  test.use({ viewport: WIDE_VIEWPORT });
-
-  test('full screen gives the preview a third of the viewport, and the dock keeps 22rem', async ({ page }) => {
-    await openHelpSettingsTab(page, 'Mascot');
-    const dialog = page.getByRole('dialog', { name: 'Formaquestion Settings' });
-    const previewWidth = () => dialog.locator('[data-fq-scroll="mascot-preview"]').evaluate((el) => Math.round(el.getBoundingClientRect().width));
-    expect(await previewWidth()).toBe(DOCKED_PREVIEW_PX);
-
-    await headerAction('View full screen').press(page);
-    const full = page.getByRole('dialog', { name: 'Mascot', exact: true });
-    await expect(full).toBeVisible();
-    // The Mascot tab runs an endless animation, so `settle` would never return; the trip is well under a second.
-    await page.waitForTimeout(900);
-    // One third of the window less its share of the gap and padding: within a fifth of the viewport's third.
-    const width = await full.locator('[data-fq-scroll="mascot-preview"]').evaluate((el) => el.getBoundingClientRect().width);
-    expect(Math.abs(width - 1600 / 3)).toBeLessThan(1600 / 3 * 0.2);
-    const controls = await full.locator('[data-fq-scroll="mascot-controls"]').evaluate((el) => el.getBoundingClientRect().width);
-    expect(controls / width).toBeGreaterThan(1.95);
-    expect(controls / width).toBeLessThan(2.05);
-
-    await headerAction('Exit full screen').press(page);
-    await expect(full).toHaveCount(0);
-    expect(await previewWidth()).toBe(DOCKED_PREVIEW_PX);
-  });
-});
 
 /** The frames in which the window is visibly mid-travel: meaningfully smaller than its final size. */
 const travelFrames = (frames: Sample[], full: number) => frames.filter((s) => area(s) < full * 0.95);
 
-/** The Mascot trip again at a desktop size, where the columns reflow from 22rem to a third during the morph. */
-const WIDE_MASCOT: Surface = {
-  ...SURFACES.find((s) => s.name === 'Formaquestion Mascot')!,
-  name: 'Formaquestion Mascot at 1600×900',
-  viewport: WIDE_VIEWPORT,
-};
-
-for (const surface of [...SURFACES, WIDE_MASCOT]) test.describe(surface.name, () => {
+for (const surface of SURFACES) test.describe(surface.name, () => {
   if (surface.viewport) {
     test.use({ viewport: surface.viewport });
     test.skip(({ isMobile, hasTouch }) => isMobile || hasTouch, 'A desktop-size run');

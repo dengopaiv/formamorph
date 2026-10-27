@@ -5,7 +5,6 @@ import { fireEvent, render, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { EditorView } from '@codemirror/view';
 import { CodeArea } from './CodeArea';
-import { registerDocsOpener } from '@/lib/formaquestion/docsOpener';
 import { STAT_CODE_SURFACE } from '@/lib/statCodeSurface';
 import { toolScriptSurface } from '@/lib/tools/toolScriptSurface';
 import type { CodeSurface } from '@/lib/codeSurface';
@@ -50,42 +49,11 @@ describe('Read in the Guide on a code card', () => {
     expect(guideLink(await openCard()).getAttribute('href')).toBe('https://github.com/JakeJamesDev/formamorph/wiki/ScriptsGuide#self');
   });
 
-  it('opens the heading in the reader and closes the card', async () => {
-    const opener = vi.fn();
-    const unregister = registerDocsOpener(opener);
-    try {
-      const user = userEvent.setup();
-      render(<Harness initial="return self.value;" />);
-      hover(await editor(), 'self');
-      await user.click(guideLink(await openCard()));
-      expect(opener).toHaveBeenCalledWith({ page: 'ScriptsGuide', anchor: 'self' });
-      await waitFor(() => expect(card()).toBeNull());
-    } finally {
-      unregister();
-    }
-  });
-
-  it('leaves the click to the browser where no reader is mounted, so the wiki opens', async () => {
+  it('leaves the click to the browser, so the wiki opens', async () => {
     render(<Harness initial="return self.value;" />);
     hover(await editor(), 'self');
     const link = guideLink(await openCard());
-    // A click the page cancels is one the reader took.
     expect(fireEvent.click(link)).toBe(true);
-  });
-
-  it('keeps the card open on a modified click, which opens a new tab', async () => {
-    const opener = vi.fn();
-    const unregister = registerDocsOpener(opener);
-    try {
-      render(<Harness initial="return self.value;" />);
-      hover(await editor(), 'self');
-      const link = guideLink(await openCard());
-      expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);
-      expect(opener).not.toHaveBeenCalled();
-      expect(card()).toBeTruthy();
-    } finally {
-      unregister();
-    }
   });
 
   it('links a Tool global to the Tools doc', async () => {
@@ -94,31 +62,23 @@ describe('Read in the Guide on a code card', () => {
     expect(guideLink(await openCard()).getAttribute('href')).toBe('https://github.com/JakeJamesDev/formamorph/wiki/Tools#args');
   });
 
-  it('keeps the link in the completion list’s pane, opens the heading and closes the list', async () => {
-    const opener = vi.fn();
-    const unregister = registerDocsOpener(opener);
-    try {
-      const user = userEvent.setup();
-      render(<Harness initial="" />);
-      const field = await editor();
-      await user.click(field);
-      for (const [i, key] of [...'return sel'].entries()) {
-        await user.keyboard(key);
-        await waitFor(() => expect(field.textContent).toBe('return sel'.slice(0, i + 1)));
-      }
-      await waitFor(() => expect(document.querySelector('.cm-tooltip-autocomplete [aria-selected] .cm-completionLabel')?.textContent).toBe('self'));
-      const shown = await waitFor(() => {
-        const found = document.querySelector<HTMLElement>('.cm-completionInfo [data-code-card]');
-        expect(found).toBeTruthy();
-        return found!;
-      });
-      expect(shown.textContent).toContain('(global) self');
-      await user.click(guideLink(shown));
-      expect(opener).toHaveBeenCalledWith({ page: 'ScriptsGuide', anchor: 'self' });
-      await waitFor(() => expect(document.querySelector('.cm-tooltip-autocomplete')).toBeNull());
-    } finally {
-      unregister();
+  it('keeps the link in the completion list’s pane', async () => {
+    const user = userEvent.setup();
+    render(<Harness initial="" />);
+    const field = await editor();
+    await user.click(field);
+    for (const [i, key] of [...'return sel'].entries()) {
+      await user.keyboard(key);
+      await waitFor(() => expect(field.textContent).toBe('return sel'.slice(0, i + 1)));
     }
+    await waitFor(() => expect(document.querySelector('.cm-tooltip-autocomplete [aria-selected] .cm-completionLabel')?.textContent).toBe('self'));
+    const shown = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.cm-completionInfo [data-code-card]');
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(shown.textContent).toContain('(global) self');
+    expect(guideLink(shown).getAttribute('href')).toBe('https://github.com/JakeJamesDev/formamorph/wiki/ScriptsGuide#self');
   });
 
   it('shows no link on a member or on console', async () => {

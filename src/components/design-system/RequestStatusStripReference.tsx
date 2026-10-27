@@ -49,11 +49,8 @@ const GLYPH_USES = (() => {
 })();
 type RowKey = keyof typeof ROWS;
 
-// The shared Thinking header while the model thinks, as the game and Formaquestion show it.
-const THINKING_FORMS = [
-  { use: 'Game', who: null },
-  { use: 'Formaquestion', who: 'Mascot' },
-] as const;
+// The Thinking header while the model thinks, as the game shows it.
+const THINKING_FORMS = [{ use: 'Game' }] as const;
 
 export function RequestStatusStripReference() {
   const [row, setRow] = useState<RowKey>('turn');
@@ -114,10 +111,10 @@ export function RequestStatusStripReference() {
           ))}
         </ul>
         <ul aria-label="Thinking Header" className="grid gap-2 sm:grid-cols-2">
-          {THINKING_FORMS.map(({ use, who }) => (
+          {THINKING_FORMS.map(({ use }) => (
             <li key={use} className="flex items-center gap-1.5 text-meta text-muted-foreground">
               <ChevronRight aria-hidden className="h-3.5 w-3.5 rotate-90" />
-              <ThinkingLabel active ms={0} who={who} />
+              <ThinkingLabel active ms={0} />
               <span className="ml-auto">{use}</span>
             </li>
           ))}

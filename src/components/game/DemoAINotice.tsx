@@ -7,7 +7,6 @@ import { Tooltip, TooltipPopup, TooltipPortal, TooltipPositioner, TooltipTrigger
 import { cn } from '@/lib/utils';
 import { useSettings } from '@/contexts/SettingsContext';
 import { deviceCanRunDesktopApp } from '@/lib/desktopAppOffer';
-import { openDocsFromClick } from '@/lib/formaquestion/docsOpener';
 import { wikiPageUrl } from '@/lib/helpTopics';
 import { isDemoAISeen, markDemoAISeen } from './demoAISeen';
 
@@ -94,9 +93,6 @@ export const DemoAINotice = forwardRef<DemoAINoticeHandle, DemoAINoticeProps>(fu
                 href={wikiPageUrl('Connect-Your-Own-AI')}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={(event) => {
-                  if (openDocsFromClick(event, { page: 'Connect-Your-Own-AI' })) close();
-                }}
                 className="text-primary underline underline-offset-4"
               >
                 How to set up your own AI

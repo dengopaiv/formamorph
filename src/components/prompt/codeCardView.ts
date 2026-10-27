@@ -5,7 +5,6 @@ import type { OpenCodeCardItem } from '@/lib/codeCardNavigation';
 import { NO_OWNERS_LABEL, scopedKind, type CodeCard, type CodeCardItem, type CodeCardSignature } from '@/lib/codeCards';
 import type { CodeUse } from '@/lib/codeUses';
 import { docTargetId } from '@/lib/docs/docsLinks';
-import { openDocsFromClick } from '@/lib/formaquestion/docsOpener';
 import { wikiPageUrl } from '@/lib/helpTopics';
 import { TIMING_SHORT } from '@/lib/statCodeTiming';
 
@@ -123,14 +122,12 @@ export function renderCodeCard(card: CodeCard, actions: CodeCardActions = {}): H
   if (findUses && item) link('Find All Uses', () => findUses(item));
   for (const entry of card.links ?? []) {
     if (entry.id === 'goToLine' && goTo) link(`Go to Line ${entry.line}`, () => goTo(entry.at));
-    // A real link, so a modified click or a window with no reader still reaches the wiki.
+    // A real link to the wiki.
     if (entry.id === 'guide' && guide) {
       const anchor = element('a', LINK_CLASS, 'Read in the Guide');
       anchor.href = wikiPageUrl(docTargetId(entry.target));
       anchor.target = '_blank';
       anchor.rel = 'noopener noreferrer';
-      // A modified click opens a tab and leaves the page, and the card, as they were.
-      anchor.addEventListener('click', (event) => { if (openDocsFromClick(event, entry.target)) guide(); });
       bar.append(anchor);
     }
   }

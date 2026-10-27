@@ -3,12 +3,12 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { endpointTabForRoute, type SettingsTabId } from '@/components/modals/settingsTabs';
 import { randomUUID } from '@/lib/uuid';
 import { useTargetLanding } from './useLanding';
-import { opensInHelpWindow, resolveSurface, stepTab, targetRoute, type SurfaceSteps, type TabKey } from './surfaceRoute';
+import { resolveSurface, stepTab, targetRoute, type SurfaceSteps, type TabKey } from './surfaceRoute';
 
 /**
  * Acts on a pending `requestSurface(...)` once per request. `open` gets the steps and `clear`, which it
  * calls once the request is answered; a view that hands the request to another screen leaves it pending.
- * Requests the help window opens itself are left for it, and an id that opens nothing is cleared.
+ * An id that opens nothing is cleared.
  */
 export function useSurfaceOpenRequest(open: (steps: SurfaceSteps, clear: () => void) => void) {
   const { surfaceRequest, clearSurfaceRequest } = useSettings();
@@ -16,7 +16,6 @@ export function useSurfaceOpenRequest(open: (steps: SurfaceSteps, clear: () => v
   useEffect(() => {
     if (!surfaceRequest || handled.current === surfaceRequest.nonce) return;
     const steps = resolveSurface(surfaceRequest.id, surfaceRequest.target);
-    if (steps && opensInHelpWindow(steps)) return;
     handled.current = surfaceRequest.nonce;
     const clear = () => clearSurfaceRequest(surfaceRequest.nonce);
     if (steps) open(steps, clear);

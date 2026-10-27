@@ -100,18 +100,12 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  (`devErrorDetailsSample.ts`) from any view with toasts; its View Details link opens the dialog.
  *  `imageSetup` raises a canned ComfyUI connection toast the same way; its Fix connection link opens
  *  the image setup guide.
- *  `formaquestion` opens the help window over whatever is on screen. It is not a dialog, so it does not
- *  close one: open the dialog first, then the window, to see both. `formaquestionSettings` opens the window
- *  and Formaquestion Settings under it. `formaquestionCompare` adds the compare view over them, on a canned
- *  edit of the answer prompt. `formaquestionAiContext` opens the window and its AI Context under it, on two
- *  canned questions with traces, so the popup has pages to show without an AI. `formaquestionWikiConfirm` opens the
- *  window and the Open Wiki confirm, named for the section `subtab=…` gives or for the wiki home, whatever the
- *  Confirm Before Opening the Wiki setting says. `settingsCompare` opens Settings
+ *  `settingsCompare` opens Settings
  *  and the compare view over it, on a canned edit of the Narration prompt. `chipOptions` opens Settings and
  *  Chip Options over it, on a canned Entities chip. `scriptPrompt` is in game (GameViewer) and fires one
  *  canned `player.*` request through the live prompt store once the game has a turn; `tab=…` picks the shape
  *  (`devScriptPromptSamples.ts`). Pair it with `fixture=…`. `DEV_PANE_MODALS` follow. */
-export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'likePrompt', 'errorDetails', 'imageSetup', 'formaquestion', 'formaquestionSettings', 'formaquestionCompare', 'formaquestionAiContext', 'formaquestionWikiConfirm', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
+export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'likePrompt', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
 export type DevModal = (typeof DEV_MODALS)[number];
 
 /** The `attach=…` value that stages sample attachments on the game view. */
@@ -252,12 +246,6 @@ export const DEV_MODAL_TABS = {
   // `sample` turns Image Attachments on, then runs sample images through the attach path: two wait in the
   // action box and two ride the latest turn's action.
   gameViewerAttach: [DEV_ATTACH_SAMPLE],
-  // The Formaquestion window's parts (`#dev?modal=formaquestion&tab=guide`). `subtab=…` takes a docs
-  // section id and opens it in the reader. `mode=wide` or `mode=narrow` picks the layout. `fullscreen=1`
-  // opens the Guide full screen over the window.
-  formaquestion: ['ask', 'search', 'guide'],
-  // Formaquestion Settings (`#dev?modal=formaquestionSettings&tab=general`).
-  formaquestionSettings: ['general', 'endpoint', 'prompts', 'tools', 'mascot'],
 } as const;
 
 // Admin Panel → Policies uses the `subtab=…` slot, and its two are fixed, so they are guarded above.

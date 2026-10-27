@@ -59,18 +59,15 @@ describe('ThinkingLabel', () => {
   const glyph = (root: HTMLElement) => root.querySelector('[data-slot="thinking-glyph"]');
   const pulse = (root: HTMLElement) => root.querySelector('.animate-pulse');
 
-  it.each([
-    [null, 'Thinking…', 'Thought for 3s'],
-    ['Mascot', 'Mascot is thinking…', 'Mascot thought for 3s'],
-  ] as const)('with speaker %s: the thought cloud while active, then the time with no glyph', (who, activeLine, doneLine) => {
-    const { container, rerender } = render(<ThinkingLabel active ms={0} who={who} />);
-    expect(screen.getByText(activeLine)).toBeInTheDocument();
+  it('shows the thought cloud while active, then the time with no glyph', () => {
+    const { container, rerender } = render(<ThinkingLabel active ms={0} />);
+    expect(screen.getByText('Thinking…')).toBeInTheDocument();
     expect(glyph(container)?.querySelector('svg')).toBeTruthy();
     expect(glyph(container)?.getAttribute('aria-hidden')).toBe('true');
     expect(pulse(container)).toBeNull();
 
-    rerender(<ThinkingLabel active={false} ms={3000} who={who} />);
-    expect(container.textContent).toBe(doneLine);
+    rerender(<ThinkingLabel active={false} ms={3000} />);
+    expect(container.textContent).toBe('Thought for 3s');
     expect(container.querySelector('svg')).toBeNull();
   });
 });

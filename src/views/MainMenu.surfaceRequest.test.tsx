@@ -198,12 +198,4 @@ describe('a surface request on the main menu', () => {
     await settle();
     expect(registry.get().tabs).toEqual(['community.entity']);
   });
-
-  it('leaves a help window surface for the help window', async () => {
-    renderMenu();
-    requester.send('formaquestionSettings.endpoint');
-    await screen.findByText('Sedge Landing');
-    expect(requester.pending()?.id).toBe('formaquestionSettings.endpoint');
-    expect(registry.get().dialog).toBeNull();
-  });
 });

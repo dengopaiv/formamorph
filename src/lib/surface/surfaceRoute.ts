@@ -37,11 +37,6 @@ type LedgerRoute = { parent: SurfaceId } | { ancestor: SurfaceId };
 const DIALOGS: Record<DevModal, DialogRoute> = {
   settings: { host: 'any' },
   worldEditor: { host: 'any' },
-  formaquestion: { host: 'any' },
-  formaquestionSettings: { host: 'any' },
-  formaquestionAiContext: { host: 'any' },
-  formaquestionWikiConfirm: { ancestor: 'formaquestion' },
-  formaquestionCompare: { ancestor: 'formaquestionSettings.prompts' },
   settingsCompare: { ancestor: 'settings.prompts' },
   chipOptions: { ancestor: 'settings.prompts' },
 
@@ -144,8 +139,6 @@ const LEDGERS: Record<TabKey, LedgerRoute> = {
   adminPanelPolicies: { parent: 'adminPanel.policies' },
   adminPanelFeedback: { parent: 'adminPanel.feedback' },
 
-  formaquestion: { parent: 'formaquestion' },
-  formaquestionSettings: { parent: 'formaquestionSettings' },
 };
 
 const KNOWN: ReadonlySet<string> = new Set(SURFACE_IDS);
@@ -180,13 +173,6 @@ function surfaceSteps(id: string): SurfaceSteps | null {
   if ('ancestor' in route) return surfaceSteps(route.ancestor);
   const parent = surfaceSteps(route.parent);
   return parent && { ...parent, tabs: [...parent.tabs, id as SurfaceId] };
-}
-
-const HELP_WINDOW: ReadonlySet<DevModal> = new Set(['formaquestion', 'formaquestionSettings', 'formaquestionAiContext']);
-
-/** Whether the help window opens these steps itself. The app's screens leave them alone. */
-export function opensInHelpWindow(steps: SurfaceSteps): boolean {
-  return steps.dialog !== null && HELP_WINDOW.has(steps.dialog);
 }
 
 /** The tab of one ledger in a set of steps, as the bare tab value, or undefined when none is asked for. */

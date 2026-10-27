@@ -22,7 +22,6 @@ import { UpdateRequiredGate } from './components/modals/UpdateRequiredDialog';
 import { SignInHost } from './components/SignInHost';
 import { LocalEngineManager } from './components/LocalEngineManager';
 import { IntroSequence } from './components/IntroSequence';
-import { Formaquestion } from './components/formaquestion/Formaquestion';
 import { TooltipProvider } from './components/ui/tooltip';
 import GameViewer from './views/GameViewer';
 import MainMenu from './views/MainMenu';
@@ -149,9 +148,6 @@ function AppViews() {
       <DevFixtureLoader onPicked={setInitialCharacters} />
       {import.meta.env.DEV && devRoute?.probe === 'viewport' && <ViewportReadout />}
       {DevPaneRoutes && devRoute?.modal && <Suspense fallback={null}><DevPaneRoutes /></Suspense>}
-      {/* One help window for every view, so it stays open with its state across a view swap. The welcome
-          animation covers the screen and takes no input, so help stands down while it plays. */}
-      <Formaquestion suspended={currentView === 'mainMenu' && introPace !== null} />
       {/* Each view reports itself as the open screen. Its tabs and dialogs report from inside it. */}
       {currentView === 'mainMenu' && (
         <SurfaceLayer id="mainMenu">
