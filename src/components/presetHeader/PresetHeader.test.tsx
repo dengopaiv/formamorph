@@ -12,7 +12,6 @@ function handlers() {
     rename: vi.fn(),
     import: vi.fn(),
     export: vi.fn(),
-    publish: vi.fn(),
     reset: { run: vi.fn(), description: 'Reset every prompt in "Mine"?' },
     delete: { run: vi.fn(), description: 'Delete the "Mine" preset?' },
   };
@@ -49,18 +48,18 @@ const rowButton = (name: string) => within(screen.getByTestId('row')).getByRole(
 describe('PresetHeader', () => {
   it('puts destructive icons left of the select and file icons right', () => {
     renderHeader(false, handlers());
-    expect(rowNames()).toEqual(['Delete', 'Reset', 'select', 'Duplicate', 'Rename', 'Import', 'Export', 'Publish']);
+    expect(rowNames()).toEqual(['Delete', 'Reset', 'select', 'Duplicate', 'Rename', 'Import', 'Export']);
   });
 
   it('puts a heading in place of the label and select, with the same icons', () => {
     render(<PresetHeader heading="Edit Mine" testId="row" actions={presetHeaderActions(false, handlers())} />);
     expect(screen.getByRole('heading', { name: 'Edit Mine' })).toBeInTheDocument();
-    expect(rowNames()).toEqual(['Delete', 'Reset', 'Duplicate', 'Rename', 'Import', 'Export', 'Publish']);
+    expect(rowNames()).toEqual(['Delete', 'Reset', 'Duplicate', 'Rename', 'Import', 'Export']);
   });
 
   it('lists every action in the ⋯ menu, destructive last', async () => {
     renderHeader(false, handlers());
-    expect(await openMenu()).toEqual(['Duplicate', 'Rename', 'Import', 'Export', 'Publish', '---', 'Reset', 'Delete']);
+    expect(await openMenu()).toEqual(['Duplicate', 'Rename', 'Import', 'Export', '---', 'Reset', 'Delete']);
   });
 
   it('keeps Duplicate, Import and Export on a built-in preset', async () => {
@@ -113,14 +112,14 @@ describe('PresetHeader', () => {
 
   it('draws only the icon row when the layout is wide', () => {
     render(<PresetHeader label="Preset" testId="row" layout="wide" actions={presetHeaderActions(false, handlers())} select={<span />} />);
-    expect(rowNames()).toEqual(['Delete', 'Reset', 'Duplicate', 'Rename', 'Import', 'Export', 'Publish']);
+    expect(rowNames()).toEqual(['Delete', 'Reset', 'Duplicate', 'Rename', 'Import', 'Export']);
     expect(screen.queryByRole('button', { name: MENU })).toBeNull();
   });
 
   it('draws only the ⋯ menu when the layout is narrow', async () => {
     render(<PresetHeader label="Preset" testId="row" layout="narrow" actions={presetHeaderActions(false, handlers())} select={<span />} />);
     expect(rowNames()).toEqual([]);
-    expect(await openMenu()).toEqual(['Duplicate', 'Rename', 'Import', 'Export', 'Publish', '---', 'Reset', 'Delete']);
+    expect(await openMenu()).toEqual(['Duplicate', 'Rename', 'Import', 'Export', '---', 'Reset', 'Delete']);
   });
 
   it('resets at once, with no confirm, from a plain handler', () => {

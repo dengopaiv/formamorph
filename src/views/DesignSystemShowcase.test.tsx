@@ -188,18 +188,6 @@ describe('markdown editing reference', () => {
   });
 });
 
-describe('community card reference', () => {
-  it('registers the production card reference in the showcase', async () => {
-    const user = userEvent.setup();
-    renderShowcase();
-
-    await user.click(screen.getByRole('tab', { name: 'Community Cards' }));
-
-    expect(screen.getByRole('heading', { name: 'Community Creation Cards' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Unlike — 286 likes/ })).toHaveAttribute('aria-pressed', 'true');
-  });
-});
-
 describe('find bar reference', () => {
   it('registers the production Find bar in the showcase', async () => {
     const user = userEvent.setup();
@@ -237,14 +225,13 @@ describe('main menu context menu reference', () => {
 });
 
 describe('narration turn reference', () => {
-  it('registers the production Turn Card, Scene Plate, and choice rows in the showcase', async () => {
+  it('registers the production Turn Card and choice rows in the showcase', async () => {
     const user = userEvent.setup();
     renderShowcase();
 
     await user.click(screen.getByRole('tab', { name: 'Narration Turn' }));
 
     const latest = screen.getByRole('region', { name: 'Latest Page' });
-    expect(within(latest).getByRole('button', { name: 'Zoom image' })).toBeInTheDocument();
     expect(within(latest).getByRole('button', { name: 'Re-generate Narration' })).toBeInTheDocument();
     expect(within(latest).getByTestId('choice-rows')).toBeInTheDocument();
   });
@@ -290,25 +277,6 @@ describe('breadcrumb picker reference', () => {
     await user.keyboard('{Escape}');
 
     expect(screen.getByRole('combobox', { name: 'Unavailable' })).toBeDisabled();
-  });
-});
-
-describe('filter row reference', () => {
-  it('shows the staff and user rows with the Filters button at its default', async () => {
-    const user = userEvent.setup();
-    renderShowcase();
-    await user.click(screen.getByRole('tab', { name: 'Filter Row' }));
-
-    const staff = screen.getByRole('region', { name: 'Staff Queue' });
-    expect(within(staff).getByLabelText('Filter by status')).toBeInTheDocument();
-    expect(within(staff).getByLabelText('Sort by')).toBeInTheDocument();
-    expect(within(staff).getByRole('button', { name: 'More Filters' })).toBeInTheDocument();
-
-    const userTab = screen.getByRole('region', { name: 'User Tab' });
-    expect(within(userTab).getByLabelText('Which threads')).toBeInTheDocument();
-    expect(within(userTab).getByRole('button', { name: 'Report a Bug' })).toBeInTheDocument();
-    await user.click(within(userTab).getByRole('button', { name: 'More Filters' }));
-    expect(within(userTab).getByRole('button', { name: 'Reset Filters' })).toBeDisabled();
   });
 });
 

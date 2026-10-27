@@ -105,8 +105,6 @@ const LEDGERS: Record<TabKey, LedgerRoute> = {
   entityEditor: { ancestor: 'entityEditor' },
   entityEditorEntity: { ancestor: 'entityEditor' },
   dictionaryEditor: { ancestor: 'dictionaryEditor' },
-
-
 };
 
 const KNOWN: ReadonlySet<string> = new Set(SURFACE_IDS);

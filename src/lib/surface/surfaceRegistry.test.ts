@@ -79,20 +79,20 @@ describe('the Surface', () => {
   it('keeps the dialog that opened last on top when an earlier one closes', () => {
     const registry = createSurfaceRegistry();
     open(registry, 'mainMenu');
-    const community = open(registry, 'community');
-    open(registry, 'profile');
-    registry.clear(community);
-    expect(registry.get().dialog).toBe('profile');
+    const backup = open(registry, 'backup');
+    open(registry, 'aiSetup');
+    registry.clear(backup);
+    expect(registry.get().dialog).toBe('aiSetup');
   });
 
   it('keeps a dialog that was open before the screen changed on top of the new screen', () => {
     const registry = createSurfaceRegistry();
     const menu = open(registry, 'mainMenu');
-    open(registry, 'privacyPolicy');
+    open(registry, 'changelog');
     registry.clear(menu);
     const game = open(registry, 'gameViewer');
     openTab(registry, game, 'gameViewer.notes');
-    expect(registry.get()).toEqual({ screen: 'gameViewer', dialog: 'privacyPolicy', tabs: [] });
+    expect(registry.get()).toEqual({ screen: 'gameViewer', dialog: 'changelog', tabs: [] });
   });
 
   it('clears an entry that reports no id', () => {

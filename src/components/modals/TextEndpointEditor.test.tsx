@@ -72,7 +72,7 @@ describe('TextEndpointEditor', () => {
     const model = modelOn('vllm');
     model.fields.endpointUrl = 'http://vllm.test';
     render(<TextEndpointEditor model={model} advanced onOpenConnectionGuide={() => {}} />);
-    expect(useEndpointReachable).toHaveBeenLastCalledWith('http://vllm.test/v1/chat/completions', '', 'local', true, 'text');
+    expect(useEndpointReachable).toHaveBeenLastCalledWith('http://vllm.test/v1/chat/completions', '', 'local', true);
   });
 
   it('shows no badge on the bundled engine preset', () => {
