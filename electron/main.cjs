@@ -532,8 +532,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Opt-in responsiveness meter (`npm run desktop:perf`). A no-op without the flag, and its renderer half is
-// injected rather than bundled, so nothing reaches a normal build.
+// Opt-in responsiveness meter (`npm run desktop:dev -- --perf-meter`). A no-op without the flag, and its
+// renderer half is injected rather than bundled, so nothing reaches a normal build.
 const stopPerfMeter = perfMeter.start({
   getWindow: () => mainWindow,
   getEnginePid: () => llmEngine.enginePid(),

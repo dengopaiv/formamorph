@@ -3,8 +3,8 @@ productName: Formamorph
 directories:
   output: release
 # GitHub Releases is the update feed. electron-updater (Linux AppImage self-update) reads latest-linux.yml
-# from the release; the Linux CI step publishes it directly. Windows uses a custom launcher swap and macOS a
-# notifier, so their targets don't rely on this — it's harmless for them.
+# from the release; the Linux CI step publishes it directly. Windows uses a custom launcher swap, so its
+# target doesn't rely on this — it's harmless for it.
 publish:
   provider: github
   owner: JakeJamesDev
@@ -17,7 +17,7 @@ files:
   - '!electron/fakeLlamaServer.mjs'
 # llama-server builds (scripts/fetchLlamaServer.mjs) ship as plain files in resources/llama-server/<build>/.
 # Single icon source shared with the web favicon (public/icon.png, 512x512). electron-builder converts
-# it to .ico (Windows) and .icns (macOS) at build time and uses the PNG directly on Linux.
+# it to .ico (Windows) at build time and uses the PNG directly on Linux.
 win:
   extraResources:
     - from: build-assets/llama-server/win-x64-vulkan
@@ -40,16 +40,4 @@ linux:
   category: Game
   artifactName: Formamorph-${version}.AppImage
   maintainer: Jake James <bennybroseph@gmail.com>
-  icon: public/icon.png
-mac:
-  # Both architectures ship; the engine picks by process.arch.
-  extraResources:
-    - from: build-assets/llama-server/mac-arm64
-      to: llama-server/mac-arm64
-    - from: build-assets/llama-server/mac-x64
-      to: llama-server/mac-x64
-  target:
-    - dmg
-  category: public.app-category.games
-  artifactName: Formamorph-${version}.dmg
   icon: public/icon.png
