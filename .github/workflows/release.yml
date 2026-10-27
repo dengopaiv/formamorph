@@ -2,7 +2,7 @@ name: Release
 
 # Build release artifacts for every tagged release. Each desktop runner packages for its own OS
 # (electron-builder can't reliably cross-build AppImage from Windows), so the matrix produces the Windows
-# launcher distributable, Linux AppImage, and macOS .dmg from one tag. Everything is attached to the one
+# launcher distributable and the Linux AppImage from one tag. Everything is attached to the one
 # GitHub Release for the tag.
 #
 # INVARIANT: the tag must equal `v<package.json version>`. The app bakes package.json's version as its
@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         # `build` is the portability class baked into the app (FORMAMORPH_BUILD → footer tag). The Windows
-        # portable .exe and the Linux AppImage are both relocatable → 'portable'; the mac .dmg installs → 'installed'.
+        # portable .exe and the Linux AppImage are both relocatable → 'portable'.
         include:
           - os: windows-latest
             script: desktop:build
@@ -41,9 +41,6 @@ jobs:
             # produced when publishing — so Linux publishes directly (a draft the `publish` job finalizes).
             script: desktop:build:linux:publish
             build: portable
-          - os: macos-latest
-            script: desktop:build:mac
-            build: installed
     runs-on: ${{ matrix.os }}
     # contents: write lets the Linux electron-builder step publish its AppImage + latest-linux.yml draft.
     permissions:
@@ -67,7 +64,7 @@ jobs:
       - run: npm run ${{ matrix.script }}
         env:
           FORMAMORPH_BUILD: ${{ matrix.build }}
-          # Only the Linux --publish step consumes this; the Windows/mac --publish never scripts ignore it.
+          # Only the Linux --publish step consumes this; the Windows --publish never script ignores it.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Windows: build the Go launcher, then assemble the distributable — launcher at the clean root + the
       # electron `dir` payload under app/. Produces the full-root zip (first-time download) plus the app
@@ -100,7 +97,6 @@ jobs:
           name: desktop-${{ matrix.os }}
           path: |
             release/*.AppImage
-            release/*.dmg
             release/*-win.zip
             release/*-win.zip.sha512
           if-no-files-found: error
@@ -125,7 +121,7 @@ jobs:
       - run: node scripts/extractReleaseNotes.mjs --release "${GITHUB_REF_NAME#v}" > notes.md
       # The Linux build already published the AppImage + latest-linux.yml to this tag's release as a draft
       # (electron-builder targets `v<package.json version>`, which the guard forces to equal the tag). This
-      # step attaches the Windows/mac artifacts to that SAME release, sets the notes, and publishes it.
+      # step attaches the Windows artifacts to that SAME release, sets the notes, and publishes it.
       # AppImage is intentionally omitted — electron-builder already uploaded it (and its update metadata).
       - uses: softprops/action-gh-release@v3
         with:
@@ -133,7 +129,6 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: notes.md
           files: |
-            artifacts/*.dmg
             artifacts/*-win.zip
             artifacts/*-win.zip.sha512
 
@@ -168,4 +163,3 @@ jobs:
           unzip -q "$WINZIP" -d win
           butler push win fierylion/formamorph:windows --userversion "$VER"
           butler push "$(ls *.AppImage)" fierylion/formamorph:linux --userversion "$VER"
-          butler push "$(ls *.dmg)" fierylion/formamorph:mac --userversion "$VER"

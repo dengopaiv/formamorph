@@ -23,7 +23,7 @@ Formamorph is a desktop app that talks to any **OpenAI-compatible** chat-complet
 - 🔊 **Audio** — on-device text-to-speech (Kokoro), plus per-location ambient sound and background music
 - 💾 **Saves** — multiple save slots with state rollback, stored locally in IndexedDB
 - 📐 **Responsive** — three-panel layout that folds to a single panel in a narrow window
-- 🖥️ **Standalone desktop app** (Windows / macOS / Linux) — package a build with `npm run desktop:build` (see [Desktop build](#-desktop-build))
+- 🖥️ **Standalone desktop app** (Windows / Linux) — package a build with `npm run desktop:build` (see [Desktop build](#-desktop-build))
 - 🏷️ **Discover & publish** — tag worlds and share them via an optional workshop backend (community content is **unmoderated** — see the [disclaimer](#disclaimer))
 
 ---
@@ -45,25 +45,22 @@ Then open the app, head to **Settings**, and point it at your AI endpoint (or pr
 |---|---|
 | `npm run dev` | Start the Vite dev server (hot reload) |
 | `npm run build` | Build the production bundle to `dist/` |
-| `npm run preview` | Preview the production build locally |
 | `npm run lint` | Run ESLint |
 | `npm run typecheck` | Type-check with incremental `tsc` (no emit) |
 | `npm run desktop:dev` | Build, then launch the app in a desktop window (Electron) |
-| `npm run desktop:build` | Package a standalone **Windows `.exe`** to `release/` |
+| `npm run desktop:build` | Package the **Windows** app to `release/win-unpacked/` |
 | `npm run desktop:build:linux` | Package a Linux **AppImage** to `release/` |
-| `npm run desktop:build:mac` | Package a macOS **dmg** to `release/` |
 
 ## 🖥️ Desktop build
 
 Formamorph can run as a standalone desktop app — no browser needed. A thin [Electron](https://www.electronjs.org/) shell (`electron/`) loads the normal web build and bundles its own Chromium, so WebGPU TTS, 3D rendering, and IndexedDB saves all work exactly as in-browser. The desktop app also unlocks the **local model engine** — download and run a GGUF on your own machine (see the [Changelog](docs/Changelog.md)).
 
 ```bash
-npm run desktop:build          # Windows portable .exe
+npm run desktop:build          # Windows app folder
 npm run desktop:build:linux    # Linux AppImage
-npm run desktop:build:mac      # macOS dmg
 ```
 
-The Windows target produces a **portable** single-file executable at `release/Formamorph-<version>-portable.exe` (the `release/` folder is gitignored). Double-click it to run — no install step. For a quick dev run in a desktop window without packaging, use `npm run desktop:dev`. Tagging a `v*` release builds all three platforms in CI and attaches them to the GitHub Release.
+The Windows target produces the unpacked app at `release/win-unpacked/` (the `release/` folder is gitignored). Run `Formamorph.exe` in it — no install step. The release build wraps that folder in a small launcher that swaps in updates; a local build has no launcher, so it doesn't update itself. For a quick dev run in a desktop window without packaging, use `npm run desktop:dev` (add `-- --perf-meter` to print what was slow). Tagging a `v*` release builds both platforms in CI and attaches them to the GitHub Release.
 
 > [!WARNING]
 > **`EPERM: … rename 'release\win-unpacked.tmp'` on Windows?**

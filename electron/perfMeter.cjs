@@ -1,6 +1,6 @@
-// Opt-in responsiveness meter for the desktop app: `npm run desktop:perf`, or pass --perf-meter to any
-// electron launch. Prints one line every couple of seconds naming what was slow in that window, so a
-// "the app feels sluggish" report becomes a number instead of an impression.
+// Opt-in responsiveness meter for the desktop app: pass --perf-meter to any electron launch, as in
+// `npm run desktop:dev -- --perf-meter`. Prints one line every couple of seconds naming what was slow in that
+// window, so a "the app feels sluggish" report becomes a number instead of an impression.
 //
 // It measures the four things that can each make the app feel slow, and which are NOT interchangeable:
 //   main loop     — the Electron main process's event loop, which is also the window message pump
