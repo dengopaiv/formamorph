@@ -1,14 +1,12 @@
 // Must load before the storage singleton, whose first use opens IndexedDB.
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { addCopyToStoredWorld, storedWorldReferences } from './addToStoredWorld';
 import WorldStorageService from '@/services/WorldStorageService';
 import type { LibrarySource } from './linkedContent';
 import type { ConnectionPlan } from './worldReferences';
 import { openingsEnabled } from './openings';
 import type { Dictionary, Entity, GameLocation, Placeholder, PlaceholderGroup, Trait, WorldOverview } from '@/types';
-
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 
 const source: LibrarySource = { id: 'lib-1', name: 'Wren', revision: 'r1', owned: true };
 

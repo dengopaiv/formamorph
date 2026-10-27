@@ -11,10 +11,6 @@ import { SurfaceLayer, SurfaceReporterContext, type SurfaceReporter } from '@/co
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { GameDataProvider, useGameDataActions } from '@/contexts/GameDataContext';
 import { PlaceholderSessionProvider } from '@/contexts/PlaceholderSessionContext';
-import { UserProfileProvider } from '@/contexts/UserProfileContext';
-import { AgeGateProvider } from '@/contexts/AgeGateContext';
-import { PrivacyPolicyProvider } from '@/contexts/PrivacyPolicyContext';
-import { AccountDeletionProvider } from '@/contexts/AccountDeletionContext';
 import { GameplayProvider } from '@/contexts/GameplayContext';
 import GameViewer from '@/views/GameViewer';
 import type { PersonaPick } from '@/lib/persona';
@@ -85,27 +81,19 @@ export function renderGameViewer(
         <SettingsProvider>
           <GameDataProvider>
             <PlaceholderSessionProvider>
-              <UserProfileProvider>
-                <AgeGateProvider>
-                  <AccountDeletionProvider>
-                    <PrivacyPolicyProvider>
-                      {children}
-                      <WithWorld world={world}>
-                        <SurfaceReporterContext.Provider value={registry}>
-                          <SurfaceLayer id="gameViewer">
-                            <GameplayProvider>
-                              <ViewGate gate={gate}>
-                                <GameViewer initialCharacterData={null} onExitToMenu={onExitToMenu} initialSaveId={initialSaveId} initialTraits={initialTraits} initialPersona={initialPersona} initialOwnedTraits={initialOwnedTraits} />
-                              </ViewGate>
-                              {inGameplay}
-                            </GameplayProvider>
-                          </SurfaceLayer>
-                        </SurfaceReporterContext.Provider>
-                      </WithWorld>
-                    </PrivacyPolicyProvider>
-                  </AccountDeletionProvider>
-                </AgeGateProvider>
-              </UserProfileProvider>
+              {children}
+              <WithWorld world={world}>
+                <SurfaceReporterContext.Provider value={registry}>
+                  <SurfaceLayer id="gameViewer">
+                    <GameplayProvider>
+                      <ViewGate gate={gate}>
+                        <GameViewer initialCharacterData={null} onExitToMenu={onExitToMenu} initialSaveId={initialSaveId} initialTraits={initialTraits} initialPersona={initialPersona} initialOwnedTraits={initialOwnedTraits} />
+                      </ViewGate>
+                      {inGameplay}
+                    </GameplayProvider>
+                  </SurfaceLayer>
+                </SurfaceReporterContext.Provider>
+              </WithWorld>
             </PlaceholderSessionProvider>
           </GameDataProvider>
         </SettingsProvider>

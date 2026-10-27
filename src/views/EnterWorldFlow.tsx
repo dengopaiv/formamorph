@@ -21,7 +21,7 @@ import { scoped, type OwnerId } from '@/lib/scope';
 import type { TraitCascade } from '@/components/game/SetupTraitList';
 import { buildInitialSelection, finalizeSelection, shouldShowDictionaryChoices } from '@/lib/dictionarySelection';
 import { libraryLines } from '@/lib/librarySources';
-import { followedLibraryId } from '@/lib/publishLinks';
+import { followedLibraryId } from '@/lib/linkedContent';
 import {
   castOwnedTraits, emptyEntryDraft, entryDefaults, entryGateInput, entryTrees, libraryCastIds, rekeyOwnedPicks,
   withLibraryDefaults, withLocationPick, withPersonaPick, withSettledTraits, type EntryDraft, type EntryTraitWorld,
@@ -66,7 +66,6 @@ interface EnterWorldFlowProps {
   /** The local entity and dictionary libraries, as metadata. */
   libraryEntities: EntityMetadata[];
   libraryDictionaries: DictionaryMetadata[];
-  signedInId: string | undefined;
   /** The global default persona: a library entity id. */
   defaultPersona: string | undefined;
   showReadme: (worldId: string) => boolean;
@@ -84,7 +83,7 @@ interface EnterWorldFlowProps {
  * the setup dialog renders this flow and not the menu behind it.
  */
 const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(function EnterWorldFlow({
-  world: selectedWorld, libraryEntities: entities, libraryDictionaries: dictionaries, signedInId, defaultPersona,
+  world: selectedWorld, libraryEntities: entities, libraryDictionaries: dictionaries, defaultPersona,
   showReadme, setShowReadme, introOpen: showIntroReadme, setIntroOpen: setShowIntroReadme,
   avatarOpen: showCharacterCustomization, setAvatarOpen: setShowCharacterCustomization, onStartGame,
 }, ref) {
@@ -266,8 +265,8 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
       .filter((id): id is string => !!id));
     return entities
       .filter((meta) => !followed.has(meta.id))
-      .map((meta) => ({ ...meta, ...libraryLines(meta, signedInId) }));
-  }, [entities, signedInId, worldEntities]);
+      .map((meta) => ({ ...meta, ...libraryLines(meta) }));
+  }, [entities, worldEntities]);
 
   /** The library personas this entry offers: marked entities the world holds no copy of. */
   const personaOptions = useMemo(
@@ -451,7 +450,7 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
 
   const start = () => {
     const additions = restoreWorldAdditionDefaults(
-      selectedWorld!.id, buildInitialSelection(worldBooks, dictionaries, signedInId), additionEntities);
+      selectedWorld!.id, buildInitialSelection(worldBooks, dictionaries), additionEntities);
     const persona = personaPreselect(selectedWorld!.id);
     // The persona wins a tie with a remembered character, and a world persona preselects its location.
     const draft = withPersonaPick(
@@ -481,7 +480,7 @@ const EnterWorldFlow = forwardRef<EnterWorldFlowHandle, EnterWorldFlowProps>(fun
     // A world persona starts at its own starting location; any other start stays random.
     const draft = withPersonaPick({
       ...emptyEntryDraft(), ...entryDefaults({ ...rawEntryWorld, library: [] }, persona),
-      dictionaryItems: buildInitialSelection(worldBooks, dictionaries, signedInId),
+      dictionaryItems: buildInitialSelection(worldBooks, dictionaries),
     }, persona, personaPickContext);
     if (entryStarted.current) return;
     cancelEntryResolution();

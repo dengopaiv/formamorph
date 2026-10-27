@@ -1,19 +1,15 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { Bug, Copy } from 'lucide-react';
+import { Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import { bugReportFromError, openFeedback } from '@/lib/feedbackOpener';
 import { copyWithToast } from '@/lib/clipboard';
 import { useDevRoute } from '@/lib/devRouter';
 import {
   closeErrorDetails, detailsWithDiagnostics, errorDetailsText, getErrorDetailsState, subscribeErrorDetails,
 } from '@/lib/errorDetails';
-import { COMMUNITY_ENABLED } from '@/lib/featureFlags';
 import { toastError } from '@/lib/linkToast';
-import { requestSignIn } from '@/lib/signInStore';
-import AuthService from '@/services/AuthService';
 
 /** The dialog a toast's View Details link opens; mounted once, beside the toast container. */
 export function ErrorDetailsHost() {
@@ -27,19 +23,6 @@ export function ErrorDetailsHost() {
     }
   }, [devRoute?.modal]);
 
-  // Hands off rather than stacking: the report's description keeps the details.
-  const reportBug = () => {
-    if (!entry) return;
-    const fill = bugReportFromError(entry);
-    const handOff = () => {
-      closeErrorDetails();
-      openFeedback('bug', fill);
-    };
-    // Bug reports are filed against an account. A canceled sign-in leaves this dialog open underneath.
-    if (AuthService.token) handOff();
-    else requestSignIn({ onSignedIn: handOff });
-  };
-
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) closeErrorDetails(); }}>
       <DialogContent surface="errorDetails" className="max-w-2xl">
@@ -51,13 +34,6 @@ export function ErrorDetailsHost() {
           {entry && detailsWithDiagnostics(entry)}
         </pre>
         <DialogFooter>
-          {/* Bug reports live on the community server. */}
-          {COMMUNITY_ENABLED && (
-            <Button variant="outline" onClick={reportBug}>
-              <Bug className="mr-2 h-4 w-4" />
-              Report Bug
-            </Button>
-          )}
           <Button onClick={() => { if (entry) copyWithToast(errorDetailsText(entry)); }}>
             <Copy className="mr-2 h-4 w-4" />
             Copy

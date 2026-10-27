@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { jsonParts, runJsonFileOp } from './jsonFileOps';
-import { measurePublishBytes } from './publishLimits';
-import { worldPublishPayload } from './publishPayload';
 import { APP_VERSION, migrateWorld } from './version';
 import { LEGACY_VRM_ID } from './legacyVrm';
 import type { World } from '@/types';
@@ -11,10 +9,6 @@ describe('runJsonFileOp', () => {
   // Multi-byte characters and a data URL: the content a real world carries, and where a character count
   // and a byte count part ways.
   const content = { name: 'Café 🐸', thumbnail: 'data:image/webp;base64,AAAA', nested: { list: [1, 2] } };
-
-  it('measures the compact byte count the publish limit is checked against', () => {
-    expect(runJsonFileOp({ op: 'measure', value: content })).toBe(measurePublishBytes(content));
-  });
 
   it('serializes to a Blob with the requested spacing and type', async () => {
     const blob = runJsonFileOp({ op: 'serialize', value: { a: 1 }, space: 2, mime: 'text/plain' }) as Blob;
@@ -61,55 +55,6 @@ describe('parseWorld', () => {
 
   it('rejects a file that is not JSON', async () => {
     await expect(runJsonFileOp({ op: 'parseWorld', file: fileOf('{"worldOverview":') })).rejects.toThrow();
-  });
-});
-
-describe('publishBody', () => {
-  // Multi-byte text and a data URL: where a character count and a byte count part ways.
-  const world = {
-    version: APP_VERSION,
-    worldOverview: { name: 'Café 🐸', description: 'Marsh "edge"', thumbnail: 'data:image/webp;base64,AAAA', tags: ['fen'] },
-    entities: [{ id: 'e1', name: 'Mara 🐸', images: ['data:image/png;base64,BBBB'] }],
-    skipped: undefined,
-  } as unknown as Omit<World, 'id'>;
-  const textOf = (blob: Blob) => blob.text();
-
-  it('sizes the content and builds a body equal to JSON.stringify of the whole request', async () => {
-    const payload = worldPublishPayload(world);
-    const { bytes, body } = (await runJsonFileOp({ op: 'publishBody', payload, contestEventId: 'ev1' })) as { bytes: number; body: Blob };
-
-    expect(bytes).toBe(measurePublishBytes(payload.contentData));
-    expect(await textOf(body)).toBe(JSON.stringify({
-      name: payload.name, description: payload.description, thumbnail: payload.thumbnail, contentData: payload.contentData,
-      kind: 'world', tags: ['fen'], contestEventId: 'ev1',
-    }));
-  });
-
-  it('omits the fields a publish has nothing to say about', async () => {
-    const payload = { kind: 'entity' as const, name: 'Mara', description: '', contentData: { name: 'Mara' } };
-    const { body } = (await runJsonFileOp({ op: 'publishBody', payload, contestEventId: null })) as { body: Blob };
-
-    expect(JSON.parse(await textOf(body))).toEqual({ name: 'Mara', description: '', contentData: { name: 'Mara' }, kind: 'entity', tags: [] });
-  });
-
-  it('drops content that serializes to nothing, as JSON.stringify does', async () => {
-    const payload = { kind: 'world' as const, name: 'W', description: '', contentData: undefined };
-    const { bytes, body } = (await runJsonFileOp({ op: 'publishBody', payload, contestEventId: null })) as { bytes: number; body: Blob };
-
-    expect(await textOf(body)).toBe(JSON.stringify({ name: 'W', description: '', contentData: undefined, kind: 'world', tags: [] }));
-    expect(bytes).toBe(0);
-  });
-
-  it('carries each relationship field a payload declares', async () => {
-    const payload = {
-      kind: 'world' as const, name: 'W', description: '', contentData: {},
-      visibility: 'unlisted' as const, requiredDependencies: ['a'], compatibleWorlds: ['b'], models: ['m'],
-    };
-    const { body } = (await runJsonFileOp({ op: 'publishBody', payload, contestEventId: null })) as { body: Blob };
-
-    expect(JSON.parse(await textOf(body))).toMatchObject({
-      visibility: 'unlisted', requiredDependencies: ['a'], compatibleWorlds: ['b'], models: ['m'],
-    });
   });
 });
 

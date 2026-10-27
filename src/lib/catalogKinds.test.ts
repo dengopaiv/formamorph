@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { CATALOG_KINDS, CARD_TYPE_BY_KIND, KIND_BY_CARD_TYPE, KIND_ICONS, KIND_LABELS, kindHasThumbnail, kindOf, showsMorphArt } from './catalogKinds';
-import { PUBLISH_LIMITS } from './publishLimits';
-import { BROWSE_TABS } from './browseTabs';
 
 describe('kindOf', () => {
   it('reads a kind the server sent', () => {
@@ -59,17 +57,12 @@ describe('kind mappings', () => {
     expect(Object.values(KIND_BY_CARD_TYPE)).not.toContain('prompt');
   });
 
-  it('gives every kind an icon, a publish limit, and a browse section', () => {
-    for (const kind of CATALOG_KINDS) {
-      expect(KIND_ICONS[kind]).toBeTruthy();
-      expect(PUBLISH_LIMITS[kind]).toBeGreaterThan(0);
-      expect(BROWSE_TABS).toContain(kind);
-    }
+  it('gives every kind an icon', () => {
+    for (const kind of CATALOG_KINDS) expect(KIND_ICONS[kind]).toBeTruthy();
   });
 
-  it('sets the prompt kind apart: its own label, a 1 MB limit, and no thumbnail', () => {
+  it('sets the prompt kind apart: its own label and no thumbnail', () => {
     expect(KIND_LABELS.prompt).toEqual({ one: 'Prompt', many: 'Prompts' });
-    expect(PUBLISH_LIMITS.prompt).toBe(1024 * 1024);
     expect(kindHasThumbnail('prompt')).toBe(false);
     expect(CATALOG_KINDS.filter(kindHasThumbnail)).toEqual(['world', 'entity', 'dictionary', 'model']);
   });

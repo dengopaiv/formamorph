@@ -49,17 +49,15 @@ const ALWAYS_ADVANCED: EditorModeValue = { mode: 'advanced', advanced: true, set
  * Edit a single library character in place, bound to ISOLATED state (never the world store). Opens on an
  * existing `entityId` (loaded from storage) or a `draft` (a brand-new character not yet stored). Export
  * exports a `.webp` card; Save writes to `EntityStorageService` — a draft isn't persisted until then.
- * `onPublish` (when the user is signed in) hands the character up to the publish dialog. The Entity tab's
- * sub-tabs are the World Editor entity panel's, over the same field bodies. `focusField` opens the tab and
+ * The Entity tab's sub-tabs are the World Editor entity panel's, over the same field bodies. `focusField` opens the tab and
  * sub-tab that hold a field. `traitWorld` is the world the editor was opened from, which the links read.
  */
 const EntityEditorModal = ({
-  entityId, draft, onClose, onPublish, initialTab = 'entity', initialSubTab = 'profile', focusField, traitWorld,
+  entityId, draft, onClose, initialTab = 'entity', initialSubTab = 'profile', focusField, traitWorld,
 }: {
   entityId: string | null;
   draft?: Entity | null;
   onClose: () => void;
-  onPublish?: (entity: Entity, libraryDetails?: LibraryDetails) => void;
   initialTab?: EntityEditorTab;
   initialSubTab?: EntityEditorSubTab;
   focusField?: FocusFieldHint | null;
@@ -215,7 +213,6 @@ const EntityEditorModal = ({
         onSave={handleSave}
         onClose={onClose}
         onExport={handleExport}
-        onPublish={onPublish && entity ? () => onPublish(entity, libraryDetails) : undefined}
       >
         {entity && tab === 'entity' ? (
           <div className="flex min-h-0 flex-1 flex-col sm:flex-row">

@@ -1,7 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { ThemeProvider } from "./components/theme-provider";
-import { watchSessionForClaim } from './lib/anonymousLikeClaim';
-import { COMMUNITY_ENABLED } from './lib/featureFlags';
 import { useDevRoute, installDevRouter, registerDevHook } from './lib/devRouter';
 import { installViewportHeightVar, APP_HEIGHT_VAR } from './lib/viewportHeight';
 import { type DevView } from './lib/devRoutes';
@@ -11,15 +9,9 @@ import { DevFixtureLoader } from './components/DevFixtureLoader';
 import { ViewportReadout } from './components/ViewportReadout';
 import { RootErrorBoundary } from './components/RootErrorBoundary';
 import { GameDataProvider } from './contexts/GameDataContext';
-import { UserProfileProvider } from './contexts/UserProfileContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { GameplayProvider } from './contexts/GameplayContext';
 import { PlaceholderSessionProvider, usePlaceholderSession } from './contexts/PlaceholderSessionContext';
-import { AgeGateProvider } from './contexts/AgeGateContext';
-import { PrivacyPolicyProvider } from './contexts/PrivacyPolicyContext';
-import { AccountDeletionProvider } from './contexts/AccountDeletionContext';
-import { UpdateRequiredGate } from './components/modals/UpdateRequiredDialog';
-import { SignInHost } from './components/SignInHost';
 import { LocalEngineManager } from './components/LocalEngineManager';
 import { IntroSequence } from './components/IntroSequence';
 import { TooltipProvider } from './components/ui/tooltip';
@@ -70,14 +62,6 @@ function AppViews() {
   // DEV dev-router: install `window.__fmDev` and let a `#dev?view=…` hash drive the top-level screen so
   // preview verification can land in one call (see `devRouter.ts`). No-op / tree-shaken in production.
   useEffect(() => installDevRouter(), []);
-
-  // Move the likes given before sign-in onto the account that just arrived. Here rather than in the
-  // community browser, because signing in happens on the menu and in another tab, and a guest who never
-  // opens the browser again would otherwise lose the hearts they filled.
-  useEffect(() => {
-    if (!COMMUNITY_ENABLED) return;
-    return watchSessionForClaim();
-  }, []);
 
   // Track the visual viewport into `--app-h` so full-height screens shrink for the on-screen keyboard
   // (see `viewportHeight.ts`). The DEV hook fakes the iOS case — a keyboard the layout viewport doesn't
@@ -189,7 +173,7 @@ function App() {
   const devRoute = useDevRoute();
   const showDesignSystem = import.meta.env.DEV && devRoute?.modal === 'designSystem';
 
-  // The reference stays outside app providers so it cannot start storage, account, or endpoint work.
+  // The reference stays outside app providers so it cannot start storage or endpoint work.
   if (showDesignSystem && DesignSystemShowcase) {
     return (
       <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
@@ -218,30 +202,7 @@ function App() {
             {/* Above the view switch: a playthrough's placeholder rolls are drawn in the enter-world flow,
                 which the main menu owns, and read again by the game view. */}
             <PlaceholderSessionProvider>
-              {/* One profile dialog for the whole app: names are clicked from inside other dialogs, and a
-                  nested one would inherit their scroll lock and their width. */}
-              <UserProfileProvider>
-                {/* The age attestation that stands in front of every community surface. Above the view
-                    switch because it also answers at boot, before anything is opened. */}
-                <AgeGateProvider>
-                  {/* Inside the age gate: both raise a blocking dialog, and the attestation is the one
-                      that decides whether the community server is talked to at all. */}
-                  {/* Outside the privacy prompt, which raises the deletion flow from its third button —
-                      and so needs the flow mounted above it. */}
-                  <AccountDeletionProvider>
-                    <PrivacyPolicyProvider>
-                      {/* Beside the privacy prompt, and before the views: a route can refuse a request
-                          made from either screen, and sibling effects run in order — so the header this
-                          installs is on `fetch` before any screen's mount effect asks for anything. */}
-                      <UpdateRequiredGate />
-                      {/* One sign-in for every view, inside the age gate and the privacy prompt it
-                          answers to. A view swap never remounts it. */}
-                      {COMMUNITY_ENABLED && <SignInHost />}
-                      <AppViews />
-                    </PrivacyPolicyProvider>
-                  </AccountDeletionProvider>
-                </AgeGateProvider>
-              </UserProfileProvider>
+              <AppViews />
             </PlaceholderSessionProvider>
           </GameDataProvider>
         </SettingsProvider>

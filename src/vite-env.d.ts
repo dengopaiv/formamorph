@@ -8,16 +8,10 @@ declare const __APP_VERSION__: string;
 declare const __BUILD_TARGET__: string;
 
 /**
- * The community server's address, in each build mode.
- *
- * Declared because `vite/client` types every `VITE_` name as `any` through an index signature, and the
- * one module that reads these annotates a `string` — an annotation that would launder anything. The
- * rest of the `VITE_DEFAULT_*` settings still come through the index signature; they are read as text
- * and parsed at their own call sites.
+ * The dev-only settings. The `VITE_DEFAULT_*` settings come through `vite/client`'s index signature; they
+ * are read as text and parsed at their own call sites.
  */
 interface ImportMetaEnv {
-  readonly VITE_API_URL_DEV: string;
-  readonly VITE_API_URL_PROD: string;
   /** DEV only: the `#dev?…` query a launch entry lands on (see `devRouter.ts`). */
   readonly VITE_DEV_ROUTE?: string;
   /** DEV only: hold HMR updates until the page applies them (see `heldUpdatesBanner.ts`). */

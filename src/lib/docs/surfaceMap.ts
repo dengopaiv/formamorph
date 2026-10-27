@@ -23,8 +23,8 @@ export const SURFACE_IDS: readonly SurfaceId[] = [
   ...(Object.keys(DEV_MODAL_TABS) as TabKey[]).flatMap(tabsOf),
 ];
 
-/** Why players never see a surface: staff tools, or a dev-only view. */
-export type SurfaceExclusionReason = 'staff' | 'dev';
+/** Why players never see a surface: a dev-only view. */
+export type SurfaceExclusionReason = 'dev';
 
 function excludeAll(ids: readonly SurfaceId[], reason: SurfaceExclusionReason) {
   return Object.fromEntries(ids.map((id) => [id, reason])) as Partial<Record<SurfaceId, SurfaceExclusionReason>>;
@@ -32,11 +32,6 @@ function excludeAll(ids: readonly SurfaceId[], reason: SurfaceExclusionReason) {
 
 /** Surfaces players never see. They need no docs section. */
 export const SURFACE_EXCLUSIONS: Partial<Record<SurfaceId, SurfaceExclusionReason>> = {
-  ...excludeAll(['adminPanel', 'likers'], 'staff'),
-  ...excludeAll(
-    [...tabsOf('adminPanel'), ...tabsOf('adminPanelEvents'), ...tabsOf('adminPanelPolicies'), ...tabsOf('adminPanelFeedback')],
-    'staff',
-  ),
   ...excludeAll(['designSystem', 'scriptPrompt', ...tabsOf('scriptPrompt'), ...tabsOf('gameViewerAttach'), ...tabsOf('worldEditorHistory')], 'dev'),
   ...excludeAll(DEV_PANE_MODALS, 'dev'),
 };
@@ -48,12 +43,6 @@ const ENTITY_OWNED_PLACEHOLDERS: Required<DocTarget> = {
 const ENTITY_OPENINGS: Required<DocTarget> = { page: 'World-Editor-Openings', anchor: 'entity-openings' };
 // One table row per prompt says what it does in a turn and when it shows.
 const THE_PROMPTS: Required<DocTarget> = { page: 'Prompts', anchor: 'the-prompts' };
-const community = (anchor: string): Required<DocTarget> => ({ page: 'Community-Creations', anchor });
-const PUBLISH_DIALOG = community('the-publish-dialog');
-const EVENT_POSTERS = community('event-posters-and-banners');
-const USER_PROFILE = community('the-user-profile-dialog');
-const ACCOUNT_DELETION = community('account-deletion');
-const BUGS_AND_SUGGESTIONS = community('bugs-and-suggestions');
 const THE_LIBRARY_TABS: Required<DocTarget> = { page: 'Library', anchor: 'the-library-tabs' };
 const THE_GROUP_DIALOGS: Required<DocTarget> = { page: 'Library', anchor: 'the-group-dialogs' };
 
@@ -65,10 +54,8 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   dictionaryEditor: { page: 'World-Editor-Dictionary', anchor: 'in-the-library' },
   entityEditor: { page: 'World-Editor-Entities', anchor: 'in-the-library' },
   importComponent: { page: 'LinkedContent', anchor: 'importing-an-entity-or-dictionary-file' },
-  manageAddons: { page: 'LinkedContent', anchor: 'manage-add-ons' },
   memoryManager: { page: 'Memory', anchor: 'the-memory-manager' },
   persona: { page: 'Personas', anchor: 'change-it-in-game' },
-  replaceSource: { page: 'LinkedContent', anchor: 'the-three-repairs' },
   imageReplace: { page: 'World-Editor-Entities', anchor: 'images-and-models' },
   codeRename: { page: 'ScriptsGuide', anchor: 'accessing-other-stats' },
   replaceAll: { page: 'WorldEditor', anchor: 'find-and-replace' },
@@ -77,7 +64,6 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   deletedElsewhere: { page: 'WorldEditor', anchor: 'editing-in-two-tabs' },
   settings: { page: 'Settings', anchor: '\u{FE0F}-settings' },
   worldEditor: { page: 'WorldEditor', anchor: '\u{FE0F}-world-editor' },
-  worldUpdate: { page: 'LinkedContent', anchor: 'update-this-world' },
 
   aiContext: { page: 'How-to-Play', anchor: 'the-ai-context-inspector' },
   demoAI: { page: 'How-to-Play', anchor: 'the-demo-ai-notice' },
@@ -89,13 +75,11 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   export: { page: 'How-to-Play', anchor: 'how-to-export-the-story' },
   gameViewer: { page: 'How-to-Play', anchor: 'the-game-screen' },
   intro: { page: 'Starting-a-Game', anchor: 'the-welcome-animation' },
-  likePrompt: { page: 'How-to-Play', anchor: 'the-like-prompt' },
   location: { page: 'How-to-Play', anchor: 'the-change-location-dialog' },
 
   // `menu` is the main menu's Load Game dialog.
   menu: { page: 'Saves-and-Backup', anchor: 'the-load-game-dialog' },
   backup: { page: 'Saves-and-Backup', anchor: 'the-backup--restore-dialog' },
-  updateRequired: { page: 'Saves-and-Backup', anchor: 'the-update-required-dialog' },
   changelog: { page: 'Saves-and-Backup', anchor: 'whats-new' },
   mainMenu: { page: 'Library', anchor: '-library' },
   ...Object.fromEntries(tabsOf('mainMenu').map((id) => [id, THE_LIBRARY_TABS])),
@@ -133,28 +117,6 @@ export const SURFACE_MAP: Partial<Record<SurfaceId, Required<DocTarget>>> = {
   'settingsToolEdit.parameters': { page: 'Tools', anchor: 'parameters' },
   'settingsToolEdit.handler': { page: 'Tools', anchor: 'handler' },
   'settingsToolEdit.tryIt': { page: 'Tools', anchor: 'try-it' },
-
-  community: community('opening-community-creations'),
-  // One table row per tab says what it holds.
-  ...Object.fromEntries(tabsOf('community').map((id) => [id, community('the-tabs')])),
-  'community.contest': community('contests'),
-  publish: PUBLISH_DIALOG,
-  'publish.world': PUBLISH_DIALOG,
-  'publish.prompt': community('publishing-a-prompt-preset'),
-  eventAck: EVENT_POSTERS,
-  ...Object.fromEntries(tabsOf('eventAck').map((id) => [id, EVENT_POSTERS])),
-  ageGate: community('the-adult-content-warning'),
-  auth: community('login-and-register'),
-  privacyPolicy: community('the-privacy-policy'),
-  profile: USER_PROFILE,
-  'profile.messages': USER_PROFILE,
-  'profile.notifications': community('the-follow-feed'),
-  'profile.terms': community('publishing-terms'),
-  'profile.settings': USER_PROFILE,
-  deleteAccount: ACCOUNT_DELETION,
-  deletionCancelled: ACCOUNT_DELETION,
-  feedbackHub: BUGS_AND_SUGGESTIONS,
-  ...Object.fromEntries(tabsOf('feedbackHub').map((id) => [id, BUGS_AND_SUGGESTIONS])),
 
   'worldEditor.overview': { page: 'World-Editor-Overview', anchor: '-world-editor-overview' },
   'worldEditor.media': { page: 'World-Editor-Media', anchor: '-world-editor-media' },

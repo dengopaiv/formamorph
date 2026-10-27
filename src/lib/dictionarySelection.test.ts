@@ -105,16 +105,9 @@ describe('buildInitialSelection', () => {
     const items = buildInitialSelection([], [
       meta('mine', { name: 'Sedge Lore' }),
       meta('theirs', { name: 'Sedge Lore', sourceId: 'listing-1', sourceAuthorName: 'Wren' }),
-    ], 'user-1');
+    ]);
     expect(items[0]).toMatchObject({ authorLine: 'You', sourceLine: 'Your library' });
     expect(items[1]).toMatchObject({ authorLine: 'Wren', sourceLine: 'Community Creations' });
-  });
-
-  it('reads a downloaded book the signed-in account published as its own', () => {
-    const items = buildInitialSelection([], [
-      meta('lib', { sourceId: 'listing-1', sourceAuthorId: 'user-1', sourceAuthorName: 'Wren' }),
-    ], 'user-1');
-    expect(items[0]).toMatchObject({ authorLine: 'You', sourceLine: 'Community Creations' });
   });
 
   it('gives a world book no author or source line, which the picker words for itself', () => {

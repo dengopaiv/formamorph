@@ -3,7 +3,6 @@ import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { renderMainMenu } from '@/test/mainMenu';
 import WorldStorageService, { type StoredWorldRecord } from '@/services/WorldStorageService';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import { readTourRecord, reloadTourProgress } from '@/lib/authoringTour/progress';
 import { TOUR_STEPS } from '@/lib/authoringTour/steps';
 import { resetTutorials } from '@/lib/tutorials';
@@ -34,7 +33,6 @@ beforeEach(async () => {
   resetTutorials();
   reloadTourProgress();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })));

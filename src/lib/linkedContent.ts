@@ -2,12 +2,29 @@ import { adoptBookPlaceholders, adoptEntityPlaceholders } from '@/lib/placeholde
 import { comparableOwnedStats } from '@/lib/portableStats';
 import { adoptOwnedTraits, bindOwnedRules, comparableOwnedTraits, traitWorldOf, type TraitWorld } from '@/lib/portableTraits';
 import { bindCarriedBlueprints } from '@/lib/blueprintTravel';
-import { followedLibraryId } from '@/lib/publishLinks';
 import { entityTexts } from '@/lib/entityTexts';
 import { entityImages } from '@/lib/entityImages';
 import { randomUUID } from '@/lib/uuid';
 import { pickToken, type VrmLookup } from '@/lib/vrmPickMatch';
-import type { CommunityLink, ContentLink, Dictionary, Entity, Placeholder, PlaceholderGroup } from '@/types';
+import type { CommunityLink, ContentLink, Dictionary, Entity, Placeholder, PlaceholderGroup, Stat, StatGroup, Trait, TraitGroup } from '@/types';
+
+/** A world's linkable content lists, as the link helpers read and rewrite them. */
+export interface LinkedWorldContent {
+  entities?: Entity[];
+  dictionaries?: Dictionary[];
+  /** The slices a copy's trait requirements bind against when the world compares it to a library item. */
+  traits?: Trait[];
+  traitGroups?: TraitGroup[];
+  stats?: Stat[];
+  statGroups?: StatGroup[];
+}
+
+/** The library item a copy follows, or null for an independent copy. The one reading of a link record's
+ *  `libraryId`, so every surface agrees on which copies follow something. */
+export const followedLibraryId = (item: { link?: ContentLink }): string | null => {
+  const id = item.link?.libraryId;
+  return typeof id === 'string' && id.trim() ? id.trim() : null;
+};
 
 /** An entity or a dictionary — the two kinds of content a world copy can follow a source for. */
 export type LinkableContent = Entity | Dictionary;
@@ -55,11 +72,9 @@ export function libraryRevision(record: RevisionStamps): string {
   return record.editedAt || record.downloadedAt || record.createdAt || '';
 }
 
-/** Whether `userId` owns the library item. An item that was never downloaded is the author's own; a
- *  downloaded one is theirs only when they published it, which needs them signed in to establish. */
-export function libraryOwned(record: Pick<CommunityLink, 'sourceId' | 'sourceAuthorId'>, userId?: string): boolean {
-  if (!record.sourceId) return true;
-  return !!userId && record.sourceAuthorId === userId;
+/** Whether the player owns the library item: one that was never downloaded is theirs. */
+export function libraryOwned(record: Pick<CommunityLink, 'sourceId'>): boolean {
+  return !record.sourceId;
 }
 
 /** The record a copy carries once it follows `source`. `differs` marks it a local replacement at once,

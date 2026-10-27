@@ -5,7 +5,7 @@ import {
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Hint, Meta } from '@/components/ui/typography';
-import { installedRows, onlineRows, type AssociationRow } from '@/lib/componentImport';
+import { installedRows, type AssociationRow } from '@/lib/componentImport';
 import type { LibraryKind } from '@/lib/librarySources';
 
 const COPY = {
@@ -22,11 +22,7 @@ export interface ImportComponentModalProps {
   rows: AssociationRow[];
   /** The installed worlds the player ticked, by listing id. */
   selected: readonly string[];
-  /** The file names worlds this machine has not got, and the player is offline. */
-  offline: boolean;
   onToggle: (listingId: string, on: boolean) => void;
-  /** Open Community Creations on one of the worlds the file names. */
-  onFind: (listingId: string) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -36,15 +32,14 @@ export interface ImportComponentModalProps {
  * it joins.
  *
  * Every world here is the file's own claim of compatibility. None of it links anything on its own: a
- * world is linked because the player ticked it, and a world this machine has not got is downloaded
- * through Community Creations like any other. Importing with nothing ticked adds the component alone.
+ * world is linked because the player ticked it. A world this machine has not got is left out. Importing
+ * with nothing ticked adds the component alone.
  */
 export function ImportComponentModal({
-  kind, name, rows, selected, offline, onToggle, onFind, onCancel, onConfirm,
+  kind, name, rows, selected, onToggle, onCancel, onConfirm,
 }: ImportComponentModalProps) {
   if (!kind) return null;
   const installed = installedRows(rows);
-  const online = onlineRows(rows);
   const picked = new Set(selected);
 
   return (
@@ -75,25 +70,6 @@ export function ImportComponentModal({
                   </label>
                 ))}
                 <Hint>Each selected world receives a linked copy of the library item.</Hint>
-              </div>
-            )}
-
-            {online.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-label font-medium">Worlds You Do Not Have</p>
-                {online.map((row) => (
-                  <div key={row.listingId} className="flex items-center justify-between gap-2">
-                    <span className="truncate">{row.name}</span>
-                    <Button variant="outline" size="sm" disabled={offline} onClick={() => onFind(row.listingId)}>
-                      Open Listing
-                    </Button>
-                  </div>
-                ))}
-                <Hint>
-                  {offline
-                    ? 'Formamorph cannot connect to Community Creations. These worlds cannot be found now.'
-                    : 'Open Listing opens the world in Community Creations. Download the world there.'}
-                </Hint>
               </div>
             )}
           </div>

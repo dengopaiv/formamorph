@@ -64,8 +64,6 @@ vi.mock('@/services/ModelStorageService', async () => {
   };
 });
 
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => ({ id: 'me', username: 'Fen' }) } }));
-
 vi.mock('../services/WorldStorageService', () => ({
   default: { initialize: vi.fn(), getWorldMetadata: vi.fn().mockResolvedValue([]), storeWorld: vi.fn().mockResolvedValue(undefined) },
 }));

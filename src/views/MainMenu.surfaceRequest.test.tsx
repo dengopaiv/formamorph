@@ -4,9 +4,7 @@ import { renderMainMenu } from '@/test/mainMenu';
 import { createSurfaceRequester } from '@/test/surfaceRequest';
 import { createSurfaceRegistry } from '@/lib/surface/surfaceRegistry';
 import WorldStorageService, { type StoredWorldRecord } from '@/services/WorldStorageService';
-import AuthService from '@/services/AuthService';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 
 /** A request from the help window, answered by the main menu. */
 
@@ -170,32 +168,5 @@ describe('a surface request on the main menu', () => {
     await waitFor(() => expect(registry.get().tabs).toEqual(['worldEditor.placeholders']));
     await settle();
     expect(registry.get().tabs).toEqual(['worldEditor.placeholders']);
-  });
-
-  it('opens the profile on the requested tab and keeps it there', async () => {
-    const user = { id: 'me', username: 'Fen' };
-    vi.spyOn(AuthService, 'isAuthenticated').mockReturnValue(true);
-    vi.spyOn(AuthService, 'getCurrentUser').mockReturnValue(user as never);
-    vi.spyOn(AuthService, 'fetchUserProfile').mockResolvedValue(user as never);
-    acceptAgeGate();
-    renderMenu();
-    await screen.findByText('Sedge Landing');
-    await waitFor(() => expect(AuthService.fetchUserProfile).toHaveBeenCalled());
-    requester.send('profile.settings');
-    await waitFor(() => expect(registry.get()).toEqual({ screen: 'mainMenu', dialog: 'profile', tabs: ['profile.settings'] }));
-    // The landing clears on the next commit; the tab must not fall back with it.
-    await settle();
-    expect(registry.get().tabs).toEqual(['profile.settings']);
-  });
-
-  it('re-selects a Community tab without falling back to the tab it opened on', async () => {
-    acceptAgeGate();
-    renderMenu();
-    requester.send('community.model');
-    await waitFor(() => expect(registry.get().tabs).toEqual(['community.model']));
-    requester.send('community.entity');
-    await waitFor(() => expect(registry.get().tabs).toEqual(['community.entity']));
-    await settle();
-    expect(registry.get().tabs).toEqual(['community.entity']);
   });
 });

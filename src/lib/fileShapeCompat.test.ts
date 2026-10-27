@@ -19,8 +19,6 @@ vi.mock('./jsonFileWorkerUtils', () => ({
   terminateWorker: vi.fn(),
 }));
 
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
-
 const { migrateWorld, APP_VERSION } = await import('./version');
 const { serializeWorldFile } = await import('./worldFile');
 

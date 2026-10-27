@@ -7,8 +7,6 @@ import { SettingsProvider } from '@/contexts/SettingsContext';
 import { ThemeProvider } from '@/components/theme-provider';
 import { SettingsModal } from './SettingsModal';
 import { presetStoreCodec, type PromptPresetStore, type PromptValues } from '@/lib/promptPresets';
-import AuthService from '@/services/AuthService';
-import WorldStorageService from '@/services/WorldStorageService';
 
 // The bundled-engine panel talks to Electron IPC, and the embedding model is a worker download.
 vi.mock('@/components/modals/LocalModelPanel', () => ({ LocalModelPanel: () => null }));
@@ -117,53 +115,5 @@ describe('Settings → Prompts: preset header', () => {
     expect(options).toContain('Mine');
     expect(options.at(-1)).toBe('Add New Preset…');
     expect(options).not.toContain('Import Preset…');
-  });
-});
-
-describe('Settings → Prompts: Publish', () => {
-  const signIn = () => vi.spyOn(AuthService, 'isAuthenticated').mockReturnValue(true);
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(WorldStorageService, 'getUserWorlds').mockResolvedValue([]);
-  });
-
-  it('offers Publish on a user preset once signed in', async () => {
-    signIn();
-    seed('mine');
-    openPrompts();
-    expect(rowButton('Publish')).toBeTruthy();
-    expect(await openMenu()).toContain('Publish');
-  });
-
-  it('blocks publish while Models is empty and leads to the Overview', async () => {
-    signIn();
-    seed('mine');
-    openPrompts();
-    fireEvent.click(rowButton('Publish'));
-
-    const block = await screen.findByRole('alertdialog');
-    expect(block.textContent).toContain('Models');
-    expect(screen.queryByRole('dialog', { name: 'Publish Prompt' })).toBeNull();
-    fireEvent.click(within(block).getByRole('button', { name: 'Open Overview' }));
-
-    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Models'));
-  });
-
-  it('opens the publish dialog once Models names a model', async () => {
-    signIn();
-    const store: PromptPresetStore = {
-      activeId: 'mine',
-      presets: [{
-        id: 'mine', name: 'Mine', values: { systemPrompt: 'A' } as unknown as PromptValues, style: 'markdown',
-        overview: { author: '', description: '', tags: [], models: ['Cydonia-24B'] },
-      }],
-    };
-    localStorage.setItem(PROMPTS_KEY, presetStoreCodec.serialize(store));
-    openPrompts();
-    fireEvent.click(rowButton('Publish'));
-
-    expect(await screen.findByRole('dialog', { name: 'Publish Prompt' })).toBeTruthy();
-    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

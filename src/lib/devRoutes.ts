@@ -12,17 +12,14 @@
 export const DEV_VIEWS = ['mainMenu', 'gameViewer'] as const;
 export type DevView = (typeof DEV_VIEWS)[number];
 
-/** Dev-only routes for panes whose real host needs a server, an admin session, or a deep click path.
- *  `customCode` opens MainMenu's Custom Code Execution dialog on canned stat code when the selected world has none; the
- *  rest mount one pane on canned props (`DevPaneRoutes`). The podium and the sent list still load from the
- *  server, so they show their empty state without one. `feedbackForm` opens on the branch `tab=` names
- *  (`bug`, `suggestion`, `question`), on a canned fill; over a stored draft it opens the Replace-draft confirm.
- *  Players never navigate to these. */
-export const DEV_PANE_MODALS = ['customCode', 'eventForm', 'podium', 'sentMessages', 'suspend', 'feedbackForm', 'feedbackEdit', 'changelogEntry', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash'] as const;
+/** Dev-only routes for panes whose real host needs a deep click path. `customCode` opens MainMenu's Custom
+ *  Code Execution dialog on canned stat code when the selected world has none; the rest mount one pane on
+ *  canned props (`DevPaneRoutes`). Players never navigate to these. */
+export const DEV_PANE_MODALS = ['customCode', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash'] as const;
 export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
 
-/** Modals the router can open via `#dev?modal=…`. `settings` opens from MainMenu or GameViewer; `menu`,
- *  `worldEditor` and `community` open from MainMenu; `entity`/`export` are in game (GameViewer).
+/** Modals the router can open via `#dev?modal=…`. `settings` opens from MainMenu or GameViewer; `menu` and
+ *  `worldEditor` open from MainMenu; `entity`/`export` are in game (GameViewer).
  *  `worldEditor` is an in-place modal on MainMenu (not a top-level view). `intro` replays the first-run
  *  welcome overlay on MainMenu. `localModel` is intentionally absent — it lives inside
  *  Settings→LocalModelPanel, reached via `modal=settings` + its tab, not its own name. `avatar` opens
@@ -31,72 +28,40 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  `dictionaryEditor` are the *library* editors (MainMenu), distinct from the in-game `entity` modal; both
  *  open on a blank draft, so they're reachable without any stored data. `modelDetails` is the exception to
  *  that: a VRM preview has nothing to show without a stored model, so it opens the library's first model and
- *  does nothing on an empty library. `community` opens Community Creations from MainMenu,
- *  in the modal the app raises; `mode=page` swaps it for the full-page shell a site entry would use.
- *  `memoryManager` is
- *  in-game (GameViewer) and opens on an empty ledger before any turn has been summarized. `profile` opens
- *  the account dialog (Messages/Manage), `feedbackHub` the reader's side of bugs and suggestions, and
- *  `adminPanel` the admin tools (Users/Broadcasts). All three need a signed-in session, and `adminPanel`
- *  an admin one, so they open empty otherwise rather than failing. `location` is in game (GameViewer) and
- *  opens the Change Location dialog on whichever of its two views was used last, so pair it with `fixture=…`
- *  to have a world worth traveling in; `fixture=entityFollowers` puts met entities on its Map and a follower
- *  in the Entities tab. `editText` is in game (GameViewer) and
+ *  does nothing on an empty library. `memoryManager` is
+ *  in-game (GameViewer) and opens on an empty ledger before any turn has been summarized. `location` is in
+ *  game (GameViewer) and opens the Change Location dialog on whichever of its two views was used last, so
+ *  pair it with `fixture=…` to have a world worth traveling in; `fixture=entityFollowers` puts met entities
+ *  on its Map and a follower in the Entities tab. `editText` is in game (GameViewer) and
  *  opens the narration editor on the current page's text — empty before any turn, which is enough to reach
  *  its full-screen toggle, the one editor that grows in place instead of raising a window. `changelog` opens
  *  MainMenu's What's New popout on a canned sample (`devChangelogSample.ts`) rather than the live GitHub
  *  fetch, so its typography is checkable offline and always shows every shape the notes can take.
- *  `eventAck` opens the running-event acknowledge poster on a canned event (`devEventSample.ts`) instead of
- *  the events poll, so both it and the main menu's event banner are checkable without a live event; `tab=…`
- *  picks which phase, an opening or an ending. `publish` opens MainMenu's publish dialog on a canned world
- *  (`devPublishSample.ts`) and a canned running contest, so the dialog and the contest opt-in inside it are
- *  reachable on a profile with nothing published and no event really running. `worldPrompts` opens
- *  MainMenu's read-only Custom Prompts viewer; with no world selected it renders a canned sample
- *  override, so it's reachable on an empty library. `aiContext` is in game (GameViewer) and opens the
+ *  `worldPrompts` opens MainMenu's read-only Custom Prompts viewer; with no world selected it renders a canned
+ *  sample override, so it's reachable on an empty library. `aiContext` is in game (GameViewer) and opens the
  *  AI Context inspector — empty before any turn, so pair it with `fixture=…` for real captured turns.
- *  `ageGate` raises the community age attestation on demand, so its copy stays checkable on a profile
- *  that has already accepted it. `likers` opens Community Creations, its first listing's details, and the
- *  staff-only likers list on top — the same "first row in the library" trick `modelDetails` uses, since
- *  the list has nothing to show without a real listing. It needs a staff session and does nothing
- *  otherwise. `privacyPolicy` raises the sign-in privacy prompt on canned text
- *  (`devPrivacySample.ts`), because the real policy is a server row that ships switched off —
- *  without the sample the prompt would have nothing to render before the cutover.
- *  `auth` raises the login/register dialog, behind the age gate's check. `designSystem` opens the live reference
- *  showcase without mounting it in production. `enterWorld` starts normal entry for the stored world
- *  named by `tab` (or the first installed world).
- *  `deleteAccount` opens the account-deletion flow at its first step, and `deletionCancelled` the notice
- *  a sign-in raises when it calls a pending deletion off. Neither is reachable by clicking without an
- *  account in the matching state — one needs a real password, the other a request already standing.
- *  `updateRequired` raises the Update Dialog on a canned refusal, since the real one needs a server route
- *  whose minimum version is above the running build.
+ *  `designSystem` opens the live reference showcase without mounting it in production. `enterWorld` starts
+ *  normal entry for the stored world named by `tab` (or the first installed world).
  *  `connectReferences` raises the Connect World References step
  *  on canned rows (`devConnectReferencesSample.ts`), because in the app it opens only partway through an add
- *  in the World Editor, and only for a library item expecting something that world lacks. `manageAddons`
- *  opens Community Creations and raises the add-on review over the first world listing, the same trick
- *  `likers` uses: the dialog reads a real listing's offers, so it has nothing to show without one.
+ *  in the World Editor, and only for a library item expecting something that world lacks.
  *  `componentUpdates` raises the component update review on a canned source and two canned worlds
  *  (`devComponentUpdateSample.ts`), because in the app it opens only for a library item whose revision two
  *  installed worlds are actually behind. Its worlds are held in memory, so Apply Updates writes nothing.
- *  `worldUpdate` raises the world update review on canned rows (`devWorldUpdateSample.ts`), because in the
- *  app it opens only between "update an existing copy" and the write, for a republished world whose
- *  required set has actually moved. Apply closes it and writes nothing.
  *  `importComponent` raises the component-file import review on a canned file
  *  (`devImportComponentSample.ts`), because in the app it opens only for a chosen file that names worlds.
  *  Importing from it does write: the character lands in the library, and a world you tick gets a copy.
- *  `replaceSource` opens the World Editor and raises the Bench's Replace From Library picker over a canned
- *  missing copy, because in the app it opens only from an Issues row whose source is gone. Replace
- *  closes it and writes nothing. `imageReplace`, `codeRename` and `replaceAll` open the World Editor and raise,
+ *  `imageReplace`, `codeRename` and `replaceAll` open the World Editor and raise,
  *  on canned text, the question a generated image with no free slot asks, the offer to carry a rename into
  *  stat code, and the Replace All confirm. In the app each opens only partway through an edit. Every answer
  *  closes it and writes nothing. `savedElsewhere` and `deletedElsewhere` open the World Editor and raise
  *  the question another tab's save or delete of the open world asks. Either answer closes it and writes nothing.
  *  `deleteWorldAvatar` opens the World Editor and raises an Avatar store delete on canned entities, which
- *  writes nothing; add `tab=media` to show the Media tab's Avatars section under it. `demoAI` is in game (GameViewer) and opens the Demo AI dialog whatever the
-  narration endpoint and the seen-key say, so it is reachable on a build that overrides the default endpoint.
+ *  writes nothing; add `tab=media` to show the Media tab's Avatars section under it. `demoAI` is in game
+ *  (GameViewer) and opens the Demo AI dialog whatever the narration endpoint and the seen-key say, so it is
+ *  reachable on a build that overrides the default endpoint.
  *  `persona` is in game (GameViewer) and opens the right panel's Change Persona picker. On mobile that panel
- *  mounts only on the Status tab, so open that tab first. `likePrompt` is in game (GameViewer) and shows the
- *  once-only like card on a canned listing, because a dev world was never downloaded from one and the card's
- *  answer comes from the server. Its Like press reaches the real route and fails there, which is the point
- *  at which a live listing is needed. `errorDetails` raises a canned ComfyUI rejection toast
+ *  mounts only on the Status tab, so open that tab first. `errorDetails` raises a canned ComfyUI rejection toast
  *  (`devErrorDetailsSample.ts`) from any view with toasts; its View Details link opens the dialog.
  *  `imageSetup` raises a canned ComfyUI connection toast the same way; its Fix connection link opens
  *  the image setup guide.
@@ -105,7 +70,7 @@ export type DevPaneModal = (typeof DEV_PANE_MODALS)[number];
  *  Chip Options over it, on a canned Entities chip. `scriptPrompt` is in game (GameViewer) and fires one
  *  canned `player.*` request through the live prompt store once the game has a turn; `tab=…` picks the shape
  *  (`devScriptPromptSamples.ts`). Pair it with `fixture=…`. `DEV_PANE_MODALS` follow. */
-export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'likePrompt', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
+export const DEV_MODALS = ['settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt', ...DEV_PANE_MODALS] as const;
 export type DevModal = (typeof DEV_MODALS)[number];
 
 /** The `attach=…` value that stages sample attachments on the game view. */
@@ -127,28 +92,6 @@ export const DEV_MODAL_TABS = {
   // `tagPrompt` is Advanced only and hidden while image generation is off.
   settingsEndpoints: ['text', 'image', 'tagPrompt'],
   worldEditor: ['overview', 'media', 'entities', 'locations', 'traits', 'stats', 'dictionary', 'placeholders', 'scripts', 'tools'],
-  // Community Creations browses one kind per tab, plus Contest — a view over the worlds already in the
-  // catalog rather than a fourth kind (see lib/browseTabs). `tab=contest` serves canned contests, so the
-  // tab is reachable whether or not one is really running.
-  community: ['world', 'entity', 'dictionary', 'model', 'prompt', 'contest'],
-  // The publish dialog's canned payload: a world by default, or a prompt with `tab=prompt`.
-  publish: ['world', 'prompt'],
-  // The account dialog: admin messages, the follow feed, the terms, and the account settings. Log Out is a
-  // header button rather than a tab, so it is not routable.
-  profile: ['messages', 'notifications', 'terms', 'settings'],
-  // The reader's side of feedback, behind the main menu's Feedback button; one tab per branch. Add
-  // `fixture=feedback` to serve a canned board (`devFeedbackStub.ts`); the admin feedback route takes it too.
-  feedbackHub: ['bugs', 'suggestions', 'questions'],
-  // The admin tools: accounts, broadcasts, the publish policies, the events calendar, the feedback
-  // queues, the report queue, and the log. `tab=events` serves a canned calendar (`devEventSample.ts`),
-  // so the tab's three groups are reachable without a live server; which of its two role views appears
-  // follows the session. `tab=reports` needs a live server with the feature — it opens empty otherwise.
-  // `tab=serverSettings` is the Server tab: one box per server setting, read from the live server, so
-  // against a server without the settings routes each row reports that it went unanswered.
-  adminPanel: ['users', 'broadcasts', 'policies', 'serverSettings', 'events', 'feedback', 'reports', 'log'],
-  // Admin Panel → Events uses the `subtab=…` slot for which of its two role views to render over the
-  // canned calendar, so the moderator's read-only half is reachable without a second account.
-  adminPanelEvents: ['admin', 'staff'],
   // The World Editor's Locations tab shows one of two views of the same locations, switched with `subtab=…`
   // (`#dev?modal=worldEditor&tab=locations&subtab=canvas`). Adding `fullscreen=1` opens the canvas in its
   // full-screen window on arrival — the same canvas, so it is not a third view and not listed as one.
@@ -213,11 +156,8 @@ export const DEV_MODAL_TABS = {
     'editor-mode', 'play',
   ],
   // Admin Panel → Policies has a second level, one sub-tab per authored popup, reached with `subtab=…`.
-  adminPanelPolicies: ['uploadGate', 'tagNotice', 'privacyPolicy'],
   // Admin Panel → Feedback uses the same `subtab=…` slot, one per branch.
-  adminPanelFeedback: ['bugs', 'suggestions', 'questions'],
   // The acknowledge poster renders one of an event's two phases; `tab=…` picks which the canned event is at.
-  eventAck: ['start', 'end'],
   // `player.*` prompt shapes on the game view (`#dev?view=gameViewer&fixture=whiteRoom&modal=scriptPrompt&tab=askLong`).
   scriptPrompt: ['confirm', 'ask', 'askLong', 'askMulti', 'input', 'tell', 'toast'],
   // MainMenu's library card-type switcher. Not a modal: reached with `tab=…` and no `modal=…`, i.e.

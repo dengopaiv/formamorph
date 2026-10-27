@@ -14,13 +14,6 @@ const PORT = Number(process.env.E2E_PORT ?? 5183);
 const BASE_URL = `http://localhost:${PORT}`;
 
 /**
- * A local FormamorphServer for the specs that need one (`contest-entry.spec.ts`). Handed to the dev
- * server as its API base, because the app reads that at start-up and the default in `.env` is the live
- * workshop — a run without the override would publish to production. Unset, those specs skip.
- */
-const API_URL = process.env.E2E_API_URL;
-
-/**
  * The Vite server the runner starts serves the tree as it stood when the run began: `BASELINE_NO_WATCH`
  * turns off its file watcher and HMR (see `vite.config.js`). A watching server pushes a full page reload
  * into every open page whenever any file under the root is saved, and a reload mid-test drops the app back
@@ -31,7 +24,6 @@ const API_URL = process.env.E2E_API_URL;
 const VITE_ENV: Record<string, string> = {
   ...(process.env as Record<string, string>),
   BASELINE_NO_WATCH: '1',
-  ...(API_URL ? { VITE_API_URL_DEV: API_URL } : {}),
 };
 
 export default defineConfig({
@@ -65,9 +57,7 @@ export default defineConfig({
       // Its own port, so a run never fights the dev servers on 5180-5182 (see `.claude/launch.json`).
       command: `npm run dev -- --port ${PORT} --strictPort`,
       url: BASE_URL,
-      // Never reuse when an API base is named: an already-running server was started against a different
-      // one, and pointing the app at the wrong API is exactly what must not happen silently.
-      reuseExistingServer: !process.env.CI && !API_URL,
+      reuseExistingServer: !process.env.CI,
       env: VITE_ENV,
       timeout: 120_000,
       stdout: 'ignore',

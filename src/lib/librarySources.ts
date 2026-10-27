@@ -8,7 +8,6 @@ import {
   type LibrarySource, type LinkableContent,
 } from '@/lib/linkedContent';
 import type { InstalledSource } from '@/lib/worldDependencies';
-import AuthService from '@/services/AuthService';
 import DictionaryStorageService from '@/services/DictionaryStorageService';
 import EntityStorageService from '@/services/EntityStorageService';
 import { withLibraryPick } from '@/lib/libraryVrm';
@@ -67,26 +66,18 @@ export function librarySourceLine(record: LibraryStamps): string {
   return record.sourceId ? 'Community Creations' : 'Your library';
 }
 
-/** The signed-in account's id, or undefined while nobody is signed in. */
-function currentUserId(): string | undefined {
-  return String(AuthService.getCurrentUser()?.id ?? '') || undefined;
-}
-
 /**
  * Who wrote a library item and where it came from, for a picker that holds only the item's metadata.
- *
- * `userId` is the account the ownership reads against. Pass it to keep the call pure; omit it and the
- * signed-in account answers.
  */
-export function libraryLines(record: LibraryStamps, userId: string | undefined = currentUserId()): LibraryLines {
+export function libraryLines(record: LibraryStamps): LibraryLines {
   return {
-    authorLine: libraryAuthorLine(record, libraryOwned(record, userId)),
+    authorLine: libraryAuthorLine(record, libraryOwned(record)),
     sourceLine: librarySourceLine(record),
   };
 }
 
 function summarize(kind: LibraryKind, record: LibraryStamps & { id: string; name: string }): LibraryItemSummary {
-  const owned = libraryOwned(record, currentUserId());
+  const owned = libraryOwned(record);
   return {
     kind,
     id: record.id,

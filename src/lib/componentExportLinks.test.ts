@@ -1,11 +1,9 @@
 // Must load before the storage singleton, whose first use opens IndexedDB.
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { associatedWorlds, exportedComponentLinks } from './componentExportLinks';
 import WorldStorageService from '@/services/WorldStorageService';
 import type { Entity } from '@/types';
-
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 
 /** Store one world holding `entities`, with the sections `storeWorld` insists on. */
 async function storeWorld(

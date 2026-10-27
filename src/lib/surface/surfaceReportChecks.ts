@@ -10,7 +10,6 @@ const NARRATION_LAYOUT = 'A display setting, not a place the player is in. The g
 export const UNREPORTED_SURFACES: Partial<Record<SurfaceId, string>> = {
   'gameViewerLayout.pages': NARRATION_LAYOUT,
   'gameViewerLayout.chat': NARRATION_LAYOUT,
-  likePrompt: 'A card inside the game screen. A report would put it on top as a dialog and hide the game screen tab while the card shows.',
 };
 
 /** A prop or call that names a surface: a quoted literal, or an expression in braces. */

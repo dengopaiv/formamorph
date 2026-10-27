@@ -1,45 +1,12 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ArrowDownWideNarrow, Check, ImageDown, Layers, ListFilter, Loader2 } from 'lucide-react';
 import { OPTIMIZE_IMAGES_TIP } from '@/components/editor/appBarCopy';
-import { HintInfo } from '@/components/SettingsRows';
-import { BAND_FILL, PUBLISH_SIZE_INFO } from '@/components/editor/IssuesInstrument';
 import { MENU_ROW } from '@/components/menuRow';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
-import { Meta } from '@/components/ui/typography';
 import { MEDIA_FILTERS, type MediaFilter, type MediaGrouping } from '@/lib/mediaIndex';
-import { formatPublishBytes, PUBLISH_LIMITS, publishSizeBand } from '@/lib/publishLimits';
 import { cn } from '@/lib/utils';
-
-/** The world's worker-measured publish size against the limit, thin enough for the header row. */
-export function MediaPublishMeter({ bytes }: { bytes: number | null }) {
-  const labelId = useId();
-  const limit = PUBLISH_LIMITS.world;
-  const { band, ratio } = publishSizeBand(bytes ?? 0, limit);
-  const readout = bytes === null ? 'Measuring…' : `${formatPublishBytes(bytes)} / ${formatPublishBytes(limit)}`;
-  return (
-    <div className="min-w-0 flex-1">
-      <div className="flex items-center gap-1">
-        <span id={labelId} className="truncate text-meta font-medium max-[480px]:sr-only">Publish Size</span>
-        <HintInfo>{PUBLISH_SIZE_INFO}</HintInfo>
-        <Meta className="ml-auto shrink-0 tabular-nums">{readout}</Meta>
-      </div>
-      <div
-        role="meter"
-        aria-labelledby={labelId}
-        aria-valuemin={0}
-        aria-valuemax={limit}
-        aria-valuenow={Math.min(bytes ?? 0, limit)}
-        aria-valuetext={readout}
-        data-band={bytes === null ? undefined : band}
-        className="mt-1 h-1 w-full overflow-hidden rounded-full bg-secondary"
-      >
-        {bytes !== null && <div className={cn('h-full rounded-full', BAND_FILL[band])} style={{ width: `${ratio * 100}%` }} />}
-      </div>
-    </div>
-  );
-}
 
 function IconToggle({ label, pressed, onClick, children }: { label: string; pressed: boolean; onClick: () => void; children: ReactNode }) {
   return (
@@ -126,9 +93,8 @@ function OptimizeButton({ progress, onRun }: OptimizeControl) {
   );
 }
 
-/** The Media tab's header row: the Publish Size meter, then grouping, Largest First, the filter and Optimize Images. */
-export function MediaHeader({ publishBytes, grouping, onGroupingChange, largestFirst, onLargestFirstChange, filter, onFilterChange, optimize }: {
-  publishBytes: number | null;
+/** The Media tab's header row: grouping, Largest First, the filter and Optimize Images. */
+export function MediaHeader({ grouping, onGroupingChange, largestFirst, onLargestFirstChange, filter, onFilterChange, optimize }: {
   grouping: MediaGrouping;
   onGroupingChange: (grouping: MediaGrouping) => void;
   largestFirst: boolean;
@@ -139,8 +105,7 @@ export function MediaHeader({ publishBytes, grouping, onGroupingChange, largestF
 }) {
   const byType = grouping === 'type';
   return (
-    <div className="flex flex-shrink-0 items-center gap-1" data-media-header>
-      <MediaPublishMeter bytes={publishBytes} />
+    <div className="flex flex-shrink-0 items-center justify-end gap-1" data-media-header>
       <IconToggle
         label="Group by Type"
         pressed={byType}

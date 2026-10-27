@@ -120,7 +120,6 @@ import { useWorldExport } from '@/lib/useWorldExport';
 import { parseJsonText, terminateWorker as terminateJsonWorker } from '@/lib/jsonFileWorkerUtils';
 import AddDictionaryModal from '@/components/modals/AddDictionaryModal';
 import AddEntityModal from '@/components/modals/AddEntityModal';
-import ReplaceSourceModal from '@/components/modals/ReplaceSourceModal';
 import { exportEntityCard } from '@/lib/entityFile';
 import { labelPlaceholders } from '@/lib/placementLetters';
 import { hasAuthoredOpenings, openingsEnabled, setOpeningsEnabled } from '@/lib/openings';
@@ -352,7 +351,6 @@ const WorldEditorInner = ({
     if (import.meta.env.DEV && devRoute?.tab) setActiveTab(devRoute.tab);
   }, [devRoute?.tab]);
   const devSubtab = devRoute?.subtab;
-  const [devReplaceDone, setDevReplaceDone] = useState(false);
   useEffect(() => {
     if (import.meta.env.DEV && LOCATION_VIEWS.some((v) => v.value === devSubtab)) {
       setLocationView(devSubtab as LocationView);
@@ -1047,7 +1045,6 @@ const WorldEditorInner = ({
   }, [navigateToBenchItem]);
   const mediaParts = useWorldMediaEditor({
     selectedId: selections.media ?? null, onSelect: selectMediaItem, search, onGoTo: goToMediaParent,
-    publishBytes: bench.publishBytes,
     optimize: { progress: optimizeProgress, onRun: () => { void optimizeImages(); } },
   });
   // The active tab's List Editor parts, on a tab that runs on it.
@@ -1594,27 +1591,6 @@ const WorldEditorInner = ({
         onOpenChange={(open) => { setShowAddEntity(open); if (!open) setResumePicker(false); }}
         onAdd={(picks) => linking.beginAdd(picks.map((pick) => ({ kind: 'entity', ...pick })))}
       />
-      {/* The Bench's Replace From Library repair. It lives here because the Bench is a hook and the picker
-          is a modal; the Bench only says which copy is being repaired. */}
-      {bench.replaceSource && (
-        <ReplaceSourceModal
-          open
-          onOpenChange={(open) => { if (!open) bench.onReplaceCancel(); }}
-          kind={bench.replaceSource.kind}
-          name={bench.replaceSource.name}
-          onReplace={bench.onReplacePicked}
-        />
-      )}
-      {/* DEV: the picker over a canned copy, since in the app it opens only from an Issues row. */}
-      {import.meta.env.DEV && devRoute?.modal === 'replaceSource' && !devReplaceDone && (
-        <ReplaceSourceModal
-          open
-          onOpenChange={(open) => { if (!open) setDevReplaceDone(true); }}
-          kind="entity"
-          name="Sedge"
-          onReplace={() => setDevReplaceDone(true)}
-        />
-      )}
       {import.meta.env.DEV && <DevEditorPrompts modal={devRoute?.modal} />}
       {linking.dialogs}
       <TutorialPopover

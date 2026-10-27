@@ -107,15 +107,13 @@ function LibraryEntriesEditor({ selectedId, onSelect, entryTab, onEntryTabChange
 /**
  * Edit a single library dictionary in place. Reuses the World Editor's dictionary widgets, but binds them
  * to an ISOLATED `DictionaryStore` (this one book) so editing never touches the app's world store. Open ⇔
- * `dictionaryId !== null`; saves back to `DictionaryStorageService`. `onPublish` (when the user is signed
- * in) hands the book up to the publish dialog.
+ * `dictionaryId !== null`; saves back to `DictionaryStorageService`.
  */
-const DictionaryEditorModal = ({ dictionaryId, draft, onClose, onPublish, initialTab = 'dictionary' }: {
+const DictionaryEditorModal = ({ dictionaryId, draft, onClose, initialTab = 'dictionary' }: {
   dictionaryId: string | null;
   draft?: Dictionary | null;
   initialTab?: DictionaryEditorTab;
   onClose: () => void;
-  onPublish?: (book: Dictionary, libraryDetails?: LibraryDetails) => void;
 }) => {
   const store = useDictionaryStoreState([]);
   const { dictionaries, setDictionaries } = store;
@@ -252,7 +250,6 @@ const DictionaryEditorModal = ({ dictionaryId, draft, onClose, onPublish, initia
         onSave={handleSave}
         onClose={onClose}
         onExport={handleExport}
-        onPublish={onPublish ? () => { if (dictionaries[0]) onPublish(dictionaries[0], libraryDetails); } : undefined}
       >
         <DictionaryStoreProvider value={store}>
           {tab === 'overview' ? (

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { clickFlask, openEditorTab, renderWorldEditorBench, shownEditorTab } from '@/test/worldEditorBench';
-import { PUBLISH_LIMITS } from '@/lib/publishLimits';
+import { openEditorTab, renderWorldEditorBench, shownEditorTab } from '@/test/worldEditorBench';
 import { fakeDataUrl, mediaFixtureWorld } from '@/test/mediaFixture';
 import { buildMediaIndex, formatMediaBytes, totalBytes } from '@/lib/mediaIndex';
 import { downloadBlob } from '@/lib/downloadBlob';
@@ -190,36 +189,17 @@ describe('Media tab Go to', () => {
 
 describe('Media tab header', () => {
   const header = () => document.querySelector<HTMLElement>('[data-media-header]')!;
-  const headerMeter = () => within(header()).getByRole('meter', { name: 'Publish Size' });
   const sectionNames = () => screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
   const pickFilter = (name: string) => {
     fireEvent.click(within(header()).getByRole('button', { name: /^Filter/ }));
     fireEvent.click(screen.getByRole('button', { name }));
   };
 
-  it('holds the meter and the icon controls in one row above the search', () => {
+  it('holds the icon controls in one row above the search', () => {
     openMedia('advanced');
 
-    expect(within(header()).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['More info', 'Group by Type', 'Largest First', 'Filter', 'Optimize Images']);
+    expect(within(header()).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Group by Type', 'Largest First', 'Filter', 'Optimize Images']);
     expect(header().compareDocumentPosition(screen.getByPlaceholderText('Search media')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it("reads the same figure and band as the World Doctor's bar for the same world", async () => {
-    const limit = PUBLISH_LIMITS.world;
-    // A lowered limit puts the fixture world in the red band.
-    PUBLISH_LIMITS.world = 20_000;
-    try {
-      openMedia('advanced');
-      await waitFor(() => expect(Number(headerMeter().getAttribute('aria-valuenow'))).toBeGreaterThan(0));
-      await clickFlask();
-      const doctor = (await screen.findAllByRole('meter', { name: 'Publish Size' })).find((m) => !header().contains(m))!;
-
-      expect(headerMeter().getAttribute('aria-valuetext')).toBe(doctor.getAttribute('aria-valuetext')!.replace(' of ', ' / '));
-      expect(headerMeter()).toHaveAttribute('data-band', 'red');
-      expect(doctor).toHaveAttribute('data-band', 'red');
-    } finally {
-      PUBLISH_LIMITS.world = limit;
-    }
   });
 
   it('groups by type with parent names on the cards, and back by parent', () => {
@@ -284,20 +264,5 @@ describe('Media tab header', () => {
     expect(screen.getByRole('button', { name: 'Largest First' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Filter' })).toBeInTheDocument();
     expect(JSON.stringify(bench.ctx().getWorldData())).toBe(before);
-  });
-
-  it('opens the Media tab from the over-limit finding', async () => {
-    const limit = PUBLISH_LIMITS.world;
-    PUBLISH_LIMITS.world = 2_000;
-    try {
-      renderWorldEditorBench(mediaFixtureWorld(), 'advanced');
-      await clickFlask();
-      expect(shownEditorTab()).not.toBe('Media');
-      fireEvent.click(await screen.findByRole('button', { name: 'Sedge Landing' }));
-
-      expect(shownEditorTab()).toBe('Media');
-    } finally {
-      PUBLISH_LIMITS.world = limit;
-    }
   });
 });

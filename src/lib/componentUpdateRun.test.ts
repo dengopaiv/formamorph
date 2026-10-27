@@ -6,8 +6,6 @@ import WorldStorageService from '@/services/WorldStorageService';
 import type { LibrarySource } from '@/lib/linkedContent';
 import type { ContentLink, Dictionary, Entity, Placeholder } from '@/types';
 
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
-
 const source: LibrarySource = { id: 'lib-1', name: 'Sedge', revision: 'r2', owned: true };
 
 const sourceData = (over: Partial<Entity> = {}): Entity => ({

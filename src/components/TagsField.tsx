@@ -29,7 +29,7 @@ export function TagsField({ values, onChange, label = 'Tags' }: {
         placeholder="Add tags..."
       />
       <p className="text-meta text-muted-foreground">
-        Shown on the listing in Community Creations, and what people filter by when browsing.
+        What the world is about, shown on its card in your library.
       </p>
     </div>
   );

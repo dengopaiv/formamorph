@@ -51,10 +51,6 @@ vi.mock('@/services/EntityStorageService', () => ({
   },
 }));
 
-vi.mock('@/services/AuthService', () => ({
-  default: { getCurrentUser: () => ({ id: 'me', username: 'Fen' }) },
-}));
-
 vi.mock('../services/WorldStorageService', () => ({
   default: {
     initialize: vi.fn(),

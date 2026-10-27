@@ -13,7 +13,6 @@ import { stepTab, targetRoute, type SurfaceSteps } from "@/lib/surface/surfaceRo
 import { targetAttribute } from "@/lib/surface/surfaceTargets";
 import { EXIT_TO_MENU_PROMPT } from "@/lib/leavePrompts";
 import { useGameplay } from "@/contexts/GameplayContext";
-import { useAccountDeletion } from "@/contexts/AccountDeletionContext";
 import { type SandboxMemory, type SandboxTurn, type StatClock, type WorldWrites } from "@/lib/statCodeExecutor";
 import { advancedClock, mergeWorldWrites } from "@/lib/worldWrites";
 import { addScriptPins, pruneScriptPins, withScriptPins } from "@/lib/scriptPins";
@@ -74,9 +73,6 @@ import { EntityModal } from "../components/modals/EntityModal";
 import { LocationModal } from "../components/modals/LocationModal";
 import { SettingsModal } from "../components/modals/SettingsModal";
 import { asSettingsTab, type SettingsTabId } from "../components/modals/settingsTabs";
-import { FeedbackDialog } from "@/components/menu/FeedbackDialog";
-import { COMMUNITY_ENABLED } from "@/lib/featureFlags";
-import AuthService from "@/services/AuthService";
 import { useDevRoute } from "../lib/devRouter";
 import { DEV_ATTACH_SAMPLE } from "../lib/devRoutes";
 import { loadDevFixture } from "../lib/devFixtures";
@@ -249,8 +245,6 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { AiSetupGate } from "../components/AiSetupGate";
 import { DemoAIBadge, DemoAINotice, type DemoAINoticeHandle } from "../components/game/DemoAINotice";
 import { useDemoAIDialogPending } from "../components/game/demoAISeen";
-import { LikePrompt } from "../components/game/LikePrompt";
-import { useLikePrompt } from "../components/game/useLikePrompt";
 import { useNarrationRescan } from "../components/game/useNarrationRescan";
 import { nextEntryDialog } from "@/lib/entryDialogOrder";
 import { useAiReachable } from "../lib/useAiReachable";
@@ -1074,19 +1068,6 @@ const GameViewer = ({
   const [isEntityModalOpen, setIsEntityModalOpen] = useState(false);
   const [ambientSound, setAmbientSound] = useState<MediaAsset | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  // Filing needs an account, so the in-game entry point is only offered to someone signed in.
-  const [showBugReport, setShowBugReport] = useState(false);
-  const canReportBug = COMMUNITY_ENABLED && Boolean(AuthService.token);
-
-  // Lend that composer to the account-deletion flow, which stands above this screen and tells a
-  // suspended account to ask the team here. The Privacy Policy prompt can raise the flow mid-game, so
-  // without this the step names Feedback on a screen with no way to reach it.
-  const { setFeedbackOpener } = useAccountDeletion();
-  useEffect(() => {
-    setFeedbackOpener(() => setShowBugReport(true));
-
-    return () => setFeedbackOpener(null);
-  }, [setFeedbackOpener]);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId | undefined>(undefined);
   const [settingsEndpointTab, setSettingsEndpointTab] = useState<string | undefined>(undefined);
   // Where a click on a highlighted run in the AI-context viewer sends Settings: the prompt that owns the
@@ -1544,9 +1525,6 @@ const GameViewer = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnCommitNonce]);
 
-  // Ask once, after enough turns, whether this downloaded world is worth a like. On the same committed
-  // turn as the autosave above, so a save restored past the threshold is asked on its next turn.
-  const likeAsk = useLikePrompt(worldId ? String(worldId) : null, turnCommitNonce, fullMessageHistory);
   const [pendingTurnNonce, setPendingTurnNonce] = useState(0);
 
   /** Re-generate the turn on `page`, which Chat passes as the latest page. */
@@ -5057,21 +5035,6 @@ const GameViewer = ({
     );
   })();
 
-  // DEV dev-router: `#dev?modal=likePrompt` asks about a canned listing, because a dev world has no
-  // listing and the card's answer comes from the server. Tree-shaken in prod.
-  const devLikePrompt = import.meta.env.DEV && devRoute?.modal === 'likePrompt';
-  const likePromptCard = (
-    <LikePrompt
-      listingId={devLikePrompt ? 'dev-listing' : likeAsk.listingId}
-      worldName={worldOverview.name}
-      onClosed={likeAsk.closed}
-      readListing={devLikePrompt
-        ? async () => ({ status: 'ok' as const, liked: false, ownListing: false, anonymousLikes: true })
-        : undefined}
-      className="w-full max-w-xl"
-    />
-  );
-
   // AI location-change suggestion (rendered at the bottom of the center panel, above pagination).
   const locationSuggestion = suggestedLocation ? (
     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-30 flex items-center justify-center gap-2 whitespace-nowrap rounded-md border bg-background px-3 py-2 text-label shadow-lg">
@@ -5167,7 +5130,6 @@ const GameViewer = ({
       ttsProgress={ttsProgress}
       memoryBar={memoryBar}
       progressBar={progressBar}
-      likePrompt={likePromptCard}
       locationSuggestion={locationSuggestion}
       commandPreview={commandPreview}
       commandChoices={commandChoices}
@@ -5234,7 +5196,6 @@ const GameViewer = ({
   const menuModal = (extra?: { onEditWorld?: () => void; onShowAiContext?: () => void }) => (
     <MenuModal
       onSettingsClick={() => setIsSettingsOpen(true)}
-      onReportBug={canReportBug ? () => setShowBugReport(true) : undefined}
       onSave={handleMenuSave}
       onLoad={handleMenuLoad}
       worldOverview={worldOverview}
@@ -6038,7 +5999,6 @@ const GameViewer = ({
         </Suspense>
       )}
 
-      <FeedbackDialog open={showBugReport} onOpenChange={setShowBugReport} />
 
       <SettingsModal
         isOpen={isSettingsOpen}

@@ -6,7 +6,6 @@ import WorldStorageService from '@/services/WorldStorageService';
 import EntityStorageService from '@/services/EntityStorageService';
 import DictionaryStorageService from '@/services/DictionaryStorageService';
 import { DEFAULT_WORLDS, tombstoneDefaultWorld } from '@/lib/defaultWorlds';
-import { acceptAgeGate } from '@/lib/ageGate';
 import type { StoredWorldRecord } from '@/services/WorldStorageService';
 import { encodePlaceholderToken } from '@/lib/placeholders';
 import { toast } from 'react-toastify';
@@ -69,7 +68,6 @@ const world = (avatar = false): StoredWorldRecord => ({
 beforeEach(async () => {
   localStorage.clear();
   DEFAULT_WORLDS.forEach(({ id }) => tombstoneDefaultWorld(id));
-  acceptAgeGate();
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })));

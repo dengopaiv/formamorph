@@ -24,13 +24,11 @@ import { MediaImagePanel } from './MediaImagePanel';
  * filter. A search matches a card's parent and slot names. It builds the parts itself rather
  * than through `useListEditor`, whose rows and search list don't fit a card grid.
  */
-export function useWorldMediaEditor({ selectedId, onSelect, search, onGoTo, publishBytes, optimize }: {
+export function useWorldMediaEditor({ selectedId, onSelect, search, onGoTo, optimize }: {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   search: ListSearch;
   onGoTo: (parent: MediaParent) => void;
-  /** The worker-measured Publish Size, or null until the first measure lands. */
-  publishBytes: number | null;
   /** The Optimize Images run: its progress, and the click that starts it. */
   optimize: OptimizeControl;
 }): ListEditorParts {
@@ -155,7 +153,6 @@ export function useWorldMediaEditor({ selectedId, onSelect, search, onGoTo, publ
     toolbar: (className, extras) => (
       <div className={cn('flex flex-shrink-0 flex-col gap-2', className)}>
         <MediaHeader
-          publishBytes={publishBytes}
           grouping={grouping}
           onGroupingChange={setGrouping}
           largestFirst={largestFirst}

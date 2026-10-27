@@ -50,7 +50,7 @@ describe('HELP_TOPICS registry', () => {
     expect(topic?.title).toBe('Linked Content');
     expect(topic?.wikiPage).toBe('LinkedContent');
     expect(helpWikiUrl(topic!)).toBe('https://github.com/JakeJamesDev/formamorph/wiki/LinkedContent#-linked-content');
-    expect(topic?.tabs?.map((t) => t.label)).toEqual(['Linked Copies', 'Updates', 'Publishing', 'Downloading', 'Repairs']);
+    expect(topic?.tabs?.map((t) => t.label)).toEqual(['Linked Copies', 'Updates', 'Importing', 'Removing']);
   });
 
   it('holds no topic for a World Editor tab, since the editor has no tab-level ?', () => {

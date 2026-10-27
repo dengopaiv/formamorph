@@ -53,13 +53,6 @@ const FIELD = '[data-find-field="AI-Facing Description"]';
 
 /** Open one entity's AI-facing description on the Values tab and return its editor root. */
 async function openValues(page: Page, entity: string): Promise<Locator> {
-  // A live event's poster is modal over the menu and swallows the clicks below. `openApp` answers the
-  // active-events call; this answers the API's other events calls too, whichever host it is on. Matched on
-  // the path rather than by glob, so the dev server's own `/src/components/events/…` modules still load.
-  await page.route(
-    (url) => url.pathname.includes('/events/') && !url.pathname.startsWith('/src/'),
-    (route) => route.fulfill({ json: [] }),
-  );
   await openApp(page);
   // The bundled worlds seed after the menu mounts and re-render it, which closes an editor opened mid-seed.
   // The seeding toast is transient, so the settled world list is what a run can wait on.

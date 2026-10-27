@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Hint } from '@/components/ui/typography';
@@ -42,24 +42,15 @@ function ChipField({ copy, values, onChange, suggestions, placeholder, onOpen }:
  * A user preset's Overview: who wrote it, what it is for, and the models it fits. The store normalizes the
  * tag and model lists; this panel only writes the raw edit through.
  */
-export function PresetOverviewPanel({ overview, onChange, tagSuggestions = NO_SUGGESTIONS, modelSuggestions = NO_SUGGESTIONS, onModelsOpen, focusModels = 0 }: {
+export function PresetOverviewPanel({ overview, onChange, tagSuggestions = NO_SUGGESTIONS, modelSuggestions = NO_SUGGESTIONS, onModelsOpen }: {
   overview: PresetOverview;
   onChange: (patch: Partial<PresetOverview>) => void;
   tagSuggestions?: string[];
   modelSuggestions?: string[];
   /** Runs when the Models field opens, so its suggestions load on demand. */
   onModelsOpen?: () => void;
-  /** Each new non-zero value focuses the Models field. */
-  focusModels?: number;
 }) {
   const plainVocab = useMemo(() => plainVocabulary(), []);
-  const modelsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!focusModels) return;
-    const input = modelsRef.current?.querySelector('input');
-    input?.focus();
-    input?.scrollIntoView({ block: 'nearest' });
-  }, [focusModels]);
   const { presetAuthor, presetDescription, presetTags, presetModels } = SETTINGS_COPY;
 
   return (
@@ -85,9 +76,7 @@ export function PresetOverviewPanel({ overview, onChange, tagSuggestions = NO_SU
         resizable
       />
       <ChipField copy={presetTags} values={overview.tags} onChange={(tags) => onChange({ tags })} suggestions={tagSuggestions} placeholder="Add tags" />
-      <div ref={modelsRef}>
-        <ChipField copy={presetModels} values={overview.models} onChange={(models) => onChange({ models })} suggestions={modelSuggestions} placeholder="Add models" onOpen={onModelsOpen} />
-      </div>
+      <ChipField copy={presetModels} values={overview.models} onChange={(models) => onChange({ models })} suggestions={modelSuggestions} placeholder="Add models" onOpen={onModelsOpen} />
     </div>
   );
 }

@@ -99,18 +99,6 @@ export const TUTORIALS: readonly TutorialEntry[] = [
     title: "Hide What You're Done With",
     body: "Hide individual items, whole tags, or authors you'd rather not see. Undo it all from the same panel.",
   },
-  {
-    id: 'main-menu-sign-in',
-    screen: 'mainMenu',
-    title: 'Sign In',
-    body: 'Create a free account to like and comment on community creations — and publish your own!',
-  },
-  {
-    id: 'main-menu-feedback',
-    screen: 'mainMenu',
-    title: 'Bugs & Suggestions',
-    body: 'Report a bug or send a suggestion straight to the developers. Replies land in your profile, and suggestions are public so everyone can read and vote on them.',
-  },
 ];
 
 const STORAGE_KEY = 'formamorph.tutorialsSeen';

@@ -507,7 +507,6 @@ export const MiddlePanel = ({
   ttsProgress,
   memoryBar,
   progressBar,
-  likePrompt,
   locationSuggestion,
   commandPreview,
   commandChoices = null,
@@ -560,8 +559,6 @@ export const MiddlePanel = ({
   ttsProgress: TTSProgress | null;
   memoryBar: React.ReactNode;
   progressBar: React.ReactNode;
-  /** The once-only in-game like prompt, above the pager and in the flow so it covers no narration. */
-  likePrompt?: React.ReactNode;
   locationSuggestion: React.ReactNode;
   commandPreview: boolean;
   /** The preview's choices, or null when it shows narration only. */
@@ -1123,7 +1120,6 @@ export const MiddlePanel = ({
           <div className="relative flex flex-col gap-2">
           {progressBar && <RequestStatusStrip>{progressBar}</RequestStatusStrip>}
           <div className="flex flex-col items-center gap-2">
-            {likePrompt}
             {locationSuggestion}
             {/* Chat has no Pager: the scroll is the one way through the turns. */}
             {!chatLayout && (

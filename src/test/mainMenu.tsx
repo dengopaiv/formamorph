@@ -9,12 +9,6 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { GameDataProvider } from '@/contexts/GameDataContext';
 import { PlaceholderSessionProvider } from '@/contexts/PlaceholderSessionContext';
-import { UserProfileProvider } from '@/contexts/UserProfileContext';
-import { AgeGateProvider } from '@/contexts/AgeGateContext';
-import { PrivacyPolicyProvider } from '@/contexts/PrivacyPolicyContext';
-import { AccountDeletionProvider } from '@/contexts/AccountDeletionContext';
-import { SignInHost } from '@/components/SignInHost';
-import { COMMUNITY_ENABLED } from '@/lib/featureFlags';
 import MainMenu from '@/views/MainMenu';
 
 /**
@@ -36,27 +30,18 @@ export function renderMainMenu(
         <SettingsProvider>
           <GameDataProvider>
             <PlaceholderSessionProvider>
-              <UserProfileProvider>
-                <AgeGateProvider>
-                  <AccountDeletionProvider>
-                  <PrivacyPolicyProvider>
-                  {COMMUNITY_ENABLED && <SignInHost />}
-                  {children}
-                  <SurfaceReporterContext.Provider value={registry}>
-                    <SurfaceLayer id="mainMenu">
-                      <MainMenu
-                        onStartGame={() => {}}
-                        onLoadSaveGame={() => {}}
-                        onReplayIntro={() => {}}
-                        introActive={false}
-                        {...props}
-                      />
-                    </SurfaceLayer>
-                  </SurfaceReporterContext.Provider>
-                  </PrivacyPolicyProvider>
-                  </AccountDeletionProvider>
-                </AgeGateProvider>
-              </UserProfileProvider>
+              {children}
+              <SurfaceReporterContext.Provider value={registry}>
+                <SurfaceLayer id="mainMenu">
+                  <MainMenu
+                    onStartGame={() => {}}
+                    onLoadSaveGame={() => {}}
+                    onReplayIntro={() => {}}
+                    introActive={false}
+                    {...props}
+                  />
+                </SurfaceLayer>
+              </SurfaceReporterContext.Provider>
             </PlaceholderSessionProvider>
           </GameDataProvider>
         </SettingsProvider>

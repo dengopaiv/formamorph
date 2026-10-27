@@ -8,7 +8,7 @@ import { MarkdownRenderer } from "@/components/game/MarkdownRenderer";
 import { Tip } from "@/components/ui/tooltip";
 
 /** Loose shape for server/catalog world payloads, whose fields vary by endpoint and save version.
- *  Shared by the main menu and the Community Creations browser; the one sanctioned dynamic-JSON bag. */
+ *  The main menu's; the one sanctioned dynamic-JSON bag. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional dynamic-JSON bag (pending a precise interface)
 export type WorldRecord = Record<string, any>;
 

@@ -1,7 +1,16 @@
 import { APP_VERSION } from '@/lib/version';
-import type { BugDiagnostics } from '@/types';
 
-/** Labels for the diagnostics panel, so the reporter reads what is being sent rather than raw keys. */
+/** What the client reports about itself in an error's details. */
+export interface BugDiagnostics {
+  /** `APP_VERSION` at the time of the error. */
+  version?: string;
+  /** `desktop` for the Electron shell, `browser` otherwise. */
+  platform?: string;
+  /** OS and browser as the user agent reports them. */
+  system?: string;
+}
+
+/** Labels for the diagnostics, so the details read as words rather than raw keys. */
 export const DIAGNOSTIC_LABELS: Record<keyof BugDiagnostics, string> = {
   version: 'Version',
   platform: 'Platform',

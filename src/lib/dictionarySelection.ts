@@ -1,5 +1,5 @@
 import { libraryLines } from '@/lib/librarySources';
-import { followedLibraryId } from '@/lib/publishLinks';
+import { followedLibraryId } from '@/lib/linkedContent';
 import { randomUUID } from "@/lib/uuid";
 import type { Dictionary, DictionaryMetadata } from '@/types';
 
@@ -55,14 +55,10 @@ function followedLibraryIds(worldBooks: Dictionary[], libraryMeta: DictionaryMet
  * A library book the world already holds a copy of gets no row of its own. Enabling both would put the
  * same entries in the run twice, so the world's copy stands for it and carries the `linked` mark. A copy
  * the player has edited is still that one copy, so it hides the library row the same way.
- *
- * `userId` decides whether a library book reads as the player's own; omit it and the signed-in account
- * answers.
  */
 export function buildInitialSelection(
   worldBooks: Dictionary[],
   libraryMeta: DictionaryMetadata[],
-  userId?: string,
 ): DictionarySelectionItem[] {
   const followed = followedLibraryIds(worldBooks, libraryMeta);
   const world: DictionarySelectionItem[] = worldBooks.map((book) => ({
@@ -88,7 +84,7 @@ export function buildInitialSelection(
       source: 'library',
       enabled: false,
       entryCount: meta.entryCount ?? 0,
-      ...libraryLines(meta, userId),
+      ...libraryLines(meta),
     }));
   return [...world, ...library];
 }

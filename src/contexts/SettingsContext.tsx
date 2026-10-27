@@ -55,10 +55,10 @@ import {
   setActive as setActivePreset, addPreset as addPresetOp, renamePreset as renamePresetOp, deletePreset as deletePresetOp, resetPreset as resetPresetOp, updateValue,
   activeSamplers, activeReasoning, activeReasoningBudget, activeMaxOutput, activeAttachments, activeVerbatim, activePromptEndpoints, activeDescTokens,
   updateSamplers, updateReasoning, updateReasoningBudget, updateMaxOutput, updateAttachments, updateVerbatim, updatePromptEndpoints, updateDescTokens, foldTuningIntoUserPresets,
-  addFullPreset, replacePreset, putDownloadedPreset, EMPTY_OVERVIEW, activeOverview, storedOverview, updateOverview, markEdited, linkPreset,
+  addFullPreset, replacePreset, activeOverview, storedOverview, updateOverview, markEdited, linkPreset,
   userToolsCodec, saveUserTool, deleteUserTool, activeEnabledTools, setToolEnabled as setToolEnabledOp, dropToolEverywhere,
   builtinToolSwitchesCodec, activeBuiltinId, setBuiltinToolEnabled, dropToolFromBuiltins, type BuiltinToolSwitches,
-  type PromptPresetStore, type PresetDownloadLink, type PresetOverview, type PromptValues, type VerbatimMap, type PromptPreset, type ReasoningMap, type DescPromptKind,
+  type PromptPresetStore, type PresetOverview, type PromptValues, type VerbatimMap, type PromptPreset, type ReasoningMap, type DescPromptKind,
 } from '../lib/promptPresets';
 import { buildSharedPreset, type SharedPreset, type ImportedPreset } from '../lib/promptPresetShare';
 import { clampMaxOutput, isMaxOutputKind, shippedMaxOutput } from '../lib/promptMaxOutput';
@@ -1205,28 +1205,6 @@ function useProvideSettings() {
     setPresetStore((s) => addFullPreset(s, id, content));
     return id;
   };
-  /**
-   * Store a community listing's preset under `id`, adding it or replacing the held copy in place so world and
-   * folder pins keep resolving. Tuning always comes along, missing prompt keys take the defaults, and a blank
-   * Author credits the uploader. The selection is left alone. Embedded Tools merge as on a file import.
-   */
-  const storeDownloadedPreset = useCallback(
-    (id: string, imported: ImportedPreset, link: PresetDownloadLink, name: string): { scriptToolAdded: boolean } => {
-      const overview = imported.overview ?? EMPTY_OVERVIEW;
-      const uploader = link.sourceAuthorName?.trim() ?? '';
-      const author = overview.author.trim() ? overview.author : uploader;
-      const { preset, scriptToolAdded } = mergeImportedTools(imported);
-      const content: Omit<PromptPreset, 'id'> = {
-        ...importedPresetContent(preset, name, true),
-        ...(imported.overview || author ? { overview: { ...overview, author } } : {}),
-        ...link,
-      };
-      // Raw, not pin-aware: the store op never touches the selection, and a download is not an edit.
-      setRawPresetStore((s) => putDownloadedPreset(s, id, content));
-      return { scriptToolAdded };
-    },
-    [mergeImportedTools, setRawPresetStore],
-  );
   // Whether each optional per-turn request is sent (replaces the legacy "type DISABLED" body hack).
   const [choicesEnabled, setChoicesEnabled] = usePersistentState<boolean>(`${APP_ID}_choicesEnabled`, true, boolCodec);
   // The hard-coded "continue" pseudo-choice offered under the generated ones (no AI request of its own).
@@ -2053,7 +2031,6 @@ function useProvideSettings() {
     exportActivePreset,
     linkPresetToListing,
     importPreset,
-    storeDownloadedPreset,
     /** Every user preset with its community link, for the browser to find a listing's copy. */
     userPromptPresets: presetStore.presets,
     imageGenDisabled,

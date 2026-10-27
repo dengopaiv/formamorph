@@ -1,14 +1,12 @@
 // Must load before the storage singletons, whose first use opens IndexedDB.
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { saveDownloadToLibrary, libraryLines } from './librarySources';
 import { buildEntityCardData } from './entityFile';
 import { buildDictionaryFile } from './dictionaryFile';
 import DictionaryStorageService from '@/services/DictionaryStorageService';
 import EntityStorageService from '@/services/EntityStorageService';
 import type { Dictionary, Entity } from '@/types';
-
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 
 const entity = (name: string): Entity => ({ id: 'from-the-publisher', name } as Entity);
 const book = (name: string): Dictionary => ({ id: 'from-the-publisher', name, entries: [] } as unknown as Dictionary);

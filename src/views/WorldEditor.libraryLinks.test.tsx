@@ -75,12 +75,6 @@ vi.mock('@/services/EntityStorageService', () => ({
   },
 }));
 
-const signedInAs = vi.hoisted(() => ({ id: 'me' as string | null }));
-
-vi.mock('@/services/AuthService', () => ({
-  default: { getCurrentUser: () => (signedInAs.id ? { id: signedInAs.id, username: 'Fen' } : null) },
-}));
-
 vi.mock('../services/WorldStorageService', () => ({
   default: {
     initialize: vi.fn(),
@@ -128,7 +122,6 @@ beforeEach(() => {
   library.entities.clear();
   library.unreadable = false;
   library.storeFails = false;
-  signedInAs.id = 'me';
   toast.info.mockClear();
   toast.error.mockClear();
 });

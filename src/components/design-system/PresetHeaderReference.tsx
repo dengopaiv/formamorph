@@ -87,7 +87,6 @@ export function PresetHeaderReference() {
     rename: ran('Rename'),
     import: ran('Import'),
     export: ran('Export'),
-    publish: ran('Publish'),
     reset: confirmed('Reset', 'Reset every prompt in the "Mine" preset to its default value? This can\'t be undone.'),
     delete: confirmed('Delete', 'Delete the "Mine" preset? This can\'t be undone.'),
   };

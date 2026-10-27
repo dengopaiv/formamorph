@@ -74,8 +74,6 @@ for (const width of WIDTHS) {
   test.describe(`library editors at ${width}px`, () => {
     test.beforeEach(async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
-      // An ended event's poster opens over the Main Menu and covers the editor.
-      await page.route(/\/events(\?|$)/, (route) => route.fulfill({ json: { data: [] } }));
       await openApp(page);
     });
 

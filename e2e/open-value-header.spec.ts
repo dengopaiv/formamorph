@@ -62,11 +62,6 @@ const FIELD = '[data-find-field="AI-Facing Description"]';
 
 /** Open one entity's AI-facing description on the Values tab and return its editor root. */
 async function openValues(page: Page, entity: string, theme: 'light' | 'dark' = 'light'): Promise<Locator> {
-  // A live event's poster is modal over the menu and swallows the clicks below.
-  await page.route(
-    (url) => url.pathname.includes('/events/') && !url.pathname.startsWith('/src/'),
-    (route) => route.fulfill({ json: [] }),
-  );
   await openApp(page, { FORMAMORPH_theme: theme });
   await page.evaluate((t) => { document.documentElement.classList.toggle('dark', t === 'dark'); }, theme);
   await expect.poll(() => page.evaluate(async () => {

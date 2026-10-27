@@ -36,20 +36,11 @@ describe('libraryRevision', () => {
 
 describe('libraryOwned', () => {
   it('owns an item that was never downloaded', () => {
-    expect(libraryOwned({}, 'user-1')).toBe(true);
+    expect(libraryOwned({})).toBe(true);
   });
 
-  it('owns a downloaded item the signed-in account published', () => {
-    expect(libraryOwned({ sourceId: 'listing-1', sourceAuthorId: 'user-1' }, 'user-1')).toBe(true);
-  });
-
-  it('does not own the published item of another account', () => {
-    expect(libraryOwned({ sourceId: 'listing-1', sourceAuthorId: 'user-2' }, 'user-1')).toBe(false);
-  });
-
-  it('does not own a downloaded item while nobody is signed in', () => {
-    // Signed out, the account that published it cannot be matched, so its saves must not push anywhere.
-    expect(libraryOwned({ sourceId: 'listing-1', sourceAuthorId: 'user-2' }, undefined)).toBe(false);
+  it('does not own a downloaded item', () => {
+    expect(libraryOwned({ sourceId: 'listing-1' })).toBe(false);
   });
 });
 

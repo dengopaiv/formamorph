@@ -1,5 +1,4 @@
 @import './styles/community.css';
-@import './styles/supporter-heart.css';
 
 @tailwind base;
 @tailwind components;
@@ -54,16 +53,6 @@
     --warning-foreground: 38 92% 12%;
     --info: 217 84% 56%;
     --info-foreground: 210 40% 98%;
-    /* Contest podium metals. Set once and never per theme, for the reason --like is: gold, silver and
-       bronze are the medal colors everywhere medals exist, and a Rose or Bubble Gum theme rotating them
-       would leave the three places indistinguishable by the one thing that tells them apart. Darkened
-       here against light backgrounds; the .dark block lifts all three for dark ones. */
-    --gold: 42 88% 30%;
-    --silver: 215 14% 40%;
-    --bronze: 22 62% 36%;
-    /* Supporter Flair tier colors: one pair per mode, never per palette. supporterTokens.test.ts checks contrast. */
-    --supporter: 318 75% 30%;
-    --supporter-plus: 268 70% 32%;
     /* Theme-independent dark scrim for overlays on imagery + modal backdrops (light text must stay readable). */
     --overlay: 0 0% 0%;
     --border: 214.3 31.8% 91.4%;
@@ -104,11 +93,6 @@
     --warning-foreground: 38 92% 12%;
     --info: 217 84% 60%;
     --info-foreground: 210 40% 98%;
-    --gold: 45 92% 60%;
-    --silver: 214 16% 76%;
-    --bronze: 25 72% 58%;
-    --supporter: 318 75% 85%;
-    --supporter-plus: 268 85% 87%;
     --overlay: 0 0% 0%;
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;

@@ -243,7 +243,6 @@ function FolderHeader({ name, settings, onBack, onRename }: {
  * @param placeholderOf - The art for an item with no thumbnail, in folders and under a carried tile
  * @param groupSettings - Settings shown in the folder header; omit on tabs that carry none
  * @param onCheckUpdates - Checks one item for source updates, offered on the tabs worlds can follow
- * @param onPublish - Publishes one item, offered in the context menu on the tabs that can publish
  * @param onDelete - Deletes one item, offered as the context menu's last entry
  * @param canDelete - False while an item can't be deleted yet; its Delete shows disabled
  * @param itemActions - The tab's own context menu items for one item, drawn above Delete
@@ -267,7 +266,6 @@ export function LibraryTileGrid<T>({
   groupPresetName,
   emptyState,
   onCheckUpdates,
-  onPublish,
   onDelete,
   canDelete,
   itemActions,
@@ -294,7 +292,6 @@ export function LibraryTileGrid<T>({
   groupPresetName?: (groupId: string) => string | undefined;
   emptyState?: React.ReactNode;
   onCheckUpdates?: (id: string) => void;
-  onPublish?: (id: string) => void;
   onDelete?: (id: string) => void;
   canDelete?: (id: string) => boolean;
   itemActions?: (id: string) => React.ReactNode;
@@ -872,7 +869,6 @@ export function LibraryTileGrid<T>({
         arrange={!locked}
         onOpenGroup={flyIntoGroup}
         onCheckUpdates={onCheckUpdates}
-        onPublish={onPublish}
         onDelete={onDelete}
         canDelete={canDelete}
         itemActions={itemActions}

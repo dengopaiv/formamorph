@@ -29,9 +29,8 @@ import {
 } from '@/lib/placeholderHomes';
 import { releasePlaceholderOwners, removePlaceholderCascade } from '@/lib/placeholderTree';
 import { chipBearingTexts } from '@/lib/testBench/rules';
-import { markEditedFrom, stampLinks, type LinkStamp } from '@/lib/linkedContent';
+import { followedLibraryId, markEditedFrom, stampLinks, type LinkStamp } from '@/lib/linkedContent';
 import { planOwnedWriteBack } from '@/lib/libraryWriteBack';
-import { followedLibraryId } from '@/lib/publishLinks';
 import { useDictionaryStoreState, DictionaryStoreProvider } from '@/contexts/DictionaryStoreContext';
 import { PlaceholderStoreProvider } from '@/contexts/PlaceholderStoreContext';
 import { PlacementLettersProvider, useStablePlacementLetters } from '@/contexts/PlacementLettersContext';

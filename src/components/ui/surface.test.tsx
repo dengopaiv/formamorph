@@ -25,16 +25,16 @@ describe('SurfaceLayer', () => {
     function Nested({ inner }: { inner: boolean }) {
       return (
         <SurfaceLayer id="mainMenu">
-          <SurfaceLayer id="community">
-            {inner && <SurfaceLayer id="profile" />}
+          <SurfaceLayer id="worldEditor">
+            {inner && <SurfaceLayer id="replaceAll" />}
           </SurfaceLayer>
         </SurfaceLayer>
       );
     }
     const view = render(<Nested inner />);
-    expect(surfaceRegistry.get()).toMatchObject({ screen: 'mainMenu', dialog: 'profile' });
+    expect(surfaceRegistry.get()).toMatchObject({ screen: 'mainMenu', dialog: 'replaceAll' });
     view.rerender(<Nested inner={false} />);
-    expect(surfaceRegistry.get()).toMatchObject({ screen: 'mainMenu', dialog: 'community' });
+    expect(surfaceRegistry.get()).toMatchObject({ screen: 'mainMenu', dialog: 'worldEditor' });
   });
 
   it('puts the dialog that opens later on top, wherever it is in the tree', () => {
@@ -174,8 +174,8 @@ describe('the names a report accepts', () => {
 
 describe('SurfaceTab', () => {
   it('reports a tab from inside its dialog', () => {
-    render(<SurfaceLayer id="publish"><SurfaceTab ledger="publish" tab="prompt" /></SurfaceLayer>);
-    expect(surfaceRegistry.get()).toEqual({ screen: null, dialog: 'publish', tabs: ['publish.prompt'] });
+    render(<SurfaceLayer id="settings"><SurfaceTab ledger="settings" tab="prompts" /></SurfaceLayer>);
+    expect(surfaceRegistry.get()).toEqual({ screen: null, dialog: 'settings', tabs: ['settings.prompts'] });
   });
 });
 
@@ -191,14 +191,14 @@ describe('useSurface', () => {
         <SurfaceLayer id="mainMenu">
           <Reader />
           <button onClick={() => setOpen((was) => !was)}>Toggle</button>
-          {open && <SurfaceLayer id="feedbackHub" />}
+          {open && <SurfaceLayer id="changelog" />}
         </SurfaceLayer>
       );
     }
     render(<App />);
     expect(screen.getByRole('status')).toHaveTextContent('mainMenu');
     act(() => screen.getByRole('button').click());
-    expect(screen.getByRole('status')).toHaveTextContent('feedbackHub');
+    expect(screen.getByRole('status')).toHaveTextContent('changelog');
     act(() => screen.getByRole('button').click());
     expect(screen.getByRole('status')).toHaveTextContent('mainMenu');
   });

@@ -3,7 +3,7 @@ import { ActionIcon } from '@/lib/actionIcons';
 
 /** One action in a preset header. The desktop row and the narrow overflow menu render the same list. */
 export interface PresetHeaderAction {
-  key: 'duplicate' | 'rename' | 'import' | 'export' | 'publish' | 'fullscreen' | 'reset' | 'delete';
+  key: 'duplicate' | 'rename' | 'import' | 'export' | 'fullscreen' | 'reset' | 'delete';
   /** The accessible name and the menu text. */
   label: string;
   /** The tooltip, when it says more than the label. */
@@ -29,7 +29,6 @@ export interface PresetHeaderHandlers {
   rename?: () => void;
   import?: () => void;
   export?: () => void;
-  publish?: () => void;
   /** The panel's way into full screen. Dropped while `active`: the window's corner button is the way out. */
   fullscreen?: { active: boolean; toggle: () => void };
   /** A plain handler resets with no confirm, for a surface whose Undo or Cancel reverts it. */
@@ -45,7 +44,6 @@ const ACTION_DEFS: ActionDef[] = [
   { key: 'rename', label: 'Rename', icon: Pencil, section: 'file' },
   { key: 'import', label: 'Import', icon: ActionIcon.import, section: 'file' },
   { key: 'export', label: 'Export', icon: ActionIcon.export, section: 'file' },
-  { key: 'publish', label: 'Publish', icon: ActionIcon.publish, section: 'file' },
   { key: 'fullscreen', label: 'View full screen', icon: Maximize2, section: 'file' },
   { key: 'reset', label: 'Reset', icon: RotateCcw, section: 'destructive', confirmTitle: 'Reset Preset' },
   { key: 'delete', label: 'Delete', icon: Trash2, section: 'destructive', confirmTitle: 'Delete Preset' },

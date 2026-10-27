@@ -11,10 +11,9 @@
  */
 
 import { linkText as text } from '@/lib/contentLink';
-import { contentMatchesSource, linkToSource, type LibrarySource, type LinkableContent } from '@/lib/linkedContent';
+import { contentMatchesSource, linkToSource, type LibrarySource, type LinkableContent, type LinkedWorldContent } from '@/lib/linkedContent';
 import type { LibraryKind } from '@/lib/librarySources';
 import { traitWorldOf } from '@/lib/portableTraits';
-import type { LinkedWorldContent } from '@/lib/publishLinks';
 import type { ContentLink, Dictionary, Entity } from '@/types';
 
 /** One local library item, as the resolution reads it. `data` is needed only to tell whether the file's

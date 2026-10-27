@@ -2,8 +2,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { DEV_MODAL_TABS, DEV_MODALS } from './devRoutes';
 import { seedDevRouteFromEnv } from './devRouter';
-import { DEV_PUBLISH_SAMPLES } from './devPublishSample';
-import { BROWSE_TABS } from './browseTabs';
 import { DEV_FIXTURES, PICKED_OPENING_TEXT, WORLD_OPENING_TEXT, WRITTEN_OPENING_TEXT, loadDevFixture } from './devFixtures';
 import { SETTINGS_ENDPOINT_TABS, SETTINGS_TABS } from '@/components/modals/settingsTabs';
 import { TOOL_EDIT_TABS } from '@/components/modals/toolsView';
@@ -23,14 +21,7 @@ import { DICTIONARY_EDITOR_TABS } from '@/views/dictionaryEditorTabs';
 import { MAIN_MENU_CARD_TABS } from '@/views/mainMenuTabs';
 import { GAME_LEFT_PANEL_TABS } from '@/components/game/leftPanelTabs';
 import { NARRATION_LAYOUTS } from '@/contexts/settingsDefaults';
-import { PROFILE_TABS } from '@/components/menu/profileTabs';
-import { ADMIN_PANEL_TABS } from '@/components/menu/adminPanelTabs';
-import { POLICIES_TABS } from '@/components/menu/policiesTabs';
-import { FEEDBACK_TABS } from '@/components/menu/feedbackTabs';
-import { MY_FEEDBACK_TABS } from '@/components/menu/myFeedbackTabs';
-import { EVENT_ACK_PHASES } from '@/components/events/eventAckPhases';
 import { SCRIPT_PROMPT_SAMPLE_KEYS } from './devScriptPromptSamples';
-import { EVENTS_TAB_ROLE_VIEWS } from '@/lib/adminEvents';
 import { isSaveEnvelope } from './version';
 import whiteRoomWorld from './devFixtures/whiteRoomWorld.json';
 import whiteRoomSave from './devFixtures/whiteRoomSave.json';
@@ -216,16 +207,6 @@ describe('dev-router coverage guard', () => {
     expect(LOCATION_PANEL_TABS.map((t) => t.value).filter((v) => views.has(v))).toEqual([]);
   });
 
-  it('ledger lists exactly the tabs the Community browser switches between', () => {
-    // The browser renders one tab per catalog kind plus Contest, so a new one must be consciously
-    // covered here too.
-    expect([...DEV_MODAL_TABS.community]).toEqual([...BROWSE_TABS]);
-  });
-
-  it('covers every canned publish payload', () => {
-    expect([...DEV_MODAL_TABS.publish]).toEqual(Object.keys(DEV_PUBLISH_SAMPLES));
-  });
-
   it('ledger lists exactly the library card tabs MainMenu renders', () => {
     expect([...DEV_MODAL_TABS.mainMenu]).toEqual([...MAIN_MENU_CARD_TABS]);
   });
@@ -238,44 +219,16 @@ describe('dev-router coverage guard', () => {
     expect([...DEV_MODAL_TABS.gameViewerLayout]).toEqual(NARRATION_LAYOUTS.map((l) => l.value));
   });
 
-  it('ledger lists exactly the Policies sub-tabs the surface renders', () => {
-    expect([...DEV_MODAL_TABS.adminPanelPolicies]).toEqual([...POLICIES_TABS]);
-  });
-
-  it('ledger lists exactly the Events role views the tab renders', () => {
-    expect([...DEV_MODAL_TABS.adminPanelEvents]).toEqual([...EVENTS_TAB_ROLE_VIEWS]);
-  });
-
-  it('ledger lists exactly the Feedback sub-tabs the surface renders', () => {
-    expect([...DEV_MODAL_TABS.adminPanelFeedback]).toEqual([...FEEDBACK_TABS]);
-  });
-
-  it('ledger lists exactly the Feedback dialog tabs the surface renders', () => {
-    expect([...DEV_MODAL_TABS.feedbackHub]).toEqual([...MY_FEEDBACK_TABS]);
-  });
-
-  it('ledger lists exactly the event acknowledge phases the poster renders', () => {
-    expect([...DEV_MODAL_TABS.eventAck]).toEqual([...EVENT_ACK_PHASES]);
-  });
-
   it('ledger lists exactly the script prompt samples', () => {
     expect([...DEV_MODAL_TABS.scriptPrompt]).toEqual(SCRIPT_PROMPT_SAMPLE_KEYS);
-  });
-
-  it('ledger lists exactly the profile dialog tabs', () => {
-    expect([...DEV_MODAL_TABS.profile]).toEqual([...PROFILE_TABS]);
-  });
-
-  it('ledger lists exactly the Admin Panel tabs', () => {
-    expect([...DEV_MODAL_TABS.adminPanel]).toEqual([...ADMIN_PANEL_TABS]);
   });
 
   it('registers the modals the router opens', () => {
     // localModel is deliberately excluded (it lives inside Settings, not as a standalone modal). worldEditor
     // is an in-place MainMenu modal (no longer a top-level view).
     expect(DEV_MODALS).toEqual([
-      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'community', 'memoryManager', 'profile', 'auth', 'feedbackHub', 'adminPanel', 'editText', 'location', 'changelog', 'eventAck', 'publish', 'worldPrompts', 'aiContext', 'ageGate', 'likers', 'privacyPolicy', 'deleteAccount', 'deletionCancelled', 'updateRequired', 'designSystem', 'enterWorld', 'connectReferences', 'manageAddons', 'componentUpdates', 'worldUpdate', 'importComponent', 'replaceSource', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'likePrompt', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt',
-      'customCode', 'eventForm', 'podium', 'sentMessages', 'suspend', 'feedbackForm', 'feedbackEdit', 'changelogEntry', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash',
+      'settings', 'entity', 'export', 'menu', 'worldEditor', 'intro', 'avatar', 'backup', 'aiSetup', 'entityEditor', 'dictionaryEditor', 'modelDetails', 'memoryManager', 'editText', 'location', 'changelog', 'worldPrompts', 'aiContext', 'designSystem', 'enterWorld', 'connectReferences', 'componentUpdates', 'importComponent', 'imageReplace', 'codeRename', 'replaceAll', 'savedElsewhere', 'deletedElsewhere', 'deleteWorldAvatar', 'demoAI', 'persona', 'errorDetails', 'imageSetup', 'settingsCompare', 'chipOptions', 'scriptPrompt',
+      'customCode', 'fontTune', 'revealDemo', 'presetImport', 'generateImage', 'placeholderPicker', 'rootCrash',
     ]);
   });
 });

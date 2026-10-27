@@ -20,10 +20,8 @@ import {
 import WorldStorageService from '@/services/WorldStorageService';
 import type { LibraryDetails } from '@/types';
 
-/** What the host supplies so the review can hand a world off to Community Creations. */
+/** What the host supplies. */
 export interface ComponentFileImportOptions {
-  /** Open Community Creations on one world listing, where the ordinary download flow takes over. */
-  onFindWorld: (listingId: string) => void;
   /** A component landed in the library, so the host can refresh its grid. */
   onImported: (kind: LibraryKind) => void;
 }
@@ -61,7 +59,7 @@ const NOTHING_TO_CONNECT: ConnectionPlan = {
  * A file whose source already has a library item is not a new component at all: it opens that item's
  * update review with the file as the incoming revision.
  */
-export function useComponentFileImport({ onFindWorld, onImported }: ComponentFileImportOptions) {
+export function useComponentFileImport({ onImported }: ComponentFileImportOptions) {
   const [pending, setPending] = useState<PendingImport | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [connect, setConnect] = useState<ConnectFlow | null>(null);
@@ -193,11 +191,9 @@ export function useComponentFileImport({ onFindWorld, onImported }: ComponentFil
         name={pending?.content.name ?? ''}
         rows={pending?.rows ?? []}
         selected={selected}
-        offline={typeof navigator !== 'undefined' && navigator.onLine === false}
         onToggle={(listingId, on) => setSelected((held) => (
           on ? [...held.filter((id) => id !== listingId), listingId] : held.filter((id) => id !== listingId)
         ))}
-        onFind={(listingId) => { setPending(null); onFindWorld(listingId); }}
         onCancel={() => setPending(null)}
         onConfirm={() => { void confirmImport(); }}
       />

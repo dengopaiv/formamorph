@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Must load before the storage singletons, whose first use opens IndexedDB.
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { addCopyToStoredWorld } from './addToStoredWorld';
 import { bindLibraryEntity, blueprintBindWorld } from './blueprintTravel';
 import { copyValueState } from './blueprints';
@@ -14,8 +14,6 @@ import { traitWorldOf, type TraitWorld } from './portableTraits';
 import EntityStorageService from '@/services/EntityStorageService';
 import WorldStorageService from '@/services/WorldStorageService';
 import type { Entity, Placeholder, PlaceholderGroup, PlaceholderValue, Trait, TraitGroup } from '@/types';
-
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 
 const value = (id: string, text: string): PlaceholderValue => ({ id, text });
 /** A chip at `id`, placed as `at` was; a rewrite moves the target and keeps the placement. */

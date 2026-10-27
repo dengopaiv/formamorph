@@ -1,12 +1,10 @@
 // Must load before the storage singletons, whose first use opens IndexedDB.
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { linkBundledContent, resolveImportedWorld, type BundleWorld } from './worldBundleRun';
 import { libraryItems } from './librarySources';
 import EntityStorageService from '@/services/EntityStorageService';
 import type { ContentLink, Entity } from '@/types';
-
-vi.mock('@/services/AuthService', () => ({ default: { getCurrentUser: () => null } }));
 
 const entity = (id: string, link?: ContentLink, over: Partial<Entity> = {}): Entity => ({
   id, name: 'Sedge', aiDescription: 'What the file holds.', ...(link ? { link } : {}), ...over,
